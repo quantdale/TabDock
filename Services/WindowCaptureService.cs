@@ -11,14 +11,12 @@ public sealed class WindowCaptureService
 {
     private readonly LoggingService _log;
     private readonly IconService _icons;
-    private readonly RenderHealthService _renderHealth;
     private readonly DpiService _dpi;
 
-    public WindowCaptureService(LoggingService log, IconService icons, RenderHealthService renderHealth, DpiService dpi)
+    public WindowCaptureService(LoggingService log, IconService icons, DpiService dpi)
     {
         _log = log;
         _icons = icons;
-        _renderHealth = renderHealth;
         _dpi = dpi;
     }
 
@@ -120,13 +118,9 @@ public sealed class WindowCaptureService
             WasMaximized = originalPlacement.showCmd == NativeMethods.SW_SHOWMAXIMIZED,
         };
 
-        _ = System.Threading.Tasks.Task.Run(async () =>
-        {
-            bool healthy = await _renderHealth.CheckHealthAsync(cw, hostHwnd).ConfigureAwait(false);
-            cw.RenderHealth = healthy;
-            _log.Log($"Render health for 0x{hwnd.ToInt64():X}: {healthy}");
-        });
-
+        // The render-health check (and the auto-release of unhealthy tabs) is
+        // driven by ContainerWindow.AddCapturedWindow, which owns the view-model
+        // state a release has to update. A duplicate check here could only log.
         _log.Log($"Captured 0x{hwnd.ToInt64():X} ({cw.OriginalTitle}) into host 0x{hostHwnd.ToInt64():X}");
         return cw;
     }

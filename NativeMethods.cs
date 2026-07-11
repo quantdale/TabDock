@@ -355,6 +355,9 @@ public static partial class NativeMethods
     public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
     public static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
 
+    /// <summary>Parent for message-only windows (CreateWindowEx / HwndSourceParameters).</summary>
+    public static readonly IntPtr HWND_MESSAGE = new IntPtr(-3);
+
     public const uint CW_USEDEFAULT = 0x80000000;
 
     public const uint GA_PARENT = 1;

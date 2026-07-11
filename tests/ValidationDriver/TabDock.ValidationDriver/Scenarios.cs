@@ -61,7 +61,7 @@ internal static class Scenarios
     {
         "rename", "popout", "closewin", "closewin-hide", "selfclose", "selfhide", "selfminhide",
         "tabswitch-hidesafety", "minrestore", "maximize-repro", "repeat-cycles", "crossfeature",
-        "renderhealth", "hotkey-afterclose", "persist-kill",
+        "renderhealth", "hotkey-afterclose", "persist-kill", "dragreorder",
     };
 
     // -------------------------------------------------------------------------
@@ -86,6 +86,7 @@ internal static class Scenarios
             "renderhealth" => RenderHealth,
             "hotkey-afterclose" => HotkeyAfterClose,
             "persist-kill" => PersistKill,
+            "dragreorder" => DragReorder,
             _ => null,
         };
         if (body == null)
@@ -324,9 +325,13 @@ internal static class Scenarios
             case "pig":
                 return SpawnPig(ctx, "MAX", "--pulse", "--color", "white");
             case "wt":
-                // Ported from the CaptureReleaseTest Windows Terminal scenario (faster clock for variance).
+                // Ported from the CaptureReleaseTest Windows Terminal scenario.
+                // No ';' in the command: wt.exe treats unescaped ';' as its own
+                // subcommand separator, which silently breaks the loop and leaves
+                // a static terminal (variance 0). A sleepless Get-Date loop keeps
+                // the content scrolling for the live-render variance check.
                 return SpawnClassGuest(ctx, "wt.exe",
-                    "powershell.exe -NoExit -Command \"while ($true) { Get-Date; Start-Sleep -Milliseconds 200 }\"",
+                    "powershell.exe -NoExit -Command \"while (1) { Get-Date }\"",
                     "CASCADIA_HOSTING_WINDOW_CLASS", useShellExecute: false);
             case "chrome-nogpu":
                 // Ported from the CaptureReleaseTest Chrome scenario (live-content page: https://time.is).
@@ -1301,6 +1306,56 @@ internal static class Scenarios
             ctx.Check(StateJsonContains(pig.Title),
                 "persisted tab metadata survived a save with the group empty (not wiped)");
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // 16. dragreorder: real-mouse drag-reorder within the strip (no crash, tabs
+    //     intact) and drag-out of the container (pop-out release).
+    // -------------------------------------------------------------------------
+    private static void DragReorder(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "DRA", "--color", "red");
+        GuestInfo pigB = SpawnPig(ctx, "DRB", "--color", "blue");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
+        ctx.Check(TabCount(container) == 2, "2 tabs after capture");
+
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+
+        // Reorder: drag the RIGHTMOST tab into the left half of the LEFTMOST tab
+        // (capture order follows picker Z-order, so tab order is not guaranteed;
+        // GetDropIndex uses item midpoints, so the target must be left of the
+        // leftmost tab's midpoint to produce a different drop index).
+        AutomationElement? tabA = FindTabText(container, pigA.Title, out int cA);
+        AutomationElement? tabB = FindTabText(container, pigB.Title, out int cB);
+        if (tabA == null || cA != 1 || tabB == null || cB != 1)
+            throw new InvalidOperationException($"Tabs not found uniquely (A={cA}, B={cB}).");
+        Rect rA = Uia.GetElementRect(tabA);
+        Rect rB = Uia.GetElementRect(tabB);
+        bool aIsRight = rA.X > rB.X;
+        GuestInfo movedPig = aIsRight ? pigA : pigB;
+        Rect leftRect = aIsRight ? rB : rA;
+        (int sx, int sy) = Uia.Center(aIsRight ? tabA : tabB);
+        Input.DragFromTo(sx, sy, (int)(leftRect.X + 8), sy, 14);
+        Thread.Sleep(600);
+
+        ctx.Check(TabCount(container) == 2, "still 2 tabs after drag-reorder");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "Reordered tab") >= 1, "a reorder was applied (log)");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-reorder");
+        ctx.Check(pigA.Proc != null && !pigA.Proc.HasExited && pigB.Proc != null && !pigB.Proc.HasExited,
+            "both pigs alive after drag-reorder");
+
+        // Drag-out: drag the just-moved tab well outside the container -> pop-out
+        // release. Deliberately reuses the leftmost slot's screen position rather
+        // than re-finding the tab via UIA: after a reorder the WPF automation
+        // peers for re-inserted items go stale (observed: FindTabText count=0 for
+        // several seconds while the tab was demonstrably alive).
+        NativeMethods.GetWindowRect(container, out NativeMethods.RECT rc);
+        Input.DragFromTo((int)(leftRect.X + leftRect.Width / 2), sy, rc.right + 150, rc.bottom + 150, 14);
+
+        ctx.Check(Util.WaitUntil(() => IsReleased(movedPig), 5000), $"moved pig '{movedPig.Title}' released by drag-out");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-out");
+        ctx.Check(movedPig.Proc != null && !movedPig.Proc.HasExited, "moved pig alive standalone");
     }
 
     /// <summary>Waits for a MessageBox owned by the TabDock pid and real-clicks the named button.</summary>

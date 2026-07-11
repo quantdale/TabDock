@@ -38,19 +38,43 @@ public sealed class PersistenceService
                     AccentColor = g.AccentColor,
                     ActiveIndex = g.ActiveIndex,
                 };
-                foreach (var m in g.Members)
+                if (g.Members.Count > 0)
                 {
-                    pg.Tabs.Add(new PersistedTab
+                    foreach (var m in g.Members)
                     {
-                        ExePath = m.ExePath,
-                        OriginalTitle = m.OriginalTitle,
-                        CustomLabel = m.CustomLabel,
-                        Left = m.OriginalBounds.left,
-                        Top = m.OriginalBounds.top,
-                        Right = m.OriginalBounds.right,
-                        Bottom = m.OriginalBounds.bottom,
-                        WasMaximized = m.WasMaximized,
-                    });
+                        pg.Tabs.Add(new PersistedTab
+                        {
+                            ExePath = m.ExePath,
+                            OriginalTitle = m.OriginalTitle,
+                            CustomLabel = m.CustomLabel,
+                            Left = m.OriginalBounds.left,
+                            Top = m.OriginalBounds.top,
+                            Right = m.OriginalBounds.right,
+                            Bottom = m.OriginalBounds.bottom,
+                            WasMaximized = m.WasMaximized,
+                        });
+                    }
+                }
+                else
+                {
+                    // A restored group that has not been re-populated has no live
+                    // members, only loaded metadata. Carry that metadata forward so
+                    // saves (now frequent — they are debounced onto every state
+                    // change, not just clean exit) cannot wipe the layout intent.
+                    foreach (var pm in g.PersistedTabs)
+                    {
+                        pg.Tabs.Add(new PersistedTab
+                        {
+                            ExePath = pm.ExePath,
+                            OriginalTitle = pm.OriginalTitle,
+                            CustomLabel = pm.CustomLabel,
+                            Left = pm.Left,
+                            Top = pm.Top,
+                            Right = pm.Right,
+                            Bottom = pm.Bottom,
+                            WasMaximized = pm.WasMaximized,
+                        });
+                    }
                 }
                 state.Groups.Add(pg);
             }

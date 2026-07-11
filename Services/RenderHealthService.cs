@@ -26,6 +26,12 @@ public sealed class RenderHealthService
         if (!NativeMethods.IsWindow(window.Hwnd))
             return false;
 
+        // A hidden window (e.g. an inactive tab hidden by tab switching) cannot
+        // be judged: PrintWindow output for it is meaningless and would produce
+        // a false "unhealthy" verdict and a spurious auto-release.
+        if (!NativeMethods.IsWindowVisible(window.Hwnd))
+            return true;
+
         NativeMethods.GetClientRect(hostHwnd, out NativeMethods.RECT rc);
         int width = rc.Width;
         int height = rc.Height;
@@ -68,7 +74,7 @@ public sealed class RenderHealthService
 
         NativeMethods.SelectObject(hdcMem, hbm);
         bool printed = NativeMethods.PrintWindow(window.Hwnd, hdcMem, NativeMethods.PW_RENDERFULLCONTENT);
-        bool hasContent = !IsUniformZero(bits, width, height);
+        bool hasContent = !IsUniformNearBlack(bits, width, height);
 
         NativeMethods.DeleteDC(hdcMem);
         NativeMethods.DeleteObject(hbm);
@@ -77,19 +83,28 @@ public sealed class RenderHealthService
         return printed && hasContent;
     }
 
-    private static bool IsUniformZero(IntPtr bits, int width, int height)
+    /// <summary>
+    /// True when every pixel is near-black in RGB. The alpha byte is masked off:
+    /// PrintWindow with PW_RENDERFULLCONTENT produces opaque output, so a dead
+    /// black surface reads as 0xFF000000 per pixel, not 0x00000000 — comparing
+    /// the full 32-bit value against zero can never flag it.
+    /// </summary>
+    private static bool IsUniformNearBlack(IntPtr bits, int width, int height)
     {
-        int stride = width * 4;
-        int total = stride * height;
-        if (total <= 0)
+        int pixels = width * height;
+        if (pixels <= 0)
             return true;
 
-        // Fast scan of 32-bit pixels.
-        int pixels = width * height;
+        const int channelThreshold = 10; // per-channel headroom for near-black noise
         for (int i = 0; i < pixels; i++)
         {
-            if (Marshal.ReadInt32(bits, i * 4) != 0)
+            int px = Marshal.ReadInt32(bits, i * 4);
+            if (((px >> 16) & 0xFF) > channelThreshold ||
+                ((px >> 8) & 0xFF) > channelThreshold ||
+                (px & 0xFF) > channelThreshold)
+            {
                 return false;
+            }
         }
         return true;
     }

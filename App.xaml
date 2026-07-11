@@ -5,6 +5,7 @@
              ShutdownMode="OnLastWindowClose"
              Startup="Application_Startup"
              Exit="Application_Exit"
+             SessionEnding="Application_SessionEnding"
              DispatcherUnhandledException="Application_DispatcherUnhandledException">
     <Application.Resources>
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />

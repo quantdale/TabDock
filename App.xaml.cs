@@ -61,11 +61,11 @@ public partial class App : Application
             _dpi = new DpiService();
             _renderHealth = new RenderHealthService(_dpi);
             _icons = new IconService();
-            _capture = new WindowCaptureService(_log, _icons, _renderHealth, _dpi);
+            _capture = new WindowCaptureService(_log, _icons, _dpi);
             _persistence = new PersistenceService(_log);
             _groups = new GroupManager(_capture, _persistence, _log);
             _events = new WinEventMonitor(_groups.IsCapturedWindow, _log);
-            _hotkey = new HotkeyService(_groups, _log);
+            _hotkey = new HotkeyService(_log);
 
             WireWinEvents();
             _groups.RestoreState();
@@ -76,8 +76,15 @@ public partial class App : Application
             _mainViewModel.ExitRequested += OnExitRequested;
 
             _mainWindow = new MainWindow(_mainViewModel);
-            _mainWindow.Closed += (_, _) => _log.Log("MainWindow closed.");
-            _hotkey.Attach(_mainWindow);
+            // Null the reference on close: the app can outlive the launcher
+            // (ShutdownMode=OnLastWindowClose with containers open), and using a
+            // closed Window as a picker Owner throws InvalidOperationException.
+            _mainWindow.Closed += (_, _) =>
+            {
+                _log.Log("MainWindow closed.");
+                _mainWindow = null;
+            };
+            _hotkey.Register();
             _hotkey.HotkeyPressed += (_, _) => OnCaptureRequested(this, EventArgs.Empty);
             _mainWindow.Show();
 
@@ -139,6 +146,7 @@ public partial class App : Application
     private void Application_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
     {
         _log?.LogException("DispatcherUnhandledException", e.Exception);
+        SaveStateGuarded("dispatcher exception");
         try
         {
             _groups?.EmergencyReleaseAll();
@@ -154,6 +162,7 @@ public partial class App : Application
     private void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
         _log?.Log($"AppDomain unhandled exception. IsTerminating={e.IsTerminating}: {e.ExceptionObject}");
+        SaveStateGuarded("AppDomain exception");
         try
         {
             _groups?.EmergencyReleaseAll();
@@ -161,6 +170,37 @@ public partial class App : Application
         catch (Exception ex)
         {
             _log?.LogException("EmergencyReleaseAll during AppDomain exception", ex);
+        }
+    }
+
+    private void Application_SessionEnding(object sender, SessionEndingCancelEventArgs e)
+    {
+        // Logoff/shutdown can kill the process before Application_Exit runs.
+        _log?.Log($"Session ending ({e.ReasonSessionEnding}); saving state and releasing captured windows.");
+        SaveStateGuarded("session ending");
+        try
+        {
+            _groups?.EmergencyReleaseAll();
+        }
+        catch (Exception ex)
+        {
+            _log?.LogException("EmergencyReleaseAll during session ending", ex);
+        }
+    }
+
+    /// <summary>
+    /// SaveState that can never throw: used in crash paths, where a save failure
+    /// must not mask the original exception or abort the emergency release.
+    /// </summary>
+    private void SaveStateGuarded(string context)
+    {
+        try
+        {
+            _groups?.SaveState();
+        }
+        catch (Exception ex)
+        {
+            _log?.LogException($"SaveState during {context}", ex);
         }
     }
 
@@ -308,19 +348,23 @@ public partial class App : Application
 
     private void ShowCapturePicker(Group? preselectedGroup)
     {
-        if (_mainWindow == null)
-            return;
-
         var pickerVm = new CapturePickerViewModel(_groups, _icons);
         if (preselectedGroup != null)
         {
             pickerVm.SelectedGroupOption = pickerVm.Groups.FirstOrDefault(o => o.Id == preselectedGroup.Id)
                 ?? pickerVm.SelectedGroupOption;
         }
-        var picker = new CapturePickerWindow(pickerVm)
+        var picker = new CapturePickerWindow(pickerVm);
+        // The picker must keep working after the launcher closes (hotkey or a
+        // container's "+" button with only containers open).
+        if (_mainWindow is { IsLoaded: true })
         {
-            Owner = _mainWindow,
-        };
+            picker.Owner = _mainWindow;
+        }
+        else
+        {
+            picker.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        }
 
         bool? result = picker.ShowDialog();
         if (result != true || picker.Result == null || picker.Result.SelectedHwnds.Count == 0)

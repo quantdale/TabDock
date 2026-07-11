@@ -1,5 +1,12 @@
 # TabDock — Investigation Findings (read-only audit)
 
+> **2026-07-12 session update:** H1, M4, H3, and M5 were fixed and runtime-validated
+> with the real-input harness (`tests/ValidationDriver`, new scenarios `renderhealth`,
+> `hotkey-afterclose`, `persist-kill`, `dragreorder`, plus the full regression set
+> including the mandatory `tabswitch-hidesafety`). Each fixed entry below carries a
+> **FIXED** status line. New findings from that session: L12, I5, and a strengthened
+> note under M6.
+
 Comprehensive read-only review of the TabDock application, ordered by severity.
 Produced by the 2026-07-11 investigation session. Findings are documented only —
 none of these were fixed in this session unless explicitly cross-referenced to the
@@ -21,7 +28,8 @@ repeated-cycle validation.
 
 ## HIGH
 
-### H1. Render-health auto-release is never invoked for captured windows (documented recovery feature is dead)
+### H1. Render-health auto-release is never invoked for captured windows (documented recovery feature is dead) — **FIXED 2026-07-12**
+- **Fix:** `ContainerWindow.CaptureWindow` now routes through `AddCapturedWindow`, so `CheckRenderHealthAsync` (the releasing check) runs on every real capture; it sets and logs `CapturedWindow.RenderHealth` (consumed by the `STATE[...]` snapshot). The duplicate log-only check in `WindowCaptureService.Capture` was removed along with its now-dead `_renderHealth` field. Validated end-to-end (`renderhealth` scenario): a genuinely black-painting GuineaPig guest is detected unhealthy ~1s after capture and auto-released with the notification MessageBox; a white guest is not.
 - **Where:** `Views/ContainerWindow.xaml.cs` (`CaptureWindow` vs `AddCapturedWindow`); `Services/WindowCaptureService.cs:123-128`
 - **Description:** CLAUDE.md describes render health as "a recovery loop … triggers automatic release back to standalone." The only method that actually releases an unhealthy window, `ContainerWindow.AddCapturedWindow` → `CheckRenderHealthAsync`, has **no callers**. The real capture path (`ContainerWindow.CaptureWindow` → `_viewModel.AddCapturedWindow`) never runs a health check. `WindowCaptureService.Capture` schedules its own check that only *logs* and sets `cw.RenderHealth` — a flag nothing reads.
 - **Why it matters:** Black/frozen GPU/Electron/DirectX tabs — the exact failure the feature exists for — are never auto-released. The window stays as a dead-looking black tab.
@@ -36,7 +44,9 @@ repeated-cycle validation.
 - **Resolution options:** Commit the reorder only on `MouseUp`; or add hysteresis (require crossing the full neighbor bounds, dead-band around the current slot); or use an insertion-adorner preview and reorder once. Cache container bounds at drag start.
 - **Severity:** High
 
-### H3. Global hotkey after MainWindow is closed throws (Owner set to a closed window)
+### H3. Global hotkey after MainWindow is closed throws (Owner set to a closed window) — **FIXED 2026-07-12**
+- **Runtime-confirmed mechanism (refined):** with the launcher closed, the hotkey did NOT crash — it went silently dead, because it was registered against the launcher's HWND and `WM_HOTKEY` posted to a destroyed window is dropped. The `Owner`-on-closed-window `InvalidOperationException` fires on the *other* `ShowCapturePicker` entry point: a container's "+" button (observed live: dispatcher crash → emergency release of all tabs → `Shutdown(1)` stalled behind the "Close group" prompt, leaving a zombie process — see the M6 note).
+- **Fix:** `HotkeyService` hosts the hotkey on its own message-only window (`HWND_MESSAGE` sink) that lives for the app lifetime; `App` nulls `_mainWindow` in its `Closed` handler; `ShowCapturePicker` sets `Owner` only when the launcher `IsLoaded` (CenterScreen fallback). Validated (`hotkey-afterclose`): launcher closed via real X click, then 3 hotkey cycles + the "+" button all open the picker; zero exceptions; tab intact.
 - **Where:** `App.xaml.cs` (`ShowCapturePicker`); `App.xaml` (`ShutdownMode="OnLastWindowClose"`)
 - **Description:** `_mainWindow` is never nulled when the launcher closes. With a container still open the app stays alive; pressing Ctrl+Alt+G then calls `ShowCapturePicker`, which sets `picker.Owner = _mainWindow` on a **closed** Window — `InvalidOperationException`.
 - **Impact:** A normal user action (close launcher, keep a group open, hit the hotkey) crashes the dispatcher → emergency release + `Shutdown(1)`.
@@ -68,14 +78,16 @@ repeated-cycle validation.
 - **Resolution options:** Back `IsCapturedWindow` with a `HashSet<IntPtr>` maintained on add/remove; consider per-thread hook scoping.
 - **Severity:** Medium
 
-### M4. Black-frame detection can't detect opaque RGB-black
+### M4. Black-frame detection can't detect opaque RGB-black — **FIXED 2026-07-12**
+- **Fix:** `IsUniformZero` replaced by `IsUniformNearBlack` (alpha masked off, per-channel near-black threshold 10). `CheckHealthAsync` additionally refuses to judge a window that is not `IsWindowVisible` — an inactive tab hidden by tab switching would otherwise produce a meaningless PrintWindow frame and a spurious auto-release. Validated together with H1.
 - **Where:** `Services/RenderHealthService.cs` (`IsUniformZero`)
 - **Description:** A frame is flagged unhealthy only if every 32-bit pixel is exactly `0x00000000`. `PrintWindow(PW_RENDERFULLCONTENT)` typically produces opaque output (`0xFF000000` for black) → black tabs read as "healthy."
 - **Impact:** False "healthy" verdicts for exactly the failure the service exists to catch (compounds H1).
 - **Resolution options:** Mask off alpha and compare RGB against near-black; or detect uniform-color frames of any color with tolerance.
 - **Severity:** Medium
 
-### M5. Persistence save timing leaves most state changes unsaved except on clean exit
+### M5. Persistence save timing leaves most state changes unsaved except on clean exit — **FIXED 2026-07-12**
+- **Fix:** `GroupManager.RequestSave()` (1s `DispatcherTimer` debounce) is called on group create, tab switch, reorder, release, and group close/remove — capture flows in via the tab switch. Crash handlers (`DispatcherUnhandledException`, `AppDomain.UnhandledException`) and a new `SessionEnding` handler save via a guarded `SaveStateGuarded` that can never mask the original exception. `PersistenceService.Save` now carries `PersistedTabs` forward for groups whose `Members` is empty, so the frequent saves cannot wipe restored-but-unpopulated layout intent. Validated (`persist-kill`): capture reaches state.json within 5s with no exit; metadata survives `Process.Kill` and a subsequent clean-exit save with the group empty.
 - **Where:** `App.xaml.cs`; `Views/ContainerWindow.xaml.cs`; `Services/PersistenceService.cs`
 - **Description:** `SaveState` runs only on clean `Application_Exit`, rename commit, and accent-color change (the latter two added this session). Group creation, capture, release, reorder, and active-tab changes are not persisted until then; crash handlers run `EmergencyReleaseAll` but not `SaveState`.
 - **Impact:** Group layout intent lost on crash or hard kill.
@@ -87,6 +99,7 @@ repeated-cycle validation.
 - **Description:** The `Tabs.Count==0` guard covers the programmatic empty-group close, but "Exit" with populated containers open fires the Yes/No/Cancel prompt once per container, and Cancel during `Shutdown` is ambiguous.
 - **Impact:** Confusing multi-prompt exit; possible half-closed states.
 - **Resolution options:** `_isShuttingDown` flag set by the Exit path → skip prompt, straight release.
+- **2026-07-12 note (strengthens this finding):** the prompt also stalls the *crash* path. During the H3 baseline repro, `DispatcherUnhandledException` → `Shutdown(1)` never completed because `ContainerWindow_Closing` raised the Yes/No/Cancel prompt with nobody to answer it (the tab list still held a stale entry after `EmergencyReleaseAll`), leaving a zombie TabDock process. The `_isShuttingDown` flag should also be set by the crash handlers.
 - **Severity:** Medium
 
 ### M7. GDI/icon handle leak on exception in `IconService.GetFileIcon`
@@ -116,8 +129,8 @@ repeated-cycle validation.
 ### L3. `ReleaseTab` and `OnPopOutRequested` are duplicated bodies
 `OnPopOutRequested` is `ReleaseTab(tab)` with the body copy-pasted. **Resolution:** delegate one to the other. **Severity:** Low
 
-### L4. Unused private fields / never-read property (analyzer warnings)
-`GroupViewModel._capture`, `WindowCaptureService._dpi`, `RenderHealthService._dpi`; `CapturedWindow.RenderHealth` written but never read. **Severity:** Low
+### L4. Unused private fields / never-read property (analyzer warnings) — partially resolved 2026-07-12
+`GroupViewModel._capture`, `WindowCaptureService._dpi`, `RenderHealthService._dpi` remain (the `_dpi` pair belongs to M8). ~~`CapturedWindow.RenderHealth` written but never read~~ — now written by `ContainerWindow.CheckRenderHealthAsync` and read by the `STATE[...]` snapshot (H1 fix). `WindowCaptureService._renderHealth` and `HotkeyService._groups` were removed outright. **Severity:** Low
 
 ### L5. Maximize button glyph has a stray semicolon — FIXED THIS SESSION
 The StateChanged handler used a variable-width `\x` hex escape that consumed the trailing `;` as a hex digit, leaving a stray glyph after each maximize/restore. **Fixed incidentally** during Task 3 cleanup by switching to fixed-width `\uXXXX` escapes. **Severity:** Low (resolved)
@@ -143,6 +156,12 @@ Currently collectible together in all flows, but any future path keeping a `Grou
 ### L10. New `ColorToBrushConverter` allocated on every `AccentBrush` get
 `GroupViewModel.AccentBrush` news up a converter per access. **Severity:** Low
 
+### L12. Groups can never be deleted; they accumulate in state.json forever (NEW 2026-07-12)
+**Where:** `Views/MainWindow.xaml` (no delete affordance); `App.xaml.cs` (`OnContainerClosed` does not remove the group).
+**Description:** Closing an empty group's container only closes the window — the `Group` stays in `GroupManager.Groups`, is saved, and its container re-opens at every launch. There is no UI to delete a group at all. Observed concretely: the development machine's state.json had accumulated **18** residual groups (15 default-named), so every TabDock launch opened 18 empty containers — which also broke the validation harness until it isolated state.json per scenario.
+**Resolution options:** a delete action in the launcher list and/or treat user-initiated close of an *empty* container as group removal.
+**Severity:** Low (Medium UX impact once several groups exist)
+
 ---
 
 ## INFO
@@ -155,6 +174,9 @@ The setter clamps against empty `Members` during load, discarding the persisted 
 
 ### I3. Capture picker may list cloaked UWP / owned windows
 No `DWMWA_CLOAKED` filter (constant exists, unused) nor `GW_OWNER` check → ApplicationFrameHost ghosts and owned popups can appear; capturing them will likely misbehave. **Severity:** Info
+
+### I5. WPF automation peers for reordered ListBox items go stale (NEW 2026-07-12, tooling-only)
+After `ReorderTabs` removes and re-inserts a tab, UIA descendant searches rooted at the container HWND stopped finding the moved tab's Text element for several seconds (observed count=0 while the tab was demonstrably alive). No end-user impact; affects UIA-based tooling only. The validation driver's `dragreorder` scenario works around it by dragging from remembered screen coordinates instead of re-querying UIA after a reorder.
 
 ### I4. WinEventMonitor's UI-thread delivery assumption is correct today but unguarded
 Out-of-context hooks deliver on the installing thread; `Start()` runs on the UI thread, so the synchronous `IsCapturedWindow` read is race-free — entirely dependent on the call site. The hide-teardown added this session additionally relies on Post-after-completion ordering (documented in code comments). **Resolution:** assert dispatcher-thread in `Start()`. **Severity:** Info

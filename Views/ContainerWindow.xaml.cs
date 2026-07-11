@@ -228,6 +228,7 @@ public partial class ContainerWindow : Window
                 guestDesc = WindowCaptureService.DescribeWindow(active.Hwnd);
                 if (NativeMethods.IsWindow(active.Hwnd))
                     guestDesc += $" parentIsHost={NativeMethods.GetParent(active.Hwnd) == ContentHostHwnd}";
+                guestDesc += $" renderHealth={active.RenderHealth}";
             }
 
             _log.Log($"STATE[{phase}] winState={WindowState} container={winRect.left},{winRect.top},{winRect.Width}x{winRect.Height} dpi={dpi} " +
@@ -378,7 +379,9 @@ public partial class ContainerWindow : Window
         if (cw == null)
             return error ?? "Capture failed.";
 
-        _viewModel.AddCapturedWindow(cw);
+        // Route through AddCapturedWindow so the render-health check (and its
+        // auto-release of black/frozen tabs) runs on every real capture.
+        AddCapturedWindow(cw);
         return null;
     }
 
@@ -442,6 +445,8 @@ public partial class ContainerWindow : Window
         try
         {
             bool healthy = await _renderHealth.CheckHealthAsync(window, ContentHostHwnd).ConfigureAwait(false);
+            window.RenderHealth = healthy;
+            _log.Log($"Render health for 0x{window.Hwnd.ToInt64():X} ('{window.DisplayLabel}'): {(healthy ? "healthy" : "unhealthy; releasing back to standalone")}");
             if (!healthy)
             {
                 await Dispatcher.InvokeAsync(() =>

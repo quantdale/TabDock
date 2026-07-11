@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Windows;
+using System.Windows.Threading;
 using TabDock.Models;
 
 namespace TabDock.Services;
@@ -38,7 +39,31 @@ public sealed class GroupManager
 
     public void SaveState()
     {
+        _saveDebounce?.Stop();
         _persistence.Save(Groups);
+    }
+
+    private DispatcherTimer? _saveDebounce;
+
+    /// <summary>
+    /// Debounced SaveState: persists layout intent ~1s after the most recent
+    /// state change so it survives crashes and force-kills (this app's history
+    /// is dominated by those), without a disk write per event for high-frequency
+    /// mutations such as drag-reorder. UI thread only (DispatcherTimer).
+    /// </summary>
+    public void RequestSave()
+    {
+        if (_saveDebounce == null)
+        {
+            _saveDebounce = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _saveDebounce.Tick += (_, _) =>
+            {
+                _saveDebounce!.Stop();
+                _persistence.Save(Groups);
+            };
+        }
+        _saveDebounce.Stop();
+        _saveDebounce.Start();
     }
 
     public void RegisterContainerHwnd(IntPtr hwnd)
@@ -97,6 +122,7 @@ public sealed class GroupManager
         var group = new Group { Name = name, AccentColor = accentColor };
         Groups.Add(group);
         _log.Log($"Created group {group.Id} '{name}'");
+        RequestSave();
         return group;
     }
 
@@ -121,6 +147,7 @@ public sealed class GroupManager
             return;
         group.ActiveIndex = index;
         _log.Log($"Switched group {group.Id} to tab {index}");
+        RequestSave();
     }
 
     public void MoveTab(Group group, int oldIndex, int newIndex)
@@ -137,6 +164,7 @@ public sealed class GroupManager
         group.Members.Insert(newIndex, item);
         group.ActiveIndex = newIndex;
         _log.Log($"Reordered tab {oldIndex}->{newIndex} in group {group.Id}");
+        RequestSave();
     }
 
     public void ReleaseTab(Group group, int index, bool show = true)
@@ -152,6 +180,7 @@ public sealed class GroupManager
             group.ActiveIndex = group.Members.Count - 1;
 
         _log.Log($"Released tab {index} from group {group.Id}");
+        RequestSave();
     }
 
     public void CloseGroup(Group group)
@@ -168,12 +197,16 @@ public sealed class GroupManager
             Groups.Remove(group);
 
         _log.Log($"Closed group {group.Id}");
+        RequestSave();
     }
 
     public void RemoveGroup(Group group)
     {
         if (Groups.Contains(group))
+        {
             Groups.Remove(group);
+            RequestSave();
+        }
     }
 
     public void EmergencyReleaseAll()
