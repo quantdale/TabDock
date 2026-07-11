@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>TabDock</AssemblyName>
+    <RootNamespace>TabDock</RootNamespace>
+    <!--
+      The repository root also contains spike/test projects. Exclude their build artifacts
+      and source trees from the main WPF project so the SDK default globs don't pull them in.
+    -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin/**;obj/**;Spike/**;tests/**;docs/**</DefaultItemExcludes>
+
+    <!--
+      Native AOT is not practical for WPF: WPF relies on COM activation, reflection emit,
+      and other runtime features that are incompatible with trimming/AOT.
+      We therefore publish a self-contained single-file executable instead.
+    -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <TrimMode>partial</TrimMode>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+</Project>

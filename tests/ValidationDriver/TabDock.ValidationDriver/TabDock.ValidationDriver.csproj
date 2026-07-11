@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- UseWPF pulls in UIAutomationClient/UIAutomationTypes for read-only System.Windows.Automation. -->
+    <UseWPF>true</UseWPF>
+    <!-- Keep this a console app; the SDK would otherwise infer WinExe because UseWPF is set. -->
+    <DisableWinExeOutputInference>true</DisableWinExeOutputInference>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\..\NativeMethods.cs" Link="NativeMethods.cs" />
+  </ItemGroup>
+</Project>

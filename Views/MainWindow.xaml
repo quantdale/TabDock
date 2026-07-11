@@ -1,0 +1,80 @@
+<Window x:Class="TabDock.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="TabDock"
+        Height="420"
+        Width="520"
+        MinWidth="360"
+        MinHeight="280"
+        WindowStartupLocation="CenterScreen"
+        Background="White">
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="TabDock" FontSize="24" FontWeight="Light" Margin="0,0,0,4" />
+        <TextBlock Grid.Row="1" Text="Select a group or start a new one." Foreground="Gray" Margin="0,0,0,12" />
+
+        <Border Grid.Row="2" BorderBrush="#FFE0E0E0" BorderThickness="1" CornerRadius="4" Background="#FFF9F9F9">
+            <Grid>
+                <ListView x:Name="GroupsListView"
+                          ItemsSource="{Binding Groups}"
+                          SelectedItem="{Binding SelectedGroup}"
+                          BorderThickness="0"
+                          Background="Transparent"
+                          Margin="8"
+                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="Padding" Value="8" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Ellipse Grid.Column="0" Width="12" Height="12" Fill="{Binding AccentColor, Converter={StaticResource ColorToBrushConverter}}" Margin="0,0,10,0" />
+                                <TextBlock Grid.Column="1" Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="2" Text="{Binding Members.Count, StringFormat='{}{0} tabs'}" Foreground="Gray" VerticalAlignment="Center" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+
+                <TextBlock Text="No groups yet. Click 'New group' to create one."
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Foreground="Gray"
+                           Visibility="{Binding Groups.Count, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=False}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Groups.Count}" Value="0">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </Grid>
+        </Border>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="New group" Width="100" Height="32" Margin="0,0,8,0" Command="{Binding NewGroupCommand}" />
+            <Button Content="Capture windows (Ctrl+Alt+G)" Width="200" Height="32" Margin="0,0,8,0" Command="{Binding CaptureCommand}" />
+            <Button Content="Exit" Width="80" Height="32" Command="{Binding ExitCommand}" />
+        </StackPanel>
+    </Grid>
+</Window>
