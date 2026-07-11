@@ -1,0 +1,171 @@
+##
+# TabDock .gitignore
+# Tailored for: .NET 8 / WPF / C# 12 / MSBuild / Visual Studio
+# Repository:  TabDock (Windows desktop utility)
+#
+# This file ignores build outputs, generated artifacts, IDE metadata, OS files,
+# local secrets, and test/coverage outputs. All rules are justified by the
+# technologies actually present in the repository.
+##
+
+# ------------------------------------------------------------------------------
+# .NET / MSBuild build outputs
+# ------------------------------------------------------------------------------
+# These directories contain compiled binaries, satellite assemblies, runtime
+# configs, and copied framework dependencies produced by `dotnet build`.
+# They are regenerated on every build and must never be committed.
+
+**/bin/
+**/obj/
+
+# ------------------------------------------------------------------------------
+# .NET publish / single-file outputs
+# ------------------------------------------------------------------------------
+# TabDock.csproj publishes a self-contained single-file executable to
+# bin/Release/net8.0-windows/win-x64/publish/ (see PublishSingleFile=true).
+# The published bundle is ~180 MB and is a build artifact, not source.
+
+**/publish/
+
+# ------------------------------------------------------------------------------
+# NuGet package restore outputs (defensive)
+# ------------------------------------------------------------------------------
+# The current projects have no PackageReference nodes, but NuGet-generated
+# project lock/state files are still created under obj/. The rules below
+# protect against future package usage or PackageReference additions.
+
+**/packages/
+*.nupkg
+*.snupkg
+project.lock.json
+
+# ------------------------------------------------------------------------------
+# Visual Studio / IDE metadata and user settings
+# ------------------------------------------------------------------------------
+# Auto-generated solution user options, per-user debugger settings, and
+# Visual Studio working state. These contain local paths and window layouts.
+
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.csproj.user
+
+# ------------------------------------------------------------------------------
+# Visual Studio / Rider local history and caches
+# ------------------------------------------------------------------------------
+.localhistory/
+.vshistory/
+*.swp
+
+# ------------------------------------------------------------------------------
+# ReSharper / Rider / Code analysis
+# ------------------------------------------------------------------------------
+*_ReSharper*/
+*.ReSharper*
+*.DotSettings.user
+.idea/
+
+# ------------------------------------------------------------------------------
+# Windows / OS generated files
+# ------------------------------------------------------------------------------
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.DS_Store
+
+# ------------------------------------------------------------------------------
+# WPF / XAML build artifacts (generated inside obj/)
+# ------------------------------------------------------------------------------
+# These are produced by the WPF MarkupCompilePass and Baml compilation.
+# They live under obj/ (already ignored above), listed explicitly for clarity.
+
+*.g.cs
+*.g.i.cs
+*.baml
+*.resources
+*_MarkupCompile.cache
+*_MarkupCompile.lref
+
+# ------------------------------------------------------------------------------
+# WPF temporary project directories
+# ------------------------------------------------------------------------------
+# MSBuild creates randomly-named *_wpftmp temporary projects during design-time
+# builds and hot reload. They appear next to the real obj/ folder.
+
+*_wpftmp/
+
+# ------------------------------------------------------------------------------
+# Test outputs and coverage
+# ------------------------------------------------------------------------------
+# Defensive rules for MSTest/VSTest/NUnit results, coverage reports, and
+# BenchmarkDotNet artifacts if any are added later.
+
+TestResults/
+*.trx
+*.coverage
+coverage.*
+*.opencover.xml
+*.cobertura.xml
+BenchmarkDotNet.Artifacts/
+
+# ------------------------------------------------------------------------------
+# Local configuration, secrets, and credentials
+# ------------------------------------------------------------------------------
+# Never commit local environment files, certificates, or strong-name keys.
+
+.env
+.env.local
+*.pfx
+*.p12
+*.snk
+*.key
+secrets.json
+appsettings.Development.json
+appsettings.Local.json
+
+# ------------------------------------------------------------------------------
+# Logs and crash dumps
+# ------------------------------------------------------------------------------
+# The app writes logs to %APPDATA%\TabDock\logs at runtime, but crash dumps
+# and diagnostic logs can also appear in the working directory during debugging.
+
+*.log
+*.tlog
+*.dmp
+*.hdmp
+
+# ------------------------------------------------------------------------------
+# Temporary and backup files
+# ------------------------------------------------------------------------------
+*.tmp
+*.temp
+*.bak
+*.orig
+*.cache
+
+# ------------------------------------------------------------------------------
+# PowerShell transcript/debug output (for tests/*.ps1 scripts)
+# ------------------------------------------------------------------------------
+*.ps1.log
+*.ps1.txt
+Transcript*.txt
+
+# ------------------------------------------------------------------------------
+# Local deployment / installer outputs
+# ------------------------------------------------------------------------------
+# If the team ever adds WiX, MSIX, or Inno Setup installers, ignore outputs.
+
+*.msi
+*.msix
+*.appx
+*.appxbundle
+*.msixupload
+setup.exe
+output/
+artifacts/
