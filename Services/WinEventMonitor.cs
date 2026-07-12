@@ -20,12 +20,27 @@ public sealed class WinEventMonitor : IDisposable
     private IntPtr _hookNameChange;
     private IntPtr _hookMinimize;
     private IntPtr _hookHide;
+    private IntPtr _hookMoveSize;
     private bool _disposed;
 
     public event EventHandler<WindowEventArgs>? WindowDestroyed;
     public event EventHandler<WindowEventArgs>? WindowForegroundChanged;
     public event EventHandler<WindowEventArgs>? WindowNameChanged;
     public event EventHandler<WindowEventArgs>? WindowMinimized;
+
+    /// <summary>
+    /// Raised when a captured window enters its interactive move/size modal
+    /// loop (e.g. the user drags a guest by its client-drawn caption — Chrome
+    /// hit-tests its tab strip as HTCAPTION, and DefWindowProc's SC_MOVE loop
+    /// works for WS_CHILD windows too).
+    /// </summary>
+    public event EventHandler<WindowEventArgs>? WindowMoveSizeStarted;
+
+    /// <summary>
+    /// Raised when a captured window leaves its interactive move/size modal
+    /// loop; the subscriber re-clamps the guest to fill the content host.
+    /// </summary>
+    public event EventHandler<WindowEventArgs>? WindowMoveSizeEnded;
 
     /// <summary>
     /// Raised when a captured window loses WS_VISIBLE. Note that
@@ -57,8 +72,12 @@ public sealed class WinEventMonitor : IDisposable
         _hookNameChange = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_NAMECHANGE, NativeMethods.EVENT_OBJECT_NAMECHANGE, IntPtr.Zero, _callback, 0, 0, flags);
         _hookMinimize = NativeMethods.SetWinEventHook(NativeMethods.EVENT_SYSTEM_MINIMIZESTART, NativeMethods.EVENT_SYSTEM_MINIMIZESTART, IntPtr.Zero, _callback, 0, 0, flags);
         _hookHide = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_HIDE, NativeMethods.EVENT_OBJECT_HIDE, IntPtr.Zero, _callback, 0, 0, flags);
+        // One ranged hook covers MOVESIZESTART (0x000A) and MOVESIZEEND (0x000B).
+        // These fire once per interactive drag start/end system-wide — low volume,
+        // unlike EVENT_OBJECT_LOCATIONCHANGE, which is deliberately not hooked.
+        _hookMoveSize = NativeMethods.SetWinEventHook(NativeMethods.EVENT_SYSTEM_MOVESIZESTART, NativeMethods.EVENT_SYSTEM_MOVESIZEEND, IntPtr.Zero, _callback, 0, 0, flags);
 
-        _log.Log($"WinEventMonitor started (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X})");
+        _log.Log($"WinEventMonitor started (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X})");
     }
 
     public void Stop()
@@ -87,6 +106,11 @@ public sealed class WinEventMonitor : IDisposable
         {
             NativeMethods.UnhookWinEvent(_hookHide);
             _hookHide = IntPtr.Zero;
+        }
+        if (_hookMoveSize != IntPtr.Zero)
+        {
+            NativeMethods.UnhookWinEvent(_hookMoveSize);
+            _hookMoveSize = IntPtr.Zero;
         }
         _log.Log("WinEventMonitor stopped.");
     }
@@ -140,6 +164,12 @@ public sealed class WinEventMonitor : IDisposable
                 break;
             case NativeMethods.EVENT_OBJECT_HIDE:
                 WindowHidden?.Invoke(this, args);
+                break;
+            case NativeMethods.EVENT_SYSTEM_MOVESIZESTART:
+                WindowMoveSizeStarted?.Invoke(this, args);
+                break;
+            case NativeMethods.EVENT_SYSTEM_MOVESIZEEND:
+                WindowMoveSizeEnded?.Invoke(this, args);
                 break;
         }
     }

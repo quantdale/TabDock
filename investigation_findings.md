@@ -1,5 +1,21 @@
 # TabDock — Investigation Findings (read-only audit)
 
+> **2026-07-12 second session update (frame-smear / H2 session):** H2 was fixed
+> (drag-start midpoint snapshot + `Tabs.Move`; pending manual runtime validation).
+> Two new defects found during the Chrome-guest smear investigation were fixed in
+> the same session: **H4** (content host registered with a NULL background brush —
+> exposed regions never repainted, producing the smear) and **H5** (the guest
+> fill-clamp was applied once at capture and never enforced — a guest could drag
+> or self-position itself loose inside the host; Chrome hit-tests its client-drawn
+> tab strip as HTCAPTION, so this was reachable with a plain mouse drag). New
+> lower-severity findings: **L13** (the `LAYOUT[...]` instrumentation referenced by
+> this document and the ValidationDriver was absent from committed source; a
+> minimal tagged subset was reintroduced) and **L14** (`CheckRenderHealthAsync`
+> failures log only via `Debug.WriteLine`, invisible in field logs — still open).
+> All fixes in that session are code-complete but **pending manual runtime
+> validation on a real Windows machine** (the session environment could not run
+> the app).
+
 > **2026-07-12 session update:** H1, M4, H3, and M5 were fixed and runtime-validated
 > with the real-input harness (`tests/ValidationDriver`, new scenarios `renderhealth`,
 > `hotkey-afterclose`, `persist-kill`, `dragreorder`, plus the full regression set
@@ -37,7 +53,16 @@ repeated-cycle validation.
 - **Resolution options:** Route the normal capture path through `ContainerWindow.AddCapturedWindow` (or call `CheckRenderHealthAsync` from `CaptureWindow`), and consume `cw.RenderHealth`.
 - **Severity:** High
 
-### H2. Drag-reorder oscillation: reorder fires on every MouseMove against a mutating layout
+### H2. Drag-reorder oscillation: reorder fires on every MouseMove against a mutating layout — **FIXED 2026-07-12 (second session; pending runtime validation)**
+- **Fix:** Tab slot midpoints are snapshotted once when the drag arms
+  (`SnapshotDragMidpoints`); `GetDropIndex` reads the cached midpoints for the whole
+  drag, so pointer→index is a fixed monotone mapping and a stationary pointer can
+  never compute the opposite index after a reorder (the feedback edge is severed,
+  not damped). The cache re-snapshots only on a tab-count change (never caused by a
+  reorder) and falls back to live geometry if a container is missing.
+  `GroupViewModel.ReorderTabs` now uses `Tabs.Move` instead of RemoveAt+Insert so
+  the ListBox keeps the same container alive (also expected to reduce I5's stale
+  UIA peers).
 - **Where:** `Views/ContainerWindow.xaml.cs` (`TabsListBox_MouseMove`, `GetDropIndex`); `ViewModels/GroupViewModel.cs` (`ReorderTabs`)
 - **Description:** Every `MouseMove` during a drag computes `GetDropIndex(pos)` from live container geometry with a single midpoint threshold and no hysteresis, and immediately reorders. After a reorder the item positions swap under a stationary cursor, so the next `MouseMove` computes the opposite index and reorders back. The runtime log records dozens of 1↔2 flips per second during a real user drag (13:21 session). The prior fatal crash (`Collection.Insert` out of range from this same path, logged 07:31 with a full stack trace) is now clamped, but the jitter remains, and `ContainerFromIndex`/`ActualWidth` may reflect pre-reorder layout for a frame, returning null or wrong positions.
 - **Why it matters / impact:** Constant reordering, re-selection, `ObservableCollection` churn, `Group.ActiveIndex` mutation and log spam during a single drag; visually unstable tab strip; latent index-staleness bugs.
@@ -52,6 +77,45 @@ repeated-cycle validation.
 - **Impact:** A normal user action (close launcher, keep a group open, hit the hotkey) crashes the dispatcher → emergency release + `Shutdown(1)`.
 - **Resolution options:** Null `_mainWindow` in its `Closed` handler and guard/recreate before use; or only set `Owner` when `_mainWindow.IsLoaded`; or keep the launcher alive/hidden.
 - **Severity:** High
+
+### H4. Content host has a NULL class background brush — exposed regions never repaint (smear) — **FIXED 2026-07-12 (second session; pending runtime validation)** (NEW)
+- **Where:** `Infrastructure/NativeHwndHost.cs` (`BuildWindowCore` / `WNDCLASSEX`)
+- **Description:** The `TabDockContentHost` window class was registered with
+  `hbrBackground` left at NULL and a WndProc that handles only `WM_SIZE`, and the
+  app never calls `InvalidateRect`/`RedrawWindow`. When a guest child was smaller
+  than the host client area and moved, Windows invalidated the newly exposed host
+  region but nothing ever painted it — stale pixels smeared across the container
+  background (observed in real use with a displaced Chrome guest; the guest itself
+  rendered healthy, the garbage was around it). The WPF `#FF1E1E1E` ContentBorder
+  behind the host cannot show through the native airspace.
+- **Fix:** the class now registers `hbrBackground = CreateSolidBrush(0x001E1E1E)`
+  (matches the ContentBorder color; class brushes are system-owned and must never
+  be `DeleteObject`'d). `DefWindowProc` erases exposed regions on `WM_ERASEBKGND`;
+  `WS_CLIPCHILDREN` keeps the erase from painting under the guest.
+- **Severity:** High (co-produced the reported smear together with H5)
+
+### H5. Guest fill-clamp applied once at capture, never enforced — guests can be dragged/self-positioned loose inside the host — **FIXED 2026-07-12 (second session; pending runtime validation)** (NEW)
+- **Where:** `Services/WindowCaptureService.cs` (`Layout`); `Services/WinEventMonitor.cs`; `Views/ContainerWindow.xaml.cs`; `App.xaml.cs`
+- **Description:** The style strip itself works and is guest-agnostic (no
+  Chrome/Electron branching), but Chrome draws its title bar/caption buttons in its
+  *client area* and hit-tests them as `HTCAPTION` — and `DefWindowProc`'s SC_MOVE
+  modal loop moves `WS_CHILD` windows too. Re-layout only ran on host `WM_SIZE`,
+  tab switch, and minimize-restore, so one drag (or one programmatic self-move,
+  e.g. a DPI-suggested rect) displaced the guest permanently, exposing the host
+  background (→ H4's smear). Blocking the drag at the source is not possible
+  cross-process without DLL injection.
+- **Fix:** the clamp is now *maintained*: (a) a ranged
+  `EVENT_SYSTEM_MOVESIZESTART..END` WinEvent hook (low-volume, unlike
+  `EVENT_OBJECT_LOCATIONCHANGE`, which stays unhooked per M3) re-clamps the guest
+  the moment an interactive drag/resize ends, and suppresses the watchdog during
+  the loop; (b) a per-container 1 s drift watchdog re-clamps programmatic
+  self-moves, logging `LAYOUT[drift]`, with a 10-correction give-up so a
+  pathological guest degrades to a log line, not a tug-of-war. Both paths guard on
+  active-tab / `IsWindow` / `IsWindowVisible` / `!IsIconic` /
+  `GetParent == host` — the visibility/iconic guards are load-bearing: `Layout`
+  uses `SWP_SHOWWINDOW` and restores iconic windows, so an unguarded re-clamp
+  would re-show a tray-hidden guest and defeat the hide-teardown.
+- **Severity:** High (co-produced the reported smear together with H4)
 
 ---
 
@@ -161,6 +225,14 @@ Currently collectible together in all flows, but any future path keeping a `Grou
 **Description:** Closing an empty group's container only closes the window — the `Group` stays in `GroupManager.Groups`, is saved, and its container re-opens at every launch. There is no UI to delete a group at all. Observed concretely: the development machine's state.json had accumulated **18** residual groups (15 default-named), so every TabDock launch opened 18 empty containers — which also broke the validation harness until it isolated state.json per scenario.
 **Resolution options:** a delete action in the launcher list and/or treat user-initiated close of an *empty* container as group removal.
 **Severity:** Low (Medium UX impact once several groups exist)
+
+### L13. `LAYOUT[...]` instrumentation was documented and harness-referenced but absent from committed source — **RESTORED 2026-07-12 (second session)** (NEW)
+**Where:** `Services/WindowCaptureService.cs` (`Layout`); contrast L6 and `tests/ValidationDriver/.../Scenarios.cs` (which references LAYOUT lines).
+**Description:** L6 and the validation driver describe `LAYOUT[...]` per-layout and `HOST WM_SIZE` lines, but no committed code emitted them (only `STATE[...]`/`MAXCLICK` existed). Either never committed or lost. A minimal tagged subset was reintroduced: `LAYOUT[capture|switch|restore|movesize|drift]` logs host client size vs guest rect; the per-resize-tick `wmsize` reason is deliberately not logged (L6's churn concern). **Severity:** Low
+
+### L14. `CheckRenderHealthAsync` failures are invisible in field logs (NEW 2026-07-12, second session — OPEN)
+**Where:** `Views/ContainerWindow.xaml.cs` (`CheckRenderHealthAsync` catch block).
+**Description:** The catch-all writes only `System.Diagnostics.Debug.WriteLine`, which never reaches the rotating `%APPDATA%` log — a render-health crash is silent in the field. Route through `_log.LogException` (keeping the must-not-crash contract). Not fixed in the second session (out of scope). **Severity:** Low
 
 ---
 

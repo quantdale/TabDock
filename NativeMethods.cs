@@ -262,6 +262,9 @@ public static partial class NativeMethods
     public static extern bool DeleteObject(IntPtr hObject);
 
     [DllImport("gdi32.dll")]
+    public static extern IntPtr CreateSolidBrush(uint crColor);
+
+    [DllImport("gdi32.dll")]
     public static extern bool DeleteDC(IntPtr hdc);
 
     [DllImport("gdi32.dll", SetLastError = true)]
@@ -426,6 +429,8 @@ public static partial class NativeMethods
     public const int SW_FORCEMINIMIZE = 11;
 
     public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+    public const uint EVENT_SYSTEM_MOVESIZESTART = 0x000A;
+    public const uint EVENT_SYSTEM_MOVESIZEEND = 0x000B;
     public const uint EVENT_SYSTEM_MINIMIZESTART = 0x0016;
     public const uint EVENT_SYSTEM_MINIMIZEEND = 0x0017;
     public const uint EVENT_OBJECT_CREATE = 0x8000;

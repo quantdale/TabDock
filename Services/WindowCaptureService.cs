@@ -102,7 +102,7 @@ public sealed class WindowCaptureService
             _log.Log($"SetWindowLongPtr GWL_EXSTYLE failed for 0x{hwnd.ToInt64():X}: {NativeMethods.FormatLastError()}");
         }
 
-        Layout(hwnd, hostHwnd);
+        Layout(hwnd, hostHwnd, "capture");
 
         var cw = new CapturedWindow
         {
@@ -125,12 +125,12 @@ public sealed class WindowCaptureService
         return cw;
     }
 
-    public void Layout(CapturedWindow window, IntPtr hostHwnd)
+    public void Layout(CapturedWindow window, IntPtr hostHwnd, string reason = "layout")
     {
-        Layout(window.Hwnd, hostHwnd);
+        Layout(window.Hwnd, hostHwnd, reason);
     }
 
-    public void Layout(IntPtr hwnd, IntPtr hostHwnd)
+    public void Layout(IntPtr hwnd, IntPtr hostHwnd, string reason = "layout")
     {
         if (!NativeMethods.IsWindow(hwnd))
             return;
@@ -155,6 +155,11 @@ public sealed class WindowCaptureService
             NativeMethods.SWP_NOZORDER |
             NativeMethods.SWP_NOACTIVATE |
             NativeMethods.SWP_SHOWWINDOW);
+
+        // Per-resize-tick lines would churn the 1 MB rotating log (finding L6);
+        // every other layout trigger is rare and diagnostically valuable.
+        if (reason != "wmsize")
+            _log.Log($"LAYOUT[{reason}] hostClient={width}x{height} guest={DescribeWindow(hwnd)}");
     }
 
     /// <summary>

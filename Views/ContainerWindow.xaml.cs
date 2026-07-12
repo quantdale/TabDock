@@ -30,6 +30,23 @@ public partial class ContainerWindow : Window
     private bool _isDragging;
     private const double DragThreshold = 4;
 
+    // Tab-strip slot midpoints snapshotted at drag start. Drop targeting must
+    // not read live container geometry mid-drag: a reorder mutates the layout
+    // under a stationary pointer, and the next MouseMove would compute the
+    // opposite index and reorder straight back (finding H2's oscillation).
+    private System.Collections.Generic.List<double>? _dragMidpoints;
+    private int _dragMidpointsCount;
+
+    // Guest clamp enforcement. The capture-time fill-clamp is not final: a
+    // guest can move/resize itself within the host (Chrome hit-tests its
+    // client-drawn tab strip as HTCAPTION, so it can be dragged even as a
+    // frame-stripped WS_CHILD; apps also self-position programmatically).
+    private IntPtr _guestInMoveSize;
+    private System.Windows.Threading.DispatcherTimer? _driftTimer;
+    private IntPtr _driftHwnd;
+    private int _driftCorrections;
+    private const int MaxConsecutiveDriftCorrections = 10;
+
     /// <summary>
     /// The underlying group model.
     /// </summary>
@@ -107,6 +124,13 @@ public partial class ContainerWindow : Window
         TabsListBox.PreviewMouseLeftButtonUp += TabsListBox_PreviewMouseLeftButtonUp;
 
         PreviewKeyDown += ContainerWindow_PreviewKeyDown;
+
+        // Watchdog for guests that re-position themselves programmatically
+        // (DPI-suggested rects, Electron setBounds, ...) — those never enter a
+        // move/size modal loop, so the MOVESIZEEND hook cannot see them.
+        _driftTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _driftTimer.Tick += DriftTimer_Tick;
+        _driftTimer.Start();
     }
 
     private void ContainerWindow_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -176,6 +200,13 @@ public partial class ContainerWindow : Window
 
     private void ContainerWindow_Closed(object? sender, EventArgs e)
     {
+        if (_driftTimer != null)
+        {
+            _driftTimer.Stop();
+            _driftTimer.Tick -= DriftTimer_Tick;
+            _driftTimer = null;
+        }
+
         IntPtr hwnd = new WindowInteropHelper(this).Handle;
         _manager.UnregisterContainerHwnd(hwnd);
         if (ContentHost.HostWindowHandle != IntPtr.Zero)
@@ -428,7 +459,102 @@ public partial class ContainerWindow : Window
 
         NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_RESTORE);
         if (ContentHostHwnd != IntPtr.Zero)
-            _capture.Layout(window, ContentHostHwnd);
+            _capture.Layout(window, ContentHostHwnd, "restore");
+    }
+
+    /// <summary>
+    /// Tracks a captured guest's interactive move/size modal loop. Chrome (and
+    /// other custom-frame apps) hit-tests its client-drawn tab strip as
+    /// HTCAPTION, and DefWindowProc's SC_MOVE loop moves WS_CHILD windows too,
+    /// so a frame-stripped guest can still be dragged around inside the host.
+    /// While the loop runs the drift watchdog stands down (re-clamping a window
+    /// under the user's cursor fights the drag); when it ends the guest is
+    /// snapped back to fill the content host.
+    /// </summary>
+    public void NoteGuestMoveSize(CapturedWindow window, bool started)
+    {
+        if (started)
+        {
+            _guestInMoveSize = window.Hwnd;
+            return;
+        }
+
+        if (_guestInMoveSize == window.Hwnd)
+            _guestInMoveSize = IntPtr.Zero;
+        ReclampGuest(window, "movesize");
+    }
+
+    /// <summary>
+    /// Re-applies the fill-clamp to a captured guest that moved or resized
+    /// itself within the content host. The visibility/iconic guards are
+    /// load-bearing, not hygiene: Layout uses SWP_SHOWWINDOW and force-restores
+    /// iconic windows, so an unguarded re-clamp against a guest that just hid
+    /// itself (tray-style close) would re-show it, fight the guest in a loop,
+    /// and defeat the guest-initiated-hide teardown.
+    /// </summary>
+    private void ReclampGuest(CapturedWindow window, string reason)
+    {
+        if (_viewModel.ActiveTab?.Model != window)
+            return;
+        if (ContentHostHwnd == IntPtr.Zero || !NativeMethods.IsWindow(window.Hwnd))
+            return;
+        if (!NativeMethods.IsWindowVisible(window.Hwnd) || NativeMethods.IsIconic(window.Hwnd))
+            return;
+        if (NativeMethods.GetParent(window.Hwnd) != ContentHostHwnd)
+            return;
+
+        _capture.Layout(window, ContentHostHwnd, reason);
+    }
+
+    private void DriftTimer_Tick(object? sender, EventArgs e)
+    {
+        if (WindowState == WindowState.Minimized)
+            return;
+
+        var window = _viewModel.ActiveTab?.Model;
+        if (window == null || ContentHostHwnd == IntPtr.Zero)
+            return;
+        if (window.Hwnd == _guestInMoveSize)
+            return; // Interactive drag in progress; MOVESIZEEND re-clamps.
+        if (!NativeMethods.IsWindow(window.Hwnd) ||
+            !NativeMethods.IsWindowVisible(window.Hwnd) ||
+            NativeMethods.IsIconic(window.Hwnd))
+            return;
+        if (NativeMethods.GetParent(window.Hwnd) != ContentHostHwnd)
+            return;
+
+        // The host is a borderless WS_CHILD, so its window rect IS its client
+        // area in screen coordinates; exact equality means the guest fills it.
+        NativeMethods.GetWindowRect(window.Hwnd, out NativeMethods.RECT guest);
+        NativeMethods.GetWindowRect(ContentHostHwnd, out NativeMethods.RECT host);
+        if (guest.left == host.left && guest.top == host.top &&
+            guest.right == host.right && guest.bottom == host.bottom)
+        {
+            _driftHwnd = IntPtr.Zero;
+            _driftCorrections = 0;
+            return;
+        }
+
+        // A guest that keeps re-asserting its own geometry would otherwise turn
+        // this into a 1 Hz tug-of-war; degrade to a single diagnostic line.
+        if (window.Hwnd == _driftHwnd)
+        {
+            _driftCorrections++;
+            if (_driftCorrections > MaxConsecutiveDriftCorrections)
+            {
+                if (_driftCorrections == MaxConsecutiveDriftCorrections + 1)
+                    _log.Log($"LAYOUT[drift] giving up on 0x{window.Hwnd.ToInt64():X}: still diverged after {MaxConsecutiveDriftCorrections} consecutive corrections.");
+                return;
+            }
+        }
+        else
+        {
+            _driftHwnd = window.Hwnd;
+            _driftCorrections = 1;
+        }
+
+        _log.Log($"LAYOUT[drift] guest={WindowCaptureService.DescribeWindow(window.Hwnd)} host={host.left},{host.top},{host.Width}x{host.Height}");
+        ReclampGuest(window, "drift");
     }
 
     /// <summary>
@@ -505,6 +631,7 @@ public partial class ContainerWindow : Window
         {
             _isDragging = true;
             Mouse.Capture(TabsListBox);
+            SnapshotDragMidpoints();
         }
 
         if (!_isDragging)
@@ -547,6 +674,8 @@ public partial class ContainerWindow : Window
         _draggedTab = null;
         _draggedItem = null;
         _isDragging = false;
+        _dragMidpoints = null;
+        _dragMidpointsCount = 0;
     }
 
     private ListBoxItem? FindListBoxItem(object source)
@@ -559,8 +688,55 @@ public partial class ContainerWindow : Window
         return current as ListBoxItem;
     }
 
+    /// <summary>
+    /// Caches each tab slot's horizontal midpoint at drag start. Geometry is
+    /// settled at that moment; mid-drag it is not — a reorder moves the slots
+    /// under a stationary pointer, and recomputing the drop index from live
+    /// containers made the next MouseMove reorder straight back (the H2
+    /// oscillation: hundreds of A-&gt;B / B-&gt;A flips per second).
+    /// </summary>
+    private void SnapshotDragMidpoints()
+    {
+        var midpoints = new System.Collections.Generic.List<double>(_viewModel.Tabs.Count);
+        for (int i = 0; i < _viewModel.Tabs.Count; i++)
+        {
+            if (TabsListBox.ItemContainerGenerator.ContainerFromIndex(i) is ListBoxItem item)
+            {
+                Point itemPos = item.TranslatePoint(new Point(0, 0), TabsListBox);
+                midpoints.Add(itemPos.X + item.ActualWidth / 2);
+            }
+            else
+            {
+                // A container is missing (virtualized/not yet generated); the
+                // cache would be misaligned, so fall back to live geometry.
+                _dragMidpoints = null;
+                _dragMidpointsCount = 0;
+                return;
+            }
+        }
+        _dragMidpoints = midpoints;
+        _dragMidpointsCount = midpoints.Count;
+    }
+
     private int? GetDropIndex(Point mousePos)
     {
+        // A count change mid-drag (a tab destroyed or hidden by a WinEvent
+        // handler between mouse moves) invalidates the cache. Re-snapshot:
+        // reorders never change the count, so this cannot reintroduce the
+        // oscillation feedback loop.
+        if (_dragMidpoints != null && _viewModel.Tabs.Count != _dragMidpointsCount)
+            SnapshotDragMidpoints();
+
+        if (_dragMidpoints != null)
+        {
+            for (int i = 0; i < _dragMidpoints.Count; i++)
+            {
+                if (mousePos.X < _dragMidpoints[i])
+                    return i;
+            }
+            return _dragMidpoints.Count > 0 ? _dragMidpoints.Count : null;
+        }
+
         for (int i = 0; i < _viewModel.Tabs.Count; i++)
         {
             if (TabsListBox.ItemContainerGenerator.ContainerFromIndex(i) is ListBoxItem item)
