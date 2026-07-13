@@ -130,8 +130,10 @@ public sealed class GroupViewModel : ViewModelBase
 
         _manager.MoveTab(_group, oldIndex, newIndex);
         var item = Tabs[oldIndex];
-        Tabs.RemoveAt(oldIndex);
-        Tabs.Insert(newIndex, item);
+        // Move (not RemoveAt+Insert) keeps the existing ListBox container alive,
+        // so the SelectedItem/IsSelected bindings and an in-flight drag see the
+        // same item instance throughout instead of a destroyed/recreated one.
+        Tabs.Move(oldIndex, newIndex);
         ActiveTab = item;
     }
 

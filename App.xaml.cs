@@ -299,6 +299,14 @@ public partial class App : Application
             }
         };
 
+        // A guest entered/left its interactive move/size modal loop (e.g. the
+        // user dragged Chrome by its client-drawn tab strip, which hit-tests as
+        // HTCAPTION even after the frame strip). The container suspends its
+        // drift watchdog during the loop and re-clamps the guest to fill the
+        // content host when the loop ends.
+        _events.WindowMoveSizeStarted += (_, args) => OnGuestMoveSize(args.Hwnd, started: true);
+        _events.WindowMoveSizeEnded += (_, args) => OnGuestMoveSize(args.Hwnd, started: false);
+
         _events.WindowNameChanged += (_, args) =>
         {
             foreach (var group in _groups.Groups)
@@ -322,6 +330,21 @@ public partial class App : Application
                 }
             }
         };
+    }
+
+    private void OnGuestMoveSize(IntPtr hwnd, bool started)
+    {
+        foreach (var group in _groups.Groups)
+        {
+            var match = group.Members.FirstOrDefault(m => m.Hwnd == hwnd);
+            if (match == null)
+                continue;
+
+            if (_containers.TryGetValue(group.Id, out var container))
+            {
+                container.NoteGuestMoveSize(match, started);
+            }
+        }
     }
 
     private void OnNewGroupRequested(object? sender, EventArgs e)

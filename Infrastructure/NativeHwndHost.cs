@@ -58,6 +58,13 @@ public class NativeHwndHost : HwndHost
                 lpfnWndProc = Marshal.GetFunctionPointerForDelegate(s_wndProc),
                 hInstance = hInstance,
                 hCursor = NativeMethods.LoadCursor(IntPtr.Zero, NativeMethods.IDC_ARROW),
+                // Without a class brush, DefWindowProc paints nothing on
+                // WM_ERASEBKGND and any host region not covered by the guest
+                // child keeps stale pixels (smearing when a guest moves within
+                // the host). Matches the WPF ContentBorder background #1E1E1E.
+                // A brush handed to RegisterClassEx is owned by the system for
+                // the class's lifetime — it must never be DeleteObject'd.
+                hbrBackground = NativeMethods.CreateSolidBrush(0x001E1E1E),
                 lpszClassName = WindowClass,
             };
 
@@ -135,7 +142,7 @@ public class NativeHwndHost : HwndHost
             // the content area black. Restore first, then lay out and show.
             if (NativeMethods.IsIconic(newWindow.Hwnd))
                 NativeMethods.ShowWindow(newWindow.Hwnd, NativeMethods.SW_RESTORE);
-            _service.Layout(newWindow, _hwnd);
+            _service.Layout(newWindow, _hwnd, "switch");
             NativeMethods.ShowWindow(newWindow.Hwnd, NativeMethods.SW_SHOW);
         }
     }
@@ -147,7 +154,7 @@ public class NativeHwndHost : HwndHost
 
         CapturedWindow? cw = ActiveWindow;
         if (cw != null)
-            _service.Layout(cw, _hwnd);
+            _service.Layout(cw, _hwnd, "wmsize");
     }
 
     public IntPtr HostWindowHandle => _hwnd;
