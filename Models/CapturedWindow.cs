@@ -30,11 +30,16 @@ public sealed class CapturedWindow
 
     /// <summary>
     /// The guest's original DPI before capture, captured while it was still a
-    /// standalone top-level window on its original monitor. Used on release to
-    /// send a reverse WM_DPICHANGED so the guest's internal scale returns to
-    /// its pre-capture baseline.
+    /// standalone top-level window on its original monitor. Retained for
+    /// diagnostics; the forward DPI message uses the host monitor DPI.
     /// </summary>
     public uint OriginalDpi { get; set; }
+
+    /// <summary>
+    /// Keeps the native subclass callback alive while the guest is captured so it
+    /// is not garbage-collected while comctl32 holds the function pointer.
+    /// </summary>
+    public NativeMethods.SubclassProc? SubclassProc { get; set; }
 
     public bool WasMaximized { get; set; }
 

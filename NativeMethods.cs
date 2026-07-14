@@ -18,6 +18,11 @@ public static partial class NativeMethods
     public delegate IntPtr WndProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
     public delegate void WinEventProc(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
 
+    /// <summary>
+    /// Callback for comctl32 window subclassing (SetWindowSubclass).
+    /// </summary>
+    public delegate IntPtr SubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, IntPtr uIdSubclass, IntPtr dwRefData);
+
     // -------------------------------------------------------------------------
     // user32.dll
     // -------------------------------------------------------------------------
@@ -151,6 +156,9 @@ public static partial class NativeMethods
     public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
     public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
 
     [DllImport("user32.dll")]
@@ -206,6 +214,18 @@ public static partial class NativeMethods
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    // -------------------------------------------------------------------------
+    // comctl32.dll (window subclassing)
+    // -------------------------------------------------------------------------
+    [DllImport("comctl32.dll")]
+    public static extern bool SetWindowSubclass(IntPtr hWnd, SubclassProc pfnSubclass, IntPtr uIdSubclass, IntPtr dwRefData);
+
+    [DllImport("comctl32.dll")]
+    public static extern bool RemoveWindowSubclass(IntPtr hWnd, IntPtr uIdSubclass);
+
+    [DllImport("comctl32.dll")]
+    public static extern IntPtr DefSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
 
     // -------------------------------------------------------------------------
     // kernel32.dll
@@ -407,6 +427,10 @@ public static partial class NativeMethods
     public const uint WM_SETREDRAW = 0x000B;
     public const uint WM_SYSCOMMAND = 0x0112;
     public const uint SC_MAXIMIZE = 0xF030;
+    public const uint SC_RESTORE = 0xF120;
+    public const uint WA_INACTIVE = 0;
+    public const uint WA_ACTIVE = 1;
+    public const uint WA_CLICKACTIVE = 2;
     public const uint WM_NCHITTEST = 0x0084;
     public const uint WM_GETMINMAXINFO = 0x0024;
     public const uint WM_NCCALCSIZE = 0x0083;
