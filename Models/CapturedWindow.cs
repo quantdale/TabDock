@@ -36,6 +36,13 @@ public sealed class CapturedWindow
     public uint OriginalDpi { get; set; }
 
     /// <summary>
+    /// The guest's DPI awareness context before capture. Used to decide whether
+    /// a synthetic WM_DPICHANGED is appropriate (only Per-Monitor-V2 guests
+    /// handle it meaningfully).
+    /// </summary>
+    public IntPtr OriginalAwarenessContext { get; set; }
+
+    /// <summary>
     /// Keeps the native subclass callback alive while the guest is captured so it
     /// is not garbage-collected while comctl32 holds the function pointer.
     /// </summary>

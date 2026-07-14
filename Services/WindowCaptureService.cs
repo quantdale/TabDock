@@ -63,10 +63,11 @@ public sealed class WindowCaptureService
         nint style = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_STYLE);
         nint exStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
 
-        // Capture the guest's baseline DPI while it is still a standalone top-level
-        // window on its original monitor. Retained for diagnostics only; no reverse
-        // DPI message is sent on release.
+        // Capture the guest's baseline DPI and awareness context while it is still a
+        // standalone top-level window on its original monitor. These are used to
+        // reconcile the guest's logical coordinate system with the host monitor.
         uint originalDpi = _dpi.GetDpi(hwnd);
+        IntPtr originalAwareness = _dpi.GetAwarenessContext(hwnd);
 
         // Diagnostic snapshot before reparenting (class, DPI awareness, geometry).
         LogGuestDiagnostics(hwnd, "pre-capture");
@@ -111,8 +112,6 @@ public sealed class WindowCaptureService
             _log.Log($"SetWindowLongPtr GWL_EXSTYLE failed for 0x{hwnd.ToInt64():X}: {NativeMethods.FormatLastError()}");
         }
 
-        Layout(hwnd, hostHwnd, "capture");
-
         var cw = new CapturedWindow
         {
             Hwnd = hwnd,
@@ -125,12 +124,17 @@ public sealed class WindowCaptureService
             OriginalExStyle = (long)exStyle,
             OriginalBounds = bounds,
             OriginalDpi = originalDpi,
+            OriginalAwarenessContext = originalAwareness,
             WasMaximized = originalPlacement.showCmd == NativeMethods.SW_SHOWMAXIMIZED,
         };
 
-        // Chrome/Electron guests do not receive WM_DPICHANGED across the SetParent
-        // boundary, so tell the guest the host monitor's DPI explicitly.
+        // Chrome/Electron/Edge guests do not receive WM_DPICHANGED across the SetParent
+        // boundary, so tell a Per-Monitor-V2 guest the host monitor's DPI explicitly
+        // before sizing it. The Layout call below then applies the guest's logical
+        // scale to the host physical client rect.
         NotifyDpiChanged(cw, hostHwnd);
+
+        Layout(hwnd, hostHwnd, "capture");
 
         // Disable maximize/restore for the hosted guest. Frame-stripping removes
         // the system maximize box, but custom-drawn captions still dispatch these
@@ -169,8 +173,17 @@ public sealed class WindowCaptureService
             NativeMethods.ShowWindow(hwnd, NativeMethods.SW_RESTORE);
 
         NativeMethods.GetClientRect(hostHwnd, out NativeMethods.RECT rc);
-        int width = Math.Max(rc.Width, 1);
-        int height = Math.Max(rc.Height, 1);
+
+        // Reconcile the guest's logical coordinate system with the host monitor's
+        // physical pixels. A guest that runs under a different DPI awareness
+        // context (system-aware or DPI-unaware) interprets SetWindowPos sizes in
+        // its own logical pixels; Windows then scales the rendered output to the
+        // monitor DPI. Without this scale factor the guest would overflow or
+        // underflow the host. Per-Monitor-V2 guests on the same monitor use a 1:1
+        // scale and continue to fill the host exactly.
+        double scale = _dpi.GetGuestToHostScaleFactor(hwnd, hostHwnd);
+        int width = Math.Max((int)(rc.Width * scale), 1);
+        int height = Math.Max((int)(rc.Height * scale), 1);
 
         NativeMethods.SetWindowPos(
             hwnd,
@@ -187,7 +200,7 @@ public sealed class WindowCaptureService
         // Per-resize-tick lines would churn the 1 MB rotating log (finding L6);
         // every other layout trigger is rare and diagnostically valuable.
         if (reason != "wmsize")
-            _log.Log($"LAYOUT[{reason}] hostClient={width}x{height} guest={DescribeWindow(hwnd)}");
+            _log.Log($"LAYOUT[{reason}] hostClient={rc.Width}x{rc.Height} scale={scale:F3} guestSize={width}x{height} guest={DescribeWindow(hwnd)}");
     }
 
     /// <summary>
@@ -202,10 +215,13 @@ public sealed class WindowCaptureService
     }
 
     /// <summary>
-    /// Notifies a captured guest that the host monitor DPI differs from its
-    /// current DPI by sending WM_DPICHANGED with the host client rect mapped to
-    /// screen. Chrome/Electron do not receive DPI changes across the SetParent
-    /// process boundary, so this forward message is required for correct scaling.
+    /// Notifies a Per-Monitor-V2 captured guest that the host monitor DPI differs
+    /// from the DPI it had before capture. Chrome/Electron/Edge do not receive
+    /// WM_DPICHANGED across the SetParent process boundary, so this forward message
+    /// is required for correct scaling when the guest originated on a monitor with
+    /// a different DPI. System-aware and DPI-unaware guests do not handle
+    /// WM_DPICHANGED meaningfully, so the message is skipped for them; their
+    /// scaling is reconciled in Layout instead.
     /// </summary>
     public void NotifyDpiChanged(CapturedWindow window, IntPtr hostHwnd)
     {
@@ -213,9 +229,16 @@ public sealed class WindowCaptureService
             return;
 
         uint hostDpi = _dpi.GetDpi(hostHwnd);
-        uint guestDpi = _dpi.GetDpi(window.Hwnd);
-        if (hostDpi == guestDpi)
+        if (window.OriginalDpi == hostDpi)
             return;
+
+        // WM_DPICHANGED is only meaningful for Per-Monitor-V2 guests.
+        if (!_dpi.IsPerMonitorV2(window.Hwnd) &&
+            !_dpi.IsPerMonitorAware(window.Hwnd))
+        {
+            _log.Log($"LAYOUT[dpi-forward] skipped: guest 0x{window.Hwnd.ToInt64():X} is not Per-Monitor aware (originalDpi={window.OriginalDpi} hostDpi={hostDpi})");
+            return;
+        }
 
         NativeMethods.GetClientRect(hostHwnd, out NativeMethods.RECT rc);
         var pt = new NativeMethods.POINT { x = rc.left, y = rc.top };
@@ -229,7 +252,7 @@ public sealed class WindowCaptureService
         };
 
         bool sent = NativeMethods.TrySendDpiChanged(window.Hwnd, hostDpi, suggested);
-        _log.Log($"LAYOUT[dpi-forward] hostDpi={hostDpi} guestDpi={guestDpi} rect={suggested.left},{suggested.top},{suggested.Width}x{suggested.Height} result={(sent ? "sent" : "failed")} guest={DescribeWindow(window.Hwnd)}");
+        _log.Log($"LAYOUT[dpi-forward] originalDpi={window.OriginalDpi} hostDpi={hostDpi} rect={suggested.left},{suggested.top},{suggested.Width}x{suggested.Height} result={(sent ? "sent" : "failed")} guest={DescribeWindow(window.Hwnd)}");
 
     }
 
