@@ -92,6 +92,7 @@ public sealed class WindowCaptureService
             NativeMethods.WS_THICKFRAME |
             NativeMethods.WS_MINIMIZEBOX |
             NativeMethods.WS_MAXIMIZEBOX |
+            NativeMethods.WS_MAXIMIZE |
             NativeMethods.WS_SYSMENU)) |
             (long)(NativeMethods.WS_CHILD | NativeMethods.WS_CLIPSIBLINGS));
 
