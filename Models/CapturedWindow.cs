@@ -41,18 +41,6 @@ public sealed class CapturedWindow
     /// </summary>
     public NativeMethods.SubclassProc? SubclassProc { get; set; }
 
-    /// <summary>
-    /// If Edge-style Chromium guests need a child-level subclass to intercept
-    /// maximize/restore on the render HWND, this keeps that delegate alive.
-    /// </summary>
-    public NativeMethods.SubclassProc? ChildSubclassProc { get; set; }
-
-    /// <summary>
-    /// The child HWND that received the secondary subclass/DPI message for
-    /// Chromium guests that do not process these on the top-level window.
-    /// </summary>
-    public IntPtr ChildSubclassHwnd { get; set; }
-
     public bool WasMaximized { get; set; }
 
     public bool RenderHealth { get; set; } = true;
