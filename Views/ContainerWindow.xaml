@@ -123,7 +123,8 @@
             <Button Grid.Column="4" Style="{StaticResource CaptionButtonStyle}"
                     Content="&#xE949;" Click="Minimize_Click" ToolTip="Minimize" />
             <Button Grid.Column="5" Style="{StaticResource CaptionButtonStyle}"
-                    Content="&#xE739;" Click="Maximize_Click" ToolTip="Maximize/Restore" x:Name="MaximizeButton" />
+                    Content="&#xE739;" Click="Maximize_Click" ToolTip="Maximize is disabled" x:Name="MaximizeButton"
+                    IsEnabled="False" Opacity="0.5" />
             <Button Grid.Column="6" Style="{StaticResource CaptionButtonStyle}"
                     Content="&#xE106;" Click="Close_Click" ToolTip="Close" />
         </Grid>

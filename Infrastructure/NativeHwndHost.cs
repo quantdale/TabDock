@@ -191,14 +191,15 @@ public class NativeHwndHost : HwndHost
     }
 
     /// <summary>
-    /// Re-lays out the active guest and forwards the new DPI to it when the host
-    /// moves between monitors with different scale factors.
+    /// Re-lays out the active guest when the host moves between monitors with
+    /// different scale factors. DPI is reconciled by sizing the host HWND in
+    /// physical pixels (ArrangeOverride); no cross-process WM_DPICHANGED is sent
+    /// because synthetic DPI messages leave Chrome/Electron guests unresponsive
+    /// after release.
     /// </summary>
     protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
     {
         base.OnDpiChanged(oldDpi, newDpi);
         LayoutActiveWindow();
-        if (_service != null && ActiveWindow != null)
-            _service.NotifyDpiChanged(ActiveWindow, _hwnd);
     }
 }

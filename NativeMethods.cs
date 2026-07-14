@@ -406,6 +406,7 @@ public static partial class NativeMethods
     public const uint WM_ENABLE = 0x000A;
     public const uint WM_SETREDRAW = 0x000B;
     public const uint WM_SYSCOMMAND = 0x0112;
+    public const uint SC_MAXIMIZE = 0xF030;
     public const uint WM_NCHITTEST = 0x0084;
     public const uint WM_GETMINMAXINFO = 0x0024;
     public const uint WM_NCCALCSIZE = 0x0083;

@@ -128,10 +128,6 @@ public sealed class WindowCaptureService
         // driven by ContainerWindow.AddCapturedWindow, which owns the view-model
         // state a release has to update. A duplicate check here could only log.
         _log.Log($"Captured 0x{hwnd.ToInt64():X} ({cw.OriginalTitle}) into host 0x{hostHwnd.ToInt64():X}");
-
-        // Chrome/Electron guests do not receive WM_DPICHANGED across the SetParent
-        // boundary, so tell the guest the host monitor's DPI explicitly.
-        NotifyDpiChanged(cw, hostHwnd);
         return cw;
     }
 
@@ -170,49 +166,6 @@ public sealed class WindowCaptureService
         // every other layout trigger is rare and diagnostically valuable.
         if (reason != "wmsize")
             _log.Log($"LAYOUT[{reason}] hostClient={width}x{height} guest={DescribeWindow(hwnd)}");
-    }
-
-    /// <summary>
-    /// Notifies a captured guest that the host's DPI has changed (or differs from
-    /// the guest's baseline DPI) by sending WM_DPICHANGED with the host client rect
-    /// mapped to screen. Windows does not forward DPI changes across process
-    /// boundaries, so guests such as Chrome/Electron must be told explicitly.
-    /// </summary>
-    public void NotifyDpiChanged(CapturedWindow window, IntPtr hostHwnd)
-    {
-        if (!NativeMethods.IsWindow(window.Hwnd) || !NativeMethods.IsWindow(hostHwnd))
-            return;
-
-        uint hostDpi = _dpi.GetDpi(hostHwnd);
-        uint guestDpi = _dpi.GetDpi(window.Hwnd);
-        if (hostDpi == guestDpi)
-            return;
-
-        NativeMethods.GetClientRect(hostHwnd, out NativeMethods.RECT rc);
-        var pt = new NativeMethods.POINT { x = rc.left, y = rc.top };
-        NativeMethods.ClientToScreen(hostHwnd, ref pt);
-        var suggested = new NativeMethods.RECT
-        {
-            left = pt.x,
-            top = pt.y,
-            right = pt.x + rc.Width,
-            bottom = pt.y + rc.Height,
-        };
-
-        SendDpiChanged(window, hostDpi, suggested, "forward");
-    }
-
-    /// <summary>
-    /// Sends a WM_DPICHANGED message to a captured guest with the supplied DPI and
-    /// suggested rect. Logs success/failure for field diagnosis.
-    /// </summary>
-    private void SendDpiChanged(CapturedWindow window, uint dpi, NativeMethods.RECT suggestedRect, string reason)
-    {
-        if (!NativeMethods.IsWindow(window.Hwnd))
-            return;
-
-        bool sent = NativeMethods.TrySendDpiChanged(window.Hwnd, dpi, suggestedRect);
-        _log.Log($"LAYOUT[dpi-{reason}] dpi={dpi} rect={suggestedRect.left},{suggestedRect.top},{suggestedRect.Width}x{suggestedRect.Height} result={(sent ? "sent" : "failed")} guest={DescribeWindow(window.Hwnd)}");
     }
 
     /// <summary>
@@ -265,15 +218,6 @@ public sealed class WindowCaptureService
             NativeMethods.SWP_NOZORDER |
             NativeMethods.SWP_NOACTIVATE);
 
-        // Reverse the synthetic WM_DPICHANGED sent at capture so the guest's
-        // internal DPI scale returns to its pre-capture baseline before we
-        // restore its original placement.
-        if (window.OriginalDpi != 0)
-        {
-            NativeMethods.GetWindowRect(window.Hwnd, out NativeMethods.RECT currentRect);
-            SendDpiChanged(window, window.OriginalDpi, currentRect, "reverse");
-        }
-
         NativeMethods.WINDOWPLACEMENT placement = window.OriginalPlacement;
         placement.length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>();
 
@@ -298,7 +242,7 @@ public sealed class WindowCaptureService
                     window.OriginalBounds.Height,
                     NativeMethods.SWP_FRAMECHANGED | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
             }
-            _log.Log($"Released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide)");
+            _log.Log($"Released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide) originalDpi={window.OriginalDpi}");
             return;
         }
 
@@ -333,7 +277,7 @@ public sealed class WindowCaptureService
         }
 
         NativeMethods.SetForegroundWindow(window.Hwnd);
-        _log.Log($"Released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle})");
+        _log.Log($"Released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) originalDpi={window.OriginalDpi}");
     }
 
     public void ReleaseAndShow(CapturedWindow window)

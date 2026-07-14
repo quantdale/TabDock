@@ -94,6 +94,19 @@ public partial class ContainerWindow : Window
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if ((uint)msg == NativeMethods.WM_SYSCOMMAND)
+        {
+            // Block both the maximize system command and the double-click-caption
+            // maximize path so the container cannot be maximized.
+            uint cmd = (uint)(wParam.ToInt64() & 0xFFF0);
+            if (cmd == NativeMethods.SC_MAXIMIZE)
+            {
+                _log.Log("WM_SYSCOMMAND SC_MAXIMIZE ignored");
+                handled = true;
+                return IntPtr.Zero;
+            }
+        }
+
         if ((uint)msg == NativeMethods.WM_GETMINMAXINFO)
         {
             IntPtr monitor = NativeMethods.MonitorFromWindow(hwnd, NativeMethods.MONITOR_DEFAULTTONEAREST);
@@ -378,8 +391,9 @@ public partial class ContainerWindow : Window
 
     private void Maximize_Click(object sender, RoutedEventArgs e)
     {
-        _log.Log($"MAXCLICK from={WindowState}");
-        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+        // Maximizing the container is disabled: it races with reparented guests
+        // and can leave GPU/Electron tabs with a black or unresponsive surface.
+        _log.Log("MAXCLICK ignored: container maximize is disabled");
     }
 
     private void Close_Click(object sender, RoutedEventArgs e)
