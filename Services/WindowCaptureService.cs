@@ -64,9 +64,12 @@ public sealed class WindowCaptureService
         nint exStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
 
         // Capture the guest's baseline DPI while it is still a standalone top-level
-        // window on its original monitor. This is needed on release to reverse the
-        // synthetic WM_DPICHANGED sent after reparenting.
+        // window on its original monitor. Retained for diagnostics only; no reverse
+        // DPI message is sent on release.
         uint originalDpi = _dpi.GetDpi(hwnd);
+
+        // Diagnostic snapshot before reparenting (class, DPI awareness, geometry).
+        LogGuestDiagnostics(hwnd, "pre-capture");
 
         // Preserve the original placement (including maximized state) so it can be
         // restored accurately on release. Do not restore the window here; that
@@ -132,10 +135,26 @@ public sealed class WindowCaptureService
         // the system maximize box, but custom-drawn captions still dispatch these
         // commands internally.
         cw.SubclassProc = GuestSubclassProc;
-        if (!NativeMethods.SetWindowSubclass(hwnd, cw.SubclassProc, IntPtr.Zero, IntPtr.Zero))
+        bool subclassed = NativeMethods.SetWindowSubclass(hwnd, cw.SubclassProc, IntPtr.Zero, IntPtr.Zero);
+        _log.Log($"DIAG[subclass-top] hwnd=0x{hwnd.ToInt64():X} result={(subclassed ? "installed" : "failed")} error={(subclassed ? "none" : NativeMethods.FormatLastError())}");
+        if (!subclassed)
         {
             _log.Log($"SetWindowSubclass failed for 0x{hwnd.ToInt64():X}: {NativeMethods.FormatLastError()}; falling back to WinEvent zoom clamp.");
         }
+
+        // Edge uses the same Chromium top-level class as Chrome, but its internal
+        // render/input HWND may not inherit the top-level DPI message or subclass.
+        // For Edge, also target the largest visible Chromium child window.
+        if (IsEdgeExecutable(cw.ExePath) && TryFindChromiumRenderChild(hwnd, out IntPtr edgeRenderHwnd))
+        {
+            cw.ChildSubclassHwnd = edgeRenderHwnd;
+            cw.ChildSubclassProc = GuestSubclassProc;
+            bool childSubclassed = NativeMethods.SetWindowSubclass(edgeRenderHwnd, cw.ChildSubclassProc, IntPtr.Zero, IntPtr.Zero);
+            _log.Log($"DIAG[subclass-child] hwnd=0x{edgeRenderHwnd.ToInt64():X} result={(childSubclassed ? "installed" : "failed")}");
+        }
+
+        // Diagnostic snapshot after reparenting and style changes.
+        LogGuestDiagnostics(hwnd, "post-capture");
 
         // The render-health check (and the auto-release of unhealthy tabs) is
         // driven by ContainerWindow.AddCapturedWindow, which owns the view-model
@@ -221,6 +240,15 @@ public sealed class WindowCaptureService
 
         bool sent = NativeMethods.TrySendDpiChanged(window.Hwnd, hostDpi, suggested);
         _log.Log($"LAYOUT[dpi-forward] hostDpi={hostDpi} guestDpi={guestDpi} rect={suggested.left},{suggested.top},{suggested.Width}x{suggested.Height} result={(sent ? "sent" : "failed")} guest={DescribeWindow(window.Hwnd)}");
+
+        // Edge's top-level Chromium HWND may not propagate WM_DPICHANGED to its
+        // render child, leaving the UI scaled incorrectly. Send directly to the
+        // largest visible Chromium child as well.
+        if (IsEdgeExecutable(window.ExePath) && TryFindChromiumRenderChild(window.Hwnd, out IntPtr renderHwnd))
+        {
+            bool childSent = NativeMethods.TrySendDpiChanged(renderHwnd, hostDpi, suggested);
+            _log.Log($"LAYOUT[dpi-renderchild] hwnd=0x{renderHwnd.ToInt64():X} hostDpi={hostDpi} result={(childSent ? "sent" : "failed")}");
+        }
     }
 
     /// <summary>
@@ -243,6 +271,67 @@ public sealed class WindowCaptureService
     }
 
     /// <summary>
+    /// Logs the guest's class name, DPI, awareness context, and geometry so Edge vs
+    /// Chrome divergence can be diagnosed from the rotating log.
+    /// </summary>
+    private void LogGuestDiagnostics(IntPtr hwnd, string phase)
+    {
+        if (!NativeMethods.IsWindow(hwnd))
+            return;
+
+        string className = NativeMethods.GetClassNameString(hwnd) ?? "(unknown)";
+        uint dpi = _dpi.GetDpi(hwnd);
+        IntPtr context = _dpi.GetAwarenessContext(hwnd);
+        string contextName = _dpi.DescribeAwarenessContext(context);
+
+        _log.Log($"DIAG[{phase}] hwnd=0x{hwnd.ToInt64():X} class={className} dpi={dpi} awareness={contextName} {DescribeWindow(hwnd)}");
+    }
+
+    private static bool IsEdgeExecutable(string? exePath)
+    {
+        return exePath != null && exePath.IndexOf("msedge", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static bool IsChromiumClass(string? className)
+    {
+        return className != null && className.StartsWith("Chrome_WidgetWin_", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Finds the largest visible Chromium render child of the supplied parent.
+    /// Edge's top-level HWND sometimes does not process WM_DPICHANGED itself, so
+    /// the message must be delivered to the inner render HWND instead.
+    /// </summary>
+    private static bool TryFindChromiumRenderChild(IntPtr parent, out IntPtr renderHwnd)
+    {
+        IntPtr found = IntPtr.Zero;
+        int bestArea = 0;
+
+        NativeMethods.EnumChildWindows(parent, (hWnd, lParam) =>
+        {
+            if (!NativeMethods.IsWindowVisible(hWnd))
+                return true;
+
+            string? className = NativeMethods.GetClassNameString(hWnd);
+            if (!IsChromiumClass(className))
+                return true;
+
+            NativeMethods.GetWindowRect(hWnd, out NativeMethods.RECT rc);
+            int area = rc.Width * rc.Height;
+            if (area > bestArea)
+            {
+                bestArea = area;
+                found = hWnd;
+            }
+
+            return true;
+        }, IntPtr.Zero);
+
+        renderHwnd = found;
+        return renderHwnd != IntPtr.Zero && renderHwnd != parent;
+    }
+
+    /// <summary>
     /// Releases a captured window back to its original parent and restores its original styles/bounds.
     /// When <paramref name="show"/> is false the window's ownership, styles and geometry are restored
     /// but it is left hidden and not foregrounded — used when the guest hid itself (tray-style close)
@@ -258,6 +347,11 @@ public sealed class WindowCaptureService
 
         // Remove the guest subclass before reparenting so comctl32 detaches the
         // callback cleanly while the HWND is still our child.
+        if (window.ChildSubclassHwnd != IntPtr.Zero)
+        {
+            NativeMethods.RemoveWindowSubclass(window.ChildSubclassHwnd, IntPtr.Zero);
+            window.ChildSubclassHwnd = IntPtr.Zero;
+        }
         NativeMethods.RemoveWindowSubclass(window.Hwnd, IntPtr.Zero);
 
         NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
