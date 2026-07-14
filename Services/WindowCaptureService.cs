@@ -63,6 +63,11 @@ public sealed class WindowCaptureService
         nint style = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_STYLE);
         nint exStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
 
+        // Capture the guest's baseline DPI while it is still a standalone top-level
+        // window on its original monitor. This is needed on release to reverse the
+        // synthetic WM_DPICHANGED sent after reparenting.
+        uint originalDpi = _dpi.GetDpi(hwnd);
+
         // Preserve the original placement (including maximized state) so it can be
         // restored accurately on release. Do not restore the window here; that
         // would overwrite the rcNormalPosition / ptMaxPosition data we need.
@@ -115,6 +120,7 @@ public sealed class WindowCaptureService
             OriginalStyle = (long)style,
             OriginalExStyle = (long)exStyle,
             OriginalBounds = bounds,
+            OriginalDpi = originalDpi,
             WasMaximized = originalPlacement.showCmd == NativeMethods.SW_SHOWMAXIMIZED,
         };
 
@@ -193,8 +199,20 @@ public sealed class WindowCaptureService
             bottom = pt.y + rc.Height,
         };
 
-        _log.Log($"LAYOUT[dpi] hostDpi={hostDpi} guestDpi={guestDpi} hostClient={rc.Width}x{rc.Height} rect={suggested.left},{suggested.top},{suggested.Width}x{suggested.Height} guest={DescribeWindow(window.Hwnd)}");
-        NativeMethods.TrySendDpiChanged(window.Hwnd, hostDpi, suggested);
+        SendDpiChanged(window, hostDpi, suggested, "forward");
+    }
+
+    /// <summary>
+    /// Sends a WM_DPICHANGED message to a captured guest with the supplied DPI and
+    /// suggested rect. Logs success/failure for field diagnosis.
+    /// </summary>
+    private void SendDpiChanged(CapturedWindow window, uint dpi, NativeMethods.RECT suggestedRect, string reason)
+    {
+        if (!NativeMethods.IsWindow(window.Hwnd))
+            return;
+
+        bool sent = NativeMethods.TrySendDpiChanged(window.Hwnd, dpi, suggestedRect);
+        _log.Log($"LAYOUT[dpi-{reason}] dpi={dpi} rect={suggestedRect.left},{suggestedRect.top},{suggestedRect.Width}x{suggestedRect.Height} result={(sent ? "sent" : "failed")} guest={DescribeWindow(window.Hwnd)}");
     }
 
     /// <summary>
@@ -246,6 +264,15 @@ public sealed class WindowCaptureService
             NativeMethods.SWP_NOSIZE |
             NativeMethods.SWP_NOZORDER |
             NativeMethods.SWP_NOACTIVATE);
+
+        // Reverse the synthetic WM_DPICHANGED sent at capture so the guest's
+        // internal DPI scale returns to its pre-capture baseline before we
+        // restore its original placement.
+        if (window.OriginalDpi != 0)
+        {
+            NativeMethods.GetWindowRect(window.Hwnd, out NativeMethods.RECT currentRect);
+            SendDpiChanged(window, window.OriginalDpi, currentRect, "reverse");
+        }
 
         NativeMethods.WINDOWPLACEMENT placement = window.OriginalPlacement;
         placement.length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>();
