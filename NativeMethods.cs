@@ -150,6 +150,9 @@ public static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+
     [DllImport("user32.dll")]
     public static extern void PostQuitMessage(int nExitCode);
 
@@ -215,6 +218,15 @@ public static partial class NativeMethods
 
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern bool CloseHandle(IntPtr hObject);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, UIntPtr dwSize, uint flAllocationType, uint flProtect);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool VirtualFreeEx(IntPtr hProcess, IntPtr lpAddress, UIntPtr dwSize, uint dwFreeType);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, IntPtr lpBuffer, UIntPtr nSize, out UIntPtr lpNumberOfBytesWritten);
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref uint lpdwSize);
@@ -353,6 +365,16 @@ public static partial class NativeMethods
     public const uint SWP_NOOWNERZORDER = 0x0200;
     public const uint SWP_NOSENDCHANGING = 0x0400;
 
+    public const uint MEM_COMMIT = 0x1000;
+    public const uint MEM_RELEASE = 0x8000;
+    public const uint PAGE_READWRITE = 0x04;
+
+    public const uint SMTO_NORMAL = 0x0000;
+    public const uint SMTO_BLOCK = 0x0001;
+    public const uint SMTO_ABORTIFHUNG = 0x0002;
+    public const uint SMTO_NOTIMEOUTIFNOTHUNG = 0x0008;
+    public const uint SMTO_ERRORONEXIT = 0x0020;
+
     public static readonly IntPtr HWND_TOP = new IntPtr(0);
     public static readonly IntPtr HWND_BOTTOM = new IntPtr(1);
     public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
@@ -476,6 +498,9 @@ public static partial class NativeMethods
     public const uint DWMWA_CLOAKED = 14;
 
     public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000;
+    public const uint PROCESS_VM_OPERATION = 0x00000008;
+    public const uint PROCESS_VM_WRITE = 0x00000020;
+    public const uint PROCESS_VM_READ = 0x00000010;
     public const uint PROCESS_SYNCHRONIZE = 0x00100000;
     public const uint TOKEN_QUERY = 0x0008;
 
@@ -738,6 +763,52 @@ public static partial class NativeMethods
     public static bool IsCurrentProcessElevated(out bool elevated)
     {
         return IsProcessElevated(GetCurrentProcessId(), out elevated);
+    }
+
+    /// <summary>
+    /// Sends WM_DPICHANGED to a foreign GUI process window so it can rescale its
+    /// rendering to a new DPI. The RECT is allocated in the target process because
+    /// SendMessageTimeout does not marshal the lParam pointer across processes.
+    /// Returns true only if the message was dispatched before the timeout.
+    /// </summary>
+    public static bool TrySendDpiChanged(IntPtr hwnd, uint dpi, RECT suggestedRect)
+    {
+        if (!IsWindow(hwnd))
+            return false;
+
+        GetWindowThreadProcessId(hwnd, out uint pid);
+        const uint access = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ | PROCESS_SYNCHRONIZE;
+        IntPtr hProcess = OpenProcess(access, false, pid);
+        if (hProcess == IntPtr.Zero)
+            return false;
+
+        int size = Marshal.SizeOf<RECT>();
+        IntPtr remote = VirtualAllocEx(hProcess, IntPtr.Zero, (UIntPtr)size, MEM_COMMIT, PAGE_READWRITE);
+        if (remote == IntPtr.Zero)
+        {
+            CloseHandle(hProcess);
+            return false;
+        }
+
+        bool sent = false;
+        IntPtr local = Marshal.AllocHGlobal(size);
+        try
+        {
+            Marshal.StructureToPtr(suggestedRect, local, false);
+            if (WriteProcessMemory(hProcess, remote, local, (UIntPtr)size, out _))
+            {
+                IntPtr wParam = (IntPtr)(long)((dpi << 16) | (dpi & 0xFFFF));
+                sent = SendMessageTimeout(hwnd, WM_DPICHANGED, wParam, remote, SMTO_ABORTIFHUNG, 100, out _) != IntPtr.Zero;
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(local);
+            VirtualFreeEx(hProcess, remote, UIntPtr.Zero, MEM_RELEASE);
+            CloseHandle(hProcess);
+        }
+
+        return sent;
     }
 
     public static string FormatLastError()

@@ -122,6 +122,10 @@ public sealed class WindowCaptureService
         // driven by ContainerWindow.AddCapturedWindow, which owns the view-model
         // state a release has to update. A duplicate check here could only log.
         _log.Log($"Captured 0x{hwnd.ToInt64():X} ({cw.OriginalTitle}) into host 0x{hostHwnd.ToInt64():X}");
+
+        // Chrome/Electron guests do not receive WM_DPICHANGED across the SetParent
+        // boundary, so tell the guest the host monitor's DPI explicitly.
+        NotifyDpiChanged(cw, hostHwnd);
         return cw;
     }
 
@@ -160,6 +164,37 @@ public sealed class WindowCaptureService
         // every other layout trigger is rare and diagnostically valuable.
         if (reason != "wmsize")
             _log.Log($"LAYOUT[{reason}] hostClient={width}x{height} guest={DescribeWindow(hwnd)}");
+    }
+
+    /// <summary>
+    /// Notifies a captured guest that the host's DPI has changed (or differs from
+    /// the guest's baseline DPI) by sending WM_DPICHANGED with the host client rect
+    /// mapped to screen. Windows does not forward DPI changes across process
+    /// boundaries, so guests such as Chrome/Electron must be told explicitly.
+    /// </summary>
+    public void NotifyDpiChanged(CapturedWindow window, IntPtr hostHwnd)
+    {
+        if (!NativeMethods.IsWindow(window.Hwnd) || !NativeMethods.IsWindow(hostHwnd))
+            return;
+
+        uint hostDpi = _dpi.GetDpi(hostHwnd);
+        uint guestDpi = _dpi.GetDpi(window.Hwnd);
+        if (hostDpi == guestDpi)
+            return;
+
+        NativeMethods.GetClientRect(hostHwnd, out NativeMethods.RECT rc);
+        var pt = new NativeMethods.POINT { x = rc.left, y = rc.top };
+        NativeMethods.ClientToScreen(hostHwnd, ref pt);
+        var suggested = new NativeMethods.RECT
+        {
+            left = pt.x,
+            top = pt.y,
+            right = pt.x + rc.Width,
+            bottom = pt.y + rc.Height,
+        };
+
+        _log.Log($"LAYOUT[dpi] hostDpi={hostDpi} guestDpi={guestDpi} hostClient={rc.Width}x{rc.Height} rect={suggested.left},{suggested.top},{suggested.Width}x{suggested.Height} guest={DescribeWindow(window.Hwnd)}");
+        NativeMethods.TrySendDpiChanged(window.Hwnd, hostDpi, suggested);
     }
 
     /// <summary>

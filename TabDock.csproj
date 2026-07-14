@@ -9,6 +9,8 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>TabDock</AssemblyName>
     <RootNamespace>TabDock</RootNamespace>
+    <!-- The build environment cannot reach nuget.org for vulnerability audit data; disable it so the build is warning-free. -->
+    <NuGetAudit>false</NuGetAudit>
     <!--
       The repository root also contains spike/test projects. Exclude their build artifacts
       and source trees from the main WPF project so the SDK default globs don't pull them in.
