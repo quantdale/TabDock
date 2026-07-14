@@ -12,11 +12,8 @@ namespace TabDock.Services;
 /// </summary>
 public sealed class RenderHealthService
 {
-    private readonly DpiService _dpi;
-
-    public RenderHealthService(DpiService dpi)
+    public RenderHealthService()
     {
-        _dpi = dpi;
     }
 
     public async Task<bool> CheckHealthAsync(CapturedWindow window, IntPtr hostHwnd)

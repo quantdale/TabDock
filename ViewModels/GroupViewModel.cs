@@ -11,7 +11,6 @@ public sealed class GroupViewModel : ViewModelBase
 {
     private readonly Group _group;
     private readonly GroupManager _manager;
-    private readonly WindowCaptureService _capture;
     private readonly IconService _icons;
     private TabViewModel? _activeTab;
     private bool _isRenaming;
@@ -69,11 +68,10 @@ public sealed class GroupViewModel : ViewModelBase
         AddWindowsRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    public GroupViewModel(Group group, GroupManager manager, WindowCaptureService capture, IconService icons)
+    public GroupViewModel(Group group, GroupManager manager, IconService icons)
     {
         _group = group;
         _manager = manager;
-        _capture = capture;
         _icons = icons;
 
         _group.PropertyChanged += (_, e) =>

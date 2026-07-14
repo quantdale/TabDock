@@ -36,6 +36,7 @@ public partial class ContainerWindow : Window
     // opposite index and reorder straight back (finding H2's oscillation).
     private System.Collections.Generic.List<double>? _dragMidpoints;
     private int _dragMidpointsCount;
+    private bool _dragMidpointsValid;
 
     // Guest clamp enforcement. The capture-time fill-clamp is not final: a
     // guest can move/resize itself within the host (Chrome hit-tests its
@@ -46,6 +47,12 @@ public partial class ContainerWindow : Window
     private IntPtr _driftHwnd;
     private int _driftCorrections;
     private const int MaxConsecutiveDriftCorrections = 10;
+
+    // Deferred clamp for maximized guests: MOVESIZEEND fires before the window
+    // has finished restoring, so immediate clamping corrupts the render surface.
+    private System.Windows.Threading.DispatcherTimer? _reclampRetryTimer;
+    private CapturedWindow? _reclampPendingWindow;
+    private string _reclampPendingReason = string.Empty;
 
     /// <summary>
     /// The underlying group model.
@@ -207,6 +214,13 @@ public partial class ContainerWindow : Window
             _driftTimer = null;
         }
 
+        if (_reclampRetryTimer != null)
+        {
+            _reclampRetryTimer.Stop();
+            _reclampRetryTimer.Tick -= ReclampRetryTimer_Tick;
+            _reclampRetryTimer = null;
+        }
+
         IntPtr hwnd = new WindowInteropHelper(this).Handle;
         _manager.UnregisterContainerHwnd(hwnd);
         if (ContentHost.HostWindowHandle != IntPtr.Zero)
@@ -364,7 +378,6 @@ public partial class ContainerWindow : Window
 
     private void Maximize_Click(object sender, RoutedEventArgs e)
     {
-        _log.Log($"MAXCLICK from={WindowState}");
         WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
     }
 
@@ -502,8 +515,46 @@ public partial class ContainerWindow : Window
             return;
         if (NativeMethods.GetParent(window.Hwnd) != ContentHostHwnd)
             return;
+        if (NativeMethods.IsZoomed(window.Hwnd))
+        {
+            _log.Log($"LAYOUT[{reason}] skipped: guest 0x{window.Hwnd.ToInt64():X} is zoomed; retry scheduled.");
+            ScheduleReclampRetry(window, reason);
+            return;
+        }
 
+        CancelReclampRetry();
         _capture.Layout(window, ContentHostHwnd, reason);
+    }
+
+    private void ScheduleReclampRetry(CapturedWindow window, string reason)
+    {
+        _reclampPendingWindow = window;
+        _reclampPendingReason = reason;
+        if (_reclampRetryTimer == null)
+        {
+            _reclampRetryTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+            _reclampRetryTimer.Tick += ReclampRetryTimer_Tick;
+        }
+        _reclampRetryTimer.Stop();
+        _reclampRetryTimer.Start();
+    }
+
+    private void CancelReclampRetry()
+    {
+        _reclampRetryTimer?.Stop();
+        _reclampPendingWindow = null;
+        _reclampPendingReason = string.Empty;
+    }
+
+    private void ReclampRetryTimer_Tick(object? sender, EventArgs e)
+    {
+        _reclampRetryTimer?.Stop();
+        var window = _reclampPendingWindow;
+        if (window == null || _viewModel.ActiveTab?.Model != window)
+            return;
+        if (!NativeMethods.IsWindow(window.Hwnd) || NativeMethods.IsZoomed(window.Hwnd))
+            return;
+        ReclampGuest(window, _reclampPendingReason + "-retry");
     }
 
     private void DriftTimer_Tick(object? sender, EventArgs e)
@@ -522,6 +573,11 @@ public partial class ContainerWindow : Window
             return;
         if (NativeMethods.GetParent(window.Hwnd) != ContentHostHwnd)
             return;
+        if (NativeMethods.IsZoomed(window.Hwnd))
+        {
+            _log.Log($"LAYOUT[drift] skipped: guest 0x{window.Hwnd.ToInt64():X} is zoomed");
+            return;
+        }
 
         // The host is a borderless WS_CHILD, so its window rect IS its client
         // area in screen coordinates; exact equality means the guest fills it.
@@ -676,6 +732,7 @@ public partial class ContainerWindow : Window
         _isDragging = false;
         _dragMidpoints = null;
         _dragMidpointsCount = 0;
+        _dragMidpointsValid = false;
     }
 
     private ListBoxItem? FindListBoxItem(object source)
@@ -708,24 +765,33 @@ public partial class ContainerWindow : Window
             else
             {
                 // A container is missing (virtualized/not yet generated); the
-                // cache would be misaligned, so fall back to live geometry.
+                // cache would be misaligned. Disable reorder for this drag.
                 _dragMidpoints = null;
                 _dragMidpointsCount = 0;
+                _dragMidpointsValid = false;
                 return;
             }
         }
         _dragMidpoints = midpoints;
         _dragMidpointsCount = midpoints.Count;
+        _dragMidpointsValid = true;
     }
 
     private int? GetDropIndex(Point mousePos)
     {
+        if (!_dragMidpointsValid)
+            return null;
+
         // A count change mid-drag (a tab destroyed or hidden by a WinEvent
         // handler between mouse moves) invalidates the cache. Re-snapshot:
         // reorders never change the count, so this cannot reintroduce the
         // oscillation feedback loop.
         if (_dragMidpoints != null && _viewModel.Tabs.Count != _dragMidpointsCount)
+        {
             SnapshotDragMidpoints();
+            if (!_dragMidpointsValid)
+                return null;
+        }
 
         if (_dragMidpoints != null)
         {
@@ -737,16 +803,7 @@ public partial class ContainerWindow : Window
             return _dragMidpoints.Count > 0 ? _dragMidpoints.Count : null;
         }
 
-        for (int i = 0; i < _viewModel.Tabs.Count; i++)
-        {
-            if (TabsListBox.ItemContainerGenerator.ContainerFromIndex(i) is ListBoxItem item)
-            {
-                Point itemPos = item.TranslatePoint(new Point(0, 0), TabsListBox);
-                if (mousePos.X < itemPos.X + item.ActualWidth / 2)
-                    return i;
-            }
-        }
-        return _viewModel.Tabs.Count > 0 ? _viewModel.Tabs.Count : null;
+        return null;
     }
 
     #endregion

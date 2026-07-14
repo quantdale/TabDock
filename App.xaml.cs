@@ -59,7 +59,7 @@ public partial class App : Application
             _log ??= new LoggingService();
 
             _dpi = new DpiService();
-            _renderHealth = new RenderHealthService(_dpi);
+            _renderHealth = new RenderHealthService();
             _icons = new IconService();
             _capture = new WindowCaptureService(_log, _icons, _dpi);
             _persistence = new PersistenceService(_log);
@@ -443,7 +443,7 @@ public partial class App : Application
             return existing;
         }
 
-        var vm = new GroupViewModel(group, _groups, _capture, _icons);
+        var vm = new GroupViewModel(group, _groups, _icons);
         // The container's "+" button funnels through this event; without the
         // subscription it is a dead control.
         vm.AddWindowsRequested += (_, _) => ShowCapturePicker(group);

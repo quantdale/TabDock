@@ -63,6 +63,14 @@ public sealed class WindowCaptureService
         nint style = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_STYLE);
         nint exStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
 
+        // Capture the guest's baseline DPI while it is still a standalone top-level
+        // window on its original monitor. Retained for diagnostics only; no reverse
+        // DPI message is sent on release.
+        uint originalDpi = _dpi.GetDpi(hwnd);
+
+        // Diagnostic snapshot before reparenting (class, DPI awareness, geometry).
+        LogGuestDiagnostics(hwnd, "pre-capture");
+
         // Preserve the original placement (including maximized state) so it can be
         // restored accurately on release. Do not restore the window here; that
         // would overwrite the rcNormalPosition / ptMaxPosition data we need.
@@ -84,6 +92,7 @@ public sealed class WindowCaptureService
             NativeMethods.WS_THICKFRAME |
             NativeMethods.WS_MINIMIZEBOX |
             NativeMethods.WS_MAXIMIZEBOX |
+            NativeMethods.WS_MAXIMIZE |
             NativeMethods.WS_SYSMENU)) |
             (long)(NativeMethods.WS_CHILD | NativeMethods.WS_CLIPSIBLINGS));
 
@@ -115,8 +124,27 @@ public sealed class WindowCaptureService
             OriginalStyle = (long)style,
             OriginalExStyle = (long)exStyle,
             OriginalBounds = bounds,
+            OriginalDpi = originalDpi,
             WasMaximized = originalPlacement.showCmd == NativeMethods.SW_SHOWMAXIMIZED,
         };
+
+        // Chrome/Electron guests do not receive WM_DPICHANGED across the SetParent
+        // boundary, so tell the guest the host monitor's DPI explicitly.
+        NotifyDpiChanged(cw, hostHwnd);
+
+        // Disable maximize/restore for the hosted guest. Frame-stripping removes
+        // the system maximize box, but custom-drawn captions still dispatch these
+        // commands internally.
+        cw.SubclassProc = GuestSubclassProc;
+        bool subclassed = NativeMethods.SetWindowSubclass(hwnd, cw.SubclassProc, IntPtr.Zero, IntPtr.Zero);
+        _log.Log($"DIAG[subclass-top] hwnd=0x{hwnd.ToInt64():X} result={(subclassed ? "installed" : "failed")} error={(subclassed ? "none" : NativeMethods.FormatLastError())}");
+        if (!subclassed)
+        {
+            _log.Log($"SetWindowSubclass failed for 0x{hwnd.ToInt64():X}: {NativeMethods.FormatLastError()}; falling back to WinEvent zoom clamp.");
+        }
+
+        // Diagnostic snapshot after reparenting and style changes.
+        LogGuestDiagnostics(hwnd, "post-capture");
 
         // The render-health check (and the auto-release of unhealthy tabs) is
         // driven by ContainerWindow.AddCapturedWindow, which owns the view-model
@@ -173,6 +201,81 @@ public sealed class WindowCaptureService
         return $"0x{hwnd.ToInt64():X}(rect={r.left},{r.top},{r.Width}x{r.Height} iconic={NativeMethods.IsIconic(hwnd)} zoomed={NativeMethods.IsZoomed(hwnd)} visible={NativeMethods.IsWindowVisible(hwnd)})";
     }
 
+    /// <summary>
+    /// Notifies a captured guest that the host monitor DPI differs from its
+    /// current DPI by sending WM_DPICHANGED with the host client rect mapped to
+    /// screen. Chrome/Electron do not receive DPI changes across the SetParent
+    /// process boundary, so this forward message is required for correct scaling.
+    /// </summary>
+    public void NotifyDpiChanged(CapturedWindow window, IntPtr hostHwnd)
+    {
+        if (!NativeMethods.IsWindow(window.Hwnd) || !NativeMethods.IsWindow(hostHwnd))
+            return;
+
+        uint hostDpi = _dpi.GetDpi(hostHwnd);
+        uint guestDpi = _dpi.GetDpi(window.Hwnd);
+        if (hostDpi == guestDpi)
+            return;
+
+        NativeMethods.GetClientRect(hostHwnd, out NativeMethods.RECT rc);
+        var pt = new NativeMethods.POINT { x = rc.left, y = rc.top };
+        NativeMethods.ClientToScreen(hostHwnd, ref pt);
+        var suggested = new NativeMethods.RECT
+        {
+            left = pt.x,
+            top = pt.y,
+            right = pt.x + rc.Width,
+            bottom = pt.y + rc.Height,
+        };
+
+        bool sent = NativeMethods.TrySendDpiChanged(window.Hwnd, hostDpi, suggested);
+        _log.Log($"LAYOUT[dpi-forward] hostDpi={hostDpi} guestDpi={guestDpi} rect={suggested.left},{suggested.top},{suggested.Width}x{suggested.Height} result={(sent ? "sent" : "failed")} guest={DescribeWindow(window.Hwnd)}");
+
+    }
+
+    /// <summary>
+    /// Subclass procedure installed on captured guests to disable maximize and
+    /// restore while they are hosted. Custom-frame apps (Chrome, Electron, Edge)
+    /// still dispatch these system commands from their internal caption buttons,
+    /// so dropping SC_MAXIMIZE/SC_RESTORE prevents them from breaking the host
+    /// layout. Other messages are passed through to DefSubclassProc.
+    /// </summary>
+    private static IntPtr GuestSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, IntPtr uIdSubclass, IntPtr dwRefData)
+    {
+        if (uMsg == NativeMethods.WM_SYSCOMMAND)
+        {
+            uint cmd = (uint)(wParam.ToInt64() & 0xFFF0);
+            if (cmd == NativeMethods.SC_MAXIMIZE || cmd == NativeMethods.SC_RESTORE)
+                return IntPtr.Zero;
+        }
+
+        return NativeMethods.DefSubclassProc(hWnd, uMsg, wParam, lParam);
+    }
+
+    /// <summary>
+    /// Logs the guest's class name, DPI, awareness context, and geometry so Edge vs
+    /// Chrome divergence can be diagnosed from the rotating log.
+    /// </summary>
+    private void LogGuestDiagnostics(IntPtr hwnd, string phase)
+    {
+        if (!NativeMethods.IsWindow(hwnd))
+            return;
+
+        string className = NativeMethods.GetClassNameString(hwnd) ?? "(unknown)";
+        uint dpi = _dpi.GetDpi(hwnd);
+        IntPtr context = _dpi.GetAwarenessContext(hwnd);
+        string contextName = _dpi.DescribeAwarenessContext(context);
+        bool isWrapper = IsWrapperClass(className);
+
+        _log.Log($"DIAG[{phase}] hwnd=0x{hwnd.ToInt64():X} class={className} wrapper={isWrapper} dpi={dpi} awareness={contextName} {DescribeWindow(hwnd)}");
+    }
+
+    private static bool IsWrapperClass(string? className)
+    {
+        return className != null &&
+            (className.Equals("ApplicationFrameWindow", StringComparison.OrdinalIgnoreCase) ||
+             className.Equals("Windows.UI.Core.CoreWindow", StringComparison.OrdinalIgnoreCase));
+    }
 
     /// <summary>
     /// Releases a captured window back to its original parent and restores its original styles/bounds.
@@ -187,6 +290,10 @@ public sealed class WindowCaptureService
             _log.Log($"Release: window 0x{window.Hwnd.ToInt64():X} already gone.");
             return;
         }
+
+        // Remove the guest subclass before reparenting so comctl32 detaches the
+        // callback cleanly while the HWND is still our child.
+        NativeMethods.RemoveWindowSubclass(window.Hwnd, IntPtr.Zero);
 
         NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
 
@@ -236,7 +343,7 @@ public sealed class WindowCaptureService
                     window.OriginalBounds.Height,
                     NativeMethods.SWP_FRAMECHANGED | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
             }
-            _log.Log($"Released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide)");
+            _log.Log($"Released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide) originalDpi={window.OriginalDpi}");
             return;
         }
 
@@ -270,8 +377,20 @@ public sealed class WindowCaptureService
             NativeMethods.ShowWindow(window.Hwnd, (int)placement.showCmd);
         }
 
-        NativeMethods.SetForegroundWindow(window.Hwnd);
-        _log.Log($"Released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle})");
+        if (show)
+        {
+            // A released window can remain unresponsive because it never received
+            // activation after being reparented back to the desktop. Ensure it is
+            // visible, foregrounded, and explicitly told to activate.
+            if (!NativeMethods.IsWindowVisible(window.Hwnd))
+                NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_SHOW);
+
+            bool fg = NativeMethods.SetForegroundWindow(window.Hwnd);
+            IntPtr activateResult = NativeMethods.SendMessage(window.Hwnd, NativeMethods.WM_ACTIVATE, (IntPtr)NativeMethods.WA_ACTIVE, IntPtr.Zero);
+            _log.Log($"LAYOUT[release-activate] fg={fg} activate=0x{activateResult.ToInt64():X} guest={DescribeWindow(window.Hwnd)}");
+        }
+
+        _log.Log($"Released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) originalDpi={window.OriginalDpi}");
     }
 
     public void ReleaseAndShow(CapturedWindow window)

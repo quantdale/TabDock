@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 using TabDock.Models;
 using TabDock.Services;
 
@@ -158,4 +159,47 @@ public class NativeHwndHost : HwndHost
     }
 
     public IntPtr HostWindowHandle => _hwnd;
+
+    /// <summary>
+    /// Sizes the host HWND in physical pixels so it matches the WPF element bounds
+    /// on high-DPI monitors. The base HwndHost positions the window; this override
+    /// corrects the size to device pixels, which is what captured Win32 guests expect.
+    /// </summary>
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        Size result = base.ArrangeOverride(finalSize);
+        if (_hwnd != IntPtr.Zero)
+        {
+            DpiScale dpi = VisualTreeHelper.GetDpi(this);
+            int width = (int)Math.Max(1, Math.Round(finalSize.Width * dpi.DpiScaleX));
+            int height = (int)Math.Max(1, Math.Round(finalSize.Height * dpi.DpiScaleY));
+
+            NativeMethods.GetClientRect(_hwnd, out NativeMethods.RECT rc);
+            if (rc.Width != width || rc.Height != height)
+            {
+                NativeMethods.SetWindowPos(
+                    _hwnd,
+                    IntPtr.Zero,
+                    0,
+                    0,
+                    width,
+                    height,
+                    NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_FRAMECHANGED);
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Re-lays out the active guest when the host moves between monitors with
+    /// different scale factors. DPI is reconciled by sizing the host HWND in
+    /// physical pixels (ArrangeOverride); no cross-process WM_DPICHANGED is sent
+    /// because synthetic DPI messages leave Chrome/Electron guests unresponsive
+    /// after release.
+    /// </summary>
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        LayoutActiveWindow();
+    }
 }
