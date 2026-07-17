@@ -23,6 +23,7 @@ public class NativeHwndHost : HwndHost
 
     private IntPtr _hwnd;
     private WindowCaptureService? _service;
+    private LoggingService? _log;
 
     public static readonly DependencyProperty ActiveWindowProperty = DependencyProperty.Register(
         nameof(ActiveWindow),
@@ -40,6 +41,12 @@ public class NativeHwndHost : HwndHost
     {
         get => _service;
         set => _service = value;
+    }
+
+    public LoggingService? Logger
+    {
+        get => _log;
+        set => _log = value;
     }
 
     private static void OnActiveWindowChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -116,6 +123,19 @@ public class NativeHwndHost : HwndHost
                 s_hosts.TryGetValue(hWnd, out host);
             host?.LayoutActiveWindow();
         }
+        else if (msg == NativeMethods.WM_MOUSEACTIVATE)
+        {
+            // Activate the clicked child window (the captured guest) rather than the
+            // host itself. This lets Chromium/Electron receive activation on the first
+            // click in the content area instead of staying input-dead.
+            NativeHwndHost? host;
+            lock (s_hosts)
+                s_hosts.TryGetValue(hWnd, out host);
+            if (host?.ActiveWindow != null && NativeMethods.IsWindow(host.ActiveWindow.Hwnd))
+            {
+                return (IntPtr)NativeMethods.MA_ACTIVATE;
+            }
+        }
 
         return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
     }
@@ -145,6 +165,11 @@ public class NativeHwndHost : HwndHost
                 NativeMethods.ShowWindow(newWindow.Hwnd, NativeMethods.SW_RESTORE);
             _service.Layout(newWindow, _hwnd, "switch");
             NativeMethods.ShowWindow(newWindow.Hwnd, NativeMethods.SW_SHOW);
+
+            // Ensure the newly shown guest receives focus/activation so its input pump
+            // (especially Chromium/Electron) keeps consuming user input.
+            IntPtr containerHwnd = NativeMethods.GetAncestor(_hwnd, NativeMethods.GA_ROOT);
+            GuestActivationHelper.ActivateGuest(newWindow.Hwnd, containerHwnd, _log);
         }
     }
 

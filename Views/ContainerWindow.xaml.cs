@@ -94,7 +94,21 @@ public partial class ContainerWindow : Window
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if ((uint)msg == NativeMethods.WM_GETMINMAXINFO)
+        if ((uint)msg == NativeMethods.WM_ACTIVATE)
+        {
+            // Forward activation to the active captured guest so it knows it should
+            // resume consuming input after the user alt-tabs back to the container.
+            uint activateKind = (uint)(wParam.ToInt64() & 0xFFFF);
+            if (activateKind == NativeMethods.WA_ACTIVE || activateKind == NativeMethods.WA_CLICKACTIVE)
+            {
+                var active = _viewModel.ActiveTab?.Model;
+                if (active != null)
+                {
+                    GuestActivationHelper.NotifyGuestActive(active.Hwnd, _log);
+                }
+            }
+        }
+        else if ((uint)msg == NativeMethods.WM_GETMINMAXINFO)
         {
             IntPtr monitor = NativeMethods.MonitorFromWindow(hwnd, NativeMethods.MONITOR_DEFAULTTONEAREST);
             if (monitor != IntPtr.Zero)
@@ -123,6 +137,7 @@ public partial class ContainerWindow : Window
         _manager.RegisterContainerHwnd(hwnd);
 
         ContentHost.Service = _capture;
+        ContentHost.Logger = _log;
         if (ContentHost.HostWindowHandle != IntPtr.Zero)
             _manager.RegisterContainerHwnd(ContentHost.HostWindowHandle);
 

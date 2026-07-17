@@ -60,6 +60,7 @@ public sealed class WindowCaptureService
 
         NativeMethods.GetWindowRect(hwnd, out NativeMethods.RECT bounds);
         IntPtr originalParent = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_PARENT);
+        IntPtr originalOwner = NativeMethods.GetWindow(hwnd, NativeMethods.GW_OWNER);
         nint style = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_STYLE);
         nint exStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
 
@@ -120,6 +121,7 @@ public sealed class WindowCaptureService
             OriginalTitle = NativeMethods.GetWindowTextString(hwnd) ?? string.Empty,
             OriginalPlacement = originalPlacement,
             OriginalParent = originalParent,
+            OriginalOwner = originalOwner,
             OriginalStyle = (long)style,
             OriginalExStyle = (long)exStyle,
             OriginalBounds = bounds,
@@ -135,6 +137,12 @@ public sealed class WindowCaptureService
         NotifyDpiChanged(cw, hostHwnd);
 
         Layout(hwnd, hostHwnd, "capture");
+
+        // Establish focus/activation for the reparented guest. Chromium/Electron
+        // guests stop consuming input if they are not explicitly told they are
+        // active after the SetParent boundary crossing.
+        IntPtr containerHwnd = NativeMethods.GetAncestor(hostHwnd, NativeMethods.GA_ROOT);
+        GuestActivationHelper.ActivateGuest(hwnd, containerHwnd, _log);
 
         // Disable maximize/restore for the hosted guest. Frame-stripping removes
         // the system maximize box, but custom-drawn captions still dispatch these
@@ -320,12 +328,24 @@ public sealed class WindowCaptureService
 
         NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
 
-        // Restore parent first.
-        NativeMethods.SetParent(window.Hwnd, window.OriginalParent);
+        bool wasTopLevel = (window.OriginalStyle & (long)NativeMethods.WS_CHILD) == 0;
+        IntPtr targetParent = wasTopLevel ? IntPtr.Zero : window.OriginalParent;
 
-        // Restore styles.
+        // Restore styles before reparenting so the window carries the correct
+        // WS_CHILD / WS_POPUP bits for its new parent.
         NativeMethods.SetWindowLongPtr(window.Hwnd, NativeMethods.GWL_STYLE, (nint)window.OriginalStyle);
         NativeMethods.SetWindowLongPtr(window.Hwnd, NativeMethods.GWL_EXSTYLE, (nint)window.OriginalExStyle);
+
+        // Restore parent. Top-level guests are detached (NULL) rather than re-parented
+        // to the desktop window, which recreates a genuine top-level HWND.
+        NativeMethods.SetParent(window.Hwnd, targetParent);
+
+        // Restore the original owner for top-level windows (GW_OWNER is held in
+        // GWLP_HWNDPARENT when the window is not WS_CHILD).
+        if (wasTopLevel && window.OriginalOwner != IntPtr.Zero)
+        {
+            NativeMethods.SetWindowLongPtr(window.Hwnd, NativeMethods.GWLP_HWNDPARENT, (nint)window.OriginalOwner);
+        }
 
         // Recalculate the frame with the restored top-level styles before applying
         // placement, otherwise maximized bounds can end up stuck at the child size.
@@ -341,6 +361,17 @@ public sealed class WindowCaptureService
             NativeMethods.SWP_NOSIZE |
             NativeMethods.SWP_NOZORDER |
             NativeMethods.SWP_NOACTIVATE);
+
+        // Force DWM to recompute the non-client area now that the window is a
+        // top-level frame again.
+        NativeMethods.RedrawWindow(
+            window.Hwnd,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            NativeMethods.RDW_FRAME |
+            NativeMethods.RDW_INVALIDATE |
+            NativeMethods.RDW_ERASE |
+            NativeMethods.RDW_ALLCHILDREN);
 
         NativeMethods.WINDOWPLACEMENT placement = window.OriginalPlacement;
         placement.length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>();
@@ -413,11 +444,54 @@ public sealed class WindowCaptureService
             _log.Log($"LAYOUT[release-activate] fg={fg} activate=0x{activateResult.ToInt64():X} guest={DescribeWindow(window.Hwnd)}");
         }
 
-        _log.Log($"Released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) originalDpi={window.OriginalDpi}");
+        if (show)
+        {
+            nint releasedStyle = NativeMethods.GetWindowLongPtr(window.Hwnd, NativeMethods.GWL_STYLE);
+            nint releasedExStyle = NativeMethods.GetWindowLongPtr(window.Hwnd, NativeMethods.GWL_EXSTYLE);
+            IntPtr releasedParent = NativeMethods.GetParent(window.Hwnd);
+            IntPtr releasedOwner = NativeMethods.GetWindow(window.Hwnd, NativeMethods.GW_OWNER);
+            _log.Log($"Released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) parent=0x{releasedParent.ToInt64():X} owner=0x{releasedOwner.ToInt64():X} style=0x{releasedStyle.ToInt64():X} exStyle=0x{releasedExStyle.ToInt64():X} originalDpi={window.OriginalDpi} guest={DescribeWindow(window.Hwnd)}");
+
+            // Checkpoint 2: Electron/Chromium-specific nudge. Isolated so it can be
+            // removed if the real repro (ChatGPT Classic header gap) does not pass.
+            if (IsChromiumWindow(window.Hwnd))
+            {
+                TryNudgeChromiumCompositor(window.Hwnd);
+            }
+        }
+        else
+        {
+            _log.Log($"Released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide) originalDpi={window.OriginalDpi}");
+        }
     }
 
     public void ReleaseAndShow(CapturedWindow window)
     {
         Release(window);
+    }
+
+    /// <summary>
+    /// Returns true for Chromium/Electron guests whose window class follows the
+    /// Chrome_WidgetWin pattern. Used only for the isolated Checkpoint 2 nudge.
+    /// </summary>
+    private static bool IsChromiumWindow(IntPtr hwnd)
+    {
+        string? className = NativeMethods.GetClassNameString(hwnd);
+        return className != null &&
+            className.StartsWith("Chrome_WidgetWin", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Forces a Chromium/Electron compositor surface rebuild by minimizing and
+    /// restoring the released top-level window. This is intentionally isolated so
+    /// it can be deleted if Checkpoint 2 (ChatGPT Classic header-gap repro) fails.
+    /// </summary>
+    private static void TryNudgeChromiumCompositor(IntPtr hwnd)
+    {
+        if (!NativeMethods.IsWindow(hwnd))
+            return;
+
+        NativeMethods.ShowWindow(hwnd, NativeMethods.SW_MINIMIZE);
+        NativeMethods.ShowWindow(hwnd, NativeMethods.SW_RESTORE);
     }
 }

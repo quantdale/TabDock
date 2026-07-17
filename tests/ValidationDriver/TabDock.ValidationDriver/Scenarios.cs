@@ -62,6 +62,7 @@ internal static class Scenarios
         "rename", "popout", "closewin", "closewin-hide", "selfclose", "selfhide", "selfminhide",
         "tabswitch-hidesafety", "minrestore", "maximize-repro", "repeat-cycles", "crossfeature",
         "renderhealth", "hotkey-afterclose", "persist-kill", "dragreorder",
+        "contentinput", "chromeinput", "alttabinput",
     };
 
     // -------------------------------------------------------------------------
@@ -87,6 +88,9 @@ internal static class Scenarios
             "hotkey-afterclose" => HotkeyAfterClose,
             "persist-kill" => PersistKill,
             "dragreorder" => DragReorder,
+            "contentinput" => ContentInput,
+            "chromeinput" => ChromeInput,
+            "alttabinput" => AltTabInput,
             _ => null,
         };
         if (body == null)
@@ -1356,6 +1360,134 @@ internal static class Scenarios
         ctx.Check(Util.WaitUntil(() => IsReleased(movedPig), 5000), $"moved pig '{movedPig.Title}' released by drag-out");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-out");
         ctx.Check(movedPig.Proc != null && !movedPig.Proc.HasExited, "moved pig alive standalone");
+    }
+
+    // -------------------------------------------------------------------------
+    // 17. contentinput (Test A): non-Chromium content-area input gate.
+    //     Clicks the center counter button of a captured GuineaPig and verifies
+    //     the guest actually receives the input.
+    // -------------------------------------------------------------------------
+    private static void ContentInput(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "CI", "--color", "blue", "--click-counter-button");
+        Thread.Sleep(2000); // extra settle time for the button-hosted pig before picker enumeration
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+
+        NativeMethods.RECT hostClient = Discover.GetClientScreenRect(host);
+        int cx = hostClient.left + hostClient.Width / 2;
+        int cy = hostClient.top + hostClient.Height / 2;
+        GuardedProc.Log($"  ContentInput: clicking center of host client area at ({cx},{cy}); hostClient={Util.FormatRect(hostClient)}.");
+
+        if (!Input.ForceForegroundRoot(host))
+            throw new InvalidOperationException("Could not bring the captured guest to the foreground — refusing to click blind.");
+
+        Input.ClickAt(cx, cy);
+        bool clicked = PigLog.WaitForPigLine(pig.Pid, "BUTTON_CLICK count=1", 2000);
+        ctx.Check(clicked, "GuineaPig content-area button received the click (BUTTON_CLICK count=1)");
+
+        // Also exercise drag: start well outside the button and drag across the
+        // content area; the count must not increment from a drag that never
+        // presses the button.
+        Input.DragFromTo(cx - 150, cy, cx + 150, cy, 12);
+        Thread.Sleep(200);
+        bool noExtraClick = !PigLog.ContainsLine(pig.Pid, "BUTTON_CLICK count=2");
+        ctx.Check(noExtraClick, "drag across the content area did not produce a second button click (guest saw mouse motion)");
+    }
+
+    // -------------------------------------------------------------------------
+    // 18. chromeinput (Test B): Chromium input recovery after activation fix.
+    // -------------------------------------------------------------------------
+    private static void ChromeInput(Ctx ctx, Options opt)
+    {
+        string htmlPath = CreateChromeInputTestPage();
+        GuestInfo chrome = SpawnClassGuest(ctx, ChromeExe,
+            $"--user-data-dir=\"{Path.Combine(Path.GetTempPath(), "TabDockChromeProfile")}\" --disable-gpu --app=\"{htmlPath}\"",
+            "Chrome_WidgetWin_1", useShellExecute: true);
+
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, chrome);
+
+        NativeMethods.RECT hostClient = Discover.GetClientScreenRect(host);
+        int cx = hostClient.left + hostClient.Width / 2;
+        int cy = hostClient.top + hostClient.Height / 2;
+        GuardedProc.Log($"  ChromeInput: clicking center of host client area at ({cx},{cy}); hostClient={Util.FormatRect(hostClient)}.");
+
+        if (!Input.ForceForegroundRoot(host))
+            throw new InvalidOperationException("Could not bring the captured Chrome guest to the foreground — refusing to click blind.");
+
+        // The page starts white; the centered button turns the background green.
+        Input.ClickAt(cx, cy);
+        Thread.Sleep(1000);
+
+        int[]? frame = Pixels.CaptureHostScreenArea(host);
+        char dominant = frame != null ? Pixels.DominantChannel(frame) : '?';
+        GuardedProc.Log($"  ChromeInput: after click dominant channel='{dominant}'.");
+        ctx.Check(dominant == 'g', $"Chrome page turned green after click (dominant channel='{dominant}')");
+    }
+
+    private static string CreateChromeInputTestPage()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "TabDock-Validation");
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "chrome-input-test.html");
+        File.WriteAllText(path, @"<!DOCTYPE html>
+<html>
+<head><meta charset='utf-8'><style>
+body { margin: 0; width: 100vw; height: 100vh; background: white; display: flex; align-items: center; justify-content: center; }
+button { padding: 24px 48px; font-size: 24px; }
+</style></head>
+<body>
+<button id='btn'>Click me</button>
+<script>
+document.getElementById('btn').addEventListener('click', function() {
+    document.body.style.backgroundColor = '#00aa00';
+});
+</script>
+</body>
+</html>");
+        return path;
+    }
+
+    // -------------------------------------------------------------------------
+    // 19. alttabinput (Test D): container reactivation after alt-tab away/back.
+    // -------------------------------------------------------------------------
+    private static void AltTabInput(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "AT", "--color", "blue", "--click-counter-button");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+
+        NativeMethods.RECT hostClient = Discover.GetClientScreenRect(host);
+        int cx = hostClient.left + hostClient.Width / 2;
+        int cy = hostClient.top + hostClient.Height / 2;
+
+        if (!Input.ForceForegroundRoot(host))
+            throw new InvalidOperationException("Could not bring the captured guest to the foreground — refusing to click blind.");
+
+        // Baseline click: establish the guest is responsive.
+        Input.ClickAt(cx, cy);
+        ctx.Check(PigLog.WaitForPigLine(pig.Pid, "BUTTON_CLICK count=1", 2000),
+            "baseline click received (count=1)");
+
+        // Switch focus away from the container to the driver's own console window.
+        IntPtr driverHwnd = Process.GetCurrentProcess().MainWindowHandle;
+        if (driverHwnd == IntPtr.Zero)
+        {
+            // Fallback: spawn a Notepad to receive focus.
+            GuestInfo notepad = SpawnClassGuest(ctx, "notepad.exe", string.Empty, "Notepad", useShellExecute: true);
+            driverHwnd = notepad.Hwnd;
+        }
+
+        Input.ForceForegroundRoot(driverHwnd);
+        Thread.Sleep(800);
+
+        // Switch focus back to the container (simulates alt-tab back).
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container back to the foreground.");
+        Thread.Sleep(500);
+
+        // Click the guest again; the WM_ACTIVATE-forwarding path should have re-activated it.
+        Input.ClickAt(cx, cy);
+        ctx.Check(PigLog.WaitForPigLine(pig.Pid, "BUTTON_CLICK count=2", 2000),
+            "click after alt-tab-back received (count=2)");
     }
 
     /// <summary>Waits for a MessageBox owned by the TabDock pid and real-clicks the named button.</summary>

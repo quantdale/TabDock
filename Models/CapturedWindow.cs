@@ -22,6 +22,12 @@ public sealed class CapturedWindow
 
     public IntPtr OriginalParent { get; set; }
 
+    /// <summary>
+    /// The original owner window of a top-level guest (GW_OWNER), if any. Captured
+    /// before reparenting so it can be restored after release.
+    /// </summary>
+    public IntPtr OriginalOwner { get; set; }
+
     public long OriginalStyle { get; set; }
 
     public long OriginalExStyle { get; set; }

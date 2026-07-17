@@ -17,6 +17,7 @@ public sealed class PigOptions
     public int SelfCloseAfterSeconds = -1;
     public int SelfMinimizeAfterSeconds = -1;
     public bool CloseButton;
+    public bool ClickCounterButton;
 }
 
 /// <summary>
@@ -111,6 +112,28 @@ public sealed class PigForm : Form
             {
                 Log("LIFECYCLE X-CLOSE button clicked -> Close()");
                 Close();
+            };
+            Controls.Add(btn);
+        }
+
+        if (opts.ClickCounterButton)
+        {
+            var btn = new Button
+            {
+                Name = "ClickCounterButton",
+                Text = "Click me: 0",
+                Size = new Size(140, 40),
+                Anchor = AnchorStyles.None,
+            };
+            btn.Location = new Point(
+                (ClientSize.Width - btn.Width) / 2,
+                (ClientSize.Height - btn.Height) / 2);
+            int clickCount = 0;
+            btn.Click += (s, e) =>
+            {
+                clickCount++;
+                btn.Text = $"Click me: {clickCount}";
+                Log($"BUTTON_CLICK count={clickCount}");
             };
             Controls.Add(btn);
         }
