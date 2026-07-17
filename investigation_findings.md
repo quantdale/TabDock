@@ -1,5 +1,18 @@
 # TabDock — Investigation Findings (read-only audit)
 
+> **2026-07-18 update:** H2/H4/H5 are now **runtime-validated** on a real Windows
+> machine (not just code-complete) — see the "Runtime validation (2026-07-18)"
+> notes under each entry below. Validation was done via new/extended
+> `TabDock.ValidationDriver` scenarios (`chrometabdrag`, `browser-lifecycle`,
+> `browser-tabswitch-hidesafety`, `browser-dragreorder`, `browser-multi`,
+> `browser-soak`) driving real Chrome and Edge (Firefox is not installed on this
+> machine — written but unexecuted, see `KNOWN_ISSUES.md`). Two incidental bugs
+> found and fixed in the test harness itself during this pass: a near-miss where
+> cleanup almost force-killed an ancestor process of the driver's own shell
+> (`GuardedProc.IsAncestorOfCurrentProcess` now guards this), and a missing
+> `&Yes` button-text variant that silently broke the close-group "Yes" path.
+> Full detail in `KNOWN_ISSUES.md` and `docs/internal/TEST_PLAN.md`.
+
 > **2026-07-12 second session update (frame-smear / H2 session):** H2 was fixed
 > (drag-start midpoint snapshot + `Tabs.Move`; pending manual runtime validation).
 > Two new defects found during the Chrome-guest smear investigation were fixed in
@@ -53,7 +66,7 @@ repeated-cycle validation.
 - **Resolution options:** Route the normal capture path through `ContainerWindow.AddCapturedWindow` (or call `CheckRenderHealthAsync` from `CaptureWindow`), and consume `cw.RenderHealth`.
 - **Severity:** High
 
-### H2. Drag-reorder oscillation: reorder fires on every MouseMove against a mutating layout — **FIXED 2026-07-12 (second session; pending runtime validation)**
+### H2. Drag-reorder oscillation: reorder fires on every MouseMove against a mutating layout — **FIXED 2026-07-12, RUNTIME-VALIDATED 2026-07-18**
 - **Fix:** Tab slot midpoints are snapshotted once when the drag arms
   (`SnapshotDragMidpoints`); `GetDropIndex` reads the cached midpoints for the whole
   drag, so pointer→index is a fixed monotone mapping and a stationary pointer can
@@ -67,6 +80,7 @@ repeated-cycle validation.
 - **Description:** Every `MouseMove` during a drag computes `GetDropIndex(pos)` from live container geometry with a single midpoint threshold and no hysteresis, and immediately reorders. After a reorder the item positions swap under a stationary cursor, so the next `MouseMove` computes the opposite index and reorders back. The runtime log records dozens of 1↔2 flips per second during a real user drag (13:21 session). The prior fatal crash (`Collection.Insert` out of range from this same path, logged 07:31 with a full stack trace) is now clamped, but the jitter remains, and `ContainerFromIndex`/`ActualWidth` may reflect pre-reorder layout for a frame, returning null or wrong positions.
 - **Why it matters / impact:** Constant reordering, re-selection, `ObservableCollection` churn, `Group.ActiveIndex` mutation and log spam during a single drag; visually unstable tab strip; latent index-staleness bugs.
 - **Resolution options:** Commit the reorder only on `MouseUp`; or add hysteresis (require crossing the full neighbor bounds, dead-band around the current slot); or use an insertion-adorner preview and reorder once. Cache container bounds at drag start.
+- **Runtime validation (2026-07-18):** real-mouse `TabDock.ValidationDriver` scenarios `dragreorder` (2 guinea pigs) and `browser-dragreorder --guest edge-normal` (real Edge + guinea pig) both PASS: a handful of `Reordered tab` log lines per drag (not hundreds), zero oscillation pairs, tab count stable, drag-out release clean. Guarding tests: `dragreorder`, `browser-dragreorder`.
 - **Severity:** High
 
 ### H3. Global hotkey after MainWindow is closed throws (Owner set to a closed window) — **FIXED 2026-07-12**
@@ -78,7 +92,7 @@ repeated-cycle validation.
 - **Resolution options:** Null `_mainWindow` in its `Closed` handler and guard/recreate before use; or only set `Owner` when `_mainWindow.IsLoaded`; or keep the launcher alive/hidden.
 - **Severity:** High
 
-### H4. Content host has a NULL class background brush — exposed regions never repaint (smear) — **FIXED 2026-07-12 (second session; pending runtime validation)** (NEW)
+### H4. Content host has a NULL class background brush — exposed regions never repaint (smear) — **FIXED 2026-07-12, RUNTIME-VALIDATED 2026-07-18**
 - **Where:** `Infrastructure/NativeHwndHost.cs` (`BuildWindowCore` / `WNDCLASSEX`)
 - **Description:** The `TabDockContentHost` window class was registered with
   `hbrBackground` left at NULL and a WndProc that handles only `WM_SIZE`, and the
@@ -92,9 +106,15 @@ repeated-cycle validation.
   (matches the ContentBorder color; class brushes are system-owned and must never
   be `DeleteObject`'d). `DefWindowProc` erases exposed regions on `WM_ERASEBKGND`;
   `WS_CLIPCHILDREN` keeps the erase from painting under the guest.
+- **Runtime validation (2026-07-18):** `chrometabdrag` (real Chrome, drag by its own
+  client-drawn tab strip) and `browser-lifecycle --guest {chrome-normal,edge-normal}`
+  (real Chrome/Edge, minimize→restore hide/show cycle) all PASS with host-brightness
+  sampling showing no dark-background residue after the guest is repositioned/
+  hidden/shown, and `GuestMatchesHost` confirming exact snap-back geometry.
+  Guarding tests: `chrometabdrag`, `browser-lifecycle`.
 - **Severity:** High (co-produced the reported smear together with H5)
 
-### H5. Guest fill-clamp applied once at capture, never enforced — guests can be dragged/self-positioned loose inside the host — **FIXED 2026-07-12 (second session; pending runtime validation)** (NEW)
+### H5. Guest fill-clamp applied once at capture, never enforced — guests can be dragged/self-positioned loose inside the host — **FIXED 2026-07-12, RUNTIME-VALIDATED 2026-07-18**
 - **Where:** `Services/WindowCaptureService.cs` (`Layout`); `Services/WinEventMonitor.cs`; `Views/ContainerWindow.xaml.cs`; `App.xaml.cs`
 - **Description:** The style strip itself works and is guest-agnostic (no
   Chrome/Electron branching), but Chrome draws its title bar/caption buttons in its
@@ -115,6 +135,17 @@ repeated-cycle validation.
   `GetParent == host` — the visibility/iconic guards are load-bearing: `Layout`
   uses `SWP_SHOWWINDOW` and restores iconic windows, so an unguarded re-clamp
   would re-show a tray-hidden guest and defeat the hide-teardown.
+- **Runtime validation (2026-07-18):** `chrometabdrag` drags a real Chrome guest by
+  its own tab strip (the exact HTCAPTION path described above) and confirms
+  `LAYOUT[movesize]` fires on release with the guest snapped back to the host
+  client rect. `browser-tabswitch-hidesafety --guest edge-normal` (24 rapid
+  real-mouse tab switches with a real Edge tab among 3) shows zero tab loss and,
+  together with `browser-lifecycle`/`browser-dragreorder`, zero `LAYOUT[drift]`
+  lines firing without a preceding `LAYOUT[movesize]` (see the new
+  `TabDockLog.FindDriftWithoutPrecedingMovesize` assertion) — the 1s watchdog is
+  present but never had to fire alone against any real-input scenario run this
+  session. Guarding tests: `chrometabdrag`, `browser-tabswitch-hidesafety`,
+  `browser-lifecycle`, `browser-dragreorder`.
 - **Severity:** High (co-produced the reported smear together with H4)
 
 ---

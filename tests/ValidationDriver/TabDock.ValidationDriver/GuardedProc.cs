@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace TabDock.ValidationDriver;
@@ -96,6 +97,14 @@ internal static class GuardedProc
             {
                 if (!p.HasExited)
                 {
+                    if (IsAncestorOfCurrentProcess(p.Id))
+                    {
+                        Log($"SAFETY: REFUSING to kill tracked PID {p.Id} ({SafeName(p)}) — it is this driver's own " +
+                            "process or an ancestor of it (shared-instance host, e.g. Windows Terminal's monarch " +
+                            "process), not an isolated spawned child. Skipping kill; any captured window was " +
+                            "already closed via WM_CLOSE where applicable.");
+                        continue;
+                    }
                     Log($"Killing tracked process {p.Id} ({SafeName(p)})...");
                     p.Kill(entireProcessTree: true);
                 }
@@ -120,6 +129,66 @@ internal static class GuardedProc
     {
         try { return p.ProcessName; }
         catch { return "?"; }
+    }
+
+    /// <summary>
+    /// True if <paramref name="candidatePid"/> is this driver process itself or
+    /// an ancestor of it. Discovered live: wt.exe hands new windows to an
+    /// already-running WindowsTerminal.exe "monarch" process rather than
+    /// spawning a fresh one, and that monarch process can be the very process
+    /// hosting the shell this driver was launched from. A naive
+    /// Kill(entireProcessTree: true) against such a PID would try to kill an
+    /// ancestor of the calling process — .NET happens to refuse that specific
+    /// case, but this check makes the refusal explicit and proactive instead
+    /// of relying on catching that one exception message, and it covers
+    /// pattern-alike shared-instance hosts beyond just Windows Terminal.
+    /// </summary>
+    public static bool IsAncestorOfCurrentProcess(int candidatePid)
+    {
+        uint current = GetCurrentProcessIdSafe();
+        if ((uint)candidatePid == current)
+            return true;
+
+        Dictionary<uint, uint> parentOf = BuildParentMap();
+        uint walk = current;
+        for (int hops = 0; hops < 64; hops++) // hard bound: never walk an unbounded/cyclic chain
+        {
+            if (!parentOf.TryGetValue(walk, out uint parent) || parent == 0)
+                return false;
+            if (parent == (uint)candidatePid)
+                return true;
+            walk = parent;
+        }
+        return false;
+    }
+
+    private static uint GetCurrentProcessIdSafe()
+    {
+        try { return (uint)Process.GetCurrentProcess().Id; }
+        catch { return 0; }
+    }
+
+    private static Dictionary<uint, uint> BuildParentMap()
+    {
+        var map = new Dictionary<uint, uint>();
+        IntPtr snap = NativeMethods.CreateToolhelp32Snapshot(NativeMethods.TH32CS_SNAPPROCESS, 0);
+        if (snap == IntPtr.Zero || snap == new IntPtr(-1))
+            return map;
+        try
+        {
+            var entry = new NativeMethods.PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf<NativeMethods.PROCESSENTRY32>() };
+            if (!NativeMethods.Process32First(snap, ref entry))
+                return map;
+            do
+            {
+                map[entry.th32ProcessID] = entry.th32ParentProcessID;
+            } while (NativeMethods.Process32Next(snap, ref entry));
+        }
+        finally
+        {
+            NativeMethods.CloseHandle(snap);
+        }
+        return map;
     }
 }
 
