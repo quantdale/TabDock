@@ -48,12 +48,6 @@ public sealed class CapturedWindow
     /// </summary>
     public IntPtr OriginalAwarenessContext { get; set; }
 
-    /// <summary>
-    /// Keeps the native subclass callback alive while the guest is captured so it
-    /// is not garbage-collected while comctl32 holds the function pointer.
-    /// </summary>
-    public NativeMethods.SubclassProc? SubclassProc { get; set; }
-
     public bool WasMaximized { get; set; }
 
     public bool RenderHealth { get; set; } = true;

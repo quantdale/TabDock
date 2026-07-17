@@ -37,6 +37,30 @@ public sealed class GroupViewModel : ViewModelBase
         set => SetProperty(ref _isRenaming, value);
     }
 
+    /// <summary>
+    /// Experimental toggle (docs/internal/deep-audit-2026-07-17.md, section 6):
+    /// when true, this group's captures use WindowShepherdService (no
+    /// reparenting) instead of WindowCaptureService. Can only be changed while
+    /// the group has no live members — attempting otherwise reverts silently,
+    /// since flipping the backend under a live capture would desync which
+    /// service owns restoring it.
+    /// </summary>
+    public bool IsShepherdMode
+    {
+        get => _group.Mode == GroupCaptureMode.Shepherd;
+        set
+        {
+            if (value == IsShepherdMode)
+                return;
+            if (_group.Members.Count > 0)
+            {
+                OnPropertyChanged(nameof(IsShepherdMode));
+                return;
+            }
+            _group.Mode = value ? GroupCaptureMode.Shepherd : GroupCaptureMode.Reparent;
+        }
+    }
+
     public ObservableCollection<TabViewModel> Tabs { get; } = new();
 
     public TabViewModel? ActiveTab
@@ -53,7 +77,17 @@ public sealed class GroupViewModel : ViewModelBase
         }
     }
 
-    public CapturedWindow? ActiveTabContent => ActiveTab?.Model;
+    /// <summary>
+    /// The active tab's captured window, for the Reparent backend's
+    /// NativeHwndHost.ActiveWindow binding only. Deliberately null for a
+    /// shepherd-mode group: NativeHwndHost's SwitchActiveWindow assumes a
+    /// WS_CHILD reparented into its own HWND (it positions with SetWindowPos
+    /// at (0,0) relative to that host) — feeding it a shepherd guest (a real
+    /// top-level window) would snap it to the screen origin. Shepherd-mode
+    /// activation is handled entirely by ContainerWindow's
+    /// SyncShepherdActiveWindow, driven off the ActiveTab property directly.
+    /// </summary>
+    public CapturedWindow? ActiveTabContent => _group.Mode == GroupCaptureMode.Shepherd ? null : ActiveTab?.Model;
 
     public ICommand StartRenameCommand { get; }
     public ICommand FinishRenameCommand { get; }
@@ -81,6 +115,11 @@ public sealed class GroupViewModel : ViewModelBase
                 OnPropertyChanged(e.PropertyName);
                 if (e.PropertyName == nameof(Group.AccentColor))
                     OnPropertyChanged(nameof(AccentBrush));
+                if (e.PropertyName == nameof(Group.Mode))
+                {
+                    OnPropertyChanged(nameof(IsShepherdMode));
+                    OnPropertyChanged(nameof(ActiveTabContent));
+                }
             }
         };
 

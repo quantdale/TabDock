@@ -142,16 +142,11 @@ public sealed class WindowCaptureService
         // the captured window becomes the active tab, which keeps the cross-thread
         // input attachment scoped to the visible tab instead of momentary.
 
-        // Disable maximize/restore for the hosted guest. Frame-stripping removes
-        // the system maximize box, but custom-drawn captions still dispatch these
-        // commands internally.
-        cw.SubclassProc = GuestSubclassProc;
-        bool subclassed = NativeMethods.SetWindowSubclass(hwnd, cw.SubclassProc, IntPtr.Zero, IntPtr.Zero);
-        _log.Log($"DIAG[subclass-top] hwnd=0x{hwnd.ToInt64():X} result={(subclassed ? "installed" : "failed")} error={(subclassed ? "none" : NativeMethods.FormatLastError())}");
-        if (!subclassed)
-        {
-            _log.Log($"SetWindowSubclass failed for 0x{hwnd.ToInt64():X}: {NativeMethods.FormatLastError()}; falling back to WinEvent zoom clamp.");
-        }
+        // Maximize/restore for the hosted guest is prevented by the WinEvent-driven
+        // zoom clamp (ContainerWindow's drift watchdog + MOVESIZEEND reclamp), not by
+        // subclassing: comctl32's SetWindowSubclass cannot subclass a window owned by
+        // another process, so it failed on every real capture (confirmed in the
+        // rotating log) and was pure overhead. See docs/internal/deep-audit-2026-07-17.md F8.
 
         // Diagnostic snapshot after reparenting and style changes.
         LogGuestDiagnostics(hwnd, "post-capture");
@@ -263,25 +258,6 @@ public sealed class WindowCaptureService
     }
 
     /// <summary>
-    /// Subclass procedure installed on captured guests to disable maximize and
-    /// restore while they are hosted. Custom-frame apps (Chrome, Electron, Edge)
-    /// still dispatch these system commands from their internal caption buttons,
-    /// so dropping SC_MAXIMIZE/SC_RESTORE prevents them from breaking the host
-    /// layout. Other messages are passed through to DefSubclassProc.
-    /// </summary>
-    private static IntPtr GuestSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, IntPtr uIdSubclass, IntPtr dwRefData)
-    {
-        if (uMsg == NativeMethods.WM_SYSCOMMAND)
-        {
-            uint cmd = (uint)(wParam.ToInt64() & 0xFFF0);
-            if (cmd == NativeMethods.SC_MAXIMIZE || cmd == NativeMethods.SC_RESTORE)
-                return IntPtr.Zero;
-        }
-
-        return NativeMethods.DefSubclassProc(hWnd, uMsg, wParam, lParam);
-    }
-
-    /// <summary>
     /// Logs the guest's class name, DPI, awareness context, and geometry so Edge vs
     /// Chrome divergence can be diagnosed from the rotating log.
     /// </summary>
@@ -318,13 +294,6 @@ public sealed class WindowCaptureService
         {
             _log.Log($"Release: window 0x{window.Hwnd.ToInt64():X} already gone.");
             return;
-        }
-
-        // Remove the guest subclass before reparenting so comctl32 detaches the
-        // callback cleanly while the HWND is still our child.
-        if (window.SubclassProc != null)
-        {
-            NativeMethods.RemoveWindowSubclass(window.Hwnd, window.SubclassProc, IntPtr.Zero);
         }
 
         NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);

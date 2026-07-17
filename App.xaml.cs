@@ -23,6 +23,7 @@ public partial class App : Application
     private RenderHealthService _renderHealth = null!;
     private IconService _icons = null!;
     private WindowCaptureService _capture = null!;
+    private WindowShepherdService _shepherd = null!;
     private PersistenceService _persistence = null!;
     private GroupManager _groups = null!;
     private WinEventMonitor _events = null!;
@@ -30,6 +31,9 @@ public partial class App : Application
     private MainWindow? _mainWindow;
     private MainViewModel? _mainViewModel;
     private readonly Dictionary<Guid, ContainerWindow> _containers = new();
+
+    // Debounces EVENT_OBJECT_NAMECHANGE storms (see DebounceNameChanged).
+    private readonly Dictionary<IntPtr, System.Windows.Threading.DispatcherTimer> _nameChangeDebounce = new();
 
     public App()
     {
@@ -63,8 +67,9 @@ public partial class App : Application
             _renderHealth = new RenderHealthService();
             _icons = new IconService();
             _capture = new WindowCaptureService(_log, _icons, _dpi);
+            _shepherd = new WindowShepherdService(_log);
             _persistence = new PersistenceService(_log);
-            _groups = new GroupManager(_capture, _persistence, _log);
+            _groups = new GroupManager(_capture, _shepherd, _persistence, _log);
             _events = new WinEventMonitor(_groups.IsCapturedWindow, _log);
             _hotkey = new HotkeyService(_log);
 
@@ -144,6 +149,7 @@ public partial class App : Application
         {
             _events?.Dispose();
             _hotkey?.Dispose();
+            _log?.Dispose();
         }
     }
 
@@ -314,29 +320,57 @@ public partial class App : Application
         _events.WindowMoveSizeStarted += (_, args) => OnGuestMoveSize(args.Hwnd, started: true);
         _events.WindowMoveSizeEnded += (_, args) => OnGuestMoveSize(args.Hwnd, started: false);
 
-        _events.WindowNameChanged += (_, args) =>
+        _events.WindowNameChanged += (_, args) => DebounceNameChanged(args.Hwnd);
+    }
+
+    // Some guests (e.g. Windows 11 Notepad) mirror document content into the
+    // window title, firing EVENT_OBJECT_NAMECHANGE on every keystroke. Handling
+    // each one synchronously (log line + tab-title refresh) turned ordinary
+    // typing into a UI-thread event storm. Coalesce rapid repeats per HWND and
+    // act once, 250ms after the last one, reading the title fresh at that point
+    // rather than trusting whichever event happened to trigger the timer.
+    private void DebounceNameChanged(IntPtr hwnd)
+    {
+        if (_nameChangeDebounce.TryGetValue(hwnd, out var timer))
         {
-            foreach (var group in _groups.Groups)
-            {
-                var match = group.Members.FirstOrDefault(m => m.Hwnd == args.Hwnd);
-                if (match == null)
-                    continue;
-                if (!string.IsNullOrWhiteSpace(match.CustomLabel))
-                    continue; // User label wins.
+            timer.Stop();
+            timer.Start();
+            return;
+        }
 
-                string? newTitle = NativeMethods.GetWindowTextString(args.Hwnd);
-                if (newTitle == null)
-                    continue;
-
-                match.OriginalTitle = newTitle;
-                _log.Log($"WinEvent: title changed for 0x{args.Hwnd.ToInt64():X} -> '{newTitle}'.");
-
-                if (_containers.TryGetValue(group.Id, out var container))
-                {
-                    Dispatcher.Invoke(() => container.RefreshTabTitles());
-                }
-            }
+        timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        timer.Tick += (_, _) =>
+        {
+            timer!.Stop();
+            _nameChangeDebounce.Remove(hwnd);
+            HandleNameChanged(hwnd);
         };
+        _nameChangeDebounce[hwnd] = timer;
+        timer.Start();
+    }
+
+    private void HandleNameChanged(IntPtr hwnd)
+    {
+        foreach (var group in _groups.Groups.ToList())
+        {
+            var match = group.Members.FirstOrDefault(m => m.Hwnd == hwnd);
+            if (match == null)
+                continue;
+            if (!string.IsNullOrWhiteSpace(match.CustomLabel))
+                continue; // User label wins.
+
+            string? newTitle = NativeMethods.GetWindowTextString(hwnd);
+            if (newTitle == null)
+                continue;
+
+            match.OriginalTitle = newTitle;
+            _log.Log($"WinEvent: title changed for 0x{hwnd.ToInt64():X} -> '{newTitle}'.");
+
+            if (_containers.TryGetValue(group.Id, out var container))
+            {
+                container.RefreshTabTitles();
+            }
+        }
     }
 
     private void OnGuestMoveSize(IntPtr hwnd, bool started)
@@ -454,7 +488,7 @@ public partial class App : Application
         // The container's "+" button funnels through this event; without the
         // subscription it is a dead control.
         vm.AddWindowsRequested += (_, _) => ShowCapturePicker(group);
-        var window = new ContainerWindow(vm, _groups, _capture, _renderHealth, _log);
+        var window = new ContainerWindow(vm, _groups, _capture, _shepherd, _renderHealth, _log);
         window.Closed += (_, _) => OnContainerClosed(group.Id);
         _containers[group.Id] = window;
         window.Show();

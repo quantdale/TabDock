@@ -69,6 +69,11 @@
                         <MenuItem Header="Teal" Click="ColorMenuItem_Click" Tag="#009688" />
                         <MenuItem Header="Pink" Click="ColorMenuItem_Click" Tag="#E91E63" />
                         <MenuItem Header="Gray" Click="ColorMenuItem_Click" Tag="#607D8B" />
+                        <Separator />
+                        <MenuItem Header="Experimental: dock without reparenting"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding IsShepherdMode, Mode=TwoWay}"
+                                  ToolTip="Only takes effect for windows captured after toggling; has no effect while this group has open tabs." />
                     </ContextMenu>
                 </Button.ContextMenu>
             </Button>

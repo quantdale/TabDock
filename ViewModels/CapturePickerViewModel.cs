@@ -76,6 +76,13 @@ public sealed class CapturePickerViewModel : ViewModelBase
             if (_manager.IsOwnWindow(hwnd))
                 return true;
 
+            // Cloaked windows (suspended UWP apps, hidden ApplicationFrameHost
+            // ghosts) are reported visible by IsWindowVisible but aren't actually
+            // on screen; capturing one produces a tab with nothing behind it.
+            int hr = NativeMethods.DwmGetWindowAttribute(hwnd, NativeMethods.DWMWA_CLOAKED, out bool cloaked, sizeof(uint));
+            if (hr == 0 && cloaked)
+                return true;
+
             nint exStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
             if (((long)exStyle & NativeMethods.WS_EX_TOOLWINDOW) != 0)
                 return true;
