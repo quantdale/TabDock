@@ -235,4 +235,88 @@ internal static class Uia
         }
         return null;
     }
+
+    /// <summary>
+    /// Finds the first editable text control (Edit or Document) under <paramref name="root"/>.
+    /// Returns the match and the total number of editable descendants found.
+    /// </summary>
+    public static AutomationElement? FindEditOrDocument(AutomationElement root, out int matchCount)
+    {
+        matchCount = 0;
+        AutomationElement? found = null;
+        try
+        {
+            AutomationElementCollection all = root.FindAll(
+                TreeScope.Descendants,
+                new OrCondition(
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit),
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Document)));
+            matchCount = all.Count;
+            if (matchCount > 0)
+                found = all[0];
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"    [uia] FindEditOrDocument EXCEPTION: {ex.GetType().Name}: {ex.Message}");
+        }
+        return found;
+    }
+
+    /// <summary>Reads the ValuePattern value of an element, if supported.</summary>
+    public static string? GetValue(AutomationElement element)
+    {
+        try
+        {
+            if (element.TryGetCurrentPattern(ValuePattern.Pattern, out object p))
+                return ((ValuePattern)p).Current.Value;
+        }
+        catch
+        {
+        }
+        return null;
+    }
+
+    /// <summary>Reads the SelectionItemPattern.IsSelected property, if supported.</summary>
+    public static bool? IsSelected(AutomationElement element)
+    {
+        try
+        {
+            if (element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out object p))
+                return ((SelectionItemPattern)p).Current.IsSelected;
+        }
+        catch
+        {
+        }
+        return null;
+    }
+
+    /// <summary>Realizes a virtualized automation element so geometry/patterns can be used.</summary>
+    public static void Realize(AutomationElement element)
+    {
+        try
+        {
+            if (element.TryGetCurrentPattern(VirtualizedItemPattern.Pattern, out object p))
+                ((VirtualizedItemPattern)p).Realize();
+        }
+        catch
+        {
+        }
+    }
+
+    /// <summary>Selects an item via SelectionItemPattern, if supported.</summary>
+    public static bool Select(AutomationElement element)
+    {
+        try
+        {
+            if (element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out object p))
+            {
+                ((SelectionItemPattern)p).Select();
+                return true;
+            }
+        }
+        catch
+        {
+        }
+        return false;
+    }
 }

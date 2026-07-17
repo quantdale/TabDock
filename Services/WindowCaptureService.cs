@@ -138,11 +138,9 @@ public sealed class WindowCaptureService
 
         Layout(hwnd, hostHwnd, "capture");
 
-        // Establish focus/activation for the reparented guest. Chromium/Electron
-        // guests stop consuming input if they are not explicitly told they are
-        // active after the SetParent boundary crossing.
-        IntPtr containerHwnd = NativeMethods.GetAncestor(hostHwnd, NativeMethods.GA_ROOT);
-        GuestActivationHelper.ActivateGuest(hwnd, containerHwnd, _log);
+        // Focus/activation is now handled by NativeHwndHost.SwitchActiveWindow when
+        // the captured window becomes the active tab, which keeps the cross-thread
+        // input attachment scoped to the visible tab instead of momentary.
 
         // Disable maximize/restore for the hosted guest. Frame-stripping removes
         // the system maximize box, but custom-drawn captions still dispatch these

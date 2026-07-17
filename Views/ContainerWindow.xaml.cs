@@ -96,16 +96,24 @@ public partial class ContainerWindow : Window
     {
         if ((uint)msg == NativeMethods.WM_ACTIVATE)
         {
-            // Forward activation to the active captured guest so it knows it should
-            // resume consuming input after the user alt-tabs back to the container.
+            // Manage the scoped cross-thread input attachment for the active guest.
+            // Detach when the container loses foreground so the guest's thread is not
+            // chained to an inactive host; attach + focus when the container comes
+            // back (alt-tab, click on caption, etc.) so keyboard input routes to the
+            // guest again.
             uint activateKind = (uint)(wParam.ToInt64() & 0xFFFF);
             if (activateKind == NativeMethods.WA_ACTIVE || activateKind == NativeMethods.WA_CLICKACTIVE)
             {
+                ContentHost.AttachActiveGuest();
                 var active = _viewModel.ActiveTab?.Model;
-                if (active != null)
+                if (active != null && NativeMethods.IsWindow(active.Hwnd))
                 {
-                    GuestActivationHelper.NotifyGuestActive(active.Hwnd, _log);
+                    GuestActivationHelper.FocusGuest(active.Hwnd, _log);
                 }
+            }
+            else if (activateKind == NativeMethods.WA_INACTIVE)
+            {
+                ContentHost.DetachActiveGuest();
             }
         }
         else if ((uint)msg == NativeMethods.WM_GETMINMAXINFO)
@@ -222,6 +230,10 @@ public partial class ContainerWindow : Window
 
     private void ContainerWindow_Closed(object? sender, EventArgs e)
     {
+        // Detach the active guest before the container disappears so the guest's
+        // input thread is not left chained to a host whose HWND is being destroyed.
+        ContentHost.DetachActiveGuest();
+
         if (_driftTimer != null)
         {
             _driftTimer.Stop();
@@ -576,6 +588,11 @@ public partial class ContainerWindow : Window
     {
         if (WindowState == WindowState.Minimized)
             return;
+
+        // If the active guest has hung, detach its input queue so TabDock's UI
+        // thread is not blocked by a dead guest. This is checked before the normal
+        // drift/layout work because a hung guest would also fail the geometry calls.
+        ContentHost.DetachIfGuestHung();
 
         var window = _viewModel.ActiveTab?.Model;
         if (window == null || ContentHostHwnd == IntPtr.Zero)
