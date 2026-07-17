@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using TabDock.Models;
@@ -23,6 +24,17 @@ public class NativeHwndHost : HwndHost
 
     private IntPtr _hwnd;
     private WindowCaptureService? _service;
+    private LoggingService? _log;
+
+    // Scoped cross-thread input attachment. The active guest's input thread is attached
+    // to the host (WPF UI) thread for as long as the guest is the visible tab and the
+    // container is active. Detaching happens on tab switch, container deactivation,
+    // container close, guest hang/death, and application exit. This keeps keyboard focus
+    // reliably on the guest without the momentary attach/detach pattern that let focus
+    // drift back to the host.
+    private uint _attachedGuestThreadId;
+    private uint _attachedHostThreadId;
+    private bool _isThreadInputAttached;
 
     public static readonly DependencyProperty ActiveWindowProperty = DependencyProperty.Register(
         nameof(ActiveWindow),
@@ -40,6 +52,188 @@ public class NativeHwndHost : HwndHost
     {
         get => _service;
         set => _service = value;
+    }
+
+    public LoggingService? Logger
+    {
+        get => _log;
+        set => _log = value;
+    }
+
+    /// <summary>
+    /// Override HwndHost's default focus-within check so WPF does not yank Win32
+    /// focus back to a WPF element (the container caption/tab strip) when we
+    /// forward focus to the captured guest. Treat the guest subtree as "within"
+    /// the host while WPF focus is on this host or while the guest currently
+    /// holds Win32 focus.
+    /// </summary>
+    protected override bool HasFocusWithinCore()
+    {
+        CapturedWindow? cw = ActiveWindow;
+        if (cw != null && NativeMethods.IsWindow(cw.Hwnd))
+        {
+            // Treat the captured guest subtree as always having focus within this
+            // host while it is the active tab. This stops WPF from pulling Win32
+            // focus back to the container caption/tab strip when we forward focus
+            // to the guest.
+            return true;
+        }
+        return base.HasFocusWithinCore();
+    }
+
+    /// <summary>
+    /// Attaches the active guest's input thread to the host thread. Safe to call
+    /// repeatedly: it is a no-op if the same guest is already attached.
+    /// </summary>
+    public void AttachActiveGuest()
+    {
+        CapturedWindow? cw = ActiveWindow;
+        if (cw == null || cw.Hwnd == IntPtr.Zero || !NativeMethods.IsWindow(cw.Hwnd))
+        {
+            _log?.Log("INPUT[attach-skip] reason=no-active-window");
+            return;
+        }
+
+        if (NativeMethods.IsHungAppWindow(cw.Hwnd))
+        {
+            _log?.Log($"INPUT[attach-skip] guest=0x{cw.Hwnd.ToInt64():X} reason=hung");
+            return;
+        }
+
+        uint guestThreadId = NativeMethods.GetWindowThreadProcessId(cw.Hwnd, out _);
+        uint hostThreadId = NativeMethods.GetWindowThreadProcessId(_hwnd, out _);
+        if (guestThreadId == 0 || hostThreadId == 0)
+        {
+            _log?.Log($"INPUT[attach-skip] guest=0x{cw.Hwnd.ToInt64():X} guestThread={guestThreadId} hostThread={hostThreadId} reason=no-thread");
+            return;
+        }
+
+        if (guestThreadId == hostThreadId)
+        {
+            // Same thread: no attach needed, but make sure focus is on the guest.
+            _log?.Log($"INPUT[attach-same-thread] guest=0x{cw.Hwnd.ToInt64():X}");
+            FocusActiveGuest();
+            return;
+        }
+
+        if (_isThreadInputAttached &&
+            _attachedGuestThreadId == guestThreadId &&
+            _attachedHostThreadId == hostThreadId)
+        {
+            _log?.Log($"INPUT[attach-noop] guest=0x{cw.Hwnd.ToInt64():X} guestThread={guestThreadId} hostThread={hostThreadId}");
+            return;
+        }
+
+        // If attached to a different guest, detach first to avoid chaining attachments.
+        DetachActiveGuest();
+
+        bool attached = NativeMethods.AttachThreadInput(guestThreadId, hostThreadId, true);
+        if (attached)
+        {
+            _isThreadInputAttached = true;
+            _attachedGuestThreadId = guestThreadId;
+            _attachedHostThreadId = hostThreadId;
+            _log?.Log($"INPUT[attach] guest=0x{cw.Hwnd.ToInt64():X} guestThread={guestThreadId} hostThread={hostThreadId}");
+            FocusActiveGuest();
+        }
+        else
+        {
+            _log?.Log($"INPUT[attach-failed] guest=0x{cw.Hwnd.ToInt64():X} guestThread={guestThreadId} hostThread={hostThreadId} error={NativeMethods.FormatLastError()}");
+        }
+    }
+
+    /// <summary>
+    /// Detaches the currently attached guest's input thread from the host thread.
+    /// Safe to call when not attached; logs the resulting focus state for diagnosis.
+    /// </summary>
+    public void DetachActiveGuest()
+    {
+        if (!_isThreadInputAttached)
+            return;
+
+        uint guestThreadId = _attachedGuestThreadId;
+        uint hostThreadId = _attachedHostThreadId;
+        bool detached = NativeMethods.AttachThreadInput(guestThreadId, hostThreadId, false);
+        IntPtr focusAfter = NativeMethods.GetFocus();
+        _log?.Log($"INPUT[detach] guestThread={guestThreadId} hostThread={hostThreadId} detached={detached} focus=0x{focusAfter.ToInt64():X}");
+
+        _isThreadInputAttached = false;
+        _attachedGuestThreadId = 0;
+        _attachedHostThreadId = 0;
+    }
+
+    /// <summary>
+    /// Detaches only if the active guest is hung or no longer a window. Called from
+    /// the drift watchdog so a permanently stuck guest does not keep TabDock's input
+    /// queue chained to it.
+    /// </summary>
+    public void DetachIfGuestHung()
+    {
+        if (!_isThreadInputAttached)
+            return;
+
+        CapturedWindow? cw = ActiveWindow;
+        if (cw == null || cw.Hwnd == IntPtr.Zero || !NativeMethods.IsWindow(cw.Hwnd) || NativeMethods.IsHungAppWindow(cw.Hwnd))
+        {
+            string reason = cw == null ? "null" : (!NativeMethods.IsWindow(cw.Hwnd) ? "dead" : "hung");
+            _log?.Log($"INPUT[detach-hung] guest=0x{(cw?.Hwnd ?? IntPtr.Zero).ToInt64():X} reason={reason}");
+            DetachActiveGuest();
+        }
+    }
+
+    /// <summary>
+    /// Sets Win32 focus to the active guest and verifies the guest thread actually
+    /// reports the guest as focused. Caller must have already attached input queues
+    /// when cross-thread; this method also works for same-thread guests.
+    /// </summary>
+    public void FocusActiveGuest()
+    {
+        CapturedWindow? cw = ActiveWindow;
+        if (cw == null || cw.Hwnd == IntPtr.Zero || !NativeMethods.IsWindow(cw.Hwnd))
+            return;
+
+        if (NativeMethods.IsHungAppWindow(cw.Hwnd))
+        {
+            _log?.Log($"INPUT[focus-skip] guest=0x{cw.Hwnd.ToInt64():X} reason=hung");
+            return;
+        }
+
+        IntPtr focusResult = NativeMethods.SetFocus(cw.Hwnd);
+        uint guestThreadId = NativeMethods.GetWindowThreadProcessId(cw.Hwnd, out _);
+        var gti = new NativeMethods.GUITHREADINFO { cbSize = (uint)Marshal.SizeOf<NativeMethods.GUITHREADINFO>() };
+        bool gtiOk = NativeMethods.GetGUIThreadInfo(guestThreadId, ref gti);
+        _log?.Log($"INPUT[focus] guest=0x{cw.Hwnd.ToInt64():X} guestThread={guestThreadId} setFocus=0x{focusResult.ToInt64():X} gtiOk={gtiOk} gtiFocus=0x{gti.hwndFocus.ToInt64():X}");
+
+        // Chromium/Electron guests require an explicit WM_ACTIVATE notification in
+        // addition to SetFocus before they will consume keyboard input reliably.
+        GuestActivationHelper.NotifyGuestActive(cw.Hwnd, _log);
+    }
+
+    /// <summary>
+    /// Detaches every host that still has an active guest attached. Called on
+    /// application exit/crash paths so cross-thread input attachments are not left
+    /// dangling after TabDock's UI thread terminates.
+    /// </summary>
+    public static void DetachAllGuests()
+    {
+        NativeHwndHost[] hosts;
+        lock (s_hosts)
+        {
+            hosts = new NativeHwndHost[s_hosts.Count];
+            s_hosts.Values.CopyTo(hosts, 0);
+        }
+
+        foreach (NativeHwndHost host in hosts)
+        {
+            try
+            {
+                host.DetachActiveGuest();
+            }
+            catch
+            {
+                // Best-effort emergency cleanup; never throw during shutdown.
+            }
+        }
     }
 
     private static void OnActiveWindowChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -101,6 +295,10 @@ public class NativeHwndHost : HwndHost
 
     protected override void DestroyWindowCore(HandleRef hwnd)
     {
+        // Detach before destroying the host so the guest is not left chained to a
+        // thread whose window is about to disappear.
+        DetachActiveGuest();
+
         lock (s_hosts)
             s_hosts.Remove(hwnd.Handle);
 
@@ -116,12 +314,54 @@ public class NativeHwndHost : HwndHost
                 s_hosts.TryGetValue(hWnd, out host);
             host?.LayoutActiveWindow();
         }
+        else if (msg == NativeMethods.WM_MOUSEACTIVATE)
+        {
+            // Activate the clicked child window (the captured guest) rather than the
+            // host itself. This lets Chromium/Electron receive activation on the first
+            // click in the content area instead of staying input-dead.
+            NativeHwndHost? host;
+            lock (s_hosts)
+                s_hosts.TryGetValue(hWnd, out host);
+            if (host?.ActiveWindow != null && NativeMethods.IsWindow(host.ActiveWindow.Hwnd))
+            {
+                return (IntPtr)NativeMethods.MA_ACTIVATE;
+            }
+        }
+        else if (msg == NativeMethods.WM_SETFOCUS)
+        {
+            // The host HWND received Win32 focus. Attach to the active guest and
+            // forward focus there; the attachment stays in place so subsequent
+            // keyboard input continues to route to the guest.
+            NativeHwndHost? host;
+            lock (s_hosts)
+                s_hosts.TryGetValue(hWnd, out host);
+
+            host?._log?.Log($"INPUT[host-wmsetfocus] host=0x{hWnd.ToInt64():X} active=0x{(host?.ActiveWindow?.Hwnd ?? IntPtr.Zero).ToInt64():X}");
+            host?.AttachActiveGuest();
+            return IntPtr.Zero;
+        }
+        else if (msg == NativeMethods.WM_KILLFOCUS)
+        {
+            // The host is losing Win32 focus; detach so we do not keep the guest's
+            // thread chained to a host that is no longer the foreground window.
+            NativeHwndHost? host;
+            lock (s_hosts)
+                s_hosts.TryGetValue(hWnd, out host);
+            host?._log?.Log($"INPUT[host-wmkillfocus] host=0x{hWnd.ToInt64():X}");
+            host?.DetachActiveGuest();
+            return IntPtr.Zero;
+        }
 
         return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
     }
 
     private void SwitchActiveWindow(CapturedWindow? oldWindow, CapturedWindow? newWindow)
     {
+        // Detach from the old guest before hiding it. ActiveWindow has already
+        // changed to newWindow at this point, but stored attachment state still
+        // describes the old guest until AttachActiveGuest runs below.
+        DetachActiveGuest();
+
         // Hide the previously active window, but only if it is still our child.
         if (oldWindow != null && oldWindow.Hwnd != IntPtr.Zero && NativeMethods.IsWindow(oldWindow.Hwnd))
         {
@@ -145,6 +385,11 @@ public class NativeHwndHost : HwndHost
                 NativeMethods.ShowWindow(newWindow.Hwnd, NativeMethods.SW_RESTORE);
             _service.Layout(newWindow, _hwnd, "switch");
             NativeMethods.ShowWindow(newWindow.Hwnd, NativeMethods.SW_SHOW);
+
+            // Establish persistent cross-thread attachment and focus for the newly
+            // shown guest. This replaces the temporary attach/detach pattern that
+            // allowed focus to revert to the host immediately after SetFocus.
+            AttachActiveGuest();
         }
     }
 

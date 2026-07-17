@@ -22,6 +22,12 @@ public sealed class CapturedWindow
 
     public IntPtr OriginalParent { get; set; }
 
+    /// <summary>
+    /// The original owner window of a top-level guest (GW_OWNER), if any. Captured
+    /// before reparenting so it can be restored after release.
+    /// </summary>
+    public IntPtr OriginalOwner { get; set; }
+
     public long OriginalStyle { get; set; }
 
     public long OriginalExStyle { get; set; }
@@ -34,6 +40,13 @@ public sealed class CapturedWindow
     /// diagnostics; the forward DPI message uses the host monitor DPI.
     /// </summary>
     public uint OriginalDpi { get; set; }
+
+    /// <summary>
+    /// The guest's DPI awareness context before capture. Used to decide whether
+    /// a synthetic WM_DPICHANGED is appropriate (only Per-Monitor-V2 guests
+    /// handle it meaningfully).
+    /// </summary>
+    public IntPtr OriginalAwarenessContext { get; set; }
 
     /// <summary>
     /// Keeps the native subclass callback alive while the guest is captured so it

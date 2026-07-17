@@ -68,6 +68,12 @@ internal static class Program
                 case "--close-button":
                     opts.CloseButton = true;
                     break;
+                case "--click-counter-button":
+                    opts.ClickCounterButton = true;
+                    break;
+                case "--text-box":
+                    opts.TextBox = true;
+                    break;
                 default:
                     throw new ArgumentException($"Unknown argument '{args[i]}'.");
             }

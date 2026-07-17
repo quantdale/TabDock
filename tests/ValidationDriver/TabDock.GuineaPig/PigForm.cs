@@ -17,6 +17,8 @@ public sealed class PigOptions
     public int SelfCloseAfterSeconds = -1;
     public int SelfMinimizeAfterSeconds = -1;
     public bool CloseButton;
+    public bool ClickCounterButton;
+    public bool TextBox;
 }
 
 /// <summary>
@@ -33,6 +35,11 @@ public sealed class PigForm : Form
     private const int MsgSysCommand = 0x0112;
     private const int MsgSize = 0x0005;
     private const int MsgNcCalcSize = 0x0083;
+    private const int MsgLButtonDown = 0x0201;
+    private const int MsgLButtonUp = 0x0202;
+    private const int MsgSetFocus = 0x0007;
+    private const int MsgKillFocus = 0x0008;
+    private const int MsgMouseActivate = 0x0021;
 
     private readonly PigOptions _opts;
     private readonly string? _logPath;
@@ -40,6 +47,7 @@ public sealed class PigForm : Form
     private readonly Color _baseColor;
     private readonly Color _pulseColor;
     private bool _pulseOn;
+    private TextBox? _textBox;
 
     public PigForm(PigOptions opts)
     {
@@ -115,13 +123,51 @@ public sealed class PigForm : Form
             Controls.Add(btn);
         }
 
+        if (opts.ClickCounterButton)
+        {
+            var btn = new Button
+            {
+                Name = "ClickCounterButton",
+                Text = "Click me: 0",
+                Size = new Size(140, 40),
+                Anchor = AnchorStyles.None,
+            };
+            btn.Location = new Point(
+                (ClientSize.Width - btn.Width) / 2,
+                (ClientSize.Height - btn.Height) / 2);
+            int clickCount = 0;
+            btn.Click += (s, e) =>
+            {
+                clickCount++;
+                btn.Text = $"Click me: {clickCount}";
+                Log($"BUTTON_CLICK count={clickCount}");
+            };
+            Controls.Add(btn);
+        }
+
+        if (opts.TextBox)
+        {
+            _textBox = new TextBox
+            {
+                Name = "TypedTextBox",
+                Text = string.Empty,
+                Dock = DockStyle.Fill,
+            };
+            _textBox.TextChanged += (s, e) =>
+            {
+                Log($"TEXTBOX text='{_textBox.Text.Replace("'", "''")}'");
+            };
+            Controls.Add(_textBox);
+            ActiveControl = _textBox;
+        }
+
         Shown += (s, e) => Log("LIFECYCLE Shown");
         FormClosing += OnPigFormClosing;
         FormClosed += (s, e) => Log("LIFECYCLE FormClosed");
 
         Log($"LIFECYCLE Created title='{opts.Title}' pid={Environment.ProcessId} color={_baseColor} " +
             $"pulse={opts.Pulse} hideOnClose={opts.HideOnClose} minThenHide={opts.MinimizeThenHideOnClose} " +
-            $"selfClose={opts.SelfCloseAfterSeconds} selfMin={opts.SelfMinimizeAfterSeconds} closeButton={opts.CloseButton}");
+            $"selfClose={opts.SelfCloseAfterSeconds} selfMin={opts.SelfMinimizeAfterSeconds} closeButton={opts.CloseButton} textBox={opts.TextBox}");
     }
 
     private void OnPigFormClosing(object? sender, FormClosingEventArgs e)
@@ -158,6 +204,11 @@ public sealed class PigForm : Form
                 MsgSysCommand => "WM_SYSCOMMAND",
                 MsgSize => "WM_SIZE",
                 MsgNcCalcSize => "WM_NCCALCSIZE",
+                MsgLButtonDown => "WM_LBUTTONDOWN",
+                MsgLButtonUp => "WM_LBUTTONUP",
+                MsgSetFocus => "WM_SETFOCUS",
+                MsgKillFocus => "WM_KILLFOCUS",
+                MsgMouseActivate => "WM_MOUSEACTIVATE",
                 _ => null,
             };
             if (name != null)
@@ -169,6 +220,17 @@ public sealed class PigForm : Form
         }
 
         base.WndProc(ref m);
+
+        // When reparented as a WS_CHILD, WinForms does not always forward focus to
+        // ActiveControl on show/tab-switch. Force the editable control focused so
+        // keyboard input reaches it in the rapid-switch test.
+        if (m.Msg == MsgSetFocus ||
+            (m.Msg == MsgShowWindow && m.WParam != IntPtr.Zero) ||
+            m.Msg == MsgMouseActivate)
+        {
+            bool focused = _textBox?.Focus() == true;
+            Log($"FOCUS_FORWARD result={focused} msg={m.Msg:X} wParam=0x{(long)m.WParam:X}");
+        }
     }
 
     /// <summary>Open/append/close on every write so lines are flushed even if the process is killed.</summary>

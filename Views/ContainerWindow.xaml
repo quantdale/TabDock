@@ -136,6 +136,7 @@
                      SelectionChanged="TabsListBox_SelectionChanged"
                      Background="Transparent"
                      BorderThickness="0"
+                     Focusable="False"
                      ScrollViewer.HorizontalScrollBarVisibility="Auto"
                      ScrollViewer.VerticalScrollBarVisibility="Disabled">
                 <ListBox.ItemsPanel>
@@ -184,6 +185,7 @@
         <!-- Content host -->
         <Border Grid.Row="2" Background="#FF1E1E1E" x:Name="ContentBorder">
             <infra:NativeHwndHost x:Name="ContentHost"
+                                  Focusable="True"
                                   ActiveWindow="{Binding ActiveTabContent, Mode=OneWay}" />
         </Border>
     </Grid>

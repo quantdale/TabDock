@@ -47,6 +47,22 @@ internal static class Program
             CleanupTrackedProcesses();
         };
 
+        if (args.Contains("--test-a", StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                int result = await RunTestAAsync(Cts.Token);
+                CleanupTrackedProcesses();
+                return result;
+            }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine("Test A cancelled.");
+                CleanupTrackedProcesses();
+                return 4;
+            }
+        }
+
         Console.WriteLine();
         Console.WriteLine("This test will run one scenario per app:");
         Console.WriteLine("  1. Paint (baseline)");
@@ -653,6 +669,203 @@ internal static class Program
     private static void Log(string message)
     {
         Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] {message}");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test A — non-Electron release-path validation
+    // -------------------------------------------------------------------------
+    private static async Task<int> RunTestAAsync(CancellationToken cancellationToken)
+    {
+        Console.WriteLine("=== Test A: non-Electron release-path validation ===");
+        Console.WriteLine("Target app: Notepad (notepad.exe)");
+        Console.WriteLine("Verifying: GetParent == NULL, GWL_STYLE/GWL_EXSTYLE match, Bounds match");
+        Console.WriteLine();
+
+        var log = new TabDock.Services.LoggingService();
+        var icons = new TabDock.Services.IconService();
+        var dpi = new TabDock.Services.DpiService();
+        var captureService = new TabDock.Services.WindowCaptureService(log, icons, dpi);
+
+        const string notepadExe = "notepad.exe";
+        if (!CanLaunch(notepadExe))
+        {
+            Console.WriteLine("FAIL: notepad.exe not found on PATH.");
+            return 5;
+        }
+
+        Log("Enumerating pre-existing Notepad windows...");
+        var existingWindows = FindWindowsByClass("Notepad");
+        Log($"Found {existingWindows.Count} pre-existing Notepad window(s).");
+
+        Process? notepad = null;
+        try
+        {
+            notepad = SpawnGuarded(() => Process.Start(new ProcessStartInfo(notepadExe)
+            {
+                UseShellExecute = true,
+                CreateNoWindow = false,
+            })!);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"FAIL: could not start Notepad: {ex.Message}");
+            return 5;
+        }
+
+        Log("Waiting for a new Notepad top-level window...");
+        IntPtr notepadHwnd = IntPtr.Zero;
+        for (int i = 0; i < 200 && notepadHwnd == IntPtr.Zero; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            notepadHwnd = FindNewWindow("Notepad", existingWindows, t => t.Contains("Notepad", StringComparison.OrdinalIgnoreCase));
+            if (notepadHwnd == IntPtr.Zero)
+            {
+                if (i % 10 == 0)
+                    Log($"  attempt {i + 1}/200...");
+                await Task.Delay(100, cancellationToken);
+            }
+        }
+
+        if (notepadHwnd == IntPtr.Zero)
+        {
+            Console.WriteLine("FAIL: could not locate a new Notepad window.");
+            return 5;
+        }
+
+        uint pid = 0;
+        NativeMethods.GetWindowThreadProcessId(notepadHwnd, out pid);
+        Log($"Notepad HWND: 0x{notepadHwnd.ToInt64():X}, PID: {pid}");
+
+        await Task.Delay(1000, cancellationToken);
+
+        WindowSnapshot baseline = Snapshot(notepadHwnd);
+        Log("BASELINE snapshot:");
+        Console.WriteLine(baseline.ToDetailedString());
+        Log($"BASELINE GetParent: 0x{NativeMethods.GetParent(notepadHwnd).ToInt64():X}");
+
+        string hostClassName = "TabDockTestAHost_" + Guid.NewGuid().ToString("N");
+        var wndProc = new NativeMethods.WndProc(WindowProc);
+        var wc = new NativeMethods.WNDCLASSEX
+        {
+            cbSize = Marshal.SizeOf(typeof(NativeMethods.WNDCLASSEX)),
+            lpfnWndProc = Marshal.GetFunctionPointerForDelegate(wndProc),
+            hInstance = Marshal.GetHINSTANCE(typeof(Program).Module),
+            lpszClassName = hostClassName,
+        };
+
+        if (NativeMethods.RegisterClassEx(ref wc) == 0)
+        {
+            Console.WriteLine($"FAIL: RegisterClassEx failed: {NativeMethods.FormatLastError()}");
+            return 5;
+        }
+
+        IntPtr hostHwnd = NativeMethods.CreateWindowEx(
+            0,
+            hostClassName,
+            "TabDock Test A Host",
+            NativeMethods.WS_OVERLAPPEDWINDOW | NativeMethods.WS_VISIBLE,
+            unchecked((int)NativeMethods.CW_USEDEFAULT),
+            unchecked((int)NativeMethods.CW_USEDEFAULT),
+            900,
+            700,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            wc.hInstance,
+            IntPtr.Zero);
+
+        if (hostHwnd == IntPtr.Zero)
+        {
+            Console.WriteLine($"FAIL: CreateWindowEx failed: {NativeMethods.FormatLastError()}");
+            return 5;
+        }
+
+        bool allPassed = true;
+        string[] paths = { "drag-out pop-out", "right-click pop-out", "close-group-keep-alive" };
+
+        try
+        {
+            foreach (string path in paths)
+            {
+                Log($"--- Path: {path} ---");
+
+                var cw = captureService.Capture(notepadHwnd, hostHwnd, out string? error);
+                if (cw == null)
+                {
+                    Console.WriteLine($"FAIL [{path}]: WindowCaptureService.Capture returned null: {error}");
+                    allPassed = false;
+                    break;
+                }
+
+                IntPtr capturedParent = NativeMethods.GetParent(notepadHwnd);
+                if (capturedParent != hostHwnd)
+                {
+                    Console.WriteLine($"FAIL [{path}]: Expected parent == host after capture; got 0x{capturedParent.ToInt64():X}.");
+                    allPassed = false;
+                    break;
+                }
+
+                Log("Captured into host. Waiting 500ms before release...");
+                await Task.Delay(500, cancellationToken);
+
+                captureService.Release(cw, show: true);
+                await Task.Delay(800, cancellationToken);
+
+                WindowSnapshot after = Snapshot(notepadHwnd);
+                IntPtr afterParent = NativeMethods.GetParent(notepadHwnd);
+                Log("After-release snapshot:");
+                Console.WriteLine(after.ToDetailedString());
+                Log($"After-release GetParent: 0x{afterParent.ToInt64():X}");
+
+                bool pathPassed = VerifyTestARelease(baseline, after, afterParent);
+                Console.WriteLine(pathPassed
+                    ? $"PASS [{path}]"
+                    : $"FAIL [{path}]");
+
+                if (!pathPassed)
+                    allPassed = false;
+            }
+        }
+        finally
+        {
+            NativeMethods.DestroyWindow(hostHwnd);
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(allPassed
+            ? "Test A: ALL PATHS PASSED."
+            : "Test A: ONE OR MORE PATHS FAILED.");
+        return allPassed ? 0 : 5;
+    }
+
+    private static bool VerifyTestARelease(WindowSnapshot baseline, WindowSnapshot after, IntPtr afterParent)
+    {
+        bool ok = true;
+
+        if (afterParent != IntPtr.Zero)
+        {
+            Console.WriteLine($"  MISMATCH: GetParent expected NULL, got 0x{afterParent.ToInt64():X}");
+            ok = false;
+        }
+
+        if (baseline.Style != after.Style)
+        {
+            Console.WriteLine($"  MISMATCH: GWL_STYLE expected 0x{baseline.Style:X}, got 0x{after.Style:X}");
+            ok = false;
+        }
+
+        if (baseline.ExStyle != after.ExStyle)
+        {
+            Console.WriteLine($"  MISMATCH: GWL_EXSTYLE expected 0x{baseline.ExStyle:X}, got 0x{after.ExStyle:X}");
+            ok = false;
+        }
+
+        if (!RectEquals(baseline.Bounds, after.Bounds))
+        {
+            Console.WriteLine($"  MISMATCH: Bounds expected {FormatRect(baseline.Bounds)}, got {FormatRect(after.Bounds)}");
+            ok = false;
+        }
+
+        return ok;
     }
 
     private static IntPtr WindowProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)

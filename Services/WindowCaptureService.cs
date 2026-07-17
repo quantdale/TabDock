@@ -60,13 +60,15 @@ public sealed class WindowCaptureService
 
         NativeMethods.GetWindowRect(hwnd, out NativeMethods.RECT bounds);
         IntPtr originalParent = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_PARENT);
+        IntPtr originalOwner = NativeMethods.GetWindow(hwnd, NativeMethods.GW_OWNER);
         nint style = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_STYLE);
         nint exStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
 
-        // Capture the guest's baseline DPI while it is still a standalone top-level
-        // window on its original monitor. Retained for diagnostics only; no reverse
-        // DPI message is sent on release.
+        // Capture the guest's baseline DPI and awareness context while it is still a
+        // standalone top-level window on its original monitor. These are used to
+        // reconcile the guest's logical coordinate system with the host monitor.
         uint originalDpi = _dpi.GetDpi(hwnd);
+        IntPtr originalAwareness = _dpi.GetAwarenessContext(hwnd);
 
         // Diagnostic snapshot before reparenting (class, DPI awareness, geometry).
         LogGuestDiagnostics(hwnd, "pre-capture");
@@ -111,8 +113,6 @@ public sealed class WindowCaptureService
             _log.Log($"SetWindowLongPtr GWL_EXSTYLE failed for 0x{hwnd.ToInt64():X}: {NativeMethods.FormatLastError()}");
         }
 
-        Layout(hwnd, hostHwnd, "capture");
-
         var cw = new CapturedWindow
         {
             Hwnd = hwnd,
@@ -121,16 +121,26 @@ public sealed class WindowCaptureService
             OriginalTitle = NativeMethods.GetWindowTextString(hwnd) ?? string.Empty,
             OriginalPlacement = originalPlacement,
             OriginalParent = originalParent,
+            OriginalOwner = originalOwner,
             OriginalStyle = (long)style,
             OriginalExStyle = (long)exStyle,
             OriginalBounds = bounds,
             OriginalDpi = originalDpi,
+            OriginalAwarenessContext = originalAwareness,
             WasMaximized = originalPlacement.showCmd == NativeMethods.SW_SHOWMAXIMIZED,
         };
 
-        // Chrome/Electron guests do not receive WM_DPICHANGED across the SetParent
-        // boundary, so tell the guest the host monitor's DPI explicitly.
+        // Chrome/Electron/Edge guests do not receive WM_DPICHANGED across the SetParent
+        // boundary, so tell a Per-Monitor-V2 guest the host monitor's DPI explicitly
+        // before sizing it. The Layout call below then applies the guest's logical
+        // scale to the host physical client rect.
         NotifyDpiChanged(cw, hostHwnd);
+
+        Layout(hwnd, hostHwnd, "capture");
+
+        // Focus/activation is now handled by NativeHwndHost.SwitchActiveWindow when
+        // the captured window becomes the active tab, which keeps the cross-thread
+        // input attachment scoped to the visible tab instead of momentary.
 
         // Disable maximize/restore for the hosted guest. Frame-stripping removes
         // the system maximize box, but custom-drawn captions still dispatch these
@@ -169,8 +179,17 @@ public sealed class WindowCaptureService
             NativeMethods.ShowWindow(hwnd, NativeMethods.SW_RESTORE);
 
         NativeMethods.GetClientRect(hostHwnd, out NativeMethods.RECT rc);
-        int width = Math.Max(rc.Width, 1);
-        int height = Math.Max(rc.Height, 1);
+
+        // Reconcile the guest's logical coordinate system with the host monitor's
+        // physical pixels. A guest that runs under a different DPI awareness
+        // context (system-aware or DPI-unaware) interprets SetWindowPos sizes in
+        // its own logical pixels; Windows then scales the rendered output to the
+        // monitor DPI. Without this scale factor the guest would overflow or
+        // underflow the host. Per-Monitor-V2 guests on the same monitor use a 1:1
+        // scale and continue to fill the host exactly.
+        double scale = _dpi.GetGuestToHostScaleFactor(hwnd, hostHwnd);
+        int width = Math.Max((int)(rc.Width * scale), 1);
+        int height = Math.Max((int)(rc.Height * scale), 1);
 
         NativeMethods.SetWindowPos(
             hwnd,
@@ -187,7 +206,7 @@ public sealed class WindowCaptureService
         // Per-resize-tick lines would churn the 1 MB rotating log (finding L6);
         // every other layout trigger is rare and diagnostically valuable.
         if (reason != "wmsize")
-            _log.Log($"LAYOUT[{reason}] hostClient={width}x{height} guest={DescribeWindow(hwnd)}");
+            _log.Log($"LAYOUT[{reason}] hostClient={rc.Width}x{rc.Height} scale={scale:F3} guestSize={width}x{height} guest={DescribeWindow(hwnd)}");
     }
 
     /// <summary>
@@ -202,10 +221,13 @@ public sealed class WindowCaptureService
     }
 
     /// <summary>
-    /// Notifies a captured guest that the host monitor DPI differs from its
-    /// current DPI by sending WM_DPICHANGED with the host client rect mapped to
-    /// screen. Chrome/Electron do not receive DPI changes across the SetParent
-    /// process boundary, so this forward message is required for correct scaling.
+    /// Notifies a Per-Monitor-V2 captured guest that the host monitor DPI differs
+    /// from the DPI it had before capture. Chrome/Electron/Edge do not receive
+    /// WM_DPICHANGED across the SetParent process boundary, so this forward message
+    /// is required for correct scaling when the guest originated on a monitor with
+    /// a different DPI. System-aware and DPI-unaware guests do not handle
+    /// WM_DPICHANGED meaningfully, so the message is skipped for them; their
+    /// scaling is reconciled in Layout instead.
     /// </summary>
     public void NotifyDpiChanged(CapturedWindow window, IntPtr hostHwnd)
     {
@@ -213,9 +235,16 @@ public sealed class WindowCaptureService
             return;
 
         uint hostDpi = _dpi.GetDpi(hostHwnd);
-        uint guestDpi = _dpi.GetDpi(window.Hwnd);
-        if (hostDpi == guestDpi)
+        if (window.OriginalDpi == hostDpi)
             return;
+
+        // WM_DPICHANGED is only meaningful for Per-Monitor-V2 guests.
+        if (!_dpi.IsPerMonitorV2(window.Hwnd) &&
+            !_dpi.IsPerMonitorAware(window.Hwnd))
+        {
+            _log.Log($"LAYOUT[dpi-forward] skipped: guest 0x{window.Hwnd.ToInt64():X} is not Per-Monitor aware (originalDpi={window.OriginalDpi} hostDpi={hostDpi})");
+            return;
+        }
 
         NativeMethods.GetClientRect(hostHwnd, out NativeMethods.RECT rc);
         var pt = new NativeMethods.POINT { x = rc.left, y = rc.top };
@@ -229,7 +258,7 @@ public sealed class WindowCaptureService
         };
 
         bool sent = NativeMethods.TrySendDpiChanged(window.Hwnd, hostDpi, suggested);
-        _log.Log($"LAYOUT[dpi-forward] hostDpi={hostDpi} guestDpi={guestDpi} rect={suggested.left},{suggested.top},{suggested.Width}x{suggested.Height} result={(sent ? "sent" : "failed")} guest={DescribeWindow(window.Hwnd)}");
+        _log.Log($"LAYOUT[dpi-forward] originalDpi={window.OriginalDpi} hostDpi={hostDpi} rect={suggested.left},{suggested.top},{suggested.Width}x{suggested.Height} result={(sent ? "sent" : "failed")} guest={DescribeWindow(window.Hwnd)}");
 
     }
 
@@ -297,12 +326,24 @@ public sealed class WindowCaptureService
 
         NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
 
-        // Restore parent first.
-        NativeMethods.SetParent(window.Hwnd, window.OriginalParent);
+        bool wasTopLevel = (window.OriginalStyle & (long)NativeMethods.WS_CHILD) == 0;
+        IntPtr targetParent = wasTopLevel ? IntPtr.Zero : window.OriginalParent;
 
-        // Restore styles.
+        // Restore styles before reparenting so the window carries the correct
+        // WS_CHILD / WS_POPUP bits for its new parent.
         NativeMethods.SetWindowLongPtr(window.Hwnd, NativeMethods.GWL_STYLE, (nint)window.OriginalStyle);
         NativeMethods.SetWindowLongPtr(window.Hwnd, NativeMethods.GWL_EXSTYLE, (nint)window.OriginalExStyle);
+
+        // Restore parent. Top-level guests are detached (NULL) rather than re-parented
+        // to the desktop window, which recreates a genuine top-level HWND.
+        NativeMethods.SetParent(window.Hwnd, targetParent);
+
+        // Restore the original owner for top-level windows (GW_OWNER is held in
+        // GWLP_HWNDPARENT when the window is not WS_CHILD).
+        if (wasTopLevel && window.OriginalOwner != IntPtr.Zero)
+        {
+            NativeMethods.SetWindowLongPtr(window.Hwnd, NativeMethods.GWLP_HWNDPARENT, (nint)window.OriginalOwner);
+        }
 
         // Recalculate the frame with the restored top-level styles before applying
         // placement, otherwise maximized bounds can end up stuck at the child size.
@@ -318,6 +359,17 @@ public sealed class WindowCaptureService
             NativeMethods.SWP_NOSIZE |
             NativeMethods.SWP_NOZORDER |
             NativeMethods.SWP_NOACTIVATE);
+
+        // Force DWM to recompute the non-client area now that the window is a
+        // top-level frame again.
+        NativeMethods.RedrawWindow(
+            window.Hwnd,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            NativeMethods.RDW_FRAME |
+            NativeMethods.RDW_INVALIDATE |
+            NativeMethods.RDW_ERASE |
+            NativeMethods.RDW_ALLCHILDREN);
 
         NativeMethods.WINDOWPLACEMENT placement = window.OriginalPlacement;
         placement.length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>();
@@ -390,11 +442,54 @@ public sealed class WindowCaptureService
             _log.Log($"LAYOUT[release-activate] fg={fg} activate=0x{activateResult.ToInt64():X} guest={DescribeWindow(window.Hwnd)}");
         }
 
-        _log.Log($"Released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) originalDpi={window.OriginalDpi}");
+        if (show)
+        {
+            nint releasedStyle = NativeMethods.GetWindowLongPtr(window.Hwnd, NativeMethods.GWL_STYLE);
+            nint releasedExStyle = NativeMethods.GetWindowLongPtr(window.Hwnd, NativeMethods.GWL_EXSTYLE);
+            IntPtr releasedParent = NativeMethods.GetParent(window.Hwnd);
+            IntPtr releasedOwner = NativeMethods.GetWindow(window.Hwnd, NativeMethods.GW_OWNER);
+            _log.Log($"Released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) parent=0x{releasedParent.ToInt64():X} owner=0x{releasedOwner.ToInt64():X} style=0x{releasedStyle.ToInt64():X} exStyle=0x{releasedExStyle.ToInt64():X} originalDpi={window.OriginalDpi} guest={DescribeWindow(window.Hwnd)}");
+
+            // Checkpoint 2: Electron/Chromium-specific nudge. Isolated so it can be
+            // removed if the real repro (ChatGPT Classic header gap) does not pass.
+            if (IsChromiumWindow(window.Hwnd))
+            {
+                TryNudgeChromiumCompositor(window.Hwnd);
+            }
+        }
+        else
+        {
+            _log.Log($"Released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide) originalDpi={window.OriginalDpi}");
+        }
     }
 
     public void ReleaseAndShow(CapturedWindow window)
     {
         Release(window);
+    }
+
+    /// <summary>
+    /// Returns true for Chromium/Electron guests whose window class follows the
+    /// Chrome_WidgetWin pattern. Used only for the isolated Checkpoint 2 nudge.
+    /// </summary>
+    private static bool IsChromiumWindow(IntPtr hwnd)
+    {
+        string? className = NativeMethods.GetClassNameString(hwnd);
+        return className != null &&
+            className.StartsWith("Chrome_WidgetWin", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Forces a Chromium/Electron compositor surface rebuild by minimizing and
+    /// restoring the released top-level window. This is intentionally isolated so
+    /// it can be deleted if Checkpoint 2 (ChatGPT Classic header-gap repro) fails.
+    /// </summary>
+    private static void TryNudgeChromiumCompositor(IntPtr hwnd)
+    {
+        if (!NativeMethods.IsWindow(hwnd))
+            return;
+
+        NativeMethods.ShowWindow(hwnd, NativeMethods.SW_MINIMIZE);
+        NativeMethods.ShowWindow(hwnd, NativeMethods.SW_RESTORE);
     }
 }

@@ -68,6 +68,9 @@ public static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
     [DllImport("user32.dll", SetLastError = true, EntryPoint = "GetWindowLongPtr")]
     public static extern nint GetWindowLongPtr(IntPtr hWnd, int nIndex);
 
@@ -124,6 +127,24 @@ public static partial class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetFocus(IntPtr hWnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr GetFocus();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO lpgui);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsChild(IntPtr hWndParent, IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsHungAppWindow(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     public static extern IntPtr WindowFromPoint(POINT Point);
@@ -467,8 +488,12 @@ public static partial class NativeMethods
     public const uint WM_NCHITTEST = 0x0084;
     public const uint WM_GETMINMAXINFO = 0x0024;
     public const uint WM_NCCALCSIZE = 0x0083;
+    public const uint WM_MOUSEACTIVATE = 0x0021;
     public const uint WM_DPICHANGED = 0x02E0;
     public const uint WM_HOTKEY = 0x0312;
+
+    public const uint MA_ACTIVATE = 1;
+    public const uint MA_ACTIVATEANDEAT = 2;
 
     // WM_SIZE wParam values.
     public const int SIZE_RESTORED = 0;
@@ -728,6 +753,20 @@ public static partial class NativeMethods
         public RECT rcMonitor;
         public RECT rcWork;
         public uint dwFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct GUITHREADINFO
+    {
+        public uint cbSize;
+        public uint flags;
+        public IntPtr hwndActive;
+        public IntPtr hwndFocus;
+        public IntPtr hwndCapture;
+        public IntPtr hwndMenuOwner;
+        public IntPtr hwndMoveSize;
+        public IntPtr hwndCaret;
+        public RECT rcCaret;
     }
 
     public enum TOKEN_INFORMATION_CLASS

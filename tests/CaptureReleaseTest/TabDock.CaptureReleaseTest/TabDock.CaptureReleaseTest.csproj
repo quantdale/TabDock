@@ -7,6 +7,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\..\..\NativeMethods.cs" Link="NativeMethods.cs" />
+    <Reference Include="TabDock">
+      <HintPath>..\..\..\bin\Debug\net8.0-windows\win-x64\TabDock.dll</HintPath>
+    </Reference>
   </ItemGroup>
 </Project>

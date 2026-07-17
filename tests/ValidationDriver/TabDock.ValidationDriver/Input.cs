@@ -13,6 +13,7 @@ internal static class Input
 {
     public const ushort VK_CONTROL = 0x11;
     public const ushort VK_MENU = 0x12;
+    public const ushort VK_TAB = 0x09;
     public const ushort VK_G = 0x47;
     public const ushort VK_RETURN = 0x0D;
     public const ushort VK_ESCAPE = 0x1B;
@@ -192,6 +193,18 @@ internal static class Input
         Thread.Sleep(20);
         SendVk(vk, up: true);
         Thread.Sleep(30);
+    }
+
+    public static void SendKeyDown(ushort vk)
+    {
+        SendVk(vk, up: false);
+        Thread.Sleep(20);
+    }
+
+    public static void SendKeyUp(ushort vk)
+    {
+        SendVk(vk, up: true);
+        Thread.Sleep(20);
     }
 
     public static void SendHotkeyCtrlAltG()

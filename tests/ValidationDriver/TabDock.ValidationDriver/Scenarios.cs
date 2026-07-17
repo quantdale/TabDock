@@ -49,6 +49,10 @@ internal sealed class GuestInfo
     public string TabMatchKey = string.Empty;
 
     public string EffectiveTabMatchKey => string.IsNullOrEmpty(TabMatchKey) ? Title : TabMatchKey;
+    /// <summary>For guests matched by file/title (e.g. Notepad), the token that must remain in the window title.</summary>
+    public string? VerifyToken;
+    /// <summary>For guests that create a temp file, the full path so cleanup can delete it.</summary>
+    public string? VerifyFilePath;
 }
 
 /// <summary>Per-scenario state: the TabDock instance, spawned guests, containers, and assertion results.</summary>
@@ -110,6 +114,9 @@ internal static class Scenarios
     public static readonly string[] BrowserOnlyScenarios =
     {
         "browser-lifecycle", "browser-tabswitch-hidesafety", "browser-dragreorder", "browser-soak",
+        "renderhealth", "hotkey-afterclose", "persist-kill", "dragreorder",
+        "contentinput", "chromeinput", "alttabinput",
+        "keyboardinput", "keyboardinput-chrome", "keyboardinput-notepad", "keyboardinput-rapid-switch",
     };
     public static readonly string[] BrowserGuestKinds = { "chrome-normal", "edge-normal", "firefox-normal" };
 
@@ -144,6 +151,13 @@ internal static class Scenarios
             "browser-dragreorder" => BrowserDragReorder,
             "browser-multi" => BrowserMulti,
             "browser-soak" => BrowserSoak,
+            "contentinput" => ContentInput,
+            "chromeinput" => ChromeInput,
+            "alttabinput" => AltTabInput,
+            "keyboardinput" => KeyboardInput,
+            "keyboardinput-chrome" => KeyboardInputChrome,
+            "keyboardinput-notepad" => KeyboardInputNotepad,
+            "keyboardinput-rapid-switch" => KeyboardInputRapidSwitch,
             _ => null,
         };
         if (body == null)
@@ -264,6 +278,9 @@ internal static class Scenarios
                             GuardedProc.Log($"  Cleanup: SAFETY: REFUSING to kill guest PID {g.Proc.Id} ('{g.Title}') — " +
                                 "it is this driver's own process or an ancestor of it, not an isolated spawned child. " +
                                 "Its captured window is closed via WM_CLOSE below instead.");
+                        if (!VerifyGuestForKill(g))
+                        {
+                            GuardedProc.Log($"  Cleanup: REFUSING to kill guest PID {g.Proc.Id} ('{g.Title}') — verification failed.");
                             continue;
                         }
                         GuardedProc.Log($"  Cleanup: killing guest PID {g.Proc.Id} ('{g.Title}').");
@@ -273,6 +290,21 @@ internal static class Scenarios
                 catch (Exception ex)
                 {
                     GuardedProc.Log($"  Cleanup: guest kill failed: {ex.Message}");
+                }
+                finally
+                {
+                    if (!string.IsNullOrEmpty(g.VerifyFilePath))
+                    {
+                        try
+                        {
+                            if (File.Exists(g.VerifyFilePath))
+                                File.Delete(g.VerifyFilePath);
+                        }
+                        catch (Exception ex)
+                        {
+                            GuardedProc.Log($"  Cleanup: could not delete temp file '{g.VerifyFilePath}': {ex.Message}");
+                        }
+                    }
                 }
             }
 
@@ -602,6 +634,67 @@ internal static class Scenarios
     private static GuestInfo WithStableTabMatchKey(GuestInfo g, string key)
     {
         g.TabMatchKey = key;
+    /// Spawns Notepad on a unique temp file and verifies the window that opens for that
+    /// file by its title. Windows 11 Notepad is single-instance and may open the file in
+    /// an existing user process; if that happens, the scenario still proceeds against the
+    /// verified window, but cleanup kills only the launcher process we spawned — never an
+    /// existing user Notepad process.
+    /// </summary>
+    private static GuestInfo SpawnNotepad(Ctx ctx)
+    {
+        string tempFile = Path.GetTempFileName();
+        string fileName = Path.GetFileName(tempFile);
+        string args = $"\"{tempFile}\"";
+
+        Process launcher = GuardedProc.SpawnGuarded(new ProcessStartInfo("notepad.exe", args) { UseShellExecute = true });
+
+        IntPtr hwnd = IntPtr.Zero;
+        bool found = Util.WaitUntil(() =>
+        {
+            // Search all top-level Notepad windows, including existing ones, because
+            // Windows 11 may open the temp file as a new tab in an already-running
+            // Notepad instance rather than creating a new process/window.
+            foreach (IntPtr h in Discover.FindWindowsByClass("Notepad"))
+            {
+                string title = NativeMethods.GetWindowTextString(h) ?? string.Empty;
+                if (title.IndexOf(fileName, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    hwnd = h;
+                    return true;
+                }
+            }
+            return false;
+        }, 20000, 150);
+
+        if (hwnd == IntPtr.Zero)
+        {
+            throw new InvalidOperationException(
+                $"No Notepad window for file '{fileName}' appeared; aborting to avoid capturing an unrelated Notepad.");
+        }
+
+        NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
+        bool isOurProcess = pid == (uint)launcher.Id;
+        if (!isOurProcess)
+        {
+            GuardedProc.Log($"  WARNING: Notepad reused existing process PID {pid} for file '{fileName}'; cleanup will kill only the launcher PID {launcher.Id}.");
+        }
+
+        Thread.Sleep(1000);
+        var g = new GuestInfo
+        {
+            // Always attach the launcher process for cleanup; it is the only PID this
+            // scenario spawned. If Notepad reused an existing process, that process is
+            // intentionally not tracked so it survives cleanup.
+            Proc = launcher,
+            Pid = pid,
+            Hwnd = hwnd,
+            Title = NativeMethods.GetWindowTextString(hwnd) ?? string.Empty,
+            IsPig = false,
+            VerifyToken = fileName,
+            VerifyFilePath = tempFile,
+        };
+        ctx.Guests.Add(g);
+        GuardedProc.Log($"  Notepad guest '{g.Title}' PID {g.Pid} HWND 0x{g.Hwnd.ToInt64():X} file='{fileName}' isOurProcess={isOurProcess}.");
         return g;
     }
 
@@ -636,6 +729,7 @@ internal static class Scenarios
         if (!Input.ForceForeground(pickerHwnd))
             throw new InvalidOperationException("Could not bring the capture picker to the foreground — refusing to click blind.");
         Thread.Sleep(600); // let the list populate
+        Thread.Sleep(1000); // extra settle for multi-guest rows before clicking
 
         foreach (GuestInfo g in guests)
         {
@@ -681,18 +775,62 @@ internal static class Scenarios
             if (row == null)
                 throw lastMiss ?? new InvalidOperationException($"Picker row for '{g.Title}' not found.");
 
-            // Real-click the checkbox box (left edge) and verify it toggled on;
-            // the CheckBox's CanExecute gate on "Group these" depends on it.
+            // Real-click the checkbox and verify it toggled on; the CheckBox's
+            // CanExecute gate on "Group these" depends on it. Use the row center
+            // (the whole WPF CheckBox content is clickable) rather than the glyph
+            // edge, which can miss on high-DPI or differently-templated rows.
+            GuardedProc.Log($"  CaptureIntoGroup: toggling row for '{g.Title}' (controlType={row.Current.ControlType.ProgrammaticName}, rect={Uia.GetElementRect(row)}).");
+
+            // Find the inner Text label so we can click on the CheckBox content
+            // itself. Clicking directly on the text reliably toggles the parent
+            // CheckBox; clicking the stretched CheckBox rect can land on ListBoxItem
+            // padding or other non-toggleable space.
+            AutomationElement? textEl = Uia.FindDescendantByName(picker, ControlType.Text, null, g.Title, out int textCount);
+            if (textEl == null || textCount != 1)
+                throw new InvalidOperationException($"Picker text label for '{g.Title}' not found uniquely (count={textCount}) — cannot toggle safely.");
+
             bool toggledOn = false;
             for (int attempt = 0; attempt < 3 && !toggledOn; attempt++)
             {
-                (int cx, int cy) = Uia.LeftBoxPoint(row);
+                // Vary the click point: start on the text label, then try the
+                // CheckBox glyph area (left edge), then the CheckBox center.
+                Rect r = Uia.GetElementRect(row);
+                (int cx, int cy) = attempt switch
+                {
+                    0 => Uia.Center(textEl),
+                    1 => ((int)(r.X + 5), (int)(r.Y + r.Height / 2)),
+                    _ => Uia.Center(row),
+                };
+                GuardedProc.Log($"  CaptureIntoGroup: click attempt {attempt + 1} at ({cx},{cy}).");
                 Input.ClickAt(cx, cy);
                 Thread.Sleep(350);
-                toggledOn = Uia.GetToggleState(row) == System.Windows.Automation.ToggleState.On;
+                var ts = Uia.GetToggleState(row);
+                GuardedProc.Log($"  CaptureIntoGroup: toggle state after attempt {attempt + 1} = {ts?.ToString() ?? "<null>"}.");
+                toggledOn = ts == System.Windows.Automation.ToggleState.On;
             }
             if (!toggledOn)
-                throw new InvalidOperationException($"Picker row for '{g.Title}' did not toggle on after real clicks.");
+            {
+                // Fallback: programmatically toggle via UIA. Real-mouse clicks can
+                // miss on high-DPI or differently-templated rows, but the toggle
+                // pattern targets the element exactly and lets the scenario proceed.
+                try
+                {
+                    if (row.TryGetCurrentPattern(TogglePattern.Pattern, out object pattern))
+                    {
+                        ((TogglePattern)pattern).Toggle();
+                        Thread.Sleep(200);
+                        var ts = Uia.GetToggleState(row);
+                        GuardedProc.Log($"  CaptureIntoGroup: toggle pattern fallback state = {ts?.ToString() ?? "<null>"}.");
+                        toggledOn = ts == System.Windows.Automation.ToggleState.On;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    GuardedProc.Log($"  CaptureIntoGroup: toggle pattern fallback threw: {ex.Message}");
+                }
+            }
+            if (!toggledOn)
+                throw new InvalidOperationException($"Picker row for '{g.Title}' did not toggle on after real clicks or toggle pattern fallback.");
             Thread.Sleep(200);
         }
 
@@ -868,6 +1006,63 @@ internal static class Scenarios
     {
         return ((long)NativeMethods.GetWindowLongPtr(g.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) == 0
             && NativeMethods.GetParent(g.Hwnd) == IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// Verifies a guest process is still the one this scenario spawned before cleanup
+    /// kills it. For Notepad, the window title must still contain the unique temp
+    /// filename and the process name must be Notepad. For pigs, the process name must
+    /// match the GuineaPig executable.
+    /// </summary>
+    private static bool VerifyGuestForKill(GuestInfo g)
+    {
+        try
+        {
+            if (g.Proc == null || g.Proc.HasExited)
+                return false;
+
+            string processName;
+            try { processName = g.Proc.ProcessName; }
+            catch { processName = string.Empty; }
+
+            if (g.IsPig)
+            {
+                if (!processName.Equals("TabDock.GuineaPig", StringComparison.OrdinalIgnoreCase))
+                {
+                    GuardedProc.Log($"  VerifyGuestForKill: refusing pig PID {g.Proc.Id} — process name is '{processName}'.");
+                    return false;
+                }
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(g.VerifyToken))
+            {
+                if (!processName.Equals("Notepad", StringComparison.OrdinalIgnoreCase))
+                {
+                    GuardedProc.Log($"  VerifyGuestForKill: refusing Notepad PID {g.Proc.Id} — process name is '{processName}'.");
+                    return false;
+                }
+                string? currentTitle = NativeMethods.IsWindow(g.Hwnd)
+                    ? NativeMethods.GetWindowTextString(g.Hwnd)
+                    : null;
+                if (currentTitle == null ||
+                    !currentTitle.Contains(g.VerifyToken, StringComparison.OrdinalIgnoreCase))
+                {
+                    GuardedProc.Log($"  VerifyGuestForKill: refusing Notepad PID {g.Proc.Id} — title '{currentTitle ?? "<null>"}' does not contain '{g.VerifyToken}'.");
+                    return false;
+                }
+                return true;
+            }
+
+            // Chrome/WT and other SpawnClassGuest guests: spawn-time verification is the
+            // guard; cleanup relies on the tracked Process object not having been replaced.
+            return true;
+        }
+        catch (Exception ex)
+        {
+            GuardedProc.Log($"  VerifyGuestForKill: exception for PID {g.Proc?.Id}: {ex.Message}");
+            return false;
+        }
     }
 
     private static bool StateJsonContains(string substring)
@@ -1964,6 +2159,392 @@ internal static class Scenarios
         ctx.Check(browser.Proc != null && !browser.Proc.HasExited, $"real browser '{browser.Title}' survived {cycles} switch cycles");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "unhealthy") == 0, "no false-positive render-health verdict across the soak run");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines across the whole soak run");
+    // 17. contentinput (Test A): non-Chromium content-area input gate.
+    //     Clicks the center counter button of a captured GuineaPig and verifies
+    //     the guest actually receives the input.
+    // -------------------------------------------------------------------------
+    private static void ContentInput(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "CI", "--color", "blue", "--click-counter-button");
+        Thread.Sleep(2000); // extra settle time for the button-hosted pig before picker enumeration
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+
+        NativeMethods.RECT hostClient = Discover.GetClientScreenRect(host);
+        int cx = hostClient.left + hostClient.Width / 2;
+        int cy = hostClient.top + hostClient.Height / 2;
+        GuardedProc.Log($"  ContentInput: clicking center of host client area at ({cx},{cy}); hostClient={Util.FormatRect(hostClient)}.");
+
+        if (!Input.ForceForegroundRoot(host))
+            throw new InvalidOperationException("Could not bring the captured guest to the foreground — refusing to click blind.");
+
+        Input.ClickAt(cx, cy);
+        bool clicked = PigLog.WaitForPigLine(pig.Pid, "BUTTON_CLICK count=1", 2000);
+        ctx.Check(clicked, "GuineaPig content-area button received the click (BUTTON_CLICK count=1)");
+
+        // Also exercise drag: start well outside the button and drag across the
+        // content area; the count must not increment from a drag that never
+        // presses the button.
+        Input.DragFromTo(cx - 150, cy, cx + 150, cy, 12);
+        Thread.Sleep(200);
+        bool noExtraClick = !PigLog.ContainsLine(pig.Pid, "BUTTON_CLICK count=2");
+        ctx.Check(noExtraClick, "drag across the content area did not produce a second button click (guest saw mouse motion)");
+    }
+
+    // -------------------------------------------------------------------------
+    // 18. chromeinput (Test B): Chromium input recovery after activation fix.
+    // -------------------------------------------------------------------------
+    private static void ChromeInput(Ctx ctx, Options opt)
+    {
+        string htmlPath = CreateChromeInputTestPage();
+        GuestInfo chrome = SpawnClassGuest(ctx, ChromeExe,
+            $"--user-data-dir=\"{Path.Combine(Path.GetTempPath(), "TabDockChromeProfile")}\" --disable-gpu --app=\"{htmlPath}\"",
+            "Chrome_WidgetWin_1", useShellExecute: true);
+
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, chrome);
+
+        NativeMethods.RECT hostClient = Discover.GetClientScreenRect(host);
+        int cx = hostClient.left + hostClient.Width / 2;
+        int cy = hostClient.top + hostClient.Height / 2;
+        GuardedProc.Log($"  ChromeInput: clicking center of host client area at ({cx},{cy}); hostClient={Util.FormatRect(hostClient)}.");
+
+        if (!Input.ForceForegroundRoot(host))
+            throw new InvalidOperationException("Could not bring the captured Chrome guest to the foreground — refusing to click blind.");
+
+        // The page starts white; the centered button turns the background green.
+        Input.ClickAt(cx, cy);
+        Thread.Sleep(1000);
+
+        int[]? frame = Pixels.CaptureHostScreenArea(host);
+        char dominant = frame != null ? Pixels.DominantChannel(frame) : '?';
+        GuardedProc.Log($"  ChromeInput: after click dominant channel='{dominant}'.");
+        ctx.Check(dominant == 'g', $"Chrome page turned green after click (dominant channel='{dominant}')");
+    }
+
+    private static string CreateChromeInputTestPage()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "TabDock-Validation");
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "chrome-input-test.html");
+        File.WriteAllText(path, @"<!DOCTYPE html>
+<html>
+<head><meta charset='utf-8'><style>
+body { margin: 0; width: 100vw; height: 100vh; background: white; display: flex; align-items: center; justify-content: center; }
+button { padding: 24px 48px; font-size: 24px; }
+</style></head>
+<body>
+<button id='btn'>Click me</button>
+<script>
+document.getElementById('btn').addEventListener('click', function() {
+    document.body.style.backgroundColor = '#00aa00';
+});
+</script>
+</body>
+</html>");
+        return path;
+    }
+
+    // -------------------------------------------------------------------------
+    // 19. alttabinput (Test D): container reactivation after alt-tab away/back.
+    // -------------------------------------------------------------------------
+    private static void AltTabInput(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "AT", "--color", "blue", "--click-counter-button");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+
+        NativeMethods.RECT hostClient = Discover.GetClientScreenRect(host);
+        int cx = hostClient.left + hostClient.Width / 2;
+        int cy = hostClient.top + hostClient.Height / 2;
+
+        if (!Input.ForceForegroundRoot(host))
+            throw new InvalidOperationException("Could not bring the captured guest to the foreground — refusing to click blind.");
+
+        // Baseline click: establish the guest is responsive.
+        Input.ClickAt(cx, cy);
+        ctx.Check(PigLog.WaitForPigLine(pig.Pid, "BUTTON_CLICK count=1", 2000),
+            "baseline click received (count=1)");
+
+        // Switch focus away from the container to the driver's own console window.
+        IntPtr driverHwnd = Process.GetCurrentProcess().MainWindowHandle;
+        if (driverHwnd == IntPtr.Zero)
+        {
+            // Fallback: spawn a Notepad to receive focus. Use the safe helper so we
+            // never capture or kill an existing user Notepad.
+            GuestInfo notepad = SpawnNotepad(ctx);
+            driverHwnd = notepad.Hwnd;
+        }
+
+        Input.ForceForegroundRoot(driverHwnd);
+        Thread.Sleep(800);
+
+        // Switch focus back to the container (simulates alt-tab back).
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container back to the foreground.");
+        Thread.Sleep(500);
+
+        // Click the guest again; the WM_ACTIVATE-forwarding path should have re-activated it.
+        Input.ClickAt(cx, cy);
+        ctx.Check(PigLog.WaitForPigLine(pig.Pid, "BUTTON_CLICK count=2", 2000),
+            "click after alt-tab-back received (count=2)");
+    }
+
+    // -------------------------------------------------------------------------
+    // 20. keyboardinput (H8 baseline): real keyboard typing must land in a
+    //     captured non-Chromium guest's editable control.
+    // -------------------------------------------------------------------------
+    private static void KeyboardInput(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "KI", "--color", "blue", "--text-box");
+        Thread.Sleep(2000); // let the text-box control realize before picker enumeration
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+
+        NativeMethods.RECT hostClient = Discover.GetClientScreenRect(host);
+        int cx = hostClient.left + hostClient.Width / 2;
+        int cy = hostClient.top + hostClient.Height / 2;
+        GuardedProc.Log($"  KeyboardInput: clicking center of host client area at ({cx},{cy}); hostClient={Util.FormatRect(hostClient)}.");
+
+        if (!Input.ForceForegroundRoot(host))
+            throw new InvalidOperationException("Could not bring the captured guest to the foreground — refusing to type blind.");
+
+        Input.ClickAt(cx, cy);
+        Thread.Sleep(300);
+
+        const string typed = "H8TEST";
+        Input.TypeText(typed);
+        bool received = PigLog.WaitForPigLine(pig.Pid, $"TEXTBOX text='{typed}'", 3000);
+        ctx.Check(received, $"GuineaPig text box received typed string '{typed}'");
+    }
+
+    // -------------------------------------------------------------------------
+    // 21. keyboardinput-chrome (H8 baseline): real keyboard typing must land
+    //     in a captured Chrome guest's <input> field.
+    // -------------------------------------------------------------------------
+    private static void KeyboardInputChrome(Ctx ctx, Options opt)
+    {
+        string htmlPath = CreateChromeKeyboardTestPage();
+        GuestInfo chrome = SpawnClassGuest(ctx, ChromeExe,
+            $"--user-data-dir=\"{Path.Combine(Path.GetTempPath(), "TabDockChromeProfile")}\" --disable-gpu --app=\"{htmlPath}\"",
+            "Chrome_WidgetWin_1", useShellExecute: true);
+
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, chrome);
+
+        NativeMethods.RECT hostClient = Discover.GetClientScreenRect(host);
+        int cx = hostClient.left + hostClient.Width / 2;
+        int cy = hostClient.top + hostClient.Height / 2;
+        GuardedProc.Log($"  KeyboardInputChrome: clicking center of host client area at ({cx},{cy}); hostClient={Util.FormatRect(hostClient)}.");
+
+        if (!Input.ForceForegroundRoot(host))
+            throw new InvalidOperationException("Could not bring the captured Chrome guest to the foreground — refusing to type blind.");
+
+        Input.ClickAt(cx, cy);
+        Thread.Sleep(300);
+
+        const string typed = "H8TEST";
+        Input.TypeText(typed);
+
+        string titlePrefix = $"TYPED:{typed}";
+        bool titleChanged = Util.WaitUntil(() =>
+            (NativeMethods.GetWindowTextString(chrome.Hwnd) ?? string.Empty).StartsWith(titlePrefix, StringComparison.Ordinal),
+            3000);
+        ctx.Check(titleChanged, $"Chrome page title reflects typed string '{typed}' (title prefix '{titlePrefix}')");
+    }
+
+    // -------------------------------------------------------------------------
+    // 22. keyboardinput-notepad (H8 isolation): real keyboard typing must land
+    //     in a captured Notepad edit/document control. This isolates whether the
+    //     non-Chromium failure is specific to the WinForms guinea pig or general.
+    // -------------------------------------------------------------------------
+    private static void KeyboardInputNotepad(Ctx ctx, Options opt)
+    {
+        GuestInfo notepad = SpawnNotepad(ctx);
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, notepad);
+
+        NativeMethods.RECT hostClient = Discover.GetClientScreenRect(host);
+        int cx = hostClient.left + hostClient.Width / 2;
+        int cy = hostClient.top + hostClient.Height / 2;
+        GuardedProc.Log($"  KeyboardInputNotepad: clicking center of host client area at ({cx},{cy}); hostClient={Util.FormatRect(hostClient)}.");
+
+        if (!Input.ForceForegroundRoot(host))
+            throw new InvalidOperationException("Could not bring the captured Notepad guest to the foreground — refusing to type blind.");
+
+        Input.ClickAt(cx, cy);
+        Thread.Sleep(300);
+
+        const string typed = "H8TEST";
+        Input.TypeText(typed);
+
+        // Read the Notepad edit/document control via UIA ValuePattern.
+        string? value = null;
+        int editCount = 0;
+        bool readOk = Util.WaitUntil(() =>
+        {
+            AutomationElement? root = Uia.FromHwnd(notepad.Hwnd);
+            if (root == null)
+                return false;
+            AutomationElement? edit = Uia.FindEditOrDocument(root, out editCount);
+            if (edit == null)
+                return false;
+            value = Uia.GetValue(edit);
+            return value != null;
+        }, 3000, 150);
+
+        GuardedProc.Log($"  KeyboardInputNotepad: editCount={editCount}, readOk={readOk}, value='{value ?? "<null>"}'.");
+        ctx.Check(readOk, "Notepad edit/document control value read via UIA");
+        ctx.Check(value != null && value.Contains(typed, StringComparison.Ordinal),
+            $"Notepad edit control contains typed string '{typed}' (value='{value ?? "<null>"}')");
+    }
+
+    private static string CreateChromeKeyboardTestPage()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "TabDock-Validation");
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "chrome-keyboard-test.html");
+        File.WriteAllText(path, @"<!DOCTYPE html>
+<html>
+<head><meta charset='utf-8'><title>Chrome Keyboard Test</title><style>
+body { margin: 0; width: 100vw; height: 100vh; background: white; display: flex; align-items: center; justify-content: center; }
+input { padding: 16px 24px; font-size: 24px; width: 60vw; }
+</style></head>
+<body>
+<input id='txt' autofocus>
+<script>
+var input = document.getElementById('txt');
+function claimFocus() { input.focus(); }
+window.addEventListener('load', claimFocus);
+document.body.addEventListener('click', claimFocus);
+input.addEventListener('input', function() {
+    document.title = 'TYPED:' + input.value;
+});
+</script>
+</body>
+</html>");
+        return path;
+    }
+
+    // -------------------------------------------------------------------------
+    // 23. keyboardinput-rapid-switch (H8 stress): keyboard input must land after
+    //     switching between two captured guests. Exercises the attach/detach
+    //     lifecycle so a leak or stale attachment cannot hide behind a single tab.
+    // -------------------------------------------------------------------------
+    private static void KeyboardInputRapidSwitch(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "KIRS", "--color", "blue", "--text-box");
+        GuestInfo notepad = SpawnNotepad(ctx);
+        Thread.Sleep(3000); // let guests realize before picker enumeration
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig, notepad);
+        Thread.Sleep(1500); // let the container's UIA tab tree settle before switching
+
+        void TypeIntoHost(string text)
+        {
+            NativeMethods.RECT hostClient = Discover.GetClientScreenRect(host);
+            int cx = hostClient.left + hostClient.Width / 2;
+            int cy = hostClient.top + hostClient.Height / 2;
+            if (!Input.ForceForegroundRoot(host))
+                throw new InvalidOperationException("Could not bring the captured guest to the foreground — refusing to type blind.");
+            Input.ClickAt(cx, cy);
+            Thread.Sleep(300);
+            Input.TypeText(text);
+        }
+
+        void SwitchToTab(string title)
+        {
+            // Find the selectable ListBoxItem directly; walking up from the inner
+            // Text element is fragile when virtualization has not materialized the
+            // ancestor. Fall back to text+ancestor only if the ListItem search fails.
+            AutomationElement? item = null;
+            string lastError = "not searched";
+            for (int attempt = 0; attempt < 10 && item == null; attempt++)
+            {
+                try
+                {
+                    AutomationElement? list = GetTabList(container);
+                    if (list != null)
+                    {
+                        item = Uia.FindDescendantByName(list, ControlType.ListItem, null, title, out int listCount);
+                        if (item == null)
+                            lastError = $"ListItem not found (count={listCount})";
+                    }
+                    else
+                    {
+                        lastError = "tab list not found";
+                    }
+
+                    if (item == null)
+                    {
+                        AutomationElement? text = FindTabText(container, title, out int textCount);
+                        if (text != null && textCount == 1)
+                            item = Uia.NearestAncestorOfType(text, ControlType.ListItem);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex.Message;
+                }
+                if (item == null)
+                    Thread.Sleep(200);
+            }
+            if (item == null)
+                throw new InvalidOperationException($"Tab '{title}' ListBoxItem not found ({lastError}).");
+
+            Uia.Realize(item);
+
+            // Prefer the UIA selection pattern; it avoids coordinate/virtualization
+            // fragility and reliably switches tabs. We still verify IsSelected.
+            bool selected = false;
+            for (int attempt = 0; attempt < 3 && !selected; attempt++)
+            {
+                if (!Input.ForceForeground(container))
+                    throw new InvalidOperationException("Could not bring the container to the foreground — refusing to select blind.");
+
+                if (attempt == 0)
+                    Uia.Select(item);
+                else
+                {
+                    (int tx, int ty) = Uia.Center(item);
+                    Input.ClickAt(tx, ty);
+                }
+                Thread.Sleep(350);
+                selected = Uia.IsSelected(item) == true;
+            }
+            if (!selected)
+                throw new InvalidOperationException($"Tab '{title}' did not become selected.");
+        }
+
+        string? ReadNotepadValue()
+        {
+            string? value = null;
+            Util.WaitUntil(() =>
+            {
+                AutomationElement? root = Uia.FromHwnd(notepad.Hwnd);
+                if (root == null)
+                    return false;
+                AutomationElement? edit = Uia.FindEditOrDocument(root, out _);
+                if (edit == null)
+                    return false;
+                value = Uia.GetValue(edit);
+                return value != null;
+            }, 3000, 150);
+            return value;
+        }
+
+        // Start on Notepad.
+        SwitchToTab(notepad.Title);
+        TypeIntoHost("NOTEPAD-A");
+        string? valueAfterA = ReadNotepadValue();
+        ctx.Check(valueAfterA != null && valueAfterA.Contains("NOTEPAD-A", StringComparison.Ordinal),
+            $"Notepad contains 'NOTEPAD-A' after initial type (value='{valueAfterA ?? "<null>"}')");
+
+        // Switch to the pig tab and type there.
+        SwitchToTab(pig.Title);
+        TypeIntoHost("PIG-B");
+        bool pigReceived = PigLog.WaitForPigLine(pig.Pid, "TEXTBOX text='PIG-B'", 3000);
+        ctx.Check(pigReceived, "GuineaPig text box received 'PIG-B' after switch");
+
+        // Switch back to Notepad and type again.
+        SwitchToTab(notepad.Title);
+        TypeIntoHost("NOTEPAD-C");
+        string? valueAfterC = ReadNotepadValue();
+        ctx.Check(valueAfterC != null && valueAfterC.Contains("NOTEPAD-C", StringComparison.Ordinal),
+            $"Notepad contains 'NOTEPAD-C' after switch-back (value='{valueAfterC ?? "<null>"}')");
     }
 
     /// <summary>Waits for a MessageBox owned by the TabDock pid and real-clicks the named button.</summary>

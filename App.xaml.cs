@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using Microsoft.Win32;
+using TabDock.Infrastructure;
 using TabDock.Models;
 using TabDock.Services;
 using TabDock.ViewModels;
@@ -129,6 +130,9 @@ public partial class App : Application
         _log?.Log("Application exiting; releasing all captured windows and saving state.");
         try
         {
+            // Detach any remaining cross-thread input attachments before releasing
+            // guests, so the guest threads are not left chained to a dying host.
+            NativeHwndHost.DetachAllGuests();
             _groups?.EmergencyReleaseAll();
             _groups?.SaveState();
         }
@@ -149,6 +153,7 @@ public partial class App : Application
         SaveStateGuarded("dispatcher exception");
         try
         {
+            NativeHwndHost.DetachAllGuests();
             _groups?.EmergencyReleaseAll();
         }
         catch (Exception ex)
@@ -165,6 +170,7 @@ public partial class App : Application
         SaveStateGuarded("AppDomain exception");
         try
         {
+            NativeHwndHost.DetachAllGuests();
             _groups?.EmergencyReleaseAll();
         }
         catch (Exception ex)
@@ -180,6 +186,7 @@ public partial class App : Application
         SaveStateGuarded("session ending");
         try
         {
+            NativeHwndHost.DetachAllGuests();
             _groups?.EmergencyReleaseAll();
         }
         catch (Exception ex)
