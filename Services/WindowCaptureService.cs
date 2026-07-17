@@ -322,7 +322,10 @@ public sealed class WindowCaptureService
 
         // Remove the guest subclass before reparenting so comctl32 detaches the
         // callback cleanly while the HWND is still our child.
-        NativeMethods.RemoveWindowSubclass(window.Hwnd, IntPtr.Zero);
+        if (window.SubclassProc != null)
+        {
+            NativeMethods.RemoveWindowSubclass(window.Hwnd, window.SubclassProc, IntPtr.Zero);
+        }
 
         NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
 

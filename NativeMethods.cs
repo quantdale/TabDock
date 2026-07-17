@@ -243,7 +243,7 @@ public static partial class NativeMethods
     public static extern bool SetWindowSubclass(IntPtr hWnd, SubclassProc pfnSubclass, IntPtr uIdSubclass, IntPtr dwRefData);
 
     [DllImport("comctl32.dll")]
-    public static extern bool RemoveWindowSubclass(IntPtr hWnd, IntPtr uIdSubclass);
+    public static extern bool RemoveWindowSubclass(IntPtr hWnd, SubclassProc pfnSubclass, IntPtr uIdSubclass);
 
     [DllImport("comctl32.dll")]
     public static extern IntPtr DefSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
