@@ -27,6 +27,28 @@ internal sealed class GuestInfo
     public IntPtr Hwnd;
     public string Title = string.Empty;
     public bool IsPig;
+
+    /// <summary>
+    /// True for guests that are the user's own pre-existing real application
+    /// instance (e.g. Codex, ChatGPT Classic) rather than something this
+    /// driver spawned. Cleanup must NEVER Process.Kill such a guest — only
+    /// release/pop it out back to standalone, exactly as a real user would.
+    /// </summary>
+    public bool DoNotKill;
+
+    /// <summary>
+    /// Stable substring for tab lookups (FindTabText/ClickTabMenuItem), where
+    /// it differs from the full window Title. Real browser titles are NOT
+    /// safe to match verbatim: confirmed live, Edge inserts a zero-width space
+    /// (U+200B) around its own branding ("Microsoft<U+200B> Edge"), and the
+    /// time.is test page's title ticks a live clock every second — either one
+    /// can silently break an exact/substring match a few seconds after
+    /// capture. Defaults to Title (guinea pigs' "TDVAL-..." titles have
+    /// neither problem); set explicitly for real-browser guests.
+    /// </summary>
+    public string TabMatchKey = string.Empty;
+
+    public string EffectiveTabMatchKey => string.IsNullOrEmpty(TabMatchKey) ? Title : TabMatchKey;
 }
 
 /// <summary>Per-scenario state: the TabDock instance, spawned guests, containers, and assertion results.</summary>
@@ -53,6 +75,12 @@ internal static class Scenarios
     public const string TabDockExe = @"d:\Documents\tryPython\TabDock\bin\Debug\net8.0-windows\win-x64\TabDock.exe";
     public const string PigExe = @"d:\Documents\tryPython\TabDock\tests\ValidationDriver\TabDock.GuineaPig\bin\Debug\net8.0-windows\TabDock.GuineaPig.exe";
     private const string ChromeExe = "C:/Program Files/Google/Chrome/Application/chrome.exe";
+    // Confirmed present on this dev machine (see docs/internal/TEST_PLAN.md section 4).
+    private const string EdgeExe = "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
+    // NOT installed on this dev machine — case exists so the code path is
+    // written and reviewable, but it cannot be run/verified here (see
+    // docs/internal/TEST_PLAN.md section 4 and KNOWN_ISSUES.md).
+    private const string FirefoxExe = "C:/Program Files/Mozilla Firefox/firefox.exe";
     private const string ContentHostClass = "TabDockContentHost";
 
     private static readonly Random Rng = new Random();
@@ -61,8 +89,29 @@ internal static class Scenarios
     {
         "rename", "popout", "closewin", "closewin-hide", "selfclose", "selfhide", "selfminhide",
         "tabswitch-hidesafety", "minrestore", "maximize-repro", "repeat-cycles", "crossfeature",
-        "renderhealth", "hotkey-afterclose", "persist-kill", "dragreorder",
+        "renderhealth", "hotkey-afterclose", "persist-kill", "dragreorder", "chrometabdrag",
+        "closegroupprompt",
     };
+
+    /// <summary>
+    /// "realapp" is deliberately NOT in AllOrder/"all": it attaches to the user's
+    /// own live app (Codex/ChatGPT Classic) rather than a disposable guest, so it
+    /// must always be invoked explicitly by name with --guest codex|chatgptclassic,
+    /// never swept in by a blanket "all" run.
+    /// </summary>
+    public static readonly string[] RealAppGuestKinds = { "codex", "chatgptclassic" };
+
+    /// <summary>
+    /// Real-browser scenarios (docs/internal/TEST_PLAN.md section 5) are also
+    /// deliberately NOT in AllOrder/"all": each needs an explicit --guest
+    /// {chrome-normal|edge-normal|firefox-normal} to mean anything, so a blanket
+    /// "all" run must not silently launch real browsers with no guest chosen.
+    /// </summary>
+    public static readonly string[] BrowserOnlyScenarios =
+    {
+        "browser-lifecycle", "browser-tabswitch-hidesafety", "browser-dragreorder", "browser-soak",
+    };
+    public static readonly string[] BrowserGuestKinds = { "chrome-normal", "edge-normal", "firefox-normal" };
 
     // -------------------------------------------------------------------------
     // Runner
@@ -87,6 +136,14 @@ internal static class Scenarios
             "hotkey-afterclose" => HotkeyAfterClose,
             "persist-kill" => PersistKill,
             "dragreorder" => DragReorder,
+            "chrometabdrag" => ChromeTabDrag,
+            "realapp" => RealAppFillMaxHide,
+            "closegroupprompt" => CloseGroupPrompt,
+            "browser-lifecycle" => BrowserLifecycle,
+            "browser-tabswitch-hidesafety" => BrowserTabSwitchHideSafety,
+            "browser-dragreorder" => BrowserDragReorder,
+            "browser-multi" => BrowserMulti,
+            "browser-soak" => BrowserSoak,
             _ => null,
         };
         if (body == null)
@@ -186,12 +243,29 @@ internal static class Scenarios
         try
         {
             // 1) Kill tracked guests first so containers empty out and close without prompting.
+            //    Guard against killing a shared-instance host process (e.g. wt.exe hands
+            //    its window to an already-running WindowsTerminal.exe "monarch" process,
+            //    which can be an ancestor of THIS driver's own shell) — see
+            //    GuardedProc.IsAncestorOfCurrentProcess and its doc comment.
             foreach (GuestInfo g in ctx.Guests)
             {
                 try
                 {
+                    if (g.DoNotKill)
+                    {
+                        GuardedProc.Log($"  Cleanup: guest PID {g.Pid} ('{g.Title}') is a protected real app (DoNotKill) — never killed. " +
+                            "Its captured window was released/popped-out during the scenario body, not here.");
+                        continue;
+                    }
                     if (g.Proc != null && !g.Proc.HasExited)
                     {
+                        if (GuardedProc.IsAncestorOfCurrentProcess(g.Proc.Id))
+                        {
+                            GuardedProc.Log($"  Cleanup: SAFETY: REFUSING to kill guest PID {g.Proc.Id} ('{g.Title}') — " +
+                                "it is this driver's own process or an ancestor of it, not an isolated spawned child. " +
+                                "Its captured window is closed via WM_CLOSE below instead.");
+                            continue;
+                        }
                         GuardedProc.Log($"  Cleanup: killing guest PID {g.Proc.Id} ('{g.Title}').");
                         g.Proc.Kill(entireProcessTree: true);
                     }
@@ -236,6 +310,22 @@ internal static class Scenarios
                 if (!ctx.TabDock.WaitForExit(5000))
                 {
                     GuardedProc.Log("  Cleanup: !!! TabDock did NOT exit after WM_CLOSE — killing the tracked TabDock process as a last resort. !!!");
+                }
+            }
+
+            // 3) A guest whose process kill was refused above (shared-instance host,
+            //    e.g. Windows Terminal's monarch) is by now released back to standalone
+            //    (via the "No" click on the close-group prompt above). Close its OWN
+            //    window handle directly instead: for Windows Terminal this ends just
+            //    that one window/pane's shell without touching the shared host process
+            //    or any other window it hosts.
+            foreach (GuestInfo g in ctx.Guests)
+            {
+                if (g.Proc != null && !g.Proc.HasExited && GuardedProc.IsAncestorOfCurrentProcess(g.Proc.Id)
+                    && NativeMethods.IsWindow(g.Hwnd))
+                {
+                    GuardedProc.Log($"  Cleanup: WM_CLOSE -> guest window 0x{g.Hwnd.ToInt64():X} ('{g.Title}') (shared-host process left untouched).");
+                    NativeMethods.PostMessage(g.Hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
                 }
             }
         }
@@ -336,15 +426,121 @@ internal static class Scenarios
             case "chrome-nogpu":
                 // Ported from the CaptureReleaseTest Chrome scenario (live-content page: https://time.is).
                 return SpawnClassGuest(ctx, ChromeExe,
-                    $"--user-data-dir=\"{Path.Combine(Path.GetTempPath(), "TabDockChromeProfile")}\" --disable-gpu --app=https://time.is",
+                    $"--user-data-dir=\"{FreshProfileDir("TabDockChromeProfile")}\" --disable-gpu --no-first-run --no-default-browser-check https://time.is",
                     "Chrome_WidgetWin_1", useShellExecute: true);
             case "chrome-gpu":
                 return SpawnClassGuest(ctx, ChromeExe,
-                    $"--user-data-dir=\"{Path.Combine(Path.GetTempPath(), "TabDockChromeProfile")}\" --app=https://time.is",
+                    $"--user-data-dir=\"{FreshProfileDir("TabDockChromeProfile")}\" --no-first-run --no-default-browser-check https://time.is",
                     "Chrome_WidgetWin_1", useShellExecute: true);
+            case "chrome-normal":
+                // Deliberately NOT --app=: normal browser chrome (tab strip, omnibox)
+                // is required so the H5 fill-clamp can be exercised by dragging the
+                // guest's own client-drawn tab strip (Chrome hit-tests it as
+                // HTCAPTION). Isolated, FRESH --user-data-dir (new per invocation,
+                // not reused) keeps this off the user's real profile/history AND
+                // avoids Chrome's "Restore pages?" crash-recovery prompt, which a
+                // reused profile accumulates after enough force-killed test runs
+                // (reproduced live: a stale shared profile directory caused a
+                // "Restore pages?" window instead of time.is, breaking the picker
+                // lookup with 0 matches).
+                return WithStableTabMatchKey(SpawnClassGuest(ctx, ChromeExe,
+                    $"--user-data-dir=\"{FreshProfileDir("TabDockChromeProfileNormal")}\" --no-first-run --no-default-browser-check --disable-session-crashed-bubble https://time.is",
+                    "Chrome_WidgetWin_1", useShellExecute: true), "Google Chrome");
+            case "edge-normal":
+                // Chromium-based: same window class, args shape, and fresh-profile
+                // rationale as chrome-normal.
+                return WithStableTabMatchKey(SpawnClassGuest(ctx, EdgeExe,
+                    $"--user-data-dir=\"{FreshProfileDir("TabDockEdgeProfileNormal")}\" --no-first-run --no-default-browser-check --disable-session-crashed-bubble https://time.is",
+                    "Chrome_WidgetWin_1", useShellExecute: true), "Microsoft");
+            case "firefox-normal":
+                // Gecko engine, different window class. NOT installed on this dev
+                // machine (docs/internal/TEST_PLAN.md section 4) — this case is
+                // written for review/future use but cannot be run/verified here.
+                // "Mozilla Firefox" match key is UNVERIFIED (never executed).
+                return WithStableTabMatchKey(SpawnClassGuest(ctx, FirefoxExe,
+                    $"-profile \"{FreshProfileDir("TabDockFirefoxProfileNormal")}\" -no-remote https://time.is",
+                    "MozillaWindowClass", useShellExecute: true), "Mozilla Firefox");
+            case "codex":
+                // Attaches to the user's own already-running Codex/ChatGPT app
+                // (process name "ChatGPT", window class Chrome_WidgetWin_1, title
+                // "ChatGPT") rather than spawning a new instance. DoNotKill=true:
+                // this is a real app with a real session, never a disposable guest.
+                return AttachExistingRealApp(ctx, "ChatGPT", "Chrome_WidgetWin_1", exactTitle: "ChatGPT");
+            case "chatgptclassic":
+                return AttachExistingRealApp(ctx, "ChatGPT Classic", null, exactTitle: "ChatGPT Classic");
             default:
-                throw new ArgumentException($"Unknown --guest kind '{kind}' (expected pig|wt|chrome-nogpu|chrome-gpu).");
+                throw new ArgumentException($"Unknown --guest kind '{kind}' (expected pig|wt|chrome-nogpu|chrome-gpu|chrome-normal|edge-normal|firefox-normal|codex|chatgptclassic).");
         }
+    }
+
+    /// <summary>
+    /// Attaches to a single already-running instance of a real, user-owned app by
+    /// process name (never spawns or kills it). Refuses if zero or more than one
+    /// matching visible-or-hidden top-level window is found — an ambiguous match
+    /// on someone's live app is exactly the "wrong window" failure mode the
+    /// project's safety rules exist to prevent. Reveals the window via ShowWindow
+    /// if it is currently hidden in its tray state.
+    /// </summary>
+    private static GuestInfo AttachExistingRealApp(Ctx ctx, string processName, string? className, string exactTitle)
+    {
+        Process[] procs = Process.GetProcessesByName(processName);
+        if (procs.Length == 0)
+            throw new InvalidOperationException($"No running process named '{processName}' found — refusing to guess.");
+
+        var candidates = new List<(IntPtr Hwnd, uint Pid)>();
+        foreach (Process p in procs)
+        {
+            foreach (IntPtr h in Discover.GetTopLevelWindowsByPid((uint)p.Id, visibleOnly: false))
+            {
+                string title = NativeMethods.GetWindowTextString(h) ?? string.Empty;
+                if (!string.Equals(title, exactTitle, StringComparison.Ordinal))
+                    continue;
+                if (className != null && !string.Equals(NativeMethods.GetClassNameString(h), className, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                candidates.Add((h, (uint)p.Id));
+            }
+        }
+        if (candidates.Count == 0)
+            throw new InvalidOperationException($"No window titled '{exactTitle}' found among '{processName}' processes — refusing to guess.");
+        if (candidates.Count > 1)
+            throw new InvalidOperationException($"{candidates.Count} windows titled '{exactTitle}' found among '{processName}' processes — ambiguous, refusing to touch any of them.");
+
+        (IntPtr hwnd, uint pid) = candidates[0];
+        GuardedProc.Log($"  Attaching to existing real app '{processName}' PID {pid} HWND 0x{hwnd.ToInt64():X} (never spawned, never killed by this driver).");
+
+        if (!NativeMethods.IsWindowVisible(hwnd))
+        {
+            GuardedProc.Log($"  '{exactTitle}' window is currently hidden (tray state); revealing with ShowWindow(SW_SHOW).");
+            NativeMethods.ShowWindow(hwnd, NativeMethods.SW_SHOW);
+            Thread.Sleep(500);
+        }
+
+        var g = new GuestInfo
+        {
+            Proc = Process.GetProcessById((int)pid),
+            Pid = pid,
+            Hwnd = hwnd,
+            Title = exactTitle,
+            IsPig = false,
+            DoNotKill = true,
+        };
+        ctx.Guests.Add(g);
+        return g;
+    }
+
+    /// <summary>
+    /// A fresh, never-reused temp directory for a browser's --user-data-dir.
+    /// Reusing one fixed profile directory across many runs accumulates
+    /// "didn't shut down properly" state from this driver's own force-kills,
+    /// which surfaces as Chrome/Edge's "Restore pages?" crash-recovery prompt
+    /// on a later launch instead of the requested URL — reproduced live, it
+    /// breaks the picker lookup (0 matches) for a window that isn't the guest
+    /// the scenario expected. A new GUID-suffixed directory per invocation
+    /// guarantees a clean profile every time.
+    /// </summary>
+    private static string FreshProfileDir(string prefix)
+    {
+        return Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}");
     }
 
     private static GuestInfo SpawnClassGuest(Ctx ctx, string exe, string args, string className, bool useShellExecute)
@@ -386,6 +582,26 @@ internal static class Scenarios
             throw new InvalidOperationException("Guest window has no title; cannot match a picker row safely.");
         ctx.Guests.Add(g);
         GuardedProc.Log($"  Guest '{g.Title}' PID {g.Pid} HWND 0x{g.Hwnd.ToInt64():X}.");
+        return g;
+    }
+
+    /// <summary>
+    /// Sets a stable, special-character-free, non-ticking substring as the
+    /// guest's tab-lookup key. Real browser window titles are not safe to
+    /// match verbatim for anything beyond the picker's one-shot row lookup
+    /// (which happens fast, right after launch): confirmed live, Edge embeds
+    /// a zero-width space (U+200B) in its own branding, and the time.is test
+    /// page's title changes over time — either can desync an exact/substring
+    /// tab-label match a few seconds later. Uses each browser's own brand
+    /// suffix (not "Time.is", which every "-normal" guest shares — ambiguous
+    /// the moment two of them are captured into one container at once, e.g.
+    /// browser-multi) so guests stay uniquely distinguishable from each other.
+    /// The key is taken from BEFORE any fragile trailing character (Edge's
+    /// zero-width space sits right after "Microsoft").
+    /// </summary>
+    private static GuestInfo WithStableTabMatchKey(GuestInfo g, string key)
+    {
+        g.TabMatchKey = key;
         return g;
     }
 
@@ -1356,6 +1572,398 @@ internal static class Scenarios
         ctx.Check(Util.WaitUntil(() => IsReleased(movedPig), 5000), $"moved pig '{movedPig.Title}' released by drag-out");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-out");
         ctx.Check(movedPig.Proc != null && !movedPig.Proc.HasExited, "moved pig alive standalone");
+    }
+
+    // -------------------------------------------------------------------------
+    // 17. chrometabdrag (H4/H5 PR gate): drag a real captured Chrome window by
+    //     its own client-drawn tab strip (Chrome hit-tests this as HTCAPTION,
+    //     so the guest itself is moved relative to the host) and verify the
+    //     fill-clamp snaps it back to the host client rect on release, with no
+    //     residual host-background smear.
+    // -------------------------------------------------------------------------
+    private static void ChromeTabDrag(Ctx ctx, Options opt)
+    {
+        long capOff = TabDockLog.RecordLogLength();
+        GuestInfo chrome = SpawnGuest(ctx, "chrome-normal");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, chrome);
+
+        ctx.Check(TabDockLog.ContainsNewLine(capOff, "LAYOUT[capture]"), "TabDock log gained a LAYOUT[capture] line");
+        ctx.Check(GuestMatchesHost(chrome.Hwnd, host, out string geoCap),
+            $"guest rect == host client rect at capture ({geoCap})");
+
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+
+        // Baseline brightness before the drag (host is fully covered by Chrome's
+        // bright default page background).
+        int[]? preFrame = Pixels.CaptureHostScreenArea(host);
+        double preBrightness = preFrame != null ? Pixels.ComputeAvgBrightness(preFrame) : -1;
+
+        NativeMethods.RECT hostRect = Discover.GetClientScreenRect(host);
+        double scale = NativeMethods.GetDpiForWindow(container) / 96.0;
+        // Chrome's tab strip is a ~36-40px (96 DPI) band at the top of its
+        // client area; this x offset clears the first tab's own close button
+        // and lands on a freshly opened single-tab window's tab.
+        int startX = hostRect.left + (int)(150 * scale);
+        int startY = hostRect.top + (int)(18 * scale);
+        int endX = hostRect.left + (int)(280 * scale);
+        int endY = hostRect.top + (int)(110 * scale);
+
+        long dragOff = TabDockLog.RecordLogLength();
+        Input.DragFromTo(startX, startY, endX, endY, 16);
+
+        // Sampled immediately on release, before the MOVESIZEEND reclamp has had
+        // time to settle — the narrowest window to catch a residual smear: if
+        // the guest is still offset, the host's own #1E1E1E background brush
+        // (the H4 fix) now paints the exposed strip and brightness drops.
+        int[]? justAfterFrame = Pixels.CaptureHostScreenArea(host);
+        double justAfterBrightness = justAfterFrame != null ? Pixels.ComputeAvgBrightness(justAfterFrame) : -1;
+
+        Thread.Sleep(600); // let the MOVESIZEEND reclamp settle
+        ctx.Check(TabDockLog.ContainsNewLine(dragOff, "LAYOUT[movesize]"),
+            "TabDock log gained a LAYOUT[movesize] line on release");
+        ctx.Check(GuestMatchesHost(chrome.Hwnd, host, out string geoAfter),
+            $"guest rect snapped back to host client rect after drag ({geoAfter})");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+        ctx.Check(chrome.Proc != null && !chrome.Proc.HasExited, "chrome guest process alive after drag");
+
+        GuardedProc.Log(
+            $"  SMEAR CHECK: preDragBrightness={preBrightness:F2} justAfterReleaseBrightness={justAfterBrightness:F2} " +
+            "(sampled over the host client rect; a low value while the guest is still offset would indicate " +
+            "exposed #1E1E1E host background — i.e. smear).");
+    }
+
+    // -------------------------------------------------------------------------
+    // 18. realapp (real Codex / ChatGPT Classic): fill + maximize/restore +
+    //     hide-on-close, against the user's OWN already-running app instance.
+    //     Never spawned, never killed by this driver (GuestInfo.DoNotKill) —
+    //     "Close window" is expected to hide it back to tray (its normal
+    //     X-click behavior), exactly like a real user closing the tab, not
+    //     terminate it. Not part of AllOrder/"all" — must be invoked by name.
+    // -------------------------------------------------------------------------
+    private static void RealAppFillMaxHide(Ctx ctx, Options opt)
+    {
+        GuestInfo app = SpawnGuest(ctx, opt.Guest);
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, app);
+
+        // "Fill": click into the window and type a short, clearly-marked
+        // throwaway line WITHOUT pressing Enter/Send. This exercises real
+        // rendering/layout with real on-screen content without submitting
+        // anything to a live account/session — deliberately conservative.
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+        NativeMethods.RECT hostRect = Discover.GetClientScreenRect(host);
+        Input.ClickAt(hostRect.left + hostRect.Width / 2, hostRect.top + hostRect.Height - 60);
+        Thread.Sleep(300);
+        Input.TypeText("TDVAL test fill - please ignore, not sent");
+        Thread.Sleep(300);
+        ctx.Check(GuestMatchesHost(app.Hwnd, host, out string geoFill), $"guest still fills host after fill ({geoFill})");
+
+        // Maximize / restore cycle. Only one monitor is available in this
+        // environment, so the checklist's "2nd monitor" clause cannot be
+        // exercised here — noted, not silently skipped.
+        ClickMaximizeButton(container);
+        Thread.Sleep(1200);
+        ctx.Check(GuestMatchesHost(app.Hwnd, host, out string geoMax), $"geometry OK after maximize ({geoMax})");
+        ClickMaximizeButton(container);
+        Thread.Sleep(1200);
+        ctx.Check(GuestMatchesHost(app.Hwnd, host, out string geoRest), $"geometry OK after restore ({geoRest})");
+
+        // Hide-on-close: "Close window" from the tab menu should hide the
+        // real app back to tray (never terminate it) — its normal X-click
+        // behavior, exercised through TabDock's teardown path instead.
+        long off = TabDockLog.RecordLogLength();
+        ClickTabMenuItem(ctx, container, app.Title, "Close window");
+        ctx.Check(Util.WaitUntil(() => TabDockLog.ContainsNewLine(off, "hid itself")
+                || TabDockLog.ContainsNewLine(off, "destroyed; removing its tab"), 8000),
+            "TabDock log shows the tab was torn down (hide or destroy path)");
+        Thread.Sleep(1500);
+        ctx.Check(app.Proc != null && !app.Proc.HasExited, "real app process still alive after close (hidden, not terminated)");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+
+        GuardedProc.Log($"  Real app '{app.Title}' left in its normal hidden/tray state (never captured, never killed by cleanup).");
+    }
+
+    // -------------------------------------------------------------------------
+    // 19. closegroupprompt: the container's Closing handler shows a Yes/No/
+    //     Cancel MessageBox when it still has tabs (ContainerWindow.xaml.cs
+    //     ContainerWindow_Closing). Cancel must leave the container and its
+    //     tabs untouched; Yes must actually close (exit) every captured guest,
+    //     not just release it — the one path no other scenario exercises,
+    //     since cleanup's own MessageBox handling always clicks "No".
+    // -------------------------------------------------------------------------
+    private static void CloseGroupPrompt(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "CGA", "--color", "red");
+        GuestInfo pigB = SpawnPig(ctx, "CGB", "--color", "blue");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
+
+        // --- Cancel: container and both tabs must be completely unaffected. ---
+        NativeMethods.PostMessage(container, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        IntPtr dlg1 = Discover.FindMessageBox(ctx.TabDockPid, "Close group");
+        Util.WaitUntil(() => (dlg1 = Discover.FindMessageBox(ctx.TabDockPid, "Close group")) != IntPtr.Zero, 5000);
+        ctx.Check(dlg1 != IntPtr.Zero, "Close-group prompt appeared on WM_CLOSE with tabs present");
+        if (dlg1 != IntPtr.Zero)
+        {
+            IntPtr cancelBtn = Discover.FindChildWindowByText(dlg1, new[] { "Cancel" });
+            ctx.Check(cancelBtn != IntPtr.Zero, "prompt has a Cancel button");
+            if (cancelBtn != IntPtr.Zero)
+            {
+                Input.ForceForeground(dlg1);
+                NativeMethods.GetWindowRect(cancelBtn, out NativeMethods.RECT rc);
+                Input.ClickAt(rc.left + rc.Width / 2, rc.top + rc.Height / 2);
+            }
+            Util.WaitUntil(() => !NativeMethods.IsWindow(dlg1), 3000);
+        }
+        Thread.Sleep(400);
+        ctx.Check(NativeMethods.IsWindow(container), "Cancel: container still open");
+        ctx.Check(TabCount(container) == 2, "Cancel: both tabs still present");
+        ctx.Check(pigA.Proc != null && !pigA.Proc.HasExited && pigB.Proc != null && !pigB.Proc.HasExited,
+            "Cancel: both pigs still alive");
+        ctx.Check(((long)NativeMethods.GetWindowLongPtr(pigA.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) != 0
+                && ((long)NativeMethods.GetWindowLongPtr(pigB.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) != 0,
+            "Cancel: both pigs still captured (WS_CHILD)");
+
+        // --- Yes: must actually close (exit) both captured guests. ---
+        long off = TabDockLog.RecordLogLength();
+        NativeMethods.PostMessage(container, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        IntPtr dlg2 = IntPtr.Zero;
+        Util.WaitUntil(() => (dlg2 = Discover.FindMessageBox(ctx.TabDockPid, "Close group")) != IntPtr.Zero, 5000);
+        ctx.Check(dlg2 != IntPtr.Zero, "Close-group prompt appeared again on second WM_CLOSE");
+        if (dlg2 != IntPtr.Zero)
+        {
+            IntPtr yesBtn = Discover.FindChildWindowByText(dlg2, new[] { "&Yes", "Yes" });
+            ctx.Check(yesBtn != IntPtr.Zero, "prompt has a Yes button");
+            if (yesBtn != IntPtr.Zero)
+            {
+                Input.ForceForeground(dlg2);
+                NativeMethods.GetWindowRect(yesBtn, out NativeMethods.RECT rc);
+                Input.ClickAt(rc.left + rc.Width / 2, rc.top + rc.Height / 2);
+            }
+        }
+        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(container), 5000), "Yes: container closed");
+        ctx.Check(Util.WaitUntil(() => pigA.Proc!.HasExited, 5000), "Yes: pigA actually exited (not just released)");
+        ctx.Check(Util.WaitUntil(() => pigB.Proc!.HasExited, 5000), "Yes: pigB actually exited (not just released)");
+        ctx.Check(TabDockLog.CountNewLines(off, "EXCEPTION") == 0, "no EXCEPTION lines across the whole prompt sequence");
+    }
+
+    // -------------------------------------------------------------------------
+    // 20. browser-lifecycle --guest {chrome-normal|edge-normal|firefox-normal}
+    //     (docs/internal/TEST_PLAN.md 5.1): real reparent lifecycle (launch/
+    //     attach/detach) plus the H4 hide->show smear check with a real browser.
+    // -------------------------------------------------------------------------
+    private static void BrowserLifecycle(Ctx ctx, Options opt)
+    {
+        GuestInfo browser = SpawnGuest(ctx, opt.Guest);
+        long capOff = TabDockLog.RecordLogLength();
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, browser);
+        ctx.Check(TabDockLog.ContainsNewLine(capOff, "LAYOUT[capture]"), "TabDock log gained a LAYOUT[capture] line");
+        ctx.Check(GuestMatchesHost(browser.Hwnd, host, out string geoCap), $"guest rect == host client rect at capture ({geoCap})");
+
+        (double bBefore, _) = SampleHost(host);
+        ctx.Check(bBefore > 1.0, $"host bright with browser visible before hide ({bBefore:F2})");
+
+        // Force a hide->show cycle of the guest within its own host by
+        // minimizing/restoring the container itself (mirrors minrestore).
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the browser container to the foreground — refusing to click blind.");
+        NativeMethods.ShowWindow(container, NativeMethods.SW_MINIMIZE);
+        Thread.Sleep(600);
+        NativeMethods.ShowWindow(container, NativeMethods.SW_RESTORE);
+        Thread.Sleep(800);
+
+        (double bAfter, _) = SampleHost(host);
+        ctx.Check(bAfter > 1.0, $"host bright again after minimize->restore hide/show cycle, i.e. no H4 smear residue ({bAfter:F2})");
+        ctx.Check(GuestMatchesHost(browser.Hwnd, host, out string geoAfter), $"guest still fills host after hide/show ({geoAfter})");
+
+        List<string> drift = TabDockLog.FindDriftWithoutPrecedingMovesize(ctx.LogOffset);
+        ctx.Check(drift.Count == 0, drift.Count == 0
+            ? "no LAYOUT[drift] fired without a preceding LAYOUT[movesize]"
+            : $"UNEXPECTED bare drift line(s): {string.Join(" | ", drift)}");
+
+        ClickTabMenuItem(ctx, container, browser.EffectiveTabMatchKey, "Pop out");
+        ctx.Check(Util.WaitUntil(() => IsReleased(browser), 5000), "browser released by Pop out");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+    }
+
+    // -------------------------------------------------------------------------
+    // 21. browser-tabswitch-hidesafety --guest {chrome-normal|edge-normal|firefox-normal}
+    //     (docs/internal/TEST_PLAN.md 5.2): the existing tabswitch-hidesafety
+    //     gate, with one of the three tabs a real browser instead of all pigs.
+    // -------------------------------------------------------------------------
+    private static void BrowserTabSwitchHideSafety(Ctx ctx, Options opt)
+    {
+        GuestInfo browser = SpawnGuest(ctx, opt.Guest);
+        GuestInfo pigB = SpawnPig(ctx, "BTB", "--color", "blue");
+        GuestInfo pigG = SpawnPig(ctx, "BTG", "--color", "green");
+        GuestInfo[] guests = { browser, pigB, pigG };
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, guests);
+        ctx.Check(TabCount(container) == 3, "3 tabs after capture (1 real browser + 2 pigs)");
+
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+        bool everyClickOk = true;
+        for (int i = 0; i < 24; i++)
+        {
+            int idx = i % guests.Length;
+            AutomationElement? tab = FindTabText(container, guests[idx].EffectiveTabMatchKey, out int count);
+            if (tab == null || count != 1)
+            {
+                everyClickOk = false;
+                ctx.Check(false, $"click {i + 1}/24: tab for '{guests[idx].Title}' found uniquely (count={count})");
+                break;
+            }
+            (int tx, int ty) = Uia.Center(tab);
+            Input.ClickAt(tx, ty);
+            Thread.Sleep(250);
+
+            int tabs = TabCount(container);
+            if (tabs != 3)
+            {
+                everyClickOk = false;
+                ctx.Check(false, $"click {i + 1}/24: tab count still 3 (got {tabs})");
+                break;
+            }
+        }
+        if (everyClickOk)
+            ctx.Check(true, "tab count stayed 3 after every one of the 24 clicks (real browser included)");
+
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "hid itself") == 0, "ZERO 'hid itself' lines in TabDock log");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "destroyed") == 0, "ZERO 'destroyed' lines in TabDock log");
+        ctx.Check(browser.Proc != null && !browser.Proc.HasExited
+                && ((long)NativeMethods.GetWindowLongPtr(browser.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) != 0,
+            $"real browser '{browser.Title}' alive and still captured after 24 switches");
+        List<string> drift = TabDockLog.FindDriftWithoutPrecedingMovesize(ctx.LogOffset);
+        ctx.Check(drift.Count == 0, drift.Count == 0
+            ? "no LAYOUT[drift] fired without a preceding LAYOUT[movesize]"
+            : $"UNEXPECTED bare drift line(s): {string.Join(" | ", drift)}");
+    }
+
+    // -------------------------------------------------------------------------
+    // 22. browser-dragreorder --guest {chrome-normal|edge-normal|firefox-normal}
+    //     (docs/internal/TEST_PLAN.md 5.3): H2's TabDock-tab-strip drag-reorder,
+    //     with a real browser as one of the two tabs (dragreorder uses pigs only).
+    // -------------------------------------------------------------------------
+    private static void BrowserDragReorder(Ctx ctx, Options opt)
+    {
+        GuestInfo browser = SpawnGuest(ctx, opt.Guest);
+        GuestInfo pig = SpawnPig(ctx, "BDR", "--color", "red");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, browser, pig);
+        ctx.Check(TabCount(container) == 2, "2 tabs after capture (1 real browser + 1 pig)");
+
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+
+        AutomationElement? tabBrowser = FindTabText(container, browser.EffectiveTabMatchKey, out int cA);
+        AutomationElement? tabPig = FindTabText(container, pig.EffectiveTabMatchKey, out int cB);
+        if (tabBrowser == null || cA != 1 || tabPig == null || cB != 1)
+            throw new InvalidOperationException($"Tabs not found uniquely (browser={cA}, pig={cB}).");
+        Rect rBrowser = Uia.GetElementRect(tabBrowser);
+        Rect rPig = Uia.GetElementRect(tabPig);
+        bool browserIsRight = rBrowser.X > rPig.X;
+        GuestInfo movedGuest = browserIsRight ? browser : pig;
+        Rect leftRect = browserIsRight ? rPig : rBrowser;
+        (int sx, int sy) = Uia.Center(browserIsRight ? tabBrowser : tabPig);
+        Input.DragFromTo(sx, sy, (int)(leftRect.X + 8), sy, 14);
+        Thread.Sleep(600);
+
+        ctx.Check(TabCount(container) == 2, "still 2 tabs after drag-reorder");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "Reordered tab") >= 1, "a reorder was applied (log)");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-reorder");
+        ctx.Check(browser.Proc != null && !browser.Proc.HasExited && pig.Proc != null && !pig.Proc.HasExited,
+            "both the real browser and the pig are alive after drag-reorder");
+
+        NativeMethods.GetWindowRect(container, out NativeMethods.RECT rc);
+        Input.DragFromTo((int)(leftRect.X + leftRect.Width / 2), sy, rc.right + 150, rc.bottom + 150, 14);
+        ctx.Check(Util.WaitUntil(() => IsReleased(movedGuest), 5000), $"moved guest '{movedGuest.Title}' released by drag-out");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-out");
+        ctx.Check(movedGuest.Proc != null && !movedGuest.Proc.HasExited, "moved guest alive standalone");
+    }
+
+    // -------------------------------------------------------------------------
+    // 23. browser-multi (docs/internal/TEST_PLAN.md 5.4): Chrome + Edge as two
+    //     simultaneous tabs in one container (Firefox omitted — not installed
+    //     on this dev machine; add "firefox-normal" to the guest list below if
+    //     it becomes available, per TEST_PLAN.md section 4/6).
+    // -------------------------------------------------------------------------
+    private static void BrowserMulti(Ctx ctx, Options opt)
+    {
+        GuestInfo chrome = SpawnGuest(ctx, "chrome-normal");
+        GuestInfo edge = SpawnGuest(ctx, "edge-normal");
+        GuestInfo[] guests = { chrome, edge };
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, guests);
+        ctx.Check(TabCount(container) == 2, "2 tabs after simultaneous multi-browser capture");
+
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+        foreach (GuestInfo g in guests)
+        {
+            AutomationElement? tab = FindTabText(container, g.EffectiveTabMatchKey, out int count);
+            ctx.Check(tab != null && count == 1, $"tab for '{g.Title}' found uniquely (count={count})");
+            if (tab == null || count != 1)
+                continue;
+            (int tx, int ty) = Uia.Center(tab);
+            Input.ClickAt(tx, ty);
+            Thread.Sleep(400);
+            ctx.Check(TabCount(container) == 2, $"tab count still 2 after switching to '{g.Title}'");
+        }
+
+        foreach (GuestInfo g in guests)
+        {
+            ctx.Check(g.Proc != null && !g.Proc.HasExited
+                    && ((long)NativeMethods.GetWindowLongPtr(g.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) != 0,
+                $"'{g.Title}' alive and still captured after the multi-browser switch pass");
+        }
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "unhealthy") == 0, "no false-positive render-health 'unhealthy' verdict for either browser");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+    }
+
+    // -------------------------------------------------------------------------
+    // 24. browser-soak --guest {chrome-normal|edge-normal|firefox-normal} --cycles N
+    //     (docs/internal/TEST_PLAN.md 5.6): a SCOPED PROXY for long-running
+    //     stability — N tab-switch cycles (default 30, several minutes) with a
+    //     periodic health check, not a true multi-hour/day soak. See
+    //     KNOWN_ISSUES.md for the honest scope note.
+    // -------------------------------------------------------------------------
+    private static void BrowserSoak(Ctx ctx, Options opt)
+    {
+        int cycles = opt.Cycles ?? 30;
+        GuestInfo browser = SpawnGuest(ctx, opt.Guest);
+        GuestInfo pig = SpawnPig(ctx, "SOAK", "--pulse", "--color", "white");
+        GuestInfo[] guests = { browser, pig };
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, guests);
+
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+
+        for (int i = 0; i < cycles; i++)
+        {
+            GuestInfo target = guests[i % guests.Length];
+            AutomationElement? tab = FindTabText(container, target.Title, out int count);
+            if (tab == null || count != 1)
+            {
+                ctx.Check(false, $"cycle {i + 1}/{cycles}: tab for '{target.Title}' found uniquely (count={count})");
+                break;
+            }
+            (int tx, int ty) = Uia.Center(tab);
+            Input.ClickAt(tx, ty);
+            Thread.Sleep(300);
+
+            if (i % 5 == 4)
+            {
+                bool ok = TabCount(container) == 2
+                    && browser.Proc != null && !browser.Proc.HasExited
+                    && pig.Proc != null && !pig.Proc.HasExited
+                    && TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0;
+                ctx.Check(ok, $"health check at cycle {i + 1}/{cycles}: 2 tabs, both guests alive, no EXCEPTION lines");
+                if (!ok)
+                    break;
+            }
+        }
+
+        ctx.Check(browser.Proc != null && !browser.Proc.HasExited, $"real browser '{browser.Title}' survived {cycles} switch cycles");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "unhealthy") == 0, "no false-positive render-health verdict across the soak run");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines across the whole soak run");
     }
 
     /// <summary>Waits for a MessageBox owned by the TabDock pid and real-clicks the named button.</summary>

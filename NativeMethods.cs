@@ -260,6 +260,39 @@ public static partial class NativeMethods
     [DllImport("kernel32.dll")]
     public static extern uint GetCurrentThreadId();
 
+    /// <summary>
+    /// Process-tree ancestry snapshot (used by the ValidationDriver to refuse
+    /// killing a tracked process that turns out to be an ancestor of the
+    /// driver itself, e.g. a shared-instance host like Windows Terminal's
+    /// monarch process, rather than an isolated spawned child).
+    /// </summary>
+    public const uint TH32CS_SNAPPROCESS = 0x00000002;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct PROCESSENTRY32
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool Process32First(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool Process32Next(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
+
     // -------------------------------------------------------------------------
     // advapi32.dll (system token helpers, not a third-party package)
     // -------------------------------------------------------------------------

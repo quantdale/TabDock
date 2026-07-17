@@ -56,8 +56,18 @@ internal static class Program
         }
         foreach (string s in scenarios)
         {
-            if (Array.IndexOf(Scenarios.AllOrder, s) < 0)
+            bool known = Array.IndexOf(Scenarios.AllOrder, s) >= 0
+                || s == "realapp" || s == "browser-multi"
+                || Array.IndexOf(Scenarios.BrowserOnlyScenarios, s) >= 0;
+            if (!known)
                 return Usage($"Unknown scenario '{s}'.");
+        }
+        if (scenarios.Contains("realapp") && Array.IndexOf(Scenarios.RealAppGuestKinds, opt.Guest) < 0)
+            return Usage($"realapp requires --guest {string.Join("|", Scenarios.RealAppGuestKinds)}.");
+        foreach (string s in Scenarios.BrowserOnlyScenarios)
+        {
+            if (scenarios.Contains(s) && Array.IndexOf(Scenarios.BrowserGuestKinds, opt.Guest) < 0)
+                return Usage($"{s} requires --guest {string.Join("|", Scenarios.BrowserGuestKinds)}.");
         }
 
         // Single-instance guard (guarded-spawn pattern rule 3).
