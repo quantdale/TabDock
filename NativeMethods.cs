@@ -18,11 +18,6 @@ public static partial class NativeMethods
     public delegate IntPtr WndProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
     public delegate void WinEventProc(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
 
-    /// <summary>
-    /// Callback for comctl32 window subclassing (SetWindowSubclass).
-    /// </summary>
-    public delegate IntPtr SubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, IntPtr uIdSubclass, IntPtr dwRefData);
-
     // -------------------------------------------------------------------------
     // user32.dll
     // -------------------------------------------------------------------------
@@ -235,18 +230,6 @@ public static partial class NativeMethods
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-
-    // -------------------------------------------------------------------------
-    // comctl32.dll (window subclassing)
-    // -------------------------------------------------------------------------
-    [DllImport("comctl32.dll")]
-    public static extern bool SetWindowSubclass(IntPtr hWnd, SubclassProc pfnSubclass, IntPtr uIdSubclass, IntPtr dwRefData);
-
-    [DllImport("comctl32.dll")]
-    public static extern bool RemoveWindowSubclass(IntPtr hWnd, IntPtr uIdSubclass);
-
-    [DllImport("comctl32.dll")]
-    public static extern IntPtr DefSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
 
     // -------------------------------------------------------------------------
     // kernel32.dll

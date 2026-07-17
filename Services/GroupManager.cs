@@ -15,6 +15,7 @@ namespace TabDock.Services;
 public sealed class GroupManager
 {
     private readonly WindowCaptureService _capture;
+    private readonly WindowShepherdService _shepherd;
     private readonly PersistenceService _persistence;
     private readonly LoggingService _log;
     private readonly HashSet<IntPtr> _ownContainerHwnds = new();
@@ -22,11 +23,24 @@ public sealed class GroupManager
 
     public ObservableCollection<Group> Groups { get; } = new();
 
-    public GroupManager(WindowCaptureService capture, PersistenceService persistence, LoggingService log)
+    public GroupManager(WindowCaptureService capture, WindowShepherdService shepherd, PersistenceService persistence, LoggingService log)
     {
         _capture = capture;
+        _shepherd = shepherd;
         _persistence = persistence;
         _log = log;
+    }
+
+    /// <summary>
+    /// Releases a captured window through whichever backend originally
+    /// captured its owning group (see <see cref="Group.Mode"/>).
+    /// </summary>
+    private void ReleaseViaBackend(Group group, CapturedWindow cw, bool show)
+    {
+        if (group.Mode == GroupCaptureMode.Shepherd)
+            _shepherd.Release(cw, show);
+        else
+            _capture.Release(cw, show);
     }
 
     public void RestoreState()
@@ -174,7 +188,7 @@ public sealed class GroupManager
 
         var cw = group.Members[index];
         group.Members.RemoveAt(index);
-        _capture.Release(cw, show);
+        ReleaseViaBackend(group, cw, show);
 
         if (group.ActiveIndex >= group.Members.Count)
             group.ActiveIndex = group.Members.Count - 1;
@@ -190,7 +204,7 @@ public sealed class GroupManager
         {
             var cw = group.Members[^1];
             group.Members.RemoveAt(group.Members.Count - 1);
-            _capture.Release(cw);
+            ReleaseViaBackend(group, cw, show: true);
         }
 
         if (Groups.Contains(group))
@@ -214,16 +228,18 @@ public sealed class GroupManager
         _log.Log("EMERGENCY RELEASE: releasing all captured windows.");
         try
         {
-            var all = Groups.SelectMany(g => g.Members).ToList();
-            foreach (var cw in all)
+            foreach (var group in Groups.ToList())
             {
-                try
+                foreach (var cw in group.Members.ToList())
                 {
-                    _capture.Release(cw);
-                }
-                catch (Exception ex)
-                {
-                    _log.LogException("EmergencyReleaseAll", ex);
+                    try
+                    {
+                        ReleaseViaBackend(group, cw, show: true);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.LogException("EmergencyReleaseAll", ex);
+                    }
                 }
             }
         }

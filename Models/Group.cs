@@ -7,6 +7,27 @@ using System.Runtime.CompilerServices;
 namespace TabDock.Models;
 
 /// <summary>
+/// How a group captures its member windows. Named GroupCaptureMode (not
+/// CaptureMode) to avoid colliding with System.Windows.Input.CaptureMode.
+/// </summary>
+public enum GroupCaptureMode
+{
+    /// <summary>
+    /// The default, production capture path: SetParent-reparents the guest as a
+    /// WS_CHILD of the container's content host. See WindowCaptureService.
+    /// </summary>
+    Reparent,
+
+    /// <summary>
+    /// Experimental prototype (docs/internal/deep-audit-2026-07-17.md, section 6):
+    /// the guest stays an unmodified top-level window; the container positions,
+    /// shows, hides, and z-orders it instead of adopting it. See
+    /// WindowShepherdService.
+    /// </summary>
+    Shepherd,
+}
+
+/// <summary>
 /// A flat tab group. Members are live captured windows; there is no nesting.
 /// PersistedTabMetadata holds the layout intent across reboots (HWNDs are not
 /// stable, so live re-attachment is intentionally not attempted automatically).
@@ -16,6 +37,7 @@ public sealed class Group : INotifyPropertyChanged
     private string _name = "Group";
     private string _accentColor = "#2196F3";
     private int _activeIndex;
+    private GroupCaptureMode _mode = GroupCaptureMode.Reparent;
 
     public Guid Id { get; set; } = Guid.NewGuid();
 
@@ -42,6 +64,17 @@ public sealed class Group : INotifyPropertyChanged
                 value = Members.Count - 1;
             SetProperty(ref _activeIndex, value);
         }
+    }
+
+    /// <summary>
+    /// The capture backend this group uses. Only meaningful to change while
+    /// <see cref="Members"/> is empty — callers must not flip it with live
+    /// captures in place (GroupViewModel.IsShepherdMode enforces this).
+    /// </summary>
+    public GroupCaptureMode Mode
+    {
+        get => _mode;
+        set => SetProperty(ref _mode, value);
     }
 
     /// <summary>

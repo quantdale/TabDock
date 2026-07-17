@@ -21,6 +21,9 @@ public sealed class PersistedGroup
     public string Name { get; set; } = string.Empty;
     public string AccentColor { get; set; } = string.Empty;
     public int ActiveIndex { get; set; }
+
+    /// <summary>Serialized <see cref="CaptureMode"/> (int cast) for this group.</summary>
+    public int Mode { get; set; }
     public List<PersistedTab> Tabs { get; set; } = new();
 }
 

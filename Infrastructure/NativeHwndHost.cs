@@ -36,6 +36,19 @@ public class NativeHwndHost : HwndHost
     private uint _attachedHostThreadId;
     private bool _isThreadInputAttached;
 
+    // Guards the WM_KILLFOCUS handler against the focus change it is itself
+    // about to cause: SetFocus(guest), called from AttachActiveGuest below,
+    // synchronously delivers WM_KILLFOCUS to whichever window currently holds
+    // focus (the host, once queues are attached) BEFORE SetFocus returns. Left
+    // unguarded, that re-entrant WM_KILLFOCUS immediately detached the
+    // attachment AttachActiveGuest had just established, and AttachThreadInput's
+    // detach resets both threads' focus state — observed live as
+    // "focus=0x0" moments after "attach" in the rotating log, i.e. no window on
+    // either thread had keyboard focus. This flag makes that specific
+    // self-triggered detach a no-op while leaving WM_KILLFOCUS from a genuine
+    // external focus change (alt-tab, click elsewhere) fully handled.
+    private bool _suppressKillFocusDetach;
+
     public static readonly DependencyProperty ActiveWindowProperty = DependencyProperty.Register(
         nameof(ActiveWindow),
         typeof(CapturedWindow),
@@ -112,7 +125,7 @@ public class NativeHwndHost : HwndHost
         {
             // Same thread: no attach needed, but make sure focus is on the guest.
             _log?.Log($"INPUT[attach-same-thread] guest=0x{cw.Hwnd.ToInt64():X}");
-            FocusActiveGuest();
+            FocusActiveGuestGuarded();
             return;
         }
 
@@ -134,7 +147,7 @@ public class NativeHwndHost : HwndHost
             _attachedGuestThreadId = guestThreadId;
             _attachedHostThreadId = hostThreadId;
             _log?.Log($"INPUT[attach] guest=0x{cw.Hwnd.ToInt64():X} guestThread={guestThreadId} hostThread={hostThreadId}");
-            FocusActiveGuest();
+            FocusActiveGuestGuarded();
         }
         else
         {
@@ -207,6 +220,23 @@ public class NativeHwndHost : HwndHost
         // Chromium/Electron guests require an explicit WM_ACTIVATE notification in
         // addition to SetFocus before they will consume keyboard input reliably.
         GuestActivationHelper.NotifyGuestActive(cw.Hwnd, _log);
+    }
+
+    /// <summary>
+    /// Calls <see cref="FocusActiveGuest"/> with the re-entrant WM_KILLFOCUS
+    /// detach suppressed for its duration (see <see cref="_suppressKillFocusDetach"/>).
+    /// </summary>
+    private void FocusActiveGuestGuarded()
+    {
+        _suppressKillFocusDetach = true;
+        try
+        {
+            FocusActiveGuest();
+        }
+        finally
+        {
+            _suppressKillFocusDetach = false;
+        }
     }
 
     /// <summary>
@@ -347,6 +377,17 @@ public class NativeHwndHost : HwndHost
             NativeHwndHost? host;
             lock (s_hosts)
                 s_hosts.TryGetValue(hWnd, out host);
+
+            if (host != null && host._suppressKillFocusDetach)
+            {
+                // This WM_KILLFOCUS was raised by our own SetFocus(guest) call
+                // inside AttachActiveGuest, not by an external focus change.
+                // Detaching here would tear down the attachment that call just
+                // established. See _suppressKillFocusDetach.
+                host._log?.Log($"INPUT[host-wmkillfocus-suppressed] host=0x{hWnd.ToInt64():X}");
+                return IntPtr.Zero;
+            }
+
             host?._log?.Log($"INPUT[host-wmkillfocus] host=0x{hWnd.ToInt64():X}");
             host?.DetachActiveGuest();
             return IntPtr.Zero;
