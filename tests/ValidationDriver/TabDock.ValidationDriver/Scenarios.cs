@@ -94,7 +94,7 @@ internal static class Scenarios
         "rename", "popout", "closewin", "closewin-hide", "selfclose", "selfhide", "selfminhide",
         "tabswitch-hidesafety", "minrestore", "maximize-repro", "repeat-cycles", "crossfeature",
         "renderhealth", "hotkey-afterclose", "persist-kill", "dragreorder", "chrometabdrag",
-        "closegroupprompt",
+        "closegroupprompt", "exitpopulated",
     };
 
     /// <summary>
@@ -111,12 +111,17 @@ internal static class Scenarios
     /// {chrome-normal|edge-normal|firefox-normal} to mean anything, so a blanket
     /// "all" run must not silently launch real browsers with no guest chosen.
     /// </summary>
+    // Previously also listed renderhealth/hotkey-afterclose/persist-kill/dragreorder
+    // and every contentinput/chromeinput/alttabinput/keyboardinput* scenario, none
+    // of which read opt.Guest at all (they spawn a hardcoded pig/Chrome/Notepad
+    // guest directly) — that mislabeling made Program.cs demand a bogus
+    // --guest {chrome-normal|edge-normal|firefox-normal} to run them at all, which
+    // in turn made "all" (which includes renderhealth/hotkey-afterclose/persist-kill/
+    // dragreorder via AllOrder) fail its own argument validation before spawning
+    // anything. Confirmed by running `all` and hitting this exact Usage() error.
     public static readonly string[] BrowserOnlyScenarios =
     {
         "browser-lifecycle", "browser-tabswitch-hidesafety", "browser-dragreorder", "browser-soak",
-        "renderhealth", "hotkey-afterclose", "persist-kill", "dragreorder",
-        "contentinput", "chromeinput", "alttabinput",
-        "keyboardinput", "keyboardinput-chrome", "keyboardinput-notepad", "keyboardinput-rapid-switch",
     };
     public static readonly string[] BrowserGuestKinds = { "chrome-normal", "edge-normal", "firefox-normal" };
 
@@ -146,6 +151,7 @@ internal static class Scenarios
             "chrometabdrag" => ChromeTabDrag,
             "realapp" => RealAppFillMaxHide,
             "closegroupprompt" => CloseGroupPrompt,
+            "exitpopulated" => ExitPopulated,
             "browser-lifecycle" => BrowserLifecycle,
             "browser-tabswitch-hidesafety" => BrowserTabSwitchHideSafety,
             "browser-dragreorder" => BrowserDragReorder,
@@ -278,6 +284,8 @@ internal static class Scenarios
                             GuardedProc.Log($"  Cleanup: SAFETY: REFUSING to kill guest PID {g.Proc.Id} ('{g.Title}') — " +
                                 "it is this driver's own process or an ancestor of it, not an isolated spawned child. " +
                                 "Its captured window is closed via WM_CLOSE below instead.");
+                            continue;
+                        }
                         if (!VerifyGuestForKill(g))
                         {
                             GuardedProc.Log($"  Cleanup: REFUSING to kill guest PID {g.Proc.Id} ('{g.Title}') — verification failed.");
@@ -634,6 +642,10 @@ internal static class Scenarios
     private static GuestInfo WithStableTabMatchKey(GuestInfo g, string key)
     {
         g.TabMatchKey = key;
+        return g;
+    }
+
+    /// <summary>
     /// Spawns Notepad on a unique temp file and verifies the window that opens for that
     /// file by its title. Windows 11 Notepad is single-instance and may open the file in
     /// an existing user process; if that happens, the scenario still proceeds against the
@@ -1155,8 +1167,16 @@ internal static class Scenarios
             $"WS_CAPTION restored (style=0x{styleAfter:X})");
         ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "pig process alive");
         ctx.Check(!PigLog.ContainsLine(pig.Pid, "WM_CLOSE"), "pig log has NO WM_CLOSE");
-        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(container) || TabCount(container) == 0, 3000),
-            "tab gone (container empty or closed)");
+        // Popping out the only tab must close the now-empty container outright,
+        // not just clear its tab strip (finding L11 — previously it was left open
+        // indefinitely). Strict "closed", not the old "empty or closed" tolerance.
+        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(container), 3000),
+            "container closed (last tab popped out)");
+        // ...and the emptied group must not persist forever either (finding L12 —
+        // 18 residual empty groups were observed accumulating this way on one
+        // machine, each reopening an empty container at every future launch).
+        ctx.Check(Util.WaitUntil(() => !StateJsonContains(pig.Title), 3000),
+            "state.json no longer references the popped-out tab (group removed, not just the window closed)");
     }
 
     // -------------------------------------------------------------------------
@@ -1943,6 +1963,51 @@ internal static class Scenarios
     }
 
     // -------------------------------------------------------------------------
+    // 19b. exitpopulated (M6): clicking the launcher's "Exit" button (bound to
+    //     ExitCommand -> App.OnExitRequested -> Application.Shutdown) with a
+    //     populated group still open must shut the whole app down cleanly. The
+    //     documented bug this guards: ContainerWindow_Closing's Yes/No/Cancel
+    //     modal previously fired for every populated container during this
+    //     exact path with nobody left to answer it, stalling Shutdown into a
+    //     zombie process (investigation_findings.md M6). Deliberately does NOT
+    //     use HandleCloseGroupMessageBox — if the prompt regresses, this must
+    //     time out and FAIL rather than have cleanup silently dismiss it.
+    // -------------------------------------------------------------------------
+    private static void ExitPopulated(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "EXP", "--color", "red");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+
+        if (!Input.ForceForeground(ctx.MainHwnd))
+            throw new InvalidOperationException("Could not bring the launcher to the foreground — refusing to click blind.");
+
+        AutomationElement? mainEl = Uia.FromHwnd(ctx.MainHwnd);
+        AutomationElement? exitBtn = mainEl == null
+            ? null
+            : Uia.FindDescendantByName(mainEl, ControlType.Button, "Exit", null, out int count);
+        ctx.Check(exitBtn != null, "launcher Exit button located via UIA");
+        if (exitBtn == null)
+            return;
+
+        (int ex, int ey) = Uia.Center(exitBtn);
+        Input.ClickAt(ex, ey);
+
+        bool exited = Util.WaitUntil(() => ctx.TabDock.HasExited, 5000);
+        IntPtr strandedDialog = exited ? IntPtr.Zero : Discover.FindMessageBox(ctx.TabDockPid, null);
+        ctx.Check(exited, "TabDock process exited within 5s of clicking Exit with a populated group open (no blocking modal)");
+        ctx.Check(strandedDialog == IntPtr.Zero, "no stranded MessageBox left open blocking shutdown");
+
+        if (exited)
+        {
+            ctx.Check(Util.WaitUntil(() => NativeMethods.IsWindow(pig.Hwnd) && NativeMethods.IsWindowVisible(pig.Hwnd), 3000),
+                "pig released back to a visible standalone window as part of clean exit");
+            ctx.Check(((long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) == 0,
+                "pig no longer WS_CHILD (fully released, not left reparented)");
+            ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "pig process itself still alive (only its window was released)");
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // 20. browser-lifecycle --guest {chrome-normal|edge-normal|firefox-normal}
     //     (docs/internal/TEST_PLAN.md 5.1): real reparent lifecycle (launch/
     //     attach/detach) plus the H4 hide->show smear check with a real browser.
@@ -2159,6 +2224,9 @@ internal static class Scenarios
         ctx.Check(browser.Proc != null && !browser.Proc.HasExited, $"real browser '{browser.Title}' survived {cycles} switch cycles");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "unhealthy") == 0, "no false-positive render-health verdict across the soak run");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines across the whole soak run");
+    }
+
+    // -------------------------------------------------------------------------
     // 17. contentinput (Test A): non-Chromium content-area input gate.
     //     Clicks the center counter button of a captured GuineaPig and verifies
     //     the guest actually receives the input.

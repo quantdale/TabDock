@@ -132,6 +132,7 @@ public partial class App : Application
 
     private void Application_Exit(object sender, ExitEventArgs e)
     {
+        ContainerWindow.IsAppShuttingDown = true;
         _log?.Log("Application exiting; releasing all captured windows and saving state.");
         try
         {
@@ -155,6 +156,7 @@ public partial class App : Application
 
     private void Application_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
     {
+        ContainerWindow.IsAppShuttingDown = true;
         _log?.LogException("DispatcherUnhandledException", e.Exception);
         SaveStateGuarded("dispatcher exception");
         try
@@ -172,6 +174,7 @@ public partial class App : Application
 
     private void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
+        ContainerWindow.IsAppShuttingDown = true;
         _log?.Log($"AppDomain unhandled exception. IsTerminating={e.IsTerminating}: {e.ExceptionObject}");
         SaveStateGuarded("AppDomain exception");
         try
@@ -188,6 +191,7 @@ public partial class App : Application
     private void Application_SessionEnding(object sender, SessionEndingCancelEventArgs e)
     {
         // Logoff/shutdown can kill the process before Application_Exit runs.
+        ContainerWindow.IsAppShuttingDown = true;
         _log?.Log($"Session ending ({e.ReasonSessionEnding}); saving state and releasing captured windows.");
         SaveStateGuarded("session ending");
         try
@@ -473,6 +477,10 @@ public partial class App : Application
 
     private void OnExitRequested(object? sender, EventArgs e)
     {
+        // Set before Shutdown() so every open container's Closing handler (which
+        // runs as part of Shutdown closing each window) skips its confirmation
+        // prompt instead of showing one modal per populated group (finding M6).
+        ContainerWindow.IsAppShuttingDown = true;
         Shutdown();
     }
 
@@ -500,6 +508,31 @@ public partial class App : Application
     {
         _containers.Remove(groupId);
         _log.Log($"Container closed for group {groupId}.");
+
+        // A closed container that never represented any real layout intent must
+        // not persist as a residual group re-opening at every future launch
+        // (finding L12: one affected machine had 18 stale empty groups
+        // accumulate this way, each reopening an empty container on every
+        // startup). A populated group closed via the Yes/No prompt already
+        // removes itself through GroupManager.CloseGroup; this only catches the
+        // empty-container case that path never reaches (ContainerWindow_Closing
+        // returns early when Tabs.Count == 0, skipping the prompt and any group
+        // removal).
+        //
+        // Group.PersistedTabs is populated ONLY by PersistenceService.Load, i.e.
+        // only for a group restored from a PREVIOUS session's state.json — never
+        // for one created fresh in the running session (GroupManager.CreateGroup
+        // starts it empty). Requiring PersistedTabs.Count == 0 too is load-bearing,
+        // not a nicety: without it, this would also delete a just-relaunched
+        // restored-but-not-yet-repopulated group the moment its auto-opened empty
+        // shell closes during ordinary app exit, wiping exactly the persisted
+        // "layout intent" PersistenceService/M5 exist to preserve (regression
+        // caught live by the persist-kill scenario's step 5).
+        var group = _groups.Groups.FirstOrDefault(g => g.Id == groupId);
+        if (group != null && group.Members.Count == 0 && group.PersistedTabs.Count == 0)
+        {
+            _groups.RemoveGroup(group);
+        }
     }
 
 }

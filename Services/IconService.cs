@@ -32,11 +32,11 @@ public sealed class IconService
 
     public ImageSource? GetFileIcon(string exePath)
     {
+        // Try the small icon first; fall back to large.
+        IntPtr hSmall = IntPtr.Zero;
+        IntPtr hLarge = IntPtr.Zero;
         try
         {
-            // Try the small icon first; fall back to large.
-            IntPtr hSmall = IntPtr.Zero;
-            IntPtr hLarge = IntPtr.Zero;
             uint count = NativeMethods.ExtractIconEx(exePath, 0, out hLarge, out hSmall, 1);
             IntPtr hIcon = hSmall != IntPtr.Zero ? hSmall : hLarge;
             if (hIcon == IntPtr.Zero)
@@ -47,19 +47,22 @@ public sealed class IconService
                 Int32Rect.Empty,
                 BitmapSizeOptions.FromEmptyOptions());
             image.Freeze();
-
-            // Only delete the handle we actually used.
-            if (hSmall != IntPtr.Zero && hIcon == hSmall && hLarge != IntPtr.Zero)
-                NativeMethods.DestroyIcon(hLarge);
-            else if (hLarge != IntPtr.Zero && hIcon == hLarge && hSmall != IntPtr.Zero)
-                NativeMethods.DestroyIcon(hSmall);
-
-            NativeMethods.DestroyIcon(hIcon);
             return image;
         }
         catch
         {
             return null;
+        }
+        finally
+        {
+            // Both handles must be destroyed on every path, including an
+            // exception from CreateBitmapSourceFromHIcon — the previous
+            // catch-and-return skipped this and leaked both GDI icon handles
+            // on every failure (finding M7).
+            if (hSmall != IntPtr.Zero)
+                NativeMethods.DestroyIcon(hSmall);
+            if (hLarge != IntPtr.Zero)
+                NativeMethods.DestroyIcon(hLarge);
         }
     }
 }

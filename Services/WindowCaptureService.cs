@@ -77,11 +77,18 @@ public sealed class WindowCaptureService
         // restored accurately on release. Do not restore the window here; that
         // would overwrite the rcNormalPosition / ptMaxPosition data we need.
 
+        // SetParent returns the previous parent, which is NULL both on failure and
+        // on success for a window that genuinely had no parent before capture (the
+        // common case for a top-level app window). GetLastError is the only way to
+        // tell them apart, so it must be zeroed immediately beforehand — a stale
+        // nonzero error from an earlier unrelated call would otherwise misclassify
+        // a successful capture as a failure.
+        Marshal.SetLastSystemError(0);
         IntPtr previousParent = NativeMethods.SetParent(hwnd, hostHwnd);
-        if (previousParent == IntPtr.Zero)
+        int setParentErr = Marshal.GetLastWin32Error();
+        if (previousParent == IntPtr.Zero && setParentErr != 0)
         {
-            int err = Marshal.GetLastWin32Error();
-            error = err == NativeMethods.ERROR_ACCESS_DENIED
+            error = setParentErr == NativeMethods.ERROR_ACCESS_DENIED
                 ? "Access denied. The target window may be elevated or protected by UIPI."
                 : $"SetParent failed: {NativeMethods.FormatLastError()}";
             _log.Log($"SetParent failed for 0x{hwnd.ToInt64():X}: {error}");

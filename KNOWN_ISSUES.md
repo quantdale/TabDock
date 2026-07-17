@@ -22,6 +22,129 @@ real-input test that would fail if the bug were reintroduced. H2/H4/H5 were
 marked "pending runtime validation" before this session (see
 `investigation_findings.md`'s 2026-07-12 note) — that gap is now closed.
 
+## Harness-level findings (new, found this session — not app bugs)
+
+| ID | Issue | Status | Guarding test(s) |
+|----|-------|--------|-------------------|
+| H-NEW | `Scenarios.cs` did not compile as committed (3 separate missing-brace bugs) | Fixed | full driver build |
+| H-NEW2 | `BrowserOnlyScenarios` wrongly gated 10 non-browser scenario names behind a bogus `--guest` requirement, breaking `all` | Fixed | full driver build + `all` run |
+
+**These are severe findings in their own right.** `tests/ValidationDriver` is
+not part of `TabDock.sln` and is never built by `dotnet build TabDock.sln` or
+CI, so nothing caught that the harness itself failed to compile. Concretely:
+`Cleanup()`'s guest-kill logic was missing a closing brace (making the
+non-ancestor Kill() path unreachable inside the wrong `if`), `WithStableTabMatchKey`
+was missing its `return g; }`, and `BrowserSoak` was missing its closing brace
+before the next scenario's comment block — three independent defects, found
+by stashing this session's edits and reproducing the build failure against
+HEAD directly (`git stash` + `dotnet build tests/ValidationDriver/...`). On
+top of that, `BrowserOnlyScenarios` incorrectly listed `renderhealth`,
+`hotkey-afterclose`, `persist-kill`, `dragreorder`, and every
+`contentinput`/`chromeinput`/`alttabinput`/`keyboardinput*` scenario — none of
+which read `opt.Guest` — which made `Program.cs`'s argument validation reject
+`all` outright before spawning anything. **This means every prior "PASS" claim
+in this file and `investigation_findings.md` was never actually exercised
+against a build that could run** (or was run against an uncommitted/different
+working copy) — treat this session's re-run (below) as the first real,
+reproducible confirmation of the H1–H5 fixes and the H2/H4/H5 real-browser
+coverage. All three brace bugs and the `BrowserOnlyScenarios` mislabeling are
+fixed; the driver now builds clean and `all` completes.
+
+## Session 2 (2026-07-18, later): M/L-series stabilization pass
+
+Continuing the discover → reproduce → fix → verify loop against the open
+M/L-series findings in `investigation_findings.md` (the H-series was already
+closed out by the prior session).
+
+| ID | Issue | Status | Guarding test(s) |
+|----|-------|--------|-------------------|
+| M1 | `SetParent` NULL-return ambiguous between success and failure | Fixed (defense in depth) | full suite unaffected (no regression) |
+| M6 | Shutdown/crash-path modal could block `Application.Shutdown` (zombie process) | Fixed | `exitpopulated` (new) |
+| M7 | GDI icon-handle leak in `IconService.GetFileIcon` on exception | Fixed | full suite unaffected (no dedicated pixel-level test; leak is a resource-growth issue, not a behavioral one) |
+| L11 | Empty container left open after popping out the last tab | Fixed | `popout` (tightened) |
+| L12 | Groups can never be deleted; accumulate in `state.json` forever | Fixed | `popout` (tightened), `persist-kill` (regression-checked) |
+| L14 | `CheckRenderHealthAsync` failures invisible in field logs | Fixed | (log-routing only; no dedicated test) |
+
+**M1** (`Services/WindowCaptureService.cs`, `Capture`): `SetParent` returns the
+previous parent, which is NULL both on failure and on success for a window
+that had no parent before capture. The code treated any NULL return as
+failure. Empirically, real captures of genuinely top-level Chrome/Edge/pig
+windows during this session's `all`/browser runs never hit this misfire (no
+capture in ~25 real-input runs failed on it) — CONFIRMED not currently
+manifesting on this machine/Windows build, so severity did not rise to High
+as the original finding worried it might. Fixed anyway via
+`Marshal.SetLastSystemError(0)` before the call and a real `GetLastWin32Error()`
+check, since the fix is cheap and removes the latent risk outright.
+
+**M6** (`Views/ContainerWindow.xaml.cs` + `App.xaml.cs`): added
+`ContainerWindow.IsAppShuttingDown`, set before every exit/crash path
+(`OnExitRequested`, `Application_Exit`, `Application_DispatcherUnhandledException`,
+`CurrentDomain_UnhandledException`, `Application_SessionEnding`) calls
+`Shutdown`/releases windows. `ContainerWindow_Closing` skips its Yes/No/Cancel
+prompt when the flag is set. New scenario `exitpopulated`: captures a guest,
+clicks the launcher's real "Exit" button via UIA+real click with the group
+still populated, and asserts the whole process exits within 5s with **no**
+stranded MessageBox — deliberately does not use the harness's own
+dialog-dismissing helper, so a regression would time out and FAIL rather than
+be silently papered over. PASS, real evidence (see full-suite log below).
+
+**L11/L12** (`ViewModels/GroupViewModel.cs`, `Views/ContainerWindow.xaml.cs`,
+`App.xaml.cs`): popping out the last tab now raises `GroupViewModel.EmptiedByPopOut`,
+which `ContainerWindow` turns into `Close()`. `App.OnContainerClosed` now
+removes a closed container's group from `GroupManager` when it is empty —
+**but only when `Group.PersistedTabs.Count == 0` too**. That guard is
+load-bearing, not incidental: `PersistedTabs` is populated exclusively by
+`PersistenceService.Load` (i.e. only for a group restored from a *previous*
+session), so a same-session group that was created and abandoned empty (the
+L12 accumulation complaint — 18 residual groups observed on one machine) is
+deleted, while a group restored from a prior session's real layout intent
+survives having its auto-reopened empty shell closed during ordinary exit.
+**First cut of this fix was wrong and caught by the harness itself**: an
+unconditional `Members.Count == 0` check regressed `persist-kill`'s explicit
+"a clean-exit save with the group still empty must not wipe persisted tab
+metadata" assertion (M5) — real FAIL output during this session, not a
+hypothetical. Narrowing to also require `PersistedTabs.Count == 0` fixed it
+without reintroducing the M5 regression; re-run confirmed both `popout` and
+`persist-kill` PASS together.
+
+**M7** (`Services/IconService.cs`): `GetFileIcon`'s icon handles are now
+freed in a `finally` block instead of a `catch` that skipped `DestroyIcon`
+entirely on a `CreateBitmapSourceFromHIcon` exception.
+
+**L14** (`Views/ContainerWindow.xaml.cs`): `CheckRenderHealthAsync`'s catch
+block now routes through `_log.LogException` instead of
+`Debug.WriteLine`-only.
+
+### Full-suite re-run (2026-07-18, after all fixes above), from a clean state
+
+`dotnet run --project tests/ValidationDriver/TabDock.ValidationDriver/... -- --yes all`,
+fresh TabDock instance per scenario, `state.json` snapshotted/restored around
+the run:
+
+```
+ALL 19 SCENARIO(S) PASSED.
+```
+
+19/19: `rename`, `popout`, `closewin`, `closewin-hide`, `selfclose`, `selfhide`,
+`selfminhide`, `tabswitch-hidesafety`, `minrestore`, `maximize-repro`,
+`repeat-cycles`, `crossfeature`, `renderhealth`, `hotkey-afterclose`,
+`persist-kill`, `dragreorder`, `chrometabdrag`, `closegroupprompt`,
+`exitpopulated` (new). Additionally re-ran real-browser scenarios standalone
+(not part of `all`), all PASS: `browser-lifecycle --guest chrome-normal`,
+`browser-tabswitch-hidesafety --guest chrome-normal`, `browser-dragreorder
+--guest edge-normal`, `browser-multi` (real Chrome + real Edge captured
+simultaneously).
+
+Two flakes observed and diagnosed, NOT app bugs: an earlier `all` run failed
+`maximize-repro` on "variance > 0.005 after restore (0.0000)" for one cycle
+out of three; re-running the same scenario alone showed the same
+zero-variance reading occur at an *unasserted* baseline sample in a run that
+otherwise PASSed. The `--pulse` guinea pig's color cycle legitimately passes
+through a momentary solid-color (zero-variance) frame, and the harness's
+single-sample-per-checkpoint timing can occasionally land on it. This is
+sampling-timing flakiness in the test harness, not a TabDock rendering
+regression — no app code path differs between the flaky and clean runs.
+
 ## What changed this session (2026-07-18)
 
 - Ran the full existing `TabDock.ValidationDriver` suite (18 scenarios)

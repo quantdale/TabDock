@@ -97,6 +97,17 @@ public sealed class GroupViewModel : ViewModelBase
     public event EventHandler? CloseRequested;
     public event EventHandler? AddWindowsRequested;
 
+    /// <summary>
+    /// Raised when popping out the last tab leaves this group with zero members.
+    /// The destroy/hide WinEvent paths (App.RemoveDeadMember) already close an
+    /// emptied container automatically; pop-out via drag-out or the context menu
+    /// was the one path that left an empty container open indefinitely (finding
+    /// L11). Distinct from CloseRequested (raised by CloseGroup, itself invoked
+    /// from inside ContainerWindow's own Closing handler) to avoid re-entering
+    /// Window.Close from within its own Closing event.
+    /// </summary>
+    public event EventHandler? EmptiedByPopOut;
+
     public void RequestAddWindows()
     {
         AddWindowsRequested?.Invoke(this, EventArgs.Empty);
@@ -223,7 +234,10 @@ public sealed class GroupViewModel : ViewModelBase
         tab.CloseWindowRequested -= OnCloseWindowRequested;
         Tabs.RemoveAt(idx);
         if (Tabs.Count == 0)
+        {
             ActiveTab = null;
+            EmptiedByPopOut?.Invoke(this, EventArgs.Empty);
+        }
         else
             SetActiveTab(Tabs[Math.Min(idx, Tabs.Count - 1)]);
     }

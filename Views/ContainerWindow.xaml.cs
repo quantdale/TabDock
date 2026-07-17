@@ -63,6 +63,16 @@ public partial class ContainerWindow : Window
     private string _reclampPendingReason = string.Empty;
 
     /// <summary>
+    /// Set by App before any exit/crash path calls Application.Shutdown so every
+    /// open container's Closing handler skips the Yes/No/Cancel prompt instead of
+    /// showing one modal per container with nobody left to answer it (finding M6).
+    /// GroupManager.EmergencyReleaseAll (called by the same exit/crash paths) is
+    /// what actually returns captured windows to standalone; this flag only stops
+    /// Closing from blocking on user input during teardown.
+    /// </summary>
+    public static bool IsAppShuttingDown { get; set; }
+
+    /// <summary>
     /// The underlying group model.
     /// </summary>
     public Group Group => _viewModel.Model;
@@ -87,6 +97,11 @@ public partial class ContainerWindow : Window
         Closed += ContainerWindow_Closed;
         StateChanged += ContainerWindow_StateChanged;
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
+        // Popping out the last tab (drag-out or context menu) leaves the group
+        // empty; close the now-pointless container instead of leaving it open
+        // (finding L11). IsAppShuttingDown is irrelevant here — this always runs
+        // on the interactive pop-out path, never during app teardown.
+        _viewModel.EmptiedByPopOut += (_, _) => Close();
     }
 
     private void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -232,6 +247,8 @@ public partial class ContainerWindow : Window
 
     private void ContainerWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        if (IsAppShuttingDown)
+            return;
         if (_viewModel.Tabs.Count == 0)
             return;
 
@@ -828,8 +845,10 @@ public partial class ContainerWindow : Window
         }
         catch (Exception ex)
         {
-            // Render-health failure must not crash the container.
-            System.Diagnostics.Debug.WriteLine($"Render health check failed: {ex}");
+            // Render-health failure must not crash the container, but must still
+            // reach the field log — Debug.WriteLine alone is invisible outside a
+            // debugger (finding L14).
+            _log.LogException("CheckRenderHealthAsync", ex);
         }
     }
 

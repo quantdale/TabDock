@@ -1,5 +1,21 @@
 # TabDock — Investigation Findings (read-only audit)
 
+> **2026-07-18 session 2 update:** M1, M6, M7, L11, L12, and L14 are now fixed
+> and (except M7/L14, which are logging/leak fixes with no behavior to assert
+> on) runtime-validated — see each entry below and `KNOWN_ISSUES.md`'s
+> "Session 2" section. Also found and fixed, independent of any app bug: the
+> `TabDock.ValidationDriver` harness itself did not compile as committed (three
+> separate missing-brace defects in `Scenarios.cs`, confirmed by reproducing
+> the build failure against HEAD with this session's edits stashed out) and its
+> `BrowserOnlyScenarios` list wrongly gated 10 non-browser-guest scenarios
+> behind a `--guest` requirement, which made `all` fail before spawning
+> anything. Both are fixed; the full 19-scenario `all` suite plus four
+> standalone real-browser scenarios (Chrome and Edge) now PASS from a clean
+> state — see `KNOWN_ISSUES.md` for full command/output evidence. This means
+> the *previous* session's "all PASS" claims (below) were never actually
+> exercised against a build that could run, and should be treated as
+> re-confirmed only as of this session, not as originally recorded.
+
 > **2026-07-18 update:** H2/H4/H5 are now **runtime-validated** on a real Windows
 > machine (not just code-complete) — see the "Runtime validation (2026-07-18)"
 > notes under each entry below. Validation was done via new/extended
@@ -152,7 +168,16 @@ repeated-cycle validation.
 
 ## MEDIUM
 
-### M1. `SetParent` NULL-return treated as failure — parentless top-level windows misclassified
+### M1. `SetParent` NULL-return treated as failure — parentless top-level windows misclassified — **FIXED 2026-07-18 (session 2)**
+- **Fix:** `Marshal.SetLastSystemError(0)` immediately before `SetParent`, then a
+  real `Marshal.GetLastWin32Error()` check distinguishes "NULL because there
+  was no previous parent" from "NULL because it failed." Empirically this
+  never misfired in this session's ~25 real captures (guinea pigs, real
+  Chrome, real Edge) across the full `all` suite and the standalone
+  browser-lifecycle/multi/dragreorder runs — CONFIRMED not currently
+  reproducible on this machine/Windows build, so the "severity rises to High"
+  concern below did not materialize. Fixed anyway since the risk is real in
+  principle and the fix is cheap. See `KNOWN_ISSUES.md` session 2.
 - **Where:** `Services/WindowCaptureService.cs:72-81`
 - **Description:** `SetParent` returns the *previous parent*, which is NULL for a genuinely parentless top-level window even on **success**; failure is distinguished only by `GetLastError`. The code treats any `IntPtr.Zero` return as failure and aborts — *after* the reparent took effect but *before* style fixup and `CapturedWindow` creation, leaving the guest reparented into the host untracked/unrestyled on that branch.
 - **Impact:** Either valid captures rejected, or an orphaned guest stuck inside the host with no tracking entry (severity rises to High if common windows actually return NULL on success — verify at runtime against Notepad).
@@ -189,7 +214,19 @@ repeated-cycle validation.
 - **Resolution options:** Debounced save on group create/capture/release/reorder; add `SaveState` to crash handlers.
 - **Severity:** Medium
 
-### M6. `ContainerWindow_Closing` shows a modal MessageBox per container during app shutdown
+### M6. `ContainerWindow_Closing` shows a modal MessageBox per container during app shutdown — **FIXED 2026-07-18 (session 2)**
+- **Fix:** `ContainerWindow.IsAppShuttingDown` (static) is set before every
+  exit/crash path (`App.OnExitRequested`, `Application_Exit`,
+  `Application_DispatcherUnhandledException`, `CurrentDomain_UnhandledException`,
+  `Application_SessionEnding`) does its release/`Shutdown` work.
+  `ContainerWindow_Closing` returns immediately when the flag is set, skipping
+  the Yes/No/Cancel prompt entirely — actual window release still happens via
+  `GroupManager.EmergencyReleaseAll`, called by the same paths, independent of
+  Closing. Validated (`exitpopulated`, new): captures a guest, clicks the
+  launcher's real "Exit" button with the group still populated, and asserts
+  the process exits within 5s with zero stranded MessageBox — deliberately
+  does not use the harness's own dialog-dismissing helper, so a regression
+  would time out and FAIL. PASS with real evidence; see `KNOWN_ISSUES.md`.
 - **Where:** `Views/ContainerWindow.xaml.cs` (`ContainerWindow_Closing`); `App.xaml.cs` (Exit path)
 - **Description:** The `Tabs.Count==0` guard covers the programmatic empty-group close, but "Exit" with populated containers open fires the Yes/No/Cancel prompt once per container, and Cancel during `Shutdown` is ambiguous.
 - **Impact:** Confusing multi-prompt exit; possible half-closed states.
@@ -197,7 +234,13 @@ repeated-cycle validation.
 - **2026-07-12 note (strengthens this finding):** the prompt also stalls the *crash* path. During the H3 baseline repro, `DispatcherUnhandledException` → `Shutdown(1)` never completed because `ContainerWindow_Closing` raised the Yes/No/Cancel prompt with nobody to answer it (the tab list still held a stale entry after `EmergencyReleaseAll`), leaving a zombie TabDock process. The `_isShuttingDown` flag should also be set by the crash handlers.
 - **Severity:** Medium
 
-### M7. GDI/icon handle leak on exception in `IconService.GetFileIcon`
+### M7. GDI/icon handle leak on exception in `IconService.GetFileIcon` — **FIXED 2026-07-18 (session 2)**
+- **Fix:** both extracted icon handles are now freed in a `finally` block
+  instead of a bare `catch { return null; }` that skipped `DestroyIcon`
+  entirely whenever `CreateBitmapSourceFromHIcon` threw. No dedicated
+  regression test (a GDI-handle-count assertion was judged not worth the
+  added harness complexity this session); the fix is a straightforward
+  try/finally with no behavioral branching to regress.
 - **Where:** `Services/IconService.cs:33-64`
 - **Description:** If `CreateBitmapSourceFromHIcon` throws, the `catch { return null; }` skips `DestroyIcon` for both extracted handles.
 - **Impact:** Slow GDI-object growth under repeated capture/picker refresh.
@@ -230,7 +273,13 @@ repeated-cycle validation.
 ### L5. Maximize button glyph has a stray semicolon — FIXED THIS SESSION
 The StateChanged handler used a variable-width `\x` hex escape that consumed the trailing `;` as a hex digit, leaving a stray glyph after each maximize/restore. **Fixed incidentally** during Task 3 cleanup by switching to fixed-width `\uXXXX` escapes. **Severity:** Low (resolved)
 
-### L11. Empty container remains open after popping out the last tab
+### L11. Empty container remains open after popping out the last tab — **FIXED 2026-07-18 (session 2)**
+**Fix:** `GroupViewModel` raises a new `EmptiedByPopOut` event when
+`OnPopOutRequested` leaves `Tabs.Count == 0`; `ContainerWindow` subscribes and
+calls `Close()`. Kept distinct from the existing `CloseGroup`-driven
+`CloseRequested` event to avoid re-entering `Window.Close` from within its
+own `Closing` handler. Guarded by the tightened `popout` scenario (now
+asserts the container actually **closes**, not "empty or closed").
 **Where:** `ViewModels/GroupViewModel.cs` (`OnPopOutRequested`); contrast `App.xaml.cs` `RemoveDeadMember`.
 **Description:** The destroy/hide handlers close the now-empty container and remove the group, but popping out the **last** tab via the context menu or drag-out removes the tab and sets `ActiveTab = null`, leaving an empty container open. Observed during repeated-cycle validation: five pop-out cycles left multiple empty "Group" containers on screen.
 **Why it matters:** Empty container windows accumulate (clutter/confusion). Not a correctness bug (no orphaned guests), and arguably intended (pop-out is not "close the group").
@@ -251,8 +300,21 @@ Currently collectible together in all flows, but any future path keeping a `Grou
 ### L10. New `ColorToBrushConverter` allocated on every `AccentBrush` get
 `GroupViewModel.AccentBrush` news up a converter per access. **Severity:** Low
 
-### L12. Groups can never be deleted; they accumulate in state.json forever (NEW 2026-07-12)
-**Where:** `Views/MainWindow.xaml` (no delete affordance); `App.xaml.cs` (`OnContainerClosed` does not remove the group).
+### L12. Groups can never be deleted; they accumulate in state.json forever — **FIXED 2026-07-18 (session 2)**
+**Fix:** `App.OnContainerClosed` now calls `GroupManager.RemoveGroup` when the
+closed group is empty (`Members.Count == 0`) **and** has no restored layout
+intent (`PersistedTabs.Count == 0`). The second condition is load-bearing:
+`PersistedTabs` is populated only by `PersistenceService.Load`, i.e. only for
+a group restored from a *previous* session, so this correctly deletes a
+same-session group created and abandoned empty (the original 18-residual-group
+complaint) while preserving a restored group's persisted intent when its
+auto-reopened empty shell closes during ordinary exit. An unconditional
+`Members.Count == 0` first cut regressed `persist-kill`'s M5 assertion (real
+FAIL, caught by the harness) before the `PersistedTabs` guard was added — see
+`KNOWN_ISSUES.md` session 2 for the full account. Guarded by the tightened
+`popout` scenario (asserts the tab's title is gone from `state.json`, not
+just the window) and re-confirmed against `persist-kill`.
+**Where:** `Views/MainWindow.xaml` (still no delete affordance — out of scope, this only fixes the empty-container-close path); `App.xaml.cs` (`OnContainerClosed`).
 **Description:** Closing an empty group's container only closes the window — the `Group` stays in `GroupManager.Groups`, is saved, and its container re-opens at every launch. There is no UI to delete a group at all. Observed concretely: the development machine's state.json had accumulated **18** residual groups (15 default-named), so every TabDock launch opened 18 empty containers — which also broke the validation harness until it isolated state.json per scenario.
 **Resolution options:** a delete action in the launcher list and/or treat user-initiated close of an *empty* container as group removal.
 **Severity:** Low (Medium UX impact once several groups exist)
@@ -261,9 +323,10 @@ Currently collectible together in all flows, but any future path keeping a `Grou
 **Where:** `Services/WindowCaptureService.cs` (`Layout`); contrast L6 and `tests/ValidationDriver/.../Scenarios.cs` (which references LAYOUT lines).
 **Description:** L6 and the validation driver describe `LAYOUT[...]` per-layout and `HOST WM_SIZE` lines, but no committed code emitted them (only `STATE[...]`/`MAXCLICK` existed). Either never committed or lost. A minimal tagged subset was reintroduced: `LAYOUT[capture|switch|restore|movesize|drift]` logs host client size vs guest rect; the per-resize-tick `wmsize` reason is deliberately not logged (L6's churn concern). **Severity:** Low
 
-### L14. `CheckRenderHealthAsync` failures are invisible in field logs (NEW 2026-07-12, second session — OPEN)
+### L14. `CheckRenderHealthAsync` failures are invisible in field logs — **FIXED 2026-07-18 (session 2)**
 **Where:** `Views/ContainerWindow.xaml.cs` (`CheckRenderHealthAsync` catch block).
-**Description:** The catch-all writes only `System.Diagnostics.Debug.WriteLine`, which never reaches the rotating `%APPDATA%` log — a render-health crash is silent in the field. Route through `_log.LogException` (keeping the must-not-crash contract). Not fixed in the second session (out of scope). **Severity:** Low
+**Description:** The catch-all writes only `System.Diagnostics.Debug.WriteLine`, which never reaches the rotating `%APPDATA%` log — a render-health crash is silent in the field.
+**Fix:** routed through `_log.LogException("CheckRenderHealthAsync", ex)`, keeping the must-not-crash contract (still just logs and returns). No dedicated regression test — this is a logging-visibility fix with no observable behavior change to assert on. **Severity:** Low
 
 ---
 

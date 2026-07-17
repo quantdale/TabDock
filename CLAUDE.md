@@ -37,13 +37,24 @@ Run the capture/release end-to-end test harness (spawns real apps — Paint, Win
 dotnet run --project tests\CaptureReleaseTest\TabDock.CaptureReleaseTest\TabDock.CaptureReleaseTest.csproj
 ```
 
+Run the real-input validation driver (drives a fresh TabDock plus guinea-pig windows entirely through synthesized `SendInput` mouse/keyboard at UIA-read coordinates, then asserts on window state, `BitBlt` pixels, and both TabDock's and the pigs' message logs; interactive, spawns real apps — pass `--yes` to skip confirmation):
+```powershell
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- [--yes] [--cycles N] [--guest pig|wt|chrome-nogpu|chrome-gpu] <scenario|all>
+```
+`TabDock.GuineaPig` is the disposable target app it spawns. Neither `ValidationDriver` project is in `TabDock.sln` — build/run them by project path.
+
 There is no automated unit test suite; `README.md` has a manual test checklist to run before considering a build ready.
 
 When debugging runtime behavior, the app writes a rotating log to `%APPDATA%\TabDock\logs\TabDock.log` (rotated at 1 MB to `TabDock.log.old`).
 
 ## Architecture: the pieces that require reading multiple files to understand
 
-**Window capture/release lifecycle.** `WindowCaptureService` reparents an external HWND into a `NativeHwndHost` (an `HwndHost` subclass in `Infrastructure/`) owned by a `ContainerWindow`, and must restore the exact prior parent/style/exstyle/bounds/placement on release. `GroupManager` owns the set of `Group`s and coordinates which capture belongs to which container, tab order, and active-tab switching. `WinEventMonitor` runs an out-of-process `SetWinEventHook` to detect when a captured window is destroyed, renamed, minimized, or brought to foreground externally, and feeds those events back into `GroupManager`/`ContainerWindow` so tab state stays in sync with reality outside TabDock's control. Its filter is a direct captured-member HWND match (`GroupManager.IsCapturedWindow`) — do not reintroduce `GetAncestor(GA_ROOT)`/own-window filtering there: a captured window's root *is* the TabDock container, and a destroyed window has no ancestors, so both would silently drop the exact events the monitor exists to observe.
+**Two capture backends, chosen per group.** `Group.Mode` (`GroupCaptureMode`, `Models/Group.cs`) selects between `Reparent` (default) and `Shepherd`, and is fixed for a group's lifetime — flipping it under a live capture would desync which backend owns a window. `GroupManager` holds both services and routes release to whichever backend captured the window.
+
+- **Reparent** (`WindowCaptureService`) is the original model: it reparents an external HWND into a `NativeHwndHost` (an `HwndHost` subclass in `Infrastructure/`) owned by a `ContainerWindow`, mutating parent/style/exstyle and restoring the exact prior parent/style/exstyle/bounds/placement on release. Everything downstream (DPI forwarding, drift watchdog, render-health) exists to compensate for `SetParent` breaking input/DPI/rendering.
+- **Shepherd** (`WindowShepherdService`) is the experimental backend from `docs/internal/deep-audit-2026-07-17.md` §6: it *never* reparents or restyles the guest. The guest stays a top-level window, positioned over the container's content area and z-ordered just above it (`SetWindowPos`), hidden with `SW_HIDE` when it's not the active tab. Release just restores the capture-time placement — no style/parent surgery to get wrong. `ContainerWindow` tracks the shepherded active window separately (`_shepherdActiveWindow`) and drives `PositionAndShow`/`Hide`/`BringToFront`. The deep audit argues the reparenting model is the root cause of the recurring DPI/input/render bugs and recommends migrating to this coordinate-don't-adopt model; treat Shepherd as the strategic direction, not a dead experiment.
+
+`GroupManager` owns the set of `Group`s and coordinates which capture belongs to which container, tab order, and active-tab switching. `WinEventMonitor` runs an out-of-process `SetWinEventHook` to detect when a captured window is destroyed, renamed, minimized, or brought to foreground externally, and feeds those events back into `GroupManager`/`ContainerWindow` so tab state stays in sync with reality outside TabDock's control. Its filter is a direct captured-member HWND match (`GroupManager.IsCapturedWindow`) — do not reintroduce `GetAncestor(GA_ROOT)`/own-window filtering there: a captured window's root *is* the TabDock container, and a destroyed window has no ancestors, so both would silently drop the exact events the monitor exists to observe.
 
 **No-nesting invariant, enforced in two places at once.** `GroupManager.IsOwnWindow` checks PID plus a registered set of container HWNDs; `WindowCaptureService` separately rejects captures where the target PID equals the current process. Container windows register both their own HWND and their `NativeHwndHost`'s HWND with `GroupManager` at creation. Any change to capture logic must preserve both checks — losing either reopens the nested-group case.
 
@@ -60,3 +71,5 @@ When debugging runtime behavior, the app writes a rotating log to `%APPDATA%\Tab
 ## Solution layout
 
 `TabDock.sln` has three projects: `TabDock.csproj` (main app), `tests/CaptureReleaseTest/TabDock.CaptureReleaseTest` (e2e harness), and `Spike/TabDock.Spike` (experimental, not part of normal CI). The main csproj explicitly excludes `Spike/**`, `tests/**`, and `docs/**` from its default item globs so SDK-style wildcard includes don't pull spike/test source into the app build.
+
+Two more projects live under `tests/ValidationDriver/` (`TabDock.ValidationDriver` and `TabDock.GuineaPig`) but are **not** in `TabDock.sln`; build and run them via their project paths. `ValidationDriver` link-includes the app's `NativeMethods.cs` rather than referencing the app, so it stays a standalone console tool.
