@@ -90,13 +90,26 @@ public partial class ContainerWindow : Window
         // empty; close the now-pointless container instead of leaving it open
         // (finding L11). IsAppShuttingDown is irrelevant here — this always runs
         // on the interactive pop-out path, never during app teardown.
-        _viewModel.EmptiedByPopOut += (_, _) => Close();
+        _viewModel.EmptiedByPopOut += ViewModel_EmptiedByPopOut;
     }
+
+    private void ViewModel_EmptiedByPopOut(object? sender, EventArgs e) => Close();
 
     private void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(GroupViewModel.ActiveTab))
         {
+            // Defensive: every add/release/pop-out ends with a SetActiveTab
+            // call, so this fires on every tab-set mutation. If a drag was
+            // somehow left in progress across one of those mutations (e.g. a
+            // tab removed out from under an in-flight drag), a stale
+            // Mouse.Capture(TabsListBox) would swallow every future click
+            // anywhere in the strip and its header — clicks stop reaching
+            // ListBoxItems/buttons at all, exactly like the tunneling-capture
+            // bug documented in TabsListBox_PreviewMouseLeftButtonDown, just
+            // via a different trigger. Clearing it here costs nothing when
+            // there was nothing to clear.
+            EndDrag();
             SyncShepherdActiveWindow();
         }
     }
@@ -230,6 +243,7 @@ public partial class ContainerWindow : Window
             return;
 
         var result = MessageBox.Show(
+            this,
             "Do you want to close the grouped applications?\n\nYes = close all apps\nNo = release windows back to standalone",
             "Close group",
             MessageBoxButton.YesNoCancel,
@@ -265,6 +279,8 @@ public partial class ContainerWindow : Window
     private void ContainerWindow_Closed(object? sender, EventArgs e)
     {
         _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
+        _viewModel.EmptiedByPopOut -= ViewModel_EmptiedByPopOut;
+        _viewModel.Detach();
 
         IntPtr hwnd = new WindowInteropHelper(this).Handle;
         _manager.UnregisterContainerHwnd(hwnd);
@@ -506,11 +522,13 @@ public partial class ContainerWindow : Window
     #region Shepherd active-tab sync
 
     /// <summary>
-    /// Reacts to an ActiveTab change: hides the previously active guest (only
-    /// if it is still a member of this group — if it was just released,
-    /// WindowShepherdService.Release already decided its final visible state
-    /// and must not be second-guessed here), then positions and shows the
-    /// newly active one.
+    /// Reacts to an ActiveTab change: positions and shows the newly active
+    /// guest FIRST — on top of the outgoing one, so it visually covers it
+    /// immediately, with no frame where neither is on top and the content
+    /// marker's own background could show through — then hides the
+    /// previously active guest (only if it is still a member of this group —
+    /// if it was just released, WindowShepherdService.Release already
+    /// decided its final visible state and must not be second-guessed here).
     /// </summary>
     private void SyncShepherdActiveWindow()
     {
@@ -519,16 +537,16 @@ public partial class ContainerWindow : Window
         if (ReferenceEquals(oldWindow, newWindow))
             return;
 
-        if (oldWindow != null && _viewModel.Tabs.Any(t => t.Model == oldWindow))
-        {
-            _shepherd.Hide(oldWindow);
-        }
-
         _shepherdActiveWindow = newWindow;
 
         if (newWindow != null && NativeMethods.IsWindow(newWindow.Hwnd))
         {
             LayoutShepherdActiveWindow();
+        }
+
+        if (oldWindow != null && _viewModel.Tabs.Any(t => t.Model == oldWindow))
+        {
+            _shepherd.Hide(oldWindow);
         }
     }
 

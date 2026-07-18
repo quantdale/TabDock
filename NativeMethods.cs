@@ -37,6 +37,9 @@ public static partial class NativeMethods
     public static extern bool IsWindowVisible(IntPtr hWnd);
 
     [DllImport("user32.dll")]
+    public static extern bool IsWindowEnabled(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
     public static extern bool IsIconic(IntPtr hWnd);
 
     [DllImport("user32.dll")]
@@ -319,6 +322,9 @@ public static partial class NativeMethods
     [DllImport("dwmapi.dll")]
     public static extern int DwmIsCompositionEnabled(out bool pfEnabled);
 
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmSetWindowAttribute(IntPtr hwnd, uint dwAttribute, ref int pvAttribute, uint cbAttribute);
+
     // -------------------------------------------------------------------------
     // Constants
     // -------------------------------------------------------------------------
@@ -518,6 +524,7 @@ public static partial class NativeMethods
     public const int SM_CYVIRTUALSCREEN = 79;
 
     public const uint DWMWA_CLOAKED = 14;
+    public const uint DWMWA_TRANSITIONS_FORCEDISABLED = 3;
 
     public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000;
     public const uint TOKEN_QUERY = 0x0008;

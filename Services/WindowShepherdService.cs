@@ -100,8 +100,21 @@ public sealed class WindowShepherdService
             WasMaximized = originalPlacement.showCmd == NativeMethods.SW_SHOWMAXIMIZED,
         };
 
+        // DWM plays its own default fade transition whenever a top-level
+        // window's visibility changes — with no reparenting to hide behind,
+        // this is directly visible as a "fade" on every tab switch (Hide the
+        // outgoing guest, Show the incoming one). Force it off for the whole
+        // captured lifetime so hide/show is instantaneous; restored on release.
+        SetTransitionsDisabled(hwnd, true);
+
         _log.Log($"Shepherd-captured 0x{hwnd.ToInt64():X} ({cw.OriginalTitle}) without reparenting; guest={NativeMethods.DescribeWindow(hwnd)}");
         return cw;
+    }
+
+    private static void SetTransitionsDisabled(IntPtr hwnd, bool disabled)
+    {
+        int value = disabled ? 1 : 0;
+        NativeMethods.DwmSetWindowAttribute(hwnd, NativeMethods.DWMWA_TRANSITIONS_FORCEDISABLED, ref value, sizeof(int));
     }
 
     /// <summary>
@@ -239,6 +252,7 @@ public sealed class WindowShepherdService
         {
             NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
             JournalHide(window);
+            SetTransitionsDisabled(window.Hwnd, false);
             _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide)");
             return;
         }
@@ -262,6 +276,7 @@ public sealed class WindowShepherdService
         NativeMethods.ShowWindow(window.Hwnd, (int)placement.showCmd);
         NativeMethods.SetForegroundWindow(window.Hwnd);
         JournalClear(window.Hwnd);
+        SetTransitionsDisabled(window.Hwnd, false);
 
         _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) guest={NativeMethods.DescribeWindow(window.Hwnd)}");
     }

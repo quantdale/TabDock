@@ -428,11 +428,24 @@ public partial class App : Application
                 ?? pickerVm.SelectedGroupOption;
         }
         var picker = new CapturePickerWindow(pickerVm);
-        // The picker must keep working after the launcher closes (hotkey or a
-        // container's "+" button with only containers open).
-        if (_mainWindow is { IsLoaded: true })
+        // Own the picker to whichever window actually requested it — a
+        // specific container's own "+" button, when that's the trigger —
+        // rather than always the main launcher. An owned window is kept
+        // properly paired in z-order with its owner by Windows itself (it
+        // can never fall behind it, and reactivating the owner correctly
+        // resurfaces it too); defaulting every picker to _mainWindow as
+        // owner regardless of trigger meant a container-triggered picker had
+        // NO enforced z-order relationship to the container that opened it,
+        // letting the two stack unpredictably. The picker must still keep
+        // working after the launcher closes (hotkey or a container's "+"
+        // button with only containers open), so fall back through main
+        // window, then no owner at all.
+        Window? requestingWindow = preselectedGroup != null && _containers.TryGetValue(preselectedGroup.Id, out var requestingContainer)
+            ? requestingContainer
+            : _mainWindow;
+        if (requestingWindow is { IsLoaded: true })
         {
-            picker.Owner = _mainWindow;
+            picker.Owner = requestingWindow;
         }
         else
         {
@@ -475,7 +488,10 @@ public partial class App : Application
             if (error != null)
             {
                 _log.Log($"Capture failed for 0x{hwnd.ToInt64():X}: {error}");
-                MessageBox.Show(error, "Could not capture window", MessageBoxButton.OK, MessageBoxImage.Warning);
+                // Explicit owner: an owner-less MessageBox falls back to WPF's
+                // own default modal-parent resolution, which can disable more
+                // than just this container if it resolves unexpectedly.
+                MessageBox.Show(container, error, "Could not capture window", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
     }

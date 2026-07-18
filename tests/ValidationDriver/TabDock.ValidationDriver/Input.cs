@@ -12,8 +12,11 @@ namespace TabDock.ValidationDriver;
 internal static class Input
 {
     public const ushort VK_CONTROL = 0x11;
+    public const ushort VK_SHIFT = 0x10;
     public const ushort VK_MENU = 0x12;
     public const ushort VK_TAB = 0x09;
+    public const ushort VK_DELETE = 0x2E;
+    public const ushort VK_A = 0x41;
     public const ushort VK_G = 0x47;
     public const ushort VK_L = 0x4C;
     public const ushort VK_RETURN = 0x0D;
@@ -176,6 +179,37 @@ internal static class Input
         }
         SendMouse(NativeMethods.MOUSEEVENTF_LEFTUP);
         Thread.Sleep(60);
+    }
+
+    /// <summary>
+    /// Presses the left mouse button down at (x,y) and returns WITHOUT releasing it —
+    /// only for scenarios that need a real OS-level mouse-button-down state to persist
+    /// across an external event (e.g. force-killing TabDock while a tab-strip drag is
+    /// theoretically still in progress). Every caller MUST eventually call
+    /// <see cref="ReleaseLeftButtonHeld"/> (ideally in a finally block): an unreleased
+    /// real button-down state would corrupt every subsequent click in this run.
+    /// </summary>
+    public static void PressLeftButtonHeld(int x, int y)
+    {
+        MoveTo(x, y);
+        Thread.Sleep(40);
+        SendMouse(NativeMethods.MOUSEEVENTF_LEFTDOWN);
+        Thread.Sleep(40);
+    }
+
+    /// <summary>Moves the cursor while the left button is already held down (see <see cref="PressLeftButtonHeld"/>), without a fresh down/up pair.</summary>
+    public static void MoveWhileHeld(int x, int y)
+    {
+        NativeMethods.SetCursorPos(x, y);
+        SendMouse(NativeMethods.MOUSEEVENTF_MOVE);
+        Thread.Sleep(15);
+    }
+
+    /// <summary>Releases a left-button-down state started by <see cref="PressLeftButtonHeld"/>.</summary>
+    public static void ReleaseLeftButtonHeld()
+    {
+        SendMouse(NativeMethods.MOUSEEVENTF_LEFTUP);
+        Thread.Sleep(40);
     }
 
     /// <summary>Types text as KEYEVENTF_UNICODE down/up pairs, one character at a time.</summary>

@@ -82,15 +82,7 @@ public sealed class GroupViewModel : ViewModelBase
         _manager = manager;
         _icons = icons;
 
-        _group.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName != null)
-            {
-                OnPropertyChanged(e.PropertyName);
-                if (e.PropertyName == nameof(Group.AccentColor))
-                    OnPropertyChanged(nameof(AccentBrush));
-            }
-        };
+        _group.PropertyChanged += OnGroupPropertyChanged;
 
         foreach (var m in group.Members)
         {
@@ -222,5 +214,29 @@ public sealed class GroupViewModel : ViewModelBase
     public void RefreshIcon(TabViewModel tab)
     {
         tab.Icon = _icons.GetFileIcon(tab.Model.ExePath);
+    }
+
+    private void OnGroupPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != null)
+        {
+            OnPropertyChanged(e.PropertyName);
+            if (e.PropertyName == nameof(Group.AccentColor))
+                OnPropertyChanged(nameof(AccentBrush));
+        }
+    }
+
+    /// <summary>
+    /// Unsubscribes from the (long-lived, possibly-outlives-this-view-model)
+    /// Group. Without this, a GroupViewModel whose container closed while the
+    /// Group itself stayed alive (e.g. a restored-but-not-yet-repopulated group
+    /// re-targeted from the capture picker) is kept reachable forever via
+    /// Group.PropertyChanged, along with everything it references (Tabs,
+    /// the ContainerWindow that owned it, its visual tree). Call once, from
+    /// ContainerWindow_Closed.
+    /// </summary>
+    public void Detach()
+    {
+        _group.PropertyChanged -= OnGroupPropertyChanged;
     }
 }

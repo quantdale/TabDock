@@ -231,6 +231,65 @@ all pass individually; `realworkflow-altswitch` hits the same
 `ForceForeground` limitation as `hotkey-afterclose`/`keyboardinput-*-altswitch`
 for the same reason.
 
+### 2026-07-18: root cause of the `ForceForeground` flakiness identified — it's this Claude Code session's own window
+
+While re-verifying new reattach/z-order regression scenarios (`reattach-thenclick-othertab`,
+`picker-owner-is-requesting-container`, and others added this session), `ForceForeground`
+failures escalated from "occasional retry" to "consistently blocks even the pre-existing,
+previously-green `popout` scenario" partway through this same session — with **no app code
+change in between the passing and failing runs**. Diagnosis: dumped the actual foreground
+window via a throwaway `GetForegroundWindow` + `GetWindowText` check while a test was
+failing, and it resolved to **`Claude` (this Claude Code session's own window)**, not
+TabDock, not the terminal, not anything test-related.
+
+Root cause: the ValidationDriver is invoked interactively, from inside a live Claude Code
+session, via the same Bash tool that's also rendering this conversation. Claude Code's own
+window appears to hold (or reassert) OS foreground for the duration of a running Bash tool
+call, which fights `ForceForeground`'s `SetForegroundWindow` calls the entire time the test
+is executing — not just at tool-call boundaries. A test can pass its own internal
+"foreground acquired" check (the retry loop's `GetForegroundWindow() == hwnd` succeeds for
+an instant) and still lose the race a few milliseconds later, right as the next
+`SendInput` click fires, landing the click on the Claude Code window instead of the
+intended TabDock element. This is consistent with, and a more specific explanation for,
+every `ForceForeground`-related flake documented earlier in this file
+(`hotkey-afterclose`, `keyboardinput-*-altswitch`, `realworkflow-altswitch`) — all of them
+were fought by the same interactive session, not by anything intrinsic to those scenarios.
+
+**Implication:** automated pass/fail signal from the ValidationDriver is only fully
+trustworthy when it is *not* run interactively from inside an active Claude Code (or any
+other foreground-stealing) session on the same desktop — e.g. from a plain terminal the
+user is not simultaneously driving another app from, or a scheduled/unattended run. Treat
+any `ForceForeground`-adjacent failure observed while an agent is actively running the
+suite from its own tool loop as unverified rather than a confirmed regression, and re-run
+it standalone before trusting the result either way.
+
+**Mitigation added, not a fix for the root cause:** `Scenarios.cs` gained a shared
+`EnsureClickable(target, x, y)` helper, now used by every shared click helper
+(`ClickTabMenuItem`, `ClickMaximizeButton`, `ClickMinimizeButton`, `ClickAddWindowButton`)
+and the reattach/rename scenarios' inline click sites, that falls back to a
+`WindowFromPoint`-based "is the click target actually unobscured at these coordinates"
+check when `ForceForeground` fails, and proceeds with the real click if so — matching what
+an actual human user gets for free from ordinary click-to-activate, without ever needing
+`SetForegroundWindow` to succeed first. Concretely confirmed effective:
+`reattach-repeated-cycles` went from a deterministic `ForceForeground`-triggered FAIL to a
+clean PASS (fallback fired and correctly recovered on all 3 cycles), and
+`reattach-thenclick-othertab`'s core regression assertion — clicking another tab
+immediately after a reattach — now passes cleanly where it previously threw.
+
+This narrows the blast radius of the contention for click-then-verify call sites, but does
+**not** cover double-click-then-type sequences (`ClickCaption` in `rename-edge-cases` and
+the rename step of `reattach-thenclick-othertab`): both still failed in this same
+diagnostic pass, but differently — `ForceForeground` reported *success* (no warning logged)
+right before the double-click, yet the rename still didn't take, meaning the foreground
+window was lost in the sub-second gap between the check and the `SendInput` double-click
+actually landing, not at the check itself. `EnsureClickable`'s point-in-time
+`WindowFromPoint` check can't catch a race that resolves in the following few
+milliseconds. Do not read these two rename failures as a reopened rename bug without
+re-running them standalone first — every other header control exercised in the same
+`reattach-thenclick-othertab` run in the same pass (tab click, "+" add-window button,
+minimize/restore) passed, which is strong evidence the reattach fix itself holds and this
+is the contention, not a regression in rename specifically.
+
 ---
 
 Quick-reference index for the H-series issues (the project's established
