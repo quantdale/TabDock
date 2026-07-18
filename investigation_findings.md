@@ -1,5 +1,25 @@
 # TabDock — Investigation Findings (read-only audit)
 
+> **2026-07-18 session 3 update (Shepherd migration):** The keyboard-input-lost-
+> after-app-switch bug reported by the user (and the whole RC1-RC3 root-cause
+> family this document traces to `SetParent`/`AttachThreadInput` reparenting)
+> is now closed by architecture change, not patch: the Reparent backend
+> (`WindowCaptureService`, `GuestActivationHelper`, `DpiService`,
+> `RenderHealthService`) has been deleted outright, and Shepherd
+> (`Services/WindowShepherdService.cs`) is now the only capture backend. A
+> captured guest is never reparented or restyled, so the entire class of bugs
+> this document catalogs under the Reparent model — input-queue desync,
+> DPI-forwarding races, `SetParent`-induced compositor invalidation — no longer
+> has a precondition to occur under. See `CLAUDE.md`'s Architecture section for
+> the design and `KNOWN_ISSUES.md`'s "Session 3" entry for the fix narrative,
+> a genuine z-order bug found and fixed during the migration's own manual
+> verification, and the modernized test suite. Findings below that are
+> specific to the deleted Reparent backend (anything referencing
+> `WindowCaptureService`, `RenderHealthService`, `DpiService`, or DPI/render-
+> health mechanics) are now moot — retained here as historical record of what
+> the old architecture's failure modes were, not as open issues against the
+> current codebase.
+
 > **2026-07-18 session 2 update:** M1, M6, M7, L11, L12, and L14 are now fixed
 > and (except M7/L14, which are logging/leak fixes with no behavior to assert
 > on) runtime-validated — see each entry below and `KNOWN_ISSUES.md`'s

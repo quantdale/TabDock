@@ -8,6 +8,8 @@ This file is a concise, accurate reference for AI coding agents working on the T
 
 TabDock is a Windows desktop utility that merges multiple independent application windows (browser, terminal, editor, etc.) into a single container window with a browser-style tab strip. It is implemented as a C# / .NET 8 / WPF application and uses only P/Invoke for native interop — no third-party NuGet packages.
 
+A captured window is never reparented: TabDock positions it over the container's content area and z-orders it in place (the "Shepherd" model — see `WindowShepherdService` in the Services table below), so it remains, from Windows' point of view, an ordinary independent top-level window the whole time it's captured.
+
 Key design constraints:
 
 - **No nested groups.** TabDock refuses to capture its own windows or any already-captured container.
@@ -43,9 +45,11 @@ The main project disables implicit usings and enables nullable reference types:
 ```
 TabDock.sln
 ├── TabDock.csproj                    Main WPF application
-├── tests/CaptureReleaseTest/         End-to-end capture/release test harness
-│   └── TabDock.CaptureReleaseTest/
 └── Spike/TabDock.Spike/              Experimental survival spike
+
+tests/ValidationDriver/               Not in TabDock.sln — build/run by project path
+├── TabDock.ValidationDriver/         Real-input (SendInput) validation harness
+└── TabDock.GuineaPig/                Disposable WinForms target app it spawns
 ```
 
 ### Main project code organization
@@ -58,7 +62,7 @@ TabDock.sln
 | `Models/` | Data objects: `CapturedWindow`, `Group`, `PersistedState`, persistence DTOs |
 | `ViewModels/` | WPF view models and `RelayCommand` |
 | `Views/` | WPF windows and dialogs (`MainWindow`, `ContainerWindow`, `CapturePickerWindow`) |
-| `Infrastructure/` | `NativeHwndHost` — the WPF `HwndHost` that owns the native HWND for reparented windows |
+| `Infrastructure/` | `NativeHwndHost` — a plain `HwndHost` marker window sized/positioned to match the WPF-rendered content area; guests are positioned over it, never reparented into it |
 | `Converters/` | `BoolToVisibilityConverter`, `ColorToBrushConverter` |
 | `app.manifest` | DPI awareness, compatibility, and execution level (`asInvoker`) |
 
@@ -66,15 +70,15 @@ TabDock.sln
 
 | Service | Responsibility |
 |---------|----------------|
-| `WindowCaptureService` | Reparent an external HWND into a TabDock host and restore it on release |
+| `WindowShepherdService` | TabDock's only capture backend. Positions/shows/hides an external HWND over the container's content area via `SetWindowPos`/`ShowWindow` — never reparents or restyles it. Release restores the capture-time `WINDOWPLACEMENT`. Also owns the `hidden-windows.json` crash-recovery journal (see `RescueOrphanedWindows`) |
 | `GroupManager` | Owns all groups; enforces flat, no-nesting rule; coordinates tab switching/reordering/release |
 | `PersistenceService` | Saves/restores group metadata to `%APPDATA%\TabDock\state.json` |
-| `WinEventMonitor` | Out-of-process `SetWinEventHook` wrapper for destroy/rename/minimize/foreground events on captured windows. Filters by direct member-HWND match — never by `GetAncestor`, which cannot see reparented children or already-destroyed windows |
+| `WinEventMonitor` | Out-of-process `SetWinEventHook` wrapper for destroy/rename/minimize/foreground events on captured windows. Filters by direct member-HWND match — never by `GetAncestor`, which cannot see an already-destroyed window's ancestors |
 | `HotkeyService` | Registers global `Ctrl+Alt+G` hotkey |
-| `RenderHealthService` | Detects black/frozen GPU-rendered tabs using `PrintWindow` |
-| `DpiService` | DPI awareness and scale-factor helpers |
 | `IconService` | Extracts executable icons for tab thumbnails |
 | `LoggingService` | Rotating file logger in `%APPDATA%\TabDock\logs\TabDock.log` |
+
+`WindowCaptureService` (`SetParent`-based reparenting), `RenderHealthService` (`PrintWindow`-based black-frame detection), `DpiService` (DPI-forwarding to a reparented child), and `GuestActivationHelper` (synthetic activation messages) were deleted together in the Shepherd migration — all four existed solely to compensate for problems that `SetParent` reparenting caused and that Shepherd's never-reparent model doesn't have in the first place.
 
 ---
 
@@ -116,20 +120,15 @@ This produces one distributable file with no external runtime dependency. Native
 
 ## Testing instructions
 
-### Automated end-to-end test
+### Automated real-input test
 
-`tests/CaptureReleaseTest/TabDock.CaptureReleaseTest` is a console harness that:
-
-1. Spawns Paint, Windows Terminal, Chrome, and Cursor (when available).
-2. Captures each into a native host window.
-3. Verifies live rendering by comparing two screen-captured frames.
-4. Releases the window and compares HWND state (parent, style, ex-style, bounds, placement) against a pre-capture snapshot.
-
-Run it:
+`tests/ValidationDriver/TabDock.ValidationDriver` is a console harness that drives a fresh TabDock instance plus guinea-pig/real-app windows entirely through synthesized `SendInput` mouse/keyboard at UIA-read coordinates, then asserts on window state, pixels, and log output:
 
 ```powershell
-dotnet run --project tests\CaptureReleaseTest\TabDock.CaptureReleaseTest\TabDock.CaptureReleaseTest.csproj
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --yes <scenario|all>
 ```
+
+Since a Shepherd guest is never reparented, "is this guest captured/released" can no longer be read off `WS_CHILD`/`GetParent` (both are permanently unchanged) — scenarios instead compare the guest's `GetWindowRect` against the container's content-area marker (`IsDocked`/`IsReleasedAndShown`/`IsReleasedAndHidden` helpers in `Scenarios.cs`). Notable scenarios beyond the general capture/release/tab-switch coverage: `dragout-by-titlebar` (drag the guest's own native title bar past/under the pop-out threshold), `directclick-foreground-pairing` (click the guest directly, bypassing TabDock's own UI, and verify z-order re-pairing), `crashkill-rescue` (force-kill TabDock with a hidden tab captured, relaunch, verify the crash-recovery journal restores it), `realapp-multi-render` (real apps, `PrintWindow`-verified live rendering, byte-identical placement/style/exstyle/parent before vs. after capture+release — this replaced the old, Reparent-only `tests/CaptureReleaseTest` project, since a `PrintWindow` capture of a GPU-rendered guest reads its own back-buffer directly and isn't affected by whatever else is on top of it on screen, unlike a `BitBlt`-based screen-region capture), and `keyboardinput-*-altswitch` (the direct regression test for the originally-reported "keyboard input stops after switching to another app and back" bug).
 
 The test requires interactive confirmation, spawns real applications, and kills them on completion or failure. Do not run it unattended on a production machine.
 
@@ -187,7 +186,7 @@ The pattern was made mandatory after a runaway self-recursion incident in `Spike
 ### Window ownership and no-nesting rule
 
 - `GroupManager.IsOwnWindow` checks process ID and a registered set of container HWNDs.
-- `WindowCaptureService` rejects captures where the target PID equals the current process ID.
+- `WindowShepherdService.Capture` rejects captures where the target PID equals the current process ID.
 - Container windows register their own HWND and the `NativeHwndHost` HWND with `GroupManager`.
 
 ### Error handling
@@ -216,12 +215,11 @@ The intended distribution artifact is the self-contained single-file executable 
 
 ## Known limitations
 
-- **GPU-rendered / Electron / DirectX apps** may show black or frozen content when reparented. TabDock detects this and releases the window back to standalone.
+- **Guest self-maximize is a cosmetic gap.** If the user maximizes the docked guest itself (not via TabDock's own maximize), it fills the whole monitor, breaking the docked look — there is no reliable WinEvent signal that distinguishes a programmatic/self-maximize from the interactive move/size loop, so nothing corrects it. Not an input-correctness bug; out of scope for now.
 - **Elevated windows** cannot be captured by a non-elevated TabDock instance.
-- **Mixed DPI awareness** can cause slight sizing issues when moving containers between monitors with different scaling.
-- **Task Manager force-kill:** A `taskkill /F` against TabDock cannot be intercepted reliably; child HWNDs may be destroyed as part of the dead parent's window tree.
+- **Task Manager force-kill:** captured guest processes/windows now survive a `taskkill /F` against TabDock (they were never reparented into its window tree) — a hidden (inactive-tab) guest is restored on the next launch via the crash-recovery journal (`WindowShepherdService.RescueOrphanedWindows`); the previously-active guest is left wherever it was, unmanaged, until the next capture.
 
-These limitations are documented in `README.md` and should not be treated as bugs to be fixed without changing the project's scope.
+These limitations are documented in `README.md` and should not be treated as bugs to be fixed without changing the project's scope. GPU-rendered/Electron/DirectX apps showing black or frozen content, and mixed-DPI sizing issues across monitors, were artifacts of the deleted Reparent backend (`SetParent` breaking DWM composition and per-monitor DPI messages respectively) and no longer apply under Shepherd — a guest is never reparented, so it's never compositor-invalidated and always receives its own native DPI handling untouched.
 
 ---
 

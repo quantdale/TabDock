@@ -15,6 +15,7 @@ internal static class Input
     public const ushort VK_MENU = 0x12;
     public const ushort VK_TAB = 0x09;
     public const ushort VK_G = 0x47;
+    public const ushort VK_L = 0x4C;
     public const ushort VK_RETURN = 0x0D;
     public const ushort VK_ESCAPE = 0x1B;
 
@@ -56,6 +57,7 @@ internal static class Input
                 return true;
 
             SendVk(VK_MENU, up: true); // benign key-up; grants foreground-change rights
+            NativeMethods.AllowSetForegroundWindow(NativeMethods.ASFW_ANY);
             Thread.Sleep(30);
             NativeMethods.SetForegroundWindow(hwnd);
             Thread.Sleep(150);
@@ -205,6 +207,19 @@ internal static class Input
     {
         SendVk(vk, up: true);
         Thread.Sleep(20);
+    }
+
+    /// <summary>Ctrl+L: the standard browser shortcut to focus and select-all the address/search bar.</summary>
+    public static void SendCtrlL()
+    {
+        SendVk(VK_CONTROL, up: false);
+        Thread.Sleep(20);
+        SendVk(VK_L, up: false);
+        Thread.Sleep(20);
+        SendVk(VK_L, up: true);
+        Thread.Sleep(20);
+        SendVk(VK_CONTROL, up: true);
+        Thread.Sleep(50);
     }
 
     public static void SendHotkeyCtrlAltG()

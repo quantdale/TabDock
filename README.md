@@ -53,13 +53,12 @@ WPF relies on COM activation, reflection emit, and other runtime features that a
 ## Architecture overview
 
 - `NativeMethods.cs` — all P/Invoke declarations in one place.
-- `Services/WindowCaptureService.cs` — captures, lays out, and releases external windows.
+- `Services/WindowShepherdService.cs` — TabDock's only capture backend. Positions/shows/hides a captured window over the container's content area without ever reparenting or restyling it; also owns the crash-recovery journal for hidden guests.
 - `Services/WinEventMonitor.cs` — out-of-process `SetWinEventHook` wrapper.
 - `Services/GroupManager.cs` — owns all groups and enforces the flat, no-nesting rule.
 - `Services/PersistenceService.cs` — JSON persistence of group metadata.
-- `Services/RenderHealthService.cs` — detects black/frozen GPU-rendered tabs and triggers recovery.
 - `Services/LoggingService.cs` — rotating log in `%APPDATA%\TabDock\logs\`.
-- `Infrastructure/NativeHwndHost.cs` — WPF `HwndHost` that hosts reparented windows.
+- `Infrastructure/NativeHwndHost.cs` — a plain `HwndHost` marker sized to match the WPF-rendered content area; captured windows are positioned over it, never reparented into it.
 - `Views/ContainerWindow.xaml` — custom chrome, tab strip, content host.
 - `Views/CapturePickerWindow.xaml` — window picker for creating groups.
 
@@ -107,32 +106,29 @@ Use this checklist to verify a build before considering it ready.
 
 ### Kill TabDock via Task Manager
 
-18. Group several windows.
+18. Group several windows, with at least one on an inactive tab.
 19. Kill `TabDock.exe` from Task Manager (`taskkill /F /IM TabDock.exe`).
-20. Verify all captured windows survive and return to standalone windows.  
-    *(Note: this relies on in-process cleanup. An abrupt process kill is an OS-level race; windows are released as part of process teardown whenever possible.)*
+20. Verify every captured window/process is still running — since none of them were ever reparented, killing TabDock can no longer destroy them. The window that was on the active tab is left wherever it was positioned; relaunch TabDock and verify the window that was on an inactive (hidden) tab reappears automatically (the crash-recovery journal restores it).
 
 ### DPI change
 
 21. Move the container between monitors with different scaling (e.g., 100% and 150%).
 22. Verify the content area re-lays out and the active window fills the host.
 
-### GPU-render recovery
+### Maximize / restore
 
-23. Capture Chrome without the `--disable-gpu` flag if possible, or capture Cursor.
-24. If the embedded area is black/frozen, verify TabDock automatically releases that window back to standalone and shows a non-destructive notification.
+23. Maximize the container with a window docked; verify the docked window resizes to fill the whole content area.
+24. Restore the container; verify the docked window shrinks back to match.
 
 ## Known limitations
 
-- **GPU-rendered / Electron / DirectX apps:** Chrome, Windows Terminal, and Electron-based editors (e.g., Cursor) use hardware-accelerated rendering. Reparenting sometimes produces a black or frozen window. TabDock detects this and releases the window back to standalone, but it cannot force every app to render correctly inside a foreign parent. Chrome can usually be embedded when started with `--disable-gpu`; Cursor did not render reliably even with GPU disabled in our tests.
+- **Guest self-maximize:** if you maximize the docked window itself (not the container), it fills the whole monitor, breaking the docked look — there's no reliable signal that distinguishes this from an ordinary interactive resize, so nothing corrects it automatically. Not a rendering or input bug, just a cosmetic gap.
 
-- **Elevated windows:** A non-elevated TabDock cannot reparent a window owned by an elevated process due to UIPI. TabDock ships as a standard-user app and asks the user to run elevated if they need to group elevated windows.
-
-- **DPI awareness:** `SetParent` can behave unexpectedly when the child and parent run under different DPI-awareness contexts. TabDock declares Per-Monitor-V2 awareness and re-lays out on DPI changes, but mixed-awareness apps may still show slight sizing or scaling issues.
+- **Elevated windows:** A non-elevated TabDock cannot capture a window owned by an elevated process due to UIPI (it can't position/foreground it either, not just reparent it). TabDock ships as a standard-user app and asks the user to run elevated if they need to group elevated windows.
 
 - **Persistence across reboots:** HWNDs are not stable across reboots, so TabDock cannot reliably re-attach the exact same live windows after a restart. It persists group names, accent colors, custom labels, tab order, and executable paths as layout intent. On startup it restores the group definitions but leaves them empty for the user to re-populate. It never persists application content.
 
-- **Task Manager kill:** If the TabDock process is force-killed, Windows destroys child HWNDs as part of cleaning up the dead parent's window tree. In-process cleanup runs for normal exit, unhandled exceptions, and session-ending events, but an abrupt `taskkill /F` cannot be intercepted with 100% reliability.
+- **Task Manager kill:** captured windows are never reparented, so force-killing TabDock (`taskkill /F`) no longer destroys them — a strict improvement over earlier versions. A window that was on an inactive (hidden) tab at the moment of the kill has no way to reappear on its own; TabDock journals hides to `%APPDATA%\TabDock\hidden-windows.json` and restores any still-valid entry the next time it starts.
 
 ## Logging
 

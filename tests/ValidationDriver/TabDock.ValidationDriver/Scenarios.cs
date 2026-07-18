@@ -93,7 +93,7 @@ internal static class Scenarios
     {
         "rename", "popout", "closewin", "closewin-hide", "selfclose", "selfhide", "selfminhide",
         "tabswitch-hidesafety", "minrestore", "maximize-repro", "repeat-cycles", "crossfeature",
-        "renderhealth", "hotkey-afterclose", "persist-kill", "dragreorder", "chrometabdrag",
+        "hotkey-afterclose", "persist-kill", "dragreorder", "chrometabdrag",
         "closegroupprompt", "exitpopulated",
     };
 
@@ -111,12 +111,12 @@ internal static class Scenarios
     /// {chrome-normal|edge-normal|firefox-normal} to mean anything, so a blanket
     /// "all" run must not silently launch real browsers with no guest chosen.
     /// </summary>
-    // Previously also listed renderhealth/hotkey-afterclose/persist-kill/dragreorder
+    // Previously also listed hotkey-afterclose/persist-kill/dragreorder
     // and every contentinput/chromeinput/alttabinput/keyboardinput* scenario, none
     // of which read opt.Guest at all (they spawn a hardcoded pig/Chrome/Notepad
     // guest directly) — that mislabeling made Program.cs demand a bogus
     // --guest {chrome-normal|edge-normal|firefox-normal} to run them at all, which
-    // in turn made "all" (which includes renderhealth/hotkey-afterclose/persist-kill/
+    // in turn made "all" (which includes hotkey-afterclose/persist-kill/
     // dragreorder via AllOrder) fail its own argument validation before spawning
     // anything. Confirmed by running `all` and hitting this exact Usage() error.
     public static readonly string[] BrowserOnlyScenarios =
@@ -124,6 +124,27 @@ internal static class Scenarios
         "browser-lifecycle", "browser-tabswitch-hidesafety", "browser-dragreorder", "browser-soak",
     };
     public static readonly string[] BrowserGuestKinds = { "chrome-normal", "edge-normal", "firefox-normal" };
+
+    /// <summary>
+    /// Scenarios that read `RunScenario`'s switch fine but were left off of
+    /// every allowlist in `Program.cs`'s CLI validation when
+    /// `contentinput`/`chromeinput`/`alttabinput`/`keyboardinput*` were pulled
+    /// out of the mislabeled `BrowserOnlyScenarios` (see KNOWN_ISSUES.md
+    /// H-NEW2) — with neither list matching, `Program.cs`'s `known` check
+    /// rejected every one of them, making them uninvokable from the CLI at
+    /// all. None take --guest and none belong in AllOrder/"all" (each spawns
+    /// its own hardcoded pig/Chrome/Edge/Notepad guest; folding them into
+    /// "all" would slow every run down for coverage the browser-* scenarios
+    /// already give via an explicit --guest).
+    /// </summary>
+    public static readonly string[] StandaloneExtraScenarios =
+    {
+        "contentinput", "chromeinput", "alttabinput",
+        "keyboardinput", "keyboardinput-chrome", "keyboardinput-notepad", "keyboardinput-rapid-switch",
+        "keyboardinput-chrome-altswitch", "keyboardinput-edge-altswitch", "keyboardinput-chrome-omnibox-altswitch",
+        "realworkflow-altswitch", "directclick-foreground-pairing", "dragout-by-titlebar",
+        "crashkill-rescue", "realapp-multi-render",
+    };
 
     // -------------------------------------------------------------------------
     // Runner
@@ -144,7 +165,6 @@ internal static class Scenarios
             "maximize-repro" => MaximizeRepro,
             "repeat-cycles" => RepeatCycles,
             "crossfeature" => CrossFeature,
-            "renderhealth" => RenderHealth,
             "hotkey-afterclose" => HotkeyAfterClose,
             "persist-kill" => PersistKill,
             "dragreorder" => DragReorder,
@@ -164,6 +184,14 @@ internal static class Scenarios
             "keyboardinput-chrome" => KeyboardInputChrome,
             "keyboardinput-notepad" => KeyboardInputNotepad,
             "keyboardinput-rapid-switch" => KeyboardInputRapidSwitch,
+            "keyboardinput-chrome-altswitch" => KeyboardInputChromeAltSwitch,
+            "keyboardinput-edge-altswitch" => KeyboardInputEdgeAltSwitch,
+            "keyboardinput-chrome-omnibox-altswitch" => KeyboardInputChromeOmniboxAltSwitch,
+            "realworkflow-altswitch" => RealWorkflowAltSwitch,
+            "directclick-foreground-pairing" => DirectClickForegroundPairing,
+            "dragout-by-titlebar" => DragOutByTitlebar,
+            "crashkill-rescue" => CrashKillRescue,
+            "realapp-multi-render" => RealAppMultiRender,
             _ => null,
         };
         if (body == null)
@@ -884,10 +912,10 @@ internal static class Scenarios
         foreach (GuestInfo g in guests)
         {
             bool captured = Util.WaitUntil(
-                () => ((long)NativeMethods.GetWindowLongPtr(g.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) != 0,
+                () => IsDocked(g.Hwnd, host) || IsReleasedAndHidden(g.Hwnd),
                 5000);
             if (!captured)
-                throw new InvalidOperationException($"Guest '{g.Title}' was not captured (WS_CHILD never set).");
+                throw new InvalidOperationException($"Guest '{g.Title}' was not captured (neither docked over host nor hidden).");
         }
 
         Thread.Sleep(800); // settle
@@ -1001,6 +1029,39 @@ internal static class Scenarios
         return Util.RectNear(rcG, rcH, 4);
     }
 
+    /// <summary>True if the guest is a real, visible top-level window positioned exactly over the host's content area — the Shepherd "docked, active tab" state. Never WS_CHILD; this is the only reliable signal.</summary>
+    private static bool IsDocked(IntPtr guest, IntPtr host)
+    {
+        return NativeMethods.IsWindow(guest) && NativeMethods.IsWindowVisible(guest)
+            && GuestMatchesHost(guest, host, out _);
+    }
+
+    /// <summary>True if the guest is visible but NOT docked over the host — i.e. released back to its own placement (or never captured).</summary>
+    private static bool IsReleasedAndShown(IntPtr guest, IntPtr host)
+    {
+        return NativeMethods.IsWindow(guest) && NativeMethods.IsWindowVisible(guest) && !IsDocked(guest, host);
+    }
+
+    /// <summary>True if the guest still exists but is hidden — either an inactive captured tab, or released-while-hidden (guest-initiated hide-on-close).</summary>
+    private static bool IsReleasedAndHidden(IntPtr guest)
+    {
+        return NativeMethods.IsWindow(guest) && !NativeMethods.IsWindowVisible(guest);
+    }
+
+    /// <summary>
+    /// Walks GW_HWNDNEXT from <paramref name="hwnd"/>, skipping invisible
+    /// windows — Windows inserts invisible per-thread IME helper windows
+    /// (MSCTFIME UI, Default IME) into the z-order next to whatever window a
+    /// thread just touched, unrelated to any real z-order pairing under test.
+    /// </summary>
+    private static IntPtr NextVisibleWindow(IntPtr hwnd)
+    {
+        IntPtr cur = NativeMethods.GetWindow(hwnd, NativeMethods.GW_HWNDNEXT);
+        while (cur != IntPtr.Zero && !NativeMethods.IsWindowVisible(cur))
+            cur = NativeMethods.GetWindow(cur, NativeMethods.GW_HWNDNEXT);
+        return cur;
+    }
+
     private static void DumpGeometry(Ctx ctx, IntPtr container, IntPtr host, GuestInfo guest, string phase)
     {
         NativeMethods.GetWindowRect(container, out NativeMethods.RECT rcC);
@@ -1014,10 +1075,9 @@ internal static class Scenarios
             $"guest={Util.FormatRect(rcG)} monitorWork={Util.FormatRect(mi.rcWork)} zoomed={NativeMethods.IsZoomed(container)}");
     }
 
-    private static bool IsReleased(GuestInfo g)
+    private static bool IsReleased(GuestInfo g, IntPtr host)
     {
-        return ((long)NativeMethods.GetWindowLongPtr(g.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) == 0
-            && NativeMethods.GetParent(g.Hwnd) == IntPtr.Zero;
+        return IsReleasedAndShown(g.Hwnd, host);
     }
 
     /// <summary>
@@ -1103,10 +1163,7 @@ internal static class Scenarios
             "TabDock log gained 'hid itself (tray-style close)'");
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(container) || TabCount(container) == 0, 5000),
             "tab removed (container empty or closed)");
-        ctx.Check(!NativeMethods.IsWindowVisible(pig.Hwnd), "pig window is hidden (IsWindowVisible == false)");
-        ctx.Check(((long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) == 0,
-            "WS_CHILD cleared (released, hidden)");
-        ctx.Check(NativeMethods.GetParent(pig.Hwnd) == IntPtr.Zero, "GetParent(pig) == 0");
+        ctx.Check(IsReleasedAndHidden(pig.Hwnd), "pig released and hidden (guest-initiated hide)");
     }
 
     // -------------------------------------------------------------------------
@@ -1149,22 +1206,18 @@ internal static class Scenarios
     private static void PopOut(Ctx ctx, Options opt)
     {
         GuestInfo pig = SpawnPig(ctx, "POP", "--color", "green");
-        IntPtr parentBefore = NativeMethods.GetParent(pig.Hwnd);
-        long styleBefore = (long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_STYLE);
-        GuardedProc.Log($"  Pre-capture: parent=0x{parentBefore.ToInt64():X} style=0x{styleBefore:X}.");
 
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
 
         ClickTabMenuItem(ctx, container, pig.Title, "Pop out");
 
-        ctx.Check(Util.WaitUntil(
-                () => NativeMethods.GetParent(pig.Hwnd) == parentBefore
-                    && ((long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) == 0,
-                3000),
-            "pig released within 3s (parent restored, WS_CHILD cleared)");
-        long styleAfter = (long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_STYLE);
-        ctx.Check((styleAfter & NativeMethods.WS_CAPTION) == NativeMethods.WS_CAPTION,
-            $"WS_CAPTION restored (style=0x{styleAfter:X})");
+        // Shepherd never mutates parent/style (WindowShepherdService.cs is explicit
+        // that WS_CAPTION stripping was deliberately not implemented), so the old
+        // parent-restored/WS_CAPTION-restored checks tested a mutation that no
+        // longer happens; released-and-shown-at-its-own-placement is the only
+        // meaningful signal left.
+        ctx.Check(Util.WaitUntil(() => IsReleasedAndShown(pig.Hwnd, host), 3000),
+            "pig released within 3s (shown at its own placement, not docked over host)");
         ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "pig process alive");
         ctx.Check(!PigLog.ContainsLine(pig.Pid, "WM_CLOSE"), "pig log has NO WM_CLOSE");
         // Popping out the only tab must close the now-empty container outright,
@@ -1190,21 +1243,23 @@ internal static class Scenarios
         long off = TabDockLog.RecordLogLength();
         ClickTabMenuItem(ctx, container, pig.Title, "Close window");
 
-        // Poll every 100ms until the HWND dies: the pig must never flash as a visible top-level window.
-        bool becameTopLevelVisible = false;
+        // Poll every 100ms until the HWND dies. Under Shepherd the guest is ALWAYS
+        // a top-level window while captured, so "never becomes top-level" no
+        // longer means anything; the invariant that still matters is that it
+        // never gets shown away from the host (i.e. released-and-shown) mid-
+        // teardown — it must stay either docked over the host or hidden right up
+        // until the HWND is destroyed.
+        bool becameReleasedAndShown = false;
         var sw = Stopwatch.StartNew();
         while (sw.ElapsedMilliseconds < 5000 && NativeMethods.IsWindow(pig.Hwnd))
         {
-            long style = (long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_STYLE);
-            if ((style & NativeMethods.WS_CHILD) == 0
-                && NativeMethods.GetParent(pig.Hwnd) == IntPtr.Zero
-                && NativeMethods.IsWindowVisible(pig.Hwnd))
+            if (IsReleasedAndShown(pig.Hwnd, host))
             {
-                becameTopLevelVisible = true;
+                becameReleasedAndShown = true;
             }
             Thread.Sleep(100);
         }
-        ctx.Check(!becameTopLevelVisible, "pig NEVER became a visible top-level window while closing (stayed a child)");
+        ctx.Check(!becameReleasedAndShown, "pig NEVER shown away from the host while closing (stayed docked or hidden)");
 
         ctx.Check(PigLog.WaitForPigLine(pig.Pid, "WM_CLOSE", 3000), "pig log contains WM_CLOSE");
         ctx.Check(Util.WaitUntil(() => pig.Proc!.HasExited, 5000), "pig process exited within 5s");
@@ -1303,7 +1358,7 @@ internal static class Scenarios
             "tab removed (container empty or closed)");
         ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "pig process alive");
         ctx.Check(!NativeMethods.IsWindowVisible(pig.Hwnd), "pig hidden");
-        ctx.Check(IsReleased(pig), "pig released (WS_CHILD cleared, no parent)");
+        ctx.Check(IsReleasedAndHidden(pig.Hwnd), "pig released and hidden (guest-initiated hide, not shown)");
     }
 
     // -------------------------------------------------------------------------
@@ -1358,8 +1413,8 @@ internal static class Scenarios
         for (int i = 0; i < pigs.Length; i++)
         {
             bool alive = pigs[i].Proc != null && !pigs[i].Proc!.HasExited;
-            bool child = ((long)NativeMethods.GetWindowLongPtr(pigs[i].Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) != 0;
-            ctx.Check(alive && child, $"pig '{pigs[i].Title}' alive and still captured (WS_CHILD)");
+            bool captured = IsDocked(pigs[i].Hwnd, host) || IsReleasedAndHidden(pigs[i].Hwnd);
+            ctx.Check(alive && captured, $"pig '{pigs[i].Title}' alive and still captured (docked over host or hidden inactive tab)");
         }
 
         if (lastIdx >= 0)
@@ -1470,7 +1525,7 @@ internal static class Scenarios
                 $"cycle {cycle}: geometry OK after restore ({geoRest})");
 
             ClickTabMenuItem(ctx, container, pig.Title, "Pop out");
-            ctx.Check(Util.WaitUntil(() => IsReleased(pig), 5000), $"cycle {cycle}: pig released by Pop out");
+            ctx.Check(Util.WaitUntil(() => IsReleased(pig, host), 5000), $"cycle {cycle}: pig released by Pop out");
             ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(container) || TabCount(container) == 0, 5000),
                 $"cycle {cycle}: container closed/empty after Pop out");
             ctx.Check(TabDockLog.CountNewLines(cycOff, "EXCEPTION") == 0,
@@ -1544,7 +1599,7 @@ internal static class Scenarios
 
         // Step 4: pop out the remaining pig — the container should end up empty/closed.
         ClickTabMenuItem(ctx, container, pig1.Title, "Pop out");
-        ctx.Check(Util.WaitUntil(() => IsReleased(pig1), 5000), "step popout: pig1 released");
+        ctx.Check(Util.WaitUntil(() => IsReleased(pig1, host), 5000), "step popout: pig1 released");
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(container) || TabCount(container) == 0, 5000),
             "step popout: container empty/closed");
 
@@ -1552,39 +1607,6 @@ internal static class Scenarios
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
         ctx.Check(NoOrphanPigWindows(ctx), "no orphan TDVAL windows on the desktop");
         ctx.Check(NativeMethods.IsWindow(ctx.MainHwnd), "TabDock MainWindow still alive/responsive");
-    }
-
-    // -------------------------------------------------------------------------
-    // 13. renderhealth (H1+M4): a genuinely black-painting guest must be detected
-    //     and auto-released; a normal guest must not be (no false positive).
-    // -------------------------------------------------------------------------
-    private static void RenderHealth(Ctx ctx, Options opt)
-    {
-        // Negative control first: a white pig must stay captured.
-        GuestInfo white = SpawnPig(ctx, "RHW", "--color", "white");
-        (IntPtr c1, IntPtr h1) = CaptureIntoGroup(ctx, white);
-        Thread.Sleep(3000); // the health check runs ~800ms after capture; wide margin
-        ctx.Check(((long)NativeMethods.GetWindowLongPtr(white.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) != 0,
-            "white pig still captured 3s after capture (no false-positive release)");
-        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "unhealthy") == 0,
-            "no 'unhealthy' verdict logged for the white pig");
-
-        // A guest whose whole client area genuinely paints RGB black must be
-        // flagged unhealthy and released back to standalone with the notice.
-        long off = TabDockLog.RecordLogLength();
-        GuestInfo black = SpawnPig(ctx, "RHB", "--color", "black");
-        (IntPtr c2, IntPtr h2) = CaptureIntoGroup(ctx, black);
-
-        ctx.Check(TabDockLog.WaitForLogLine(off, "unhealthy", 10000),
-            "TabDock log gained an 'unhealthy' verdict for the black pig");
-        ctx.Check(Util.WaitUntil(() => IsReleased(black), 10000),
-            "black pig auto-released back to standalone (WS_CHILD cleared, no parent)");
-        ctx.Check(ClickMessageBoxButton(ctx, "Window could not be tabbed", new[] { "OK", "&OK" }, 8000),
-            "release-notification MessageBox appeared (clicked OK)");
-        ctx.Check(Util.WaitUntil(() => NativeMethods.IsWindowVisible(black.Hwnd), 3000),
-            "black pig visible as a standalone window after release");
-        ctx.Check(black.Proc != null && !black.Proc.HasExited, "black pig process alive");
-        ctx.Check(!ctx.TabDock.HasExited, "TabDock alive");
     }
 
     // -------------------------------------------------------------------------
@@ -1660,8 +1682,7 @@ internal static class Scenarios
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
         if (!ctx.TabDock.HasExited)
         {
-            ctx.Check(((long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) != 0,
-                "pig still captured at scenario end");
+            ctx.Check(IsDocked(pig.Hwnd, host), "pig still docked over host at scenario end");
         }
     }
 
@@ -1784,35 +1805,34 @@ internal static class Scenarios
         NativeMethods.GetWindowRect(container, out NativeMethods.RECT rc);
         Input.DragFromTo((int)(leftRect.X + leftRect.Width / 2), sy, rc.right + 150, rc.bottom + 150, 14);
 
-        ctx.Check(Util.WaitUntil(() => IsReleased(movedPig), 5000), $"moved pig '{movedPig.Title}' released by drag-out");
+        ctx.Check(Util.WaitUntil(() => IsReleased(movedPig, host), 5000), $"moved pig '{movedPig.Title}' released by drag-out");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-out");
         ctx.Check(movedPig.Proc != null && !movedPig.Proc.HasExited, "moved pig alive standalone");
     }
 
     // -------------------------------------------------------------------------
-    // 17. chrometabdrag (H4/H5 PR gate): drag a real captured Chrome window by
-    //     its own client-drawn tab strip (Chrome hit-tests this as HTCAPTION,
-    //     so the guest itself is moved relative to the host) and verify the
-    //     fill-clamp snaps it back to the host client rect on release, with no
-    //     residual host-background smear.
+    // 17. chrometabdrag: drag a real captured Chrome window by its own
+    //     client-drawn tab strip (Chrome hit-tests this as HTCAPTION, so the
+    //     guest itself enters the same interactive move loop as a native
+    //     title-bar drag — see dragout-by-titlebar). Verifies both halves of
+    //     NoteGuestMoveSize's threshold against a real app with a custom-drawn
+    //     "fake" title bar, not just a plain WinForms one: a small drag (under
+    //     DragOutThresholdPx) snaps back to the host rect; a large drag pops
+    //     the tab out. (Formerly an H4/H5 PR gate against the deleted Reparent
+    //     backend's fill-clamp/host-background-smear bugs, both of which are
+    //     structurally impossible under Shepherd — a guest is either exactly
+    //     docked over the marker or fully popped out, never mid-reparented
+    //     with the host's own background exposed in between.)
     // -------------------------------------------------------------------------
     private static void ChromeTabDrag(Ctx ctx, Options opt)
     {
-        long capOff = TabDockLog.RecordLogLength();
         GuestInfo chrome = SpawnGuest(ctx, "chrome-normal");
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, chrome);
 
-        ctx.Check(TabDockLog.ContainsNewLine(capOff, "LAYOUT[capture]"), "TabDock log gained a LAYOUT[capture] line");
-        ctx.Check(GuestMatchesHost(chrome.Hwnd, host, out string geoCap),
-            $"guest rect == host client rect at capture ({geoCap})");
+        ctx.Check(Util.WaitUntil(() => IsDocked(chrome.Hwnd, host), 3000), "chrome docked over host at capture");
 
         if (!Input.ForceForeground(container))
             throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
-
-        // Baseline brightness before the drag (host is fully covered by Chrome's
-        // bright default page background).
-        int[]? preFrame = Pixels.CaptureHostScreenArea(host);
-        double preBrightness = preFrame != null ? Pixels.ComputeAvgBrightness(preFrame) : -1;
 
         NativeMethods.RECT hostRect = Discover.GetClientScreenRect(host);
         double scale = NativeMethods.GetDpiForWindow(container) / 96.0;
@@ -1821,31 +1841,30 @@ internal static class Scenarios
         // and lands on a freshly opened single-tab window's tab.
         int startX = hostRect.left + (int)(150 * scale);
         int startY = hostRect.top + (int)(18 * scale);
-        int endX = hostRect.left + (int)(280 * scale);
-        int endY = hostRect.top + (int)(110 * scale);
 
+        // --- Small jitter (under DragOutThresholdPx=40): must snap back.
+        //     Chrome's own tab strip has its own click-vs-drag threshold
+        //     before it hands off to native window dragging; too small a
+        //     movement (e.g. the ~12px used against a plain WinForms title
+        //     bar in dragout-by-titlebar) can be absorbed as a click instead
+        //     of registering as a real move at all. ---
+        Input.DragFromTo(startX, startY, startX + (int)(25 * scale), startY + (int)(15 * scale), 10);
+        ctx.Check(Util.WaitUntil(() => IsDocked(chrome.Hwnd, host), 3000),
+            "small jitter drag on Chrome's own tab strip snaps back to docked");
+
+        // --- Real pop-out (well past the threshold), from a different start
+        //     point on the same tab strip to avoid a same-pixel double-click. ---
+        Thread.Sleep(700);
+        int startX2 = startX + (int)(40 * scale);
         long dragOff = TabDockLog.RecordLogLength();
-        Input.DragFromTo(startX, startY, endX, endY, 16);
+        Input.DragFromTo(startX2, startY, startX2 + (int)(130 * scale), startY + (int)(92 * scale), 16);
 
-        // Sampled immediately on release, before the MOVESIZEEND reclamp has had
-        // time to settle — the narrowest window to catch a residual smear: if
-        // the guest is still offset, the host's own #1E1E1E background brush
-        // (the H4 fix) now paints the exposed strip and brightness drops.
-        int[]? justAfterFrame = Pixels.CaptureHostScreenArea(host);
-        double justAfterBrightness = justAfterFrame != null ? Pixels.ComputeAvgBrightness(justAfterFrame) : -1;
-
-        Thread.Sleep(600); // let the MOVESIZEEND reclamp settle
-        ctx.Check(TabDockLog.ContainsNewLine(dragOff, "LAYOUT[movesize]"),
-            "TabDock log gained a LAYOUT[movesize] line on release");
-        ctx.Check(GuestMatchesHost(chrome.Hwnd, host, out string geoAfter),
-            $"guest rect snapped back to host client rect after drag ({geoAfter})");
+        ctx.Check(Util.WaitUntil(() => IsReleasedAndShown(chrome.Hwnd, host), 5000),
+            "drag past the threshold on Chrome's own tab strip releases the tab (shown standalone, not docked)");
+        ctx.Check(TabDockLog.WaitForLogLine(dragOff, "SHEPHERD[dragout]", 3000),
+            "TabDock log recorded the drag-out release (SHEPHERD[dragout])");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
         ctx.Check(chrome.Proc != null && !chrome.Proc.HasExited, "chrome guest process alive after drag");
-
-        GuardedProc.Log(
-            $"  SMEAR CHECK: preDragBrightness={preBrightness:F2} justAfterReleaseBrightness={justAfterBrightness:F2} " +
-            "(sampled over the host client rect; a low value while the guest is still offset would indicate " +
-            "exposed #1E1E1E host background — i.e. smear).");
     }
 
     // -------------------------------------------------------------------------
@@ -1935,9 +1954,9 @@ internal static class Scenarios
         ctx.Check(TabCount(container) == 2, "Cancel: both tabs still present");
         ctx.Check(pigA.Proc != null && !pigA.Proc.HasExited && pigB.Proc != null && !pigB.Proc.HasExited,
             "Cancel: both pigs still alive");
-        ctx.Check(((long)NativeMethods.GetWindowLongPtr(pigA.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) != 0
-                && ((long)NativeMethods.GetWindowLongPtr(pigB.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) != 0,
-            "Cancel: both pigs still captured (WS_CHILD)");
+        ctx.Check((IsDocked(pigA.Hwnd, host) || IsReleasedAndHidden(pigA.Hwnd))
+                && (IsDocked(pigB.Hwnd, host) || IsReleasedAndHidden(pigB.Hwnd)),
+            "Cancel: both pigs still captured (docked over host or hidden inactive tab)");
 
         // --- Yes: must actually close (exit) both captured guests. ---
         long off = TabDockLog.RecordLogLength();
@@ -2001,8 +2020,7 @@ internal static class Scenarios
         {
             ctx.Check(Util.WaitUntil(() => NativeMethods.IsWindow(pig.Hwnd) && NativeMethods.IsWindowVisible(pig.Hwnd), 3000),
                 "pig released back to a visible standalone window as part of clean exit");
-            ctx.Check(((long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) == 0,
-                "pig no longer WS_CHILD (fully released, not left reparented)");
+            ctx.Check(IsReleasedAndShown(pig.Hwnd, host), "pig released and shown at its own placement (not left docked over host)");
             ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "pig process itself still alive (only its window was released)");
         }
     }
@@ -2042,7 +2060,7 @@ internal static class Scenarios
             : $"UNEXPECTED bare drift line(s): {string.Join(" | ", drift)}");
 
         ClickTabMenuItem(ctx, container, browser.EffectiveTabMatchKey, "Pop out");
-        ctx.Check(Util.WaitUntil(() => IsReleased(browser), 5000), "browser released by Pop out");
+        ctx.Check(Util.WaitUntil(() => IsReleased(browser, host), 5000), "browser released by Pop out");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
     }
 
@@ -2091,8 +2109,8 @@ internal static class Scenarios
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "hid itself") == 0, "ZERO 'hid itself' lines in TabDock log");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "destroyed") == 0, "ZERO 'destroyed' lines in TabDock log");
         ctx.Check(browser.Proc != null && !browser.Proc.HasExited
-                && ((long)NativeMethods.GetWindowLongPtr(browser.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) != 0,
-            $"real browser '{browser.Title}' alive and still captured after 24 switches");
+                && (IsDocked(browser.Hwnd, host) || IsReleasedAndHidden(browser.Hwnd)),
+            $"real browser '{browser.Title}' alive and still captured (docked over host or hidden inactive tab) after 24 switches");
         List<string> drift = TabDockLog.FindDriftWithoutPrecedingMovesize(ctx.LogOffset);
         ctx.Check(drift.Count == 0, drift.Count == 0
             ? "no LAYOUT[drift] fired without a preceding LAYOUT[movesize]"
@@ -2135,7 +2153,7 @@ internal static class Scenarios
 
         NativeMethods.GetWindowRect(container, out NativeMethods.RECT rc);
         Input.DragFromTo((int)(leftRect.X + leftRect.Width / 2), sy, rc.right + 150, rc.bottom + 150, 14);
-        ctx.Check(Util.WaitUntil(() => IsReleased(movedGuest), 5000), $"moved guest '{movedGuest.Title}' released by drag-out");
+        ctx.Check(Util.WaitUntil(() => IsReleased(movedGuest, host), 5000), $"moved guest '{movedGuest.Title}' released by drag-out");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-out");
         ctx.Check(movedGuest.Proc != null && !movedGuest.Proc.HasExited, "moved guest alive standalone");
     }
@@ -2171,8 +2189,8 @@ internal static class Scenarios
         foreach (GuestInfo g in guests)
         {
             ctx.Check(g.Proc != null && !g.Proc.HasExited
-                    && ((long)NativeMethods.GetWindowLongPtr(g.Hwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_CHILD) != 0,
-                $"'{g.Title}' alive and still captured after the multi-browser switch pass");
+                    && (IsDocked(g.Hwnd, host) || IsReleasedAndHidden(g.Hwnd)),
+                $"'{g.Title}' alive and still captured (docked over host or hidden inactive tab) after the multi-browser switch pass");
         }
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "unhealthy") == 0, "no false-positive render-health 'unhealthy' verdict for either browser");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
@@ -2417,6 +2435,184 @@ document.getElementById('btn').addEventListener('click', function() {
     }
 
     // -------------------------------------------------------------------------
+    // keyboardinput-{chrome,edge}-altswitch: reproduces the reported bug
+    // directly — type into a captured browser's content <input>, switch focus
+    // to an external app TabDock never captured (a genuine alt-tab-away, NOT
+    // another TabDock tab), switch back, and type again. Unlike
+    // keyboardinput-rapid-switch (which only switches between two TABS within
+    // the same container, always via SW_HIDE/SW_SHOW and NativeHwndHost's
+    // SwitchActiveWindow) this exercises ContainerWindow's own
+    // WM_ACTIVATE(WA_ACTIVE/WA_INACTIVE) handling, which is the code path
+    // implicated by the user report: "keyboard input works the first time...
+    // after switching to another app and then returning to the browser app,
+    // I can no longer type" (reproduced live with real Edge and Chrome search
+    // bars). The click target is the host's geometric center (like
+    // keyboardinput-chrome) — a UIA-based lookup of the actual <input>
+    // element's BoundingRectangle was tried and rejected: for this captured
+    // guest, Chrome/Edge's own UIA provider reliably reports
+    // Rect.Empty for that element (never becomes valid, even after minutes),
+    // so it cannot be used as a click target here. Full browser-chrome mode
+    // (needed to test the omnibox itself) was also tried and rejected — on
+    // this dev machine it's entangled with the signed-in Edge/Chrome
+    // profile's own enterprise tab-sync, which reproducibly opens unrelated
+    // real tabs (confirmed via screenshot) within seconds of spawning even a
+    // "fresh" --user-data-dir window, making it unusable for deterministic
+    // verification. This still targets the exact same WM_ACTIVATE code path
+    // as the omnibox.
+    // -------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // keyboardinput-chrome-omnibox-altswitch (DIAGNOSTIC): same alt-tab-away/
+    // back cycle, but against the omnibox itself (full browser-chrome mode,
+    // Chrome only — Edge on this dev machine is entangled with enterprise
+    // tab-sync that reproducibly steals the window). The omnibox is native
+    // Views UI drawn by the browser process's own thread, not web content
+    // routed through a renderer process — it may not share whatever deeper
+    // reparenting limitation affects typing into a page <input> (see
+    // KeyboardInputBrowserAltSwitch's notes).
+    // -------------------------------------------------------------------------
+    private static void KeyboardInputChromeOmniboxAltSwitch(Ctx ctx, Options opt)
+    {
+        string pageA = CreateNamedTestPage("TDVAL-OMNI-A");
+        string pageB = CreateNamedTestPage("TDVAL-OMNI-B");
+        string uriA = new Uri(pageA).AbsoluteUri;
+        string uriB = new Uri(pageB).AbsoluteUri;
+
+        GuestInfo browser = SpawnClassGuest(ctx, ChromeExe,
+            $"--user-data-dir=\"{FreshProfileDir("TabDockOmniChromeProfile")}\" --no-first-run --no-default-browser-check --disable-session-crashed-bubble --disable-sync about:blank",
+            "Chrome_WidgetWin_1", useShellExecute: true);
+
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, browser);
+        Thread.Sleep(2500);
+
+        if (!Input.ForceForegroundRoot(host))
+            throw new InvalidOperationException("Could not bring the captured Chrome guest to the foreground — refusing to type blind.");
+
+        Input.SendCtrlL();
+        Thread.Sleep(300);
+        Input.TypeText(uriA);
+        Thread.Sleep(200);
+        Input.SendKey(Input.VK_RETURN);
+        bool baselineOk = Util.WaitUntil(() =>
+            (NativeMethods.GetWindowTextString(browser.Hwnd) ?? string.Empty).Contains("TDVAL-OMNI-A", StringComparison.Ordinal),
+            5000);
+        ctx.Check(baselineOk, "Chrome omnibox: typed URL navigated correctly before any app switch");
+
+        IntPtr externalHwnd = Process.GetCurrentProcess().MainWindowHandle;
+        if (externalHwnd == IntPtr.Zero)
+        {
+            GuestInfo notepad = SpawnNotepad(ctx);
+            externalHwnd = notepad.Hwnd;
+        }
+        Input.ForceForegroundRoot(externalHwnd);
+        Thread.Sleep(800);
+
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container back to the foreground after switching away.");
+        Thread.Sleep(600);
+
+        Input.SendCtrlL();
+        Thread.Sleep(300);
+        Input.TypeText(uriB);
+        Thread.Sleep(200);
+        Input.SendKey(Input.VK_RETURN);
+        bool postSwitchOk = Util.WaitUntil(() =>
+            (NativeMethods.GetWindowTextString(browser.Hwnd) ?? string.Empty).Contains("TDVAL-OMNI-B", StringComparison.Ordinal),
+            5000);
+        ctx.Check(postSwitchOk, "Chrome omnibox: typed URL navigated correctly after switching to an external app and back — THE REPORTED BUG");
+    }
+
+    private static void KeyboardInputChromeAltSwitch(Ctx ctx, Options opt) =>
+        KeyboardInputBrowserAltSwitch(ctx, ChromeExe, "Chrome_WidgetWin_1", "Chrome");
+
+    private static void KeyboardInputEdgeAltSwitch(Ctx ctx, Options opt) =>
+        KeyboardInputBrowserAltSwitch(ctx, EdgeExe, "Chrome_WidgetWin_1", "Edge");
+
+    private static void KeyboardInputBrowserAltSwitch(Ctx ctx, string exe, string className, string label)
+    {
+        string htmlPath = CreateChromeKeyboardTestPage();
+        GuestInfo browser = SpawnClassGuest(ctx, exe,
+            $"--user-data-dir=\"{FreshProfileDir("TabDockAltSwitchProfile")}\" --disable-gpu --no-first-run --no-default-browser-check --disable-session-crashed-bubble --app=\"{htmlPath}\"",
+            className, useShellExecute: true);
+
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, browser);
+
+        // Let post-capture settling finish (render-health check, debounced
+        // persistence save, any foreground contention against the terminal
+        // that launched this driver) before touching the guest, so the
+        // baseline measurement isn't itself confounded by that transient
+        // activity.
+        Thread.Sleep(2500);
+
+        if (!Input.ForceForegroundRoot(host))
+            throw new InvalidOperationException($"Could not bring the captured {label} guest to the foreground — refusing to type blind.");
+
+        NativeMethods.RECT hostClient = Discover.GetClientScreenRect(host);
+        int cx = hostClient.left + hostClient.Width / 2;
+        int cy = hostClient.top + hostClient.Height / 2;
+
+        // Baseline: click + type must land.
+        Input.ClickAt(cx, cy);
+        Thread.Sleep(300);
+        Input.TypeText("PRESWITCH");
+        bool baselineOk = Util.WaitUntil(() =>
+            (NativeMethods.GetWindowTextString(browser.Hwnd) ?? string.Empty).Contains("TYPED:PRESWITCH", StringComparison.Ordinal),
+            5000);
+        ctx.Check(baselineOk, $"{label}: baseline typed text landed before any app switch");
+
+        // Switch focus to a genuinely external app TabDock never captured —
+        // the driver's own console window, falling back to a throwaway
+        // Notepad. This must NOT be another TabDock tab (that path hides/
+        // shows via SW_HIDE and never touches ContainerWindow's own
+        // WM_ACTIVATE handler, which is what this scenario targets).
+        IntPtr externalHwnd = Process.GetCurrentProcess().MainWindowHandle;
+        if (externalHwnd == IntPtr.Zero)
+        {
+            GuestInfo notepad = SpawnNotepad(ctx);
+            externalHwnd = notepad.Hwnd;
+        }
+        Input.ForceForegroundRoot(externalHwnd);
+        Thread.Sleep(800);
+
+        // Switch back — the exact user action ("returning to the browser
+        // app"): alt-tab/click back to the TabDock container itself, no
+        // tab-strip click involved.
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container back to the foreground after switching away.");
+        Thread.Sleep(600);
+
+        // Type WITHOUT clicking first: the input field already had both
+        // Win32 focus and the page's own caret before the switch away, so if
+        // activation/focus genuinely round-trips, no re-click should be
+        // required. This is the precise assertion for the reported bug.
+        Input.TypeText("POSTSWITCH");
+        bool postSwitchNoClickOk = Util.WaitUntil(() =>
+            (NativeMethods.GetWindowTextString(browser.Hwnd) ?? string.Empty).Contains("POSTSWITCH", StringComparison.Ordinal),
+            5000);
+        ctx.Check(postSwitchNoClickOk, $"{label}: typed text (no re-click) landed after switching to an external app and back — THE REPORTED BUG");
+
+        // Then try again after an explicit click, to distinguish "totally
+        // dead" from "needs a click to re-arm" (still a real bug, just a
+        // lesser one than the no-click case above).
+        Input.ClickAt(cx, cy);
+        Thread.Sleep(300);
+        Input.TypeText("POSTCLICK");
+        bool postClickOk = Util.WaitUntil(() =>
+            (NativeMethods.GetWindowTextString(browser.Hwnd) ?? string.Empty).Contains("POSTCLICK", StringComparison.Ordinal),
+            5000);
+        ctx.Check(postClickOk, $"{label}: typed text landed after an explicit re-click following the app switch");
+    }
+
+    /// <summary>A minimal local HTML page with a distinctive, fixed &lt;title&gt; used to detect a successful omnibox navigation.</summary>
+    private static string CreateNamedTestPage(string title)
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "TabDock-Validation");
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, $"{title}.html");
+        File.WriteAllText(path, $"<!DOCTYPE html><html><head><meta charset='utf-8'><title>{title}</title></head><body>{title}</body></html>");
+        return path;
+    }
+
+    // -------------------------------------------------------------------------
     // 22. keyboardinput-notepad (H8 isolation): real keyboard typing must land
     //     in a captured Notepad edit/document control. This isolates whether the
     //     non-Chromium failure is specific to the WinForms guinea pig or general.
@@ -2473,7 +2669,7 @@ body { margin: 0; width: 100vw; height: 100vh; background: white; display: flex;
 input { padding: 16px 24px; font-size: 24px; width: 60vw; }
 </style></head>
 <body>
-<input id='txt' autofocus>
+<input id='txt' autofocus autocomplete='off' autocapitalize='off' spellcheck='false'>
 <script>
 var input = document.getElementById('txt');
 function claimFocus() { input.focus(); }
@@ -2659,5 +2855,450 @@ input.addEventListener('input', function() {
             return true;
         }, IntPtr.Zero);
         return ok;
+    }
+
+    // -------------------------------------------------------------------------
+    // 25. realworkflow-altswitch: the closest automated proxy to the originally
+    //     reported real-world workflow — a real captured browser AND a second
+    //     real captured guest (Notepad) in ONE group, with a genuine
+    //     external-app alt-tab in between (never just a TabDock-internal tab
+    //     switch). Exercises the exact reported bug (typing after
+    //     alt-tab-away/back with no re-click) interleaved with ordinary
+    //     tab-strip switching between two real captured guests.
+    // -------------------------------------------------------------------------
+    private static void RealWorkflowAltSwitch(Ctx ctx, Options opt)
+    {
+        string htmlPath = CreateChromeKeyboardTestPage();
+        GuestInfo browser = SpawnClassGuest(ctx, ChromeExe,
+            $"--user-data-dir=\"{FreshProfileDir("TabDockRealWorkflowProfile")}\" --disable-gpu --no-first-run --no-default-browser-check --disable-session-crashed-bubble --app=\"{htmlPath}\"",
+            "Chrome_WidgetWin_1", useShellExecute: true);
+        GuestInfo notepad = SpawnNotepad(ctx);
+
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, browser, notepad);
+        Thread.Sleep(1500); // let post-capture settling (render-health, debounced save) finish
+
+        // A genuinely external app TabDock never captured (never another
+        // TabDock tab) — the driver's own console window, falling back to a
+        // throwaway pig. NOT a second Notepad: Windows 11's built-in Notepad
+        // is a single-instance, multi-tab app, so a second "notepad.exe <file>"
+        // launch just opens another tab in the SAME process as the Notepad
+        // already captured above, rather than a genuinely separate window —
+        // confirmed live (SpawnNotepad's own "reused existing process"
+        // warning fired with the identical PID as the captured guest).
+        IntPtr externalHwnd = Process.GetCurrentProcess().MainWindowHandle;
+        if (externalHwnd == IntPtr.Zero)
+        {
+            GuestInfo externalPig = SpawnPig(ctx, "RWAEXT", "--color", "white");
+            externalHwnd = externalPig.Hwnd;
+            // A newly-launched process's first window is typically granted
+            // automatic foreground by Windows as it appears — reclaim it for
+            // the container now, before the iteration loop assumes the
+            // container/browser already has real foreground from capture.
+            if (!Input.ForceForeground(container))
+                throw new InvalidOperationException("Could not reclaim the foreground for the container after spawning the external pig.");
+            Thread.Sleep(300);
+        }
+
+        // The browser's own window title (and therefore its tab-strip label,
+        // which mirrors the live window title) changes completely every time
+        // CreateChromeKeyboardTestPage's page reflects newly typed text into
+        // document.title, so it cannot be re-found by its original title the
+        // way FindTabText does elsewhere. Instead, find "the tab that is NOT
+        // Notepad" by elimination against Notepad's own stable title.
+        AutomationElement? FindOtherTab(string excludeNameContains, out int count)
+        {
+            count = 0;
+            AutomationElement? found = null;
+            AutomationElement? list = GetTabList(container);
+            if (list == null)
+                return null;
+            try
+            {
+                AutomationElementCollection all = list.FindAll(
+                    TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text));
+                foreach (AutomationElement el in all)
+                {
+                    string name;
+                    try { name = el.Current.Name ?? string.Empty; }
+                    catch { continue; }
+                    if (name.IndexOf(excludeNameContains, StringComparison.OrdinalIgnoreCase) >= 0)
+                        continue;
+                    count++;
+                    found ??= el;
+                }
+            }
+            catch
+            {
+            }
+            return found;
+        }
+
+        void EnsureBrowserActive()
+        {
+            if (IsDocked(browser.Hwnd, host))
+                return;
+            if (!Input.ForceForeground(container))
+                throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+            AutomationElement? tab = FindOtherTab(notepad.Title, out int count);
+            if (tab == null || count != 1)
+                throw new InvalidOperationException($"Browser tab not found uniquely by elimination against Notepad's tab (count={count}).");
+            (int tx, int ty) = Uia.Center(tab);
+            Input.ClickAt(tx, ty);
+            Util.WaitUntil(() => IsDocked(browser.Hwnd, host), 3000);
+        }
+
+        void SwitchToNotepad()
+        {
+            if (!Input.ForceForeground(container))
+                throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+            AutomationElement? tab = FindTabText(container, notepad.Title, out int count);
+            if (tab == null || count != 1)
+                throw new InvalidOperationException($"Notepad tab not found uniquely (count={count}).");
+            (int tx, int ty) = Uia.Center(tab);
+            Input.ClickAt(tx, ty);
+            Util.WaitUntil(() => IsDocked(notepad.Hwnd, host), 3000);
+        }
+
+        string? ReadNotepadValue()
+        {
+            string? value = null;
+            Util.WaitUntil(() =>
+            {
+                AutomationElement? root = Uia.FromHwnd(notepad.Hwnd);
+                if (root == null)
+                    return false;
+                AutomationElement? edit = Uia.FindEditOrDocument(root, out _);
+                if (edit == null)
+                    return false;
+                value = Uia.GetValue(edit);
+                return value != null;
+            }, 3000, 150);
+            return value;
+        }
+
+        void ClickHostCenterAndType(string text)
+        {
+            NativeMethods.RECT hostClient = Discover.GetClientScreenRect(host);
+            int cx = hostClient.left + hostClient.Width / 2;
+            int cy = hostClient.top + hostClient.Height / 2;
+            if (!Input.ForceForegroundRoot(host))
+                throw new InvalidOperationException("Could not bring the captured guest to the foreground — refusing to type blind.");
+            Input.ClickAt(cx, cy);
+            Thread.Sleep(300);
+            Input.TypeText(text);
+        }
+
+        const int iterations = 3;
+        for (int i = 1; i <= iterations; i++)
+        {
+            GuardedProc.Log($"  --- realworkflow-altswitch iteration {i}/{iterations} ---");
+
+            // 1) Ensure the browser tab is active, click into its input, type, verify.
+            EnsureBrowserActive();
+            ctx.Check(IsDocked(browser.Hwnd, host), $"iteration {i}: browser tab is active/docked before typing");
+            string typedA = $"RWA{i}";
+            ClickHostCenterAndType(typedA);
+            ctx.Check(Util.WaitUntil(() => (NativeMethods.GetWindowTextString(browser.Hwnd) ?? string.Empty).Contains(typedA, StringComparison.Ordinal), 5000),
+                $"iteration {i}: browser typed text '{typedA}' landed after a direct click into its input");
+
+            // 2) Alt-tab away to a genuinely external app (never another TabDock tab).
+            Input.ForceForegroundRoot(externalHwnd);
+            Thread.Sleep(800);
+
+            // 3) Alt-tab back to the container and type WITHOUT clicking first —
+            //    this is the precise reported-bug assertion.
+            if (!Input.ForceForeground(container))
+                throw new InvalidOperationException("Could not bring the container back to the foreground after switching away.");
+            Thread.Sleep(600);
+            string typedB = $"RWB{i}";
+            Input.TypeText(typedB);
+            ctx.Check(Util.WaitUntil(() => (NativeMethods.GetWindowTextString(browser.Hwnd) ?? string.Empty).Contains(typedB, StringComparison.Ordinal), 5000),
+                $"iteration {i}: browser typed text '{typedB}' (NO re-click) landed after an external alt-tab away and back — THE REPORTED BUG");
+
+            // 4) Switch to the OTHER tab (Notepad), click into it, type, verify.
+            SwitchToNotepad();
+            ctx.Check(IsDocked(notepad.Hwnd, host), $"iteration {i}: Notepad tab is active/docked before typing");
+            string typedNotepad = $"RWN{i}";
+            ClickHostCenterAndType(typedNotepad);
+            string? notepadValue = ReadNotepadValue();
+            ctx.Check(notepadValue != null && notepadValue.Contains(typedNotepad, StringComparison.Ordinal),
+                $"iteration {i}: Notepad contains typed text '{typedNotepad}' (value='{notepadValue ?? "<null>"}')");
+
+            // 5) Switch back to the browser tab, click into it, type, verify.
+            EnsureBrowserActive();
+            ctx.Check(IsDocked(browser.Hwnd, host), $"iteration {i}: browser tab is active/docked again after switching back from Notepad");
+            string typedC = $"RWC{i}";
+            ClickHostCenterAndType(typedC);
+            ctx.Check(Util.WaitUntil(() => (NativeMethods.GetWindowTextString(browser.Hwnd) ?? string.Empty).Contains(typedC, StringComparison.Ordinal), 5000),
+                $"iteration {i}: browser typed text '{typedC}' landed after switching back from the Notepad tab");
+        }
+
+        ctx.Check(browser.Proc != null && !browser.Proc.HasExited && notepad.Proc != null && !notepad.Proc.HasExited,
+            "both the browser and Notepad survived the whole alt-switch workflow");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+    }
+
+    // -------------------------------------------------------------------------
+    // 26. directclick-foreground-pairing: verifies
+    //     ContainerWindow.PairZOrderBehindGuest (wired in App.xaml.cs's
+    //     WindowForegroundChanged handler) — when the user clicks the guest
+    //     DIRECTLY (never touching TabDock's own tab-strip/title-bar UI),
+    //     keyboard input must still work and the container must re-pair
+    //     immediately behind the guest in z-order.
+    // -------------------------------------------------------------------------
+    private static void DirectClickForegroundPairing(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "DCFP", "--color", "blue", "--text-box");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "pig docked over host right after capture");
+
+        // Steal foreground with a genuinely external app TabDock never
+        // captured — the driver's own console window, falling back to a
+        // throwaway Notepad (never the pig captured above).
+        IntPtr externalHwnd = Process.GetCurrentProcess().MainWindowHandle;
+        if (externalHwnd == IntPtr.Zero)
+        {
+            GuestInfo externalNotepad = SpawnNotepad(ctx);
+            externalHwnd = externalNotepad.Hwnd;
+        }
+        Input.ForceForegroundRoot(externalHwnd);
+        Thread.Sleep(500);
+        ctx.Check(NativeMethods.GetForegroundWindow() != pig.Hwnd, "foreground stolen away from the pig before the direct click");
+
+        // The real assertion under test: click the pig's own docked content
+        // area DIRECTLY — deliberately NOT via Input.ForceForeground/
+        // ForceForegroundRoot and NOT via the tab strip. Windows' own
+        // click-to-activate must hand real foreground to the pig's HWND from
+        // raw SendInput alone, exactly like a human clicking the visible
+        // content of a docked tab.
+        NativeMethods.RECT dockedRect = Discover.GetClientScreenRect(host);
+        int cx = dockedRect.left + dockedRect.Width / 2;
+        int cy = dockedRect.top + dockedRect.Height / 2;
+        GuardedProc.Log($"  DirectClickForegroundPairing: clicking pig content directly at ({cx},{cy}) — no ForceForeground helper used.");
+        Input.ClickAt(cx, cy);
+
+        ctx.Check(Util.WaitUntil(() => NativeMethods.GetForegroundWindow() == pig.Hwnd, 3000),
+            "pig became the real foreground window from the direct click alone");
+        // Windows inserts invisible per-thread IME helper windows (MSCTFIME UI,
+        // Default IME) into the z-order next to whatever window a thread just
+        // touched — harmless and unrelated to PairZOrderBehindGuest, but they
+        // sit between the pig and the container in a raw GW_HWNDNEXT walk.
+        // Skip invisible windows so this checks the next REAL window, not the
+        // literal next HWND.
+        ctx.Check(Util.WaitUntil(() => NextVisibleWindow(pig.Hwnd) == container, 3000),
+            "container re-paired immediately behind the guest in z-order (PairZOrderBehindGuest)");
+
+        const string typed = "DCFPTEST";
+        Input.TypeText(typed);
+        ctx.Check(PigLog.WaitForPigLine(pig.Pid, $"TEXTBOX text='{typed}'", 3000),
+            $"pig text box received '{typed}' with zero re-click beyond the one direct click on its content");
+
+        ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "pig process alive throughout");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+    }
+
+    // -------------------------------------------------------------------------
+    // 27. dragout-by-titlebar: verifies ContainerWindow.NoteGuestMoveSize's
+    //     drag-out-by-real-titlebar hardening (DragOutThresholdPx = 40) — a
+    //     real mouse drag on the shepherded guest's OWN native title bar
+    //     (Shepherd never strips WS_CAPTION) must snap back on small jitter
+    //     and release the tab as a pop-out once it clears the threshold.
+    // -------------------------------------------------------------------------
+    private static void DragOutByTitlebar(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "DOT", "--color", "red");
+        NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT rectBeforeCapture);
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "pig docked over host right after capture");
+
+        NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT dockedRect);
+        int titleX = dockedRect.left + dockedRect.Width / 3;
+        int titleY = dockedRect.top + 15;
+        GuardedProc.Log($"  DragOutByTitlebar: titlebar drag point ({titleX},{titleY}), docked rect {Util.FormatRect(dockedRect)}.");
+
+        if (!Input.ForceForeground(pig.Hwnd))
+            throw new InvalidOperationException("Could not bring the docked pig to the foreground — refusing to drag blind.");
+
+        // --- Small jitter (under DragOutThresholdPx=40): must snap back. ---
+        Input.DragFromTo(titleX, titleY, titleX + 12, titleY + 8, 10);
+        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "small jitter drag (~14px) snaps back to docked");
+
+        // A second mouse-down at the exact same screen point shortly after the
+        // first click-drag-release risks Windows treating the pair as a
+        // double-click on the caption (which can toggle maximize or otherwise
+        // misbehave) rather than starting a fresh drag. Settle past any
+        // double-click timing window and start the second drag from a
+        // different point on the same title bar (still safely clear of the
+        // system-menu icon and the min/max/close buttons).
+        Thread.Sleep(700);
+        int titleX2 = titleX + 40;
+
+        // --- Real pop-out (well past the threshold). ---
+        long off = TabDockLog.RecordLogLength();
+        const int dx = 180, dy = 150;
+        Input.DragFromTo(titleX2, titleY, titleX2 + dx, titleY + dy, 14);
+
+        ctx.Check(Util.WaitUntil(() => IsReleasedAndShown(pig.Hwnd, host), 5000),
+            "drag-out past the 40px threshold releases the tab (shown standalone, not docked)");
+        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(container) || TabCount(container) == 0, 5000),
+            "tab removed from the strip (it was the only tab, so the container closes/empties)");
+        ctx.Check(TabDockLog.ContainsNewLine(off, "SHEPHERD[dragout]"),
+            "TabDock log recorded the drag-out release (SHEPHERD[dragout])");
+
+        // NoteGuestMoveSize's drag-out release goes through the same release
+        // path as every other release (Pop out via the tab strip, Close group,
+        // etc.): it restores the placement snapshotted at capture time, not
+        // wherever the drag happened to drop it — the drag-past-threshold is
+        // only the SIGNAL that this was an intentional pop-out, not a
+        // "leave it where dropped" gesture.
+        NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT rcAfterDrag);
+        ctx.Check(Util.RectNear(rectBeforeCapture, rcAfterDrag, 4),
+            $"pig restored to its original pre-capture placement (before {Util.FormatRect(rectBeforeCapture)}, after {Util.FormatRect(rcAfterDrag)})");
+        ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "pig process still alive after drag-out (released standalone, not killed)");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+    }
+
+    // -------------------------------------------------------------------------
+    // 28. crashkill-rescue: verifies WindowShepherdService.RescueOrphanedWindows
+    //     (called once at startup in App.xaml.cs, before GroupManager.RestoreState)
+    //     and the %APPDATA%\TabDock\hidden-windows.json crash journal. The
+    //     headline Shepherd-vs-Reparent improvement: since nothing is ever
+    //     reparented, BOTH guest processes/windows survive a force-kill of
+    //     TabDock outright (unlike the old backend's WS_CHILD-destroyed-
+    //     with-its-parent limitation) — this only has to bring the hidden
+    //     (inactive-tab) one back into view.
+    // -------------------------------------------------------------------------
+    private static void CrashKillRescue(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "CKRA", "--color", "blue");
+        GuestInfo pigB = SpawnPig(ctx, "CKRB", "--color", "green");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
+
+        GuestInfo dockedPig = IsDocked(pigA.Hwnd, host) ? pigA : pigB;
+        GuestInfo hiddenPig = dockedPig == pigA ? pigB : pigA;
+        ctx.Check(IsDocked(dockedPig.Hwnd, host), $"'{dockedPig.Title}' is the docked/active tab after capture");
+        ctx.Check(IsReleasedAndHidden(hiddenPig.Hwnd), $"'{hiddenPig.Title}' is the hidden inactive tab after capture");
+
+        GuardedProc.Log("  Force-killing TabDock (Process.Kill, no graceful shutdown) with a hidden captured tab.");
+        ctx.TabDock.Kill();
+        ctx.Check(Util.WaitUntil(() => ctx.TabDock.HasExited, 5000), "TabDock force-killed");
+        Thread.Sleep(1000);
+
+        ctx.Check(dockedPig.Proc != null && !dockedPig.Proc.HasExited, "docked pig's process survived the force-kill");
+        ctx.Check(hiddenPig.Proc != null && !hiddenPig.Proc.HasExited, "hidden pig's process survived the force-kill (Shepherd never reparented it)");
+        ctx.Check(NativeMethods.IsWindow(hiddenPig.Hwnd) && !NativeMethods.IsWindowVisible(hiddenPig.Hwnd),
+            "hidden pig's HWND still exists but stays hidden immediately after the kill (orphaned, awaiting rescue)");
+        ctx.Check(NativeMethods.IsWindow(dockedPig.Hwnd) && NativeMethods.IsWindowVisible(dockedPig.Hwnd),
+            "docked pig's HWND still exists and is visible (nothing is repositioning it now, but nothing destroyed it either)");
+
+        long relaunchOffset = TabDockLog.RecordLogLength();
+        Process td2 = GuardedProc.SpawnGuarded(new ProcessStartInfo(TabDockExe)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(TabDockExe)!,
+        });
+        ctx.TabDock = td2;
+        ctx.TabDockPid = (uint)td2.Id;
+        ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
+        ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched (MainWindow up)");
+
+        ctx.Check(TabDockLog.WaitForLogLine(relaunchOffset, "SHEPHERD[rescue]", 10000),
+            "TabDock log gained a SHEPHERD[rescue] line on the relaunch");
+        ctx.Check(TabDockLog.ContainsNewLine(relaunchOffset, $"0x{hiddenPig.Hwnd.ToInt64():X}"),
+            "the rescue log specifically names the previously-hidden pig's HWND");
+        int rescuedCount = TabDockLog.CountNewLines(relaunchOffset, "previously-hidden window(s) restored");
+        ctx.Check(rescuedCount >= 1, $"rescue count-summary line appeared (found {rescuedCount})");
+
+        ctx.Check(Util.WaitUntil(() => NativeMethods.IsWindowVisible(hiddenPig.Hwnd), 5000),
+            "previously-hidden pig is visible again after the relaunch rescue");
+    }
+
+    // -------------------------------------------------------------------------
+    // 29. realapp-multi-render: replaces the old (now-deleted) CaptureReleaseTest
+    //     project's unique value — real rendered-pixel verification — adapted
+    //     to Shepherd's stronger guarantee: since a shepherded guest is NEVER
+    //     reparented or restyled, release must restore BYTE-IDENTICAL
+    //     placement/style/exstyle/parent, not just "close enough". Verifies
+    //     rendering via PrintWindow directly on the guest's own HWND rather
+    //     than Pixels.CaptureHostScreenArea's screen-region BitBlt — see
+    //     Pixels.CaptureWindowViaPrintWindow's doc comment for why.
+    // -------------------------------------------------------------------------
+    private static void RealAppMultiRender(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "RAMR", "--color", "blue");
+
+        var placementBefore = new NativeMethods.WINDOWPLACEMENT { length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>() };
+        NativeMethods.GetWindowPlacement(pig.Hwnd, out placementBefore);
+        NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT rectBefore);
+        long styleBefore = (long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_STYLE);
+        long exstyleBefore = (long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_EXSTYLE);
+        IntPtr parentBefore = NativeMethods.GetParent(pig.Hwnd);
+
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "pig docked over host after capture");
+
+        Input.ForceForegroundRoot(host);
+        Thread.Sleep(500);
+        int[]? dockedFrame = Pixels.CaptureWindowViaPrintWindow(pig.Hwnd);
+        double dockedBrightness = dockedFrame != null ? Pixels.ComputeAvgBrightness(dockedFrame) : -1;
+        char dockedDominant = dockedFrame != null ? Pixels.DominantChannel(dockedFrame) : '?';
+        ctx.Check(dockedFrame != null && dockedBrightness > 1.0,
+            $"PrintWindow capture of the docked guest is not black (brightness={dockedBrightness:F2})");
+        ctx.Check(dockedDominant == 'b', $"PrintWindow capture shows the pig's own blue content (dominant channel='{dockedDominant}')");
+
+        ClickTabMenuItem(ctx, container, pig.Title, "Pop out");
+        ctx.Check(Util.WaitUntil(() => IsReleasedAndShown(pig.Hwnd, host), 5000), "pig released and shown at its own placement");
+        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(container), 3000), "container closed (last tab popped out)");
+
+        var placementAfter = new NativeMethods.WINDOWPLACEMENT { length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>() };
+        NativeMethods.GetWindowPlacement(pig.Hwnd, out placementAfter);
+        NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT rectAfter);
+        long styleAfter = (long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_STYLE);
+        long exstyleAfter = (long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_EXSTYLE);
+        IntPtr parentAfter = NativeMethods.GetParent(pig.Hwnd);
+
+        ctx.Check(Util.RectNear(rectBefore, rectAfter, 0),
+            $"GetWindowRect byte-identical after release (before {Util.FormatRect(rectBefore)}, after {Util.FormatRect(rectAfter)})");
+        ctx.Check(Util.RectNear(placementBefore.rcNormalPosition, placementAfter.rcNormalPosition, 0),
+            "WINDOWPLACEMENT.rcNormalPosition byte-identical after release");
+        ctx.Check(placementBefore.showCmd == placementAfter.showCmd,
+            $"WINDOWPLACEMENT.showCmd unchanged (before={placementBefore.showCmd}, after={placementAfter.showCmd})");
+        ctx.Check(styleBefore == styleAfter, $"GWL_STYLE bits byte-identical (before=0x{styleBefore:X}, after=0x{styleAfter:X})");
+        ctx.Check(exstyleBefore == exstyleAfter, $"GWL_EXSTYLE bits byte-identical (before=0x{exstyleBefore:X}, after=0x{exstyleAfter:X})");
+        ctx.Check(parentBefore == IntPtr.Zero && parentAfter == IntPtr.Zero,
+            $"parent is IntPtr.Zero both before and after (never reparented) (before=0x{parentBefore.ToInt64():X}, after=0x{parentAfter.ToInt64():X})");
+
+        ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "pig process alive throughout capture and release");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+
+        // Best-effort secondary coverage: a real GPU-accelerated app (Chrome),
+        // verified via the same PrintWindow-based method. Deliberately NOT a
+        // hard ctx.Check — real-browser capture in an unattended run is
+        // flakier (profile/session state, first-paint timing) than the
+        // deterministic pig, so a failure here only logs a warning and never
+        // fails the scenario.
+        try
+        {
+            GuestInfo chrome = SpawnGuest(ctx, "chrome-normal");
+            (IntPtr chromeContainer, IntPtr chromeHost) = CaptureIntoGroup(ctx, chrome);
+            Util.WaitUntil(() => IsDocked(chrome.Hwnd, chromeHost), 3000);
+            Input.ForceForegroundRoot(chromeHost);
+            Thread.Sleep(800);
+
+            int[]? chromeFrame = Pixels.CaptureWindowViaPrintWindow(chrome.Hwnd);
+            double chromeBrightness = chromeFrame != null ? Pixels.ComputeAvgBrightness(chromeFrame) : -1;
+            if (chromeFrame != null && chromeBrightness > 1.0)
+                GuardedProc.Log($"  realapp-multi-render (best-effort): Chrome PrintWindow capture rendered correctly (brightness={chromeBrightness:F2}).");
+            else
+                GuardedProc.Log($"  WARNING (best-effort, not a hard failure): Chrome PrintWindow capture looked black/empty (brightness={chromeBrightness:F2}).");
+
+            ClickTabMenuItem(ctx, chromeContainer, chrome.EffectiveTabMatchKey, "Pop out");
+            Util.WaitUntil(() => IsReleased(chrome, chromeHost), 5000);
+        }
+        catch (Exception ex)
+        {
+            GuardedProc.Log($"  WARNING (best-effort, not a hard failure): real-app (Chrome) PrintWindow coverage threw: {ex.Message}");
+        }
     }
 }

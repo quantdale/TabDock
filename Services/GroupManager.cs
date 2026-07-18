@@ -14,7 +14,6 @@ namespace TabDock.Services;
 /// </summary>
 public sealed class GroupManager
 {
-    private readonly WindowCaptureService _capture;
     private readonly WindowShepherdService _shepherd;
     private readonly PersistenceService _persistence;
     private readonly LoggingService _log;
@@ -23,24 +22,11 @@ public sealed class GroupManager
 
     public ObservableCollection<Group> Groups { get; } = new();
 
-    public GroupManager(WindowCaptureService capture, WindowShepherdService shepherd, PersistenceService persistence, LoggingService log)
+    public GroupManager(WindowShepherdService shepherd, PersistenceService persistence, LoggingService log)
     {
-        _capture = capture;
         _shepherd = shepherd;
         _persistence = persistence;
         _log = log;
-    }
-
-    /// <summary>
-    /// Releases a captured window through whichever backend originally
-    /// captured its owning group (see <see cref="Group.Mode"/>).
-    /// </summary>
-    private void ReleaseViaBackend(Group group, CapturedWindow cw, bool show)
-    {
-        if (group.Mode == GroupCaptureMode.Shepherd)
-            _shepherd.Release(cw, show);
-        else
-            _capture.Release(cw, show);
     }
 
     public void RestoreState()
@@ -140,21 +126,6 @@ public sealed class GroupManager
         return group;
     }
 
-    public string? CaptureIntoGroup(IntPtr hwnd, IntPtr hostHwnd, Group group)
-    {
-        if (IsOwnWindow(hwnd))
-            return "Cannot capture a TabDock window (no nesting).";
-
-        var cw = _capture.Capture(hwnd, hostHwnd, out string? error);
-        if (cw == null)
-            return error ?? "Capture failed.";
-
-        group.Members.Add(cw);
-        group.ActiveIndex = group.Members.Count - 1;
-        _log.Log($"Added window 0x{hwnd.ToInt64():X} to group {group.Id}");
-        return null;
-    }
-
     public void SwitchActiveTab(Group group, int index)
     {
         if (index < 0 || index >= group.Members.Count)
@@ -188,7 +159,7 @@ public sealed class GroupManager
 
         var cw = group.Members[index];
         group.Members.RemoveAt(index);
-        ReleaseViaBackend(group, cw, show);
+        _shepherd.Release(cw, show);
 
         if (group.ActiveIndex >= group.Members.Count)
             group.ActiveIndex = group.Members.Count - 1;
@@ -204,7 +175,7 @@ public sealed class GroupManager
         {
             var cw = group.Members[^1];
             group.Members.RemoveAt(group.Members.Count - 1);
-            ReleaseViaBackend(group, cw, show: true);
+            _shepherd.Release(cw, show: true);
         }
 
         if (Groups.Contains(group))
@@ -234,7 +205,7 @@ public sealed class GroupManager
                 {
                     try
                     {
-                        ReleaseViaBackend(group, cw, show: true);
+                        _shepherd.Release(cw, show: true);
                     }
                     catch (Exception ex)
                     {

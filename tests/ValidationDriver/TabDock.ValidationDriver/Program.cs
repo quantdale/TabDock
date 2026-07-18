@@ -58,7 +58,8 @@ internal static class Program
         {
             bool known = Array.IndexOf(Scenarios.AllOrder, s) >= 0
                 || s == "realapp" || s == "browser-multi"
-                || Array.IndexOf(Scenarios.BrowserOnlyScenarios, s) >= 0;
+                || Array.IndexOf(Scenarios.BrowserOnlyScenarios, s) >= 0
+                || Array.IndexOf(Scenarios.StandaloneExtraScenarios, s) >= 0;
             if (!known)
                 return Usage($"Unknown scenario '{s}'.");
         }

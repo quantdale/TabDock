@@ -112,10 +112,13 @@ try {
     $tabs = Wait-For { $items = $tabsList.FindAll([System.Windows.Automation.TreeScope]::Children, $itemType); if ($items.Count -eq 2) { $items } } 'two tabs in strip'
     Say "Tabs present: $(($tabs | ForEach-Object { $_.Current.Name }) -join ' | ')"
 
-    # While captured, the consoles must NOT be top-level windows.
-    if ((Get-Win32Window 'TabDockTestA') -ne [IntPtr]::Zero) { $failures += 'Console A still top-level while captured' }
-    if ((Get-Win32Window 'TabDockTestB') -ne [IntPtr]::Zero) { $failures += 'Console B still top-level while captured' }
-    if ($failures.Count -eq 0) { Say 'Confirmed: both consoles reparented (no longer top-level).' }
+    # Shepherd never reparents: the ACTIVE tab's console stays a real, visible
+    # top-level window (docked over the content area); only the INACTIVE one
+    # is hidden. Exactly one of the two must be findable as a visible
+    # top-level window, not zero and not both.
+    $visibleCount = @('TabDockTestA', 'TabDockTestB') | Where-Object { (Get-Win32Window $_) -ne [IntPtr]::Zero } | Measure-Object | ForEach-Object { $_.Count }
+    if ($visibleCount -ne 1) { $failures += "expected exactly 1 of the 2 captured consoles visible (docked active tab), found $visibleCount" }
+    if ($failures.Count -eq 0) { Say 'Confirmed: exactly one console is docked+visible (the active tab), the other is hidden.' }
 
     Say 'Switching tabs: select tab 2, then tab 1'
     foreach ($idx in 1, 0) {

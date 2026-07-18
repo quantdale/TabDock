@@ -83,6 +83,80 @@ internal static class Pixels
         return pixels;
     }
 
+    /// <summary>
+    /// Captures a window's own rendered content directly via PrintWindow
+    /// (PW_RENDERFULLCONTENT), reading the window's own back-buffer instead of
+    /// the DWM-composited screen region. Added for realapp-multi-render: in
+    /// this sandboxed dev environment, screen-region BitBlt
+    /// (<see cref="CaptureHostScreenArea"/>) was observed to spuriously show a
+    /// hardware-accelerated window's content as solid black even while
+    /// PrintWindow — reading the same window at the same moment — showed it
+    /// rendering correctly. Pixels are 32-bit 0x00RRGGBB ints, same layout as
+    /// CaptureHostScreenArea's output.
+    /// </summary>
+    public static int[]? CaptureWindowViaPrintWindow(IntPtr hwnd)
+    {
+        if (!NativeMethods.IsWindow(hwnd))
+            return null;
+
+        NativeMethods.GetWindowRect(hwnd, out NativeMethods.RECT rc);
+        int width = rc.Width;
+        int height = rc.Height;
+        if (width <= 0 || height <= 0)
+            return null;
+
+        IntPtr hdcScreen = NativeMethods.GetDC(IntPtr.Zero);
+        if (hdcScreen == IntPtr.Zero)
+            return null;
+
+        var bmi = new NativeMethods.BITMAPINFO
+        {
+            bmiHeader = new NativeMethods.BITMAPINFOHEADER
+            {
+                biSize = (uint)Marshal.SizeOf<NativeMethods.BITMAPINFOHEADER>(),
+                biWidth = width,
+                biHeight = -height,
+                biPlanes = 1,
+                biBitCount = 32,
+                biCompression = 0,
+                biSizeImage = (uint)(width * height * 4),
+            }
+        };
+
+        IntPtr bits = IntPtr.Zero;
+        IntPtr hbm = NativeMethods.CreateDIBSection(hdcScreen, ref bmi, NativeMethods.DIB_RGB_COLORS, out bits, IntPtr.Zero, 0);
+        if (hbm == IntPtr.Zero)
+        {
+            NativeMethods.ReleaseDC(IntPtr.Zero, hdcScreen);
+            return null;
+        }
+
+        IntPtr hdcMem = NativeMethods.CreateCompatibleDC(hdcScreen);
+        if (hdcMem == IntPtr.Zero)
+        {
+            NativeMethods.DeleteObject(hbm);
+            NativeMethods.ReleaseDC(IntPtr.Zero, hdcScreen);
+            return null;
+        }
+
+        NativeMethods.SelectObject(hdcMem, hbm);
+        bool ok = NativeMethods.PrintWindow(hwnd, hdcMem, NativeMethods.PW_RENDERFULLCONTENT);
+
+        int[] pixels = new int[width * height];
+        if (ok && bits != IntPtr.Zero)
+        {
+            Marshal.Copy(bits, pixels, 0, pixels.Length);
+        }
+
+        NativeMethods.DeleteDC(hdcMem);
+        NativeMethods.DeleteObject(hbm);
+        NativeMethods.ReleaseDC(IntPtr.Zero, hdcScreen);
+
+        if (!ok)
+            return null;
+        return pixels;
+    }
+
     /// <summary>Average per-pixel-channel brightness (0..255). Below ~1.0 means black/blank.</summary>
     public static double ComputeAvgBrightness(int[] pixels)
     {

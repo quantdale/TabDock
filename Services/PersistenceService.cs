@@ -37,7 +37,6 @@ public sealed class PersistenceService
                     Name = g.Name,
                     AccentColor = g.AccentColor,
                     ActiveIndex = g.ActiveIndex,
-                    Mode = (int)g.Mode,
                 };
                 if (g.Members.Count > 0)
                 {
@@ -113,7 +112,6 @@ public sealed class PersistenceService
                     Id = pg.Id == Guid.Empty ? Guid.NewGuid() : pg.Id,
                     Name = string.IsNullOrWhiteSpace(pg.Name) ? "Group" : pg.Name,
                     AccentColor = string.IsNullOrWhiteSpace(pg.AccentColor) ? "#2196F3" : pg.AccentColor,
-                    Mode = Enum.IsDefined(typeof(GroupCaptureMode), pg.Mode) ? (GroupCaptureMode)pg.Mode : GroupCaptureMode.Reparent,
                 };
 
                 foreach (var pt in pg.Tabs)

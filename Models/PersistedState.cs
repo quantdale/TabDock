@@ -21,9 +21,6 @@ public sealed class PersistedGroup
     public string Name { get; set; } = string.Empty;
     public string AccentColor { get; set; } = string.Empty;
     public int ActiveIndex { get; set; }
-
-    /// <summary>Serialized <see cref="CaptureMode"/> (int cast) for this group.</summary>
-    public int Mode { get; set; }
     public List<PersistedTab> Tabs { get; set; } = new();
 }
 
@@ -39,8 +36,23 @@ public sealed class PersistedTab
     public bool WasMaximized { get; set; }
 }
 
+/// <summary>One hidden shepherded guest tracked for crash recovery (see WindowShepherdService.RescueOrphanedWindows).</summary>
+public sealed class HiddenWindowEntry
+{
+    public long Hwnd { get; set; }
+    public uint Pid { get; set; }
+    public string ExePath { get; set; } = string.Empty;
+}
+
+/// <summary>Root DTO for %APPDATA%\TabDock\hidden-windows.json.</summary>
+public sealed class HiddenWindowJournalFile
+{
+    public List<HiddenWindowEntry> Entries { get; set; } = new();
+}
+
 [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true, WriteIndented = true)]
 [JsonSerializable(typeof(PersistedState))]
+[JsonSerializable(typeof(HiddenWindowJournalFile))]
 public partial class TabDockJsonContext : JsonSerializerContext
 {
 }

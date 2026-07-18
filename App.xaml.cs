@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using Microsoft.Win32;
-using TabDock.Infrastructure;
 using TabDock.Models;
 using TabDock.Services;
 using TabDock.ViewModels;
@@ -19,10 +18,7 @@ namespace TabDock;
 public partial class App : Application
 {
     private LoggingService _log = null!;
-    private DpiService _dpi = null!;
-    private RenderHealthService _renderHealth = null!;
     private IconService _icons = null!;
-    private WindowCaptureService _capture = null!;
     private WindowShepherdService _shepherd = null!;
     private PersistenceService _persistence = null!;
     private GroupManager _groups = null!;
@@ -63,17 +59,15 @@ public partial class App : Application
             // still be diagnosed.
             _log ??= new LoggingService();
 
-            _dpi = new DpiService();
-            _renderHealth = new RenderHealthService();
             _icons = new IconService();
-            _capture = new WindowCaptureService(_log, _icons, _dpi);
             _shepherd = new WindowShepherdService(_log);
             _persistence = new PersistenceService(_log);
-            _groups = new GroupManager(_capture, _shepherd, _persistence, _log);
+            _groups = new GroupManager(_shepherd, _persistence, _log);
             _events = new WinEventMonitor(_groups.IsCapturedWindow, _log);
             _hotkey = new HotkeyService(_log);
 
             WireWinEvents();
+            WindowShepherdService.RescueOrphanedWindows(_log);
             _groups.RestoreState();
 
             _mainViewModel = new MainViewModel(_groups);
@@ -136,9 +130,6 @@ public partial class App : Application
         _log?.Log("Application exiting; releasing all captured windows and saving state.");
         try
         {
-            // Detach any remaining cross-thread input attachments before releasing
-            // guests, so the guest threads are not left chained to a dying host.
-            NativeHwndHost.DetachAllGuests();
             _groups?.EmergencyReleaseAll();
             _groups?.SaveState();
         }
@@ -161,7 +152,6 @@ public partial class App : Application
         SaveStateGuarded("dispatcher exception");
         try
         {
-            NativeHwndHost.DetachAllGuests();
             _groups?.EmergencyReleaseAll();
         }
         catch (Exception ex)
@@ -179,7 +169,6 @@ public partial class App : Application
         SaveStateGuarded("AppDomain exception");
         try
         {
-            NativeHwndHost.DetachAllGuests();
             _groups?.EmergencyReleaseAll();
         }
         catch (Exception ex)
@@ -196,7 +185,6 @@ public partial class App : Application
         SaveStateGuarded("session ending");
         try
         {
-            NativeHwndHost.DetachAllGuests();
             _groups?.EmergencyReleaseAll();
         }
         catch (Exception ex)
@@ -317,12 +305,29 @@ public partial class App : Application
         };
 
         // A guest entered/left its interactive move/size modal loop (e.g. the
-        // user dragged Chrome by its client-drawn tab strip, which hit-tests as
-        // HTCAPTION even after the frame strip). The container suspends its
-        // drift watchdog during the loop and re-clamps the guest to fill the
-        // content host when the loop ends.
+        // user dragged it by its own real title bar — a shepherded guest keeps
+        // one). The container decides on MOVESIZEEND whether that was jitter
+        // (snap back) or an intentional drag-out (release the tab).
         _events.WindowMoveSizeStarted += (_, args) => OnGuestMoveSize(args.Hwnd, started: true);
         _events.WindowMoveSizeEnded += (_, args) => OnGuestMoveSize(args.Hwnd, started: false);
+
+        // The guest became the system foreground window by some means other
+        // than the container's own BringToFront — the user alt-tabbed to it
+        // via Windows' own switcher, or clicked it directly instead of the
+        // tab strip. Keep the container paired immediately behind it in
+        // z-order (purely cosmetic: input already routes to the guest
+        // correctly regardless, since it is a real, untouched top-level
+        // window either way).
+        _events.WindowForegroundChanged += (_, args) =>
+        {
+            foreach (var group in _groups.Groups)
+            {
+                if (!group.Members.Any(m => m.Hwnd == args.Hwnd))
+                    continue;
+                if (_containers.TryGetValue(group.Id, out var container))
+                    container.PairZOrderBehindGuest(args.Hwnd);
+            }
+        };
 
         _events.WindowNameChanged += (_, args) => DebounceNameChanged(args.Hwnd);
     }
@@ -496,7 +501,7 @@ public partial class App : Application
         // The container's "+" button funnels through this event; without the
         // subscription it is a dead control.
         vm.AddWindowsRequested += (_, _) => ShowCapturePicker(group);
-        var window = new ContainerWindow(vm, _groups, _capture, _shepherd, _renderHealth, _log);
+        var window = new ContainerWindow(vm, _groups, _shepherd, _log);
         window.Closed += (_, _) => OnContainerClosed(group.Id);
         _containers[group.Id] = window;
         window.Show();

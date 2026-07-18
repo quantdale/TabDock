@@ -118,9 +118,11 @@ try {
         if ($t -ne 3) { $failures += "cycle ${cycle}: ticked $t/3" }
         $containerHwnd = Wait-For { $x = Get-Win32Window 'Group' $tabPid; if ($x -ne [IntPtr]::Zero) { $x } } "container (cycle $cycle)"
         Start-Sleep -Milliseconds 800
-        # all three reparented?
+        # Shepherd never reparents: only the active tab's console stays a
+        # real, visible top-level window (docked over the content area); the
+        # other two are hidden. Exactly one of the three must be visible.
         $stillTop = @('A','B','C') | Where-Object { (Get-Win32Window "TabDockTest$_") -ne [IntPtr]::Zero }
-        if ($stillTop) { $failures += "cycle ${cycle}: not captured: $($stillTop -join ',')" }
+        if ($stillTop.Count -ne 1) { $failures += "cycle ${cycle}: expected exactly 1 docked+visible console, found $($stillTop.Count): $($stillTop -join ',')" }
         # ungroup via close dialog -> No
         [W.U]::PostMessage($containerHwnd, $WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
         $dlg = Wait-For { $x = Get-Win32Window 'Close group' $tabPid; if ($x -ne [IntPtr]::Zero) { $x } } "close dialog (cycle $cycle)" 15

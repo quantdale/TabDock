@@ -13,25 +13,26 @@ using TabDock.ViewModels;
 namespace TabDock.Views;
 
 /// <summary>
-/// A container window that hosts reparented application windows in a tabbed UI.
+/// A container window that hosts shepherded application windows in a tabbed UI.
+/// A shepherded guest is never reparented or restyled — it stays an unmodified
+/// top-level window; this container just positions, shows, hides, and z-orders
+/// it (see Services/WindowShepherdService.cs and
+/// docs/internal/deep-audit-2026-07-17.md section 6).
 /// </summary>
 public partial class ContainerWindow : Window
 {
     private readonly GroupViewModel _viewModel;
     private readonly GroupManager _manager;
-    private readonly WindowCaptureService _capture;
     private readonly WindowShepherdService _shepherd;
-    private readonly RenderHealthService _renderHealth;
     private readonly LoggingService _log;
 
-    // Shepherd-mode (docs/internal/deep-audit-2026-07-17.md, section 6) active-tab
-    // tracking. Only meaningful when Group.Mode == GroupCaptureMode.Shepherd; a
-    // shepherded guest is never bound to ContentHost.ActiveWindow (that path is
-    // reparent-only), so this field and the methods around it are this
-    // container's entire sync loop for shepherded guests.
+    // The shepherded active-tab guest. Never bound through a WPF dependency
+    // property (a shepherd guest is a sibling top-level window, not content
+    // hosted inside anything) — this field and the methods around it are this
+    // container's entire sync loop for the active tab.
     private CapturedWindow? _shepherdActiveWindow;
 
-    // Drag state
+    // Drag state (tab-strip reorder / drag-out)
     private TabViewModel? _draggedTab;
     private Point _dragStart;
     private ListBoxItem? _draggedItem;
@@ -46,21 +47,10 @@ public partial class ContainerWindow : Window
     private int _dragMidpointsCount;
     private bool _dragMidpointsValid;
 
-    // Guest clamp enforcement. The capture-time fill-clamp is not final: a
-    // guest can move/resize itself within the host (Chrome hit-tests its
-    // client-drawn tab strip as HTCAPTION, so it can be dragged even as a
-    // frame-stripped WS_CHILD; apps also self-position programmatically).
-    private IntPtr _guestInMoveSize;
-    private System.Windows.Threading.DispatcherTimer? _driftTimer;
-    private IntPtr _driftHwnd;
-    private int _driftCorrections;
-    private const int MaxConsecutiveDriftCorrections = 10;
-
-    // Deferred clamp for maximized guests: MOVESIZEEND fires before the window
-    // has finished restoring, so immediate clamping corrupts the render surface.
-    private System.Windows.Threading.DispatcherTimer? _reclampRetryTimer;
-    private CapturedWindow? _reclampPendingWindow;
-    private string _reclampPendingReason = string.Empty;
+    // A guest dragged more than this many pixels off its docked position by its
+    // own (real, visible) title bar is treated as an intentional pop-out rather
+    // than jitter to snap back. See NoteGuestMoveSize.
+    private const int DragOutThresholdPx = 40;
 
     /// <summary>
     /// Set by App before any exit/crash path calls Application.Shutdown so every
@@ -78,17 +68,16 @@ public partial class ContainerWindow : Window
     public Group Group => _viewModel.Model;
 
     /// <summary>
-    /// The native HWND into which captured windows are reparented.
+    /// The native marker HWND that defines exactly where the content area sits
+    /// on screen. See Infrastructure/NativeHwndHost.cs.
     /// </summary>
     public IntPtr ContentHostHwnd => ContentHost.HostWindowHandle;
 
-    public ContainerWindow(GroupViewModel viewModel, GroupManager manager, WindowCaptureService capture, WindowShepherdService shepherd, RenderHealthService renderHealth, LoggingService log)
+    public ContainerWindow(GroupViewModel viewModel, GroupManager manager, WindowShepherdService shepherd, LoggingService log)
     {
         _viewModel = viewModel;
         _manager = manager;
-        _capture = capture;
         _shepherd = shepherd;
-        _renderHealth = renderHealth;
         _log = log;
         DataContext = viewModel;
         InitializeComponent();
@@ -106,7 +95,7 @@ public partial class ContainerWindow : Window
 
     private void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(GroupViewModel.ActiveTab) && Group.Mode == GroupCaptureMode.Shepherd)
+        if (e.PropertyName == nameof(GroupViewModel.ActiveTab))
         {
             SyncShepherdActiveWindow();
         }
@@ -118,8 +107,7 @@ public partial class ContainerWindow : Window
         // Clamp maximize to the monitor work area. A WindowStyle="None" +
         // WindowChrome window otherwise maximizes to the full monitor plus the
         // invisible resize border, covering the taskbar and spilling a few pixels
-        // past every edge — which sizes the reparented guest LARGER than the
-        // visible monitor at a negative origin. See WndProc/WM_GETMINMAXINFO.
+        // past every edge. See WndProc/WM_GETMINMAXINFO.
         IntPtr hwnd = new WindowInteropHelper(this).Handle;
         HwndSource? source = HwndSource.FromHwnd(hwnd);
         source?.AddHook(WndProc);
@@ -129,38 +117,37 @@ public partial class ContainerWindow : Window
     {
         if ((uint)msg == NativeMethods.WM_ACTIVATE)
         {
-            // Manage the scoped cross-thread input attachment for the active guest.
-            // Detach when the container loses foreground so the guest's thread is not
-            // chained to an inactive host; attach + focus when the container comes
-            // back (alt-tab, click on caption, etc.) so keyboard input routes to the
-            // guest again.
             uint activateKind = (uint)(wParam.ToInt64() & 0xFFFF);
-            if (Group.Mode == GroupCaptureMode.Shepherd)
+            // On activation (alt-tab back, click on caption), re-assert the
+            // guest's overlay position/z-order (it may have drifted while
+            // inactive) and give it real foreground activation. On
+            // deactivation there is nothing to do — Windows naturally raises
+            // whatever the user just activated above both the container and
+            // its docked guest, and the guest's own input handling is
+            // completely untouched (no attach/detach state to manage: the
+            // guest is a real top-level window the whole time).
+            if ((activateKind == NativeMethods.WA_ACTIVE || activateKind == NativeMethods.WA_CLICKACTIVE) &&
+                _shepherdActiveWindow != null)
             {
-                // No thread-input attachment exists in shepherd mode. On
-                // activation, re-assert the guest's overlay position/z-order
-                // (it may have drifted while inactive) and give it real
-                // foreground activation. On deactivation there is nothing to
-                // detach — Windows naturally raises whatever the user just
-                // activated above both the container and its docked guest.
-                if ((activateKind == NativeMethods.WA_ACTIVE || activateKind == NativeMethods.WA_CLICKACTIVE) &&
-                    _shepherdActiveWindow != null)
+                // Because the container is kept z-order-paired immediately
+                // behind its active guest, the guest hiding ITSELF (e.g. a
+                // tray-style close) naturally hands this container the very
+                // next WM_ACTIVATE — delivered synchronously as part of the
+                // same OS activation transaction, which can race ahead of the
+                // guest's own Hide() call fully settling. Forcing it back to
+                // visible here (PositionAndShow uses SWP_SHOWWINDOW) would
+                // fight that intentional hide. Defer briefly and re-check
+                // visibility right before acting, so an in-flight self-hide
+                // has settled either way by the time this decides.
+                CapturedWindow activeWindow = _shepherdActiveWindow;
+                var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+                timer.Tick += (_, _) =>
                 {
-                    _shepherd.BringToFront(_shepherdActiveWindow, hwnd, GetContentAreaScreenRect());
-                }
-            }
-            else if (activateKind == NativeMethods.WA_ACTIVE || activateKind == NativeMethods.WA_CLICKACTIVE)
-            {
-                ContentHost.AttachActiveGuest();
-                var active = _viewModel.ActiveTab?.Model;
-                if (active != null && NativeMethods.IsWindow(active.Hwnd))
-                {
-                    GuestActivationHelper.FocusGuest(active.Hwnd, _log);
-                }
-            }
-            else if (activateKind == NativeMethods.WA_INACTIVE)
-            {
-                ContentHost.DetachActiveGuest();
+                    timer.Stop();
+                    if (_shepherdActiveWindow == activeWindow && NativeMethods.IsWindowVisible(activeWindow.Hwnd))
+                        _shepherd.BringToFront(activeWindow, hwnd, GetContentAreaScreenRect());
+                };
+                timer.Start();
             }
         }
         else if ((uint)msg == NativeMethods.WM_GETMINMAXINFO)
@@ -191,8 +178,6 @@ public partial class ContainerWindow : Window
         IntPtr hwnd = new WindowInteropHelper(this).EnsureHandle();
         _manager.RegisterContainerHwnd(hwnd);
 
-        ContentHost.Service = _capture;
-        ContentHost.Logger = _log;
         if (ContentHost.HostWindowHandle != IntPtr.Zero)
             _manager.RegisterContainerHwnd(ContentHost.HostWindowHandle);
 
@@ -202,18 +187,10 @@ public partial class ContainerWindow : Window
 
         PreviewKeyDown += ContainerWindow_PreviewKeyDown;
 
-        // Watchdog for guests that re-position themselves programmatically
-        // (DPI-suggested rects, Electron setBounds, ...) — those never enter a
-        // move/size modal loop, so the MOVESIZEEND hook cannot see them.
-        // Shepherd-mode groups do not use this watchdog (see DriftTimer_Tick).
-        _driftTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _driftTimer.Tick += DriftTimer_Tick;
-        _driftTimer.Start();
-
         // Keep the shepherded active guest glued to the content area as the
-        // container itself moves or resizes (the Reparent backend gets this
-        // for free from WS_CHILD/HwndHost; a shepherded guest is a sibling
-        // top-level window, so this container must reposition it explicitly).
+        // container itself moves or resizes (a shepherded guest is a sibling
+        // top-level window, so this container must reposition it explicitly —
+        // there is no WS_CHILD/HwndHost relationship to get this for free).
         LocationChanged += (_, _) => LayoutShepherdActiveWindow();
         SizeChanged += (_, _) => LayoutShepherdActiveWindow();
     }
@@ -287,24 +264,7 @@ public partial class ContainerWindow : Window
 
     private void ContainerWindow_Closed(object? sender, EventArgs e)
     {
-        // Detach the active guest before the container disappears so the guest's
-        // input thread is not left chained to a host whose HWND is being destroyed.
-        ContentHost.DetachActiveGuest();
         _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
-
-        if (_driftTimer != null)
-        {
-            _driftTimer.Stop();
-            _driftTimer.Tick -= DriftTimer_Tick;
-            _driftTimer = null;
-        }
-
-        if (_reclampRetryTimer != null)
-        {
-            _reclampRetryTimer.Stop();
-            _reclampRetryTimer.Tick -= ReclampRetryTimer_Tick;
-            _reclampRetryTimer = null;
-        }
 
         IntPtr hwnd = new WindowInteropHelper(this).Handle;
         _manager.UnregisterContainerHwnd(hwnd);
@@ -314,9 +274,9 @@ public partial class ContainerWindow : Window
 
     private void ContainerWindow_StateChanged(object? sender, EventArgs e)
     {
-        MaximizeButton.Content = WindowState == WindowState.Maximized ? "\uE923" : "\uE739";
+        MaximizeButton.Content = WindowState == WindowState.Maximized ? "" : "";
 
-        if (Group.Mode == GroupCaptureMode.Shepherd && _shepherdActiveWindow != null)
+        if (_shepherdActiveWindow != null)
         {
             // A minimized container has no visible content area to overlay;
             // hide the docked guest along with it. Restoring re-positions and
@@ -328,8 +288,7 @@ public partial class ContainerWindow : Window
         }
 
         // Lightweight state snapshot after the transition settles. Retained (low
-        // volume: once per maximize/restore) as a field-diagnosis aid for the
-        // known GPU/Electron black-content-on-reparent limitation.
+        // volume: once per maximize/restore) as a field-diagnosis aid.
         var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(750) };
         timer.Tick += (_, _) =>
         {
@@ -358,18 +317,22 @@ public partial class ContainerWindow : Window
             if (ContentHostHwnd != IntPtr.Zero)
             {
                 NativeMethods.GetWindowRect(ContentHostHwnd, out NativeMethods.RECT hostRect);
-                NativeMethods.GetClientRect(ContentHostHwnd, out NativeMethods.RECT hostClient);
-                hostDesc = $"rect={hostRect.left},{hostRect.top},{hostRect.Width}x{hostRect.Height} client={hostClient.Width}x{hostClient.Height}";
+                hostDesc = $"rect={hostRect.left},{hostRect.top},{hostRect.Width}x{hostRect.Height}";
             }
 
             string guestDesc = "none";
             var active = _viewModel.ActiveTab?.Model;
             if (active != null)
             {
-                guestDesc = WindowCaptureService.DescribeWindow(active.Hwnd);
+                guestDesc = NativeMethods.DescribeWindow(active.Hwnd);
                 if (NativeMethods.IsWindow(active.Hwnd))
-                    guestDesc += $" parentIsHost={NativeMethods.GetParent(active.Hwnd) == ContentHostHwnd}";
-                guestDesc += $" renderHealth={active.RenderHealth}";
+                {
+                    NativeMethods.GetWindowRect(active.Hwnd, out NativeMethods.RECT guestRect);
+                    NativeMethods.RECT docked = GetContentAreaScreenRect();
+                    bool isDocked = guestRect.left == docked.left && guestRect.top == docked.top
+                        && guestRect.right == docked.right && guestRect.bottom == docked.bottom;
+                    guestDesc += $" docked={isDocked}";
+                }
             }
 
             _log.Log($"STATE[{phase}] winState={WindowState} container={winRect.left},{winRect.top},{winRect.Width}x{winRect.Height} dpi={dpi} " +
@@ -512,36 +475,20 @@ public partial class ContainerWindow : Window
         if (_manager.IsOwnWindow(hwnd))
             return "Cannot capture a TabDock window (no nesting).";
 
-        CapturedWindow? cw;
-        string? error;
-        if (Group.Mode == GroupCaptureMode.Shepherd)
-        {
-            cw = _shepherd.Capture(hwnd, out error);
-        }
-        else
-        {
-            if (ContentHostHwnd == IntPtr.Zero)
-                return "Container content host is not ready yet.";
-            cw = _capture.Capture(hwnd, ContentHostHwnd, out error);
-        }
-
+        CapturedWindow? cw = _shepherd.Capture(hwnd, out string? error);
         if (cw == null)
             return error ?? "Capture failed.";
 
-        // Route through AddCapturedWindow so the render-health check (and its
-        // auto-release of black/frozen tabs) runs on every real capture.
         AddCapturedWindow(cw);
         return null;
     }
 
     /// <summary>
-    /// Adds an already-captured window to this container's view model and schedules
-    /// a render-health check so black/frozen tabs are released automatically.
+    /// Adds an already-captured window to this container's view model.
     /// </summary>
     public void AddCapturedWindow(CapturedWindow window)
     {
         _viewModel.AddCapturedWindow(window);
-        _ = CheckRenderHealthAsync(window);
     }
 
     /// <summary>
@@ -556,14 +503,14 @@ public partial class ContainerWindow : Window
             _viewModel.ReleaseTab(tab, show);
     }
 
-    #region Shepherd mode (no-reparent capture)
+    #region Shepherd active-tab sync
 
     /// <summary>
-    /// Reacts to an ActiveTab change for a shepherd-mode group: hides the
-    /// previously active guest (only if it is still a member of this group —
-    /// if it was just released, WindowShepherdService.Release already decided
-    /// its final visible state and must not be second-guessed here), then
-    /// positions and shows the newly active one.
+    /// Reacts to an ActiveTab change: hides the previously active guest (only
+    /// if it is still a member of this group — if it was just released,
+    /// WindowShepherdService.Release already decided its final visible state
+    /// and must not be second-guessed here), then positions and shows the
+    /// newly active one.
     /// </summary>
     private void SyncShepherdActiveWindow()
     {
@@ -586,13 +533,13 @@ public partial class ContainerWindow : Window
     }
 
     /// <summary>
-    /// Positions and shows the shepherd-mode active guest to exactly cover the
-    /// content area, layered directly above this container. Called on tab
-    /// switch, container move/resize/restore, and DPI change.
+    /// Positions and shows the active guest to exactly cover the content area,
+    /// layered directly above this container. Called on tab switch, container
+    /// move/resize/restore, and drag-out-threshold snap-back.
     /// </summary>
     private void LayoutShepherdActiveWindow()
     {
-        if (Group.Mode != GroupCaptureMode.Shepherd || _shepherdActiveWindow == null)
+        if (_shepherdActiveWindow == null)
             return;
         if (WindowState == WindowState.Minimized)
             return;
@@ -601,31 +548,58 @@ public partial class ContainerWindow : Window
         if (containerHwnd == IntPtr.Zero)
             return;
 
+        // StateChanged (maximize/restore) can fire before WPF's own layout pass
+        // has run the content marker's ArrangeOverride, which is what actually
+        // resizes its native HWND — reading its screen rect too early silently
+        // repositions the guest to the stale, pre-transition size. Force the
+        // pending layout to flush first so the marker's HWND is already correct.
+        UpdateLayout();
         _shepherd.PositionAndShow(_shepherdActiveWindow, containerHwnd, GetContentAreaScreenRect());
     }
 
     /// <summary>
-    /// The content area (ContentBorder) in screen coordinates, in physical
-    /// pixels. PointToScreen already returns physical pixels for the origin;
-    /// ActualWidth/Height are DIPs and must be scaled by this window's DPI to
-    /// match, since the guest is a physical-pixel Win32 top-level window.
+    /// The content area in screen coordinates, in physical pixels — read
+    /// directly off the native marker window (Infrastructure/NativeHwndHost.cs)
+    /// rather than computed from the WPF element, so production code and the
+    /// real-input test harness (a separate process) agree on exactly the same
+    /// rect via the same native calls.
     /// </summary>
     private NativeMethods.RECT GetContentAreaScreenRect()
     {
-        Point topLeft = ContentBorder.PointToScreen(new Point(0, 0));
-        DpiScale dpi = VisualTreeHelper.GetDpi(this);
-        int width = (int)Math.Round(ContentBorder.ActualWidth * dpi.DpiScaleX);
-        int height = (int)Math.Round(ContentBorder.ActualHeight * dpi.DpiScaleY);
-        int left = (int)Math.Round(topLeft.X);
-        int top = (int)Math.Round(topLeft.Y);
-
+        IntPtr hostHwnd = ContentHost.HostWindowHandle;
+        NativeMethods.GetClientRect(hostHwnd, out NativeMethods.RECT rc);
+        var topLeft = new NativeMethods.POINT { x = 0, y = 0 };
+        NativeMethods.ClientToScreen(hostHwnd, ref topLeft);
         return new NativeMethods.RECT
         {
-            left = left,
-            top = top,
-            right = left + width,
-            bottom = top + height,
+            left = topLeft.x,
+            top = topLeft.y,
+            right = topLeft.x + rc.Width,
+            bottom = topLeft.y + rc.Height,
         };
+    }
+
+    /// <summary>
+    /// Keeps the container paired with its shepherded active guest when the
+    /// guest becomes the system foreground window by some means other than
+    /// this container's own BringToFront (e.g. the user alt-tabs via Windows'
+    /// own switcher, or clicks the guest directly instead of the tab strip).
+    /// Purely a z-order nicety: mouse and keyboard input already route
+    /// correctly to the guest natively regardless; this just keeps the
+    /// container visually paired immediately behind it so the docked look
+    /// holds together through real-world alt-tab patterns.
+    /// </summary>
+    public void PairZOrderBehindGuest(IntPtr foregroundHwnd)
+    {
+        if (_shepherdActiveWindow == null || _shepherdActiveWindow.Hwnd != foregroundHwnd)
+            return;
+
+        IntPtr containerHwnd = new WindowInteropHelper(this).Handle;
+        if (containerHwnd == IntPtr.Zero)
+            return;
+
+        NativeMethods.SetWindowPos(containerHwnd, foregroundHwnd, 0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
     }
 
     #endregion
@@ -643,172 +617,65 @@ public partial class ContainerWindow : Window
             return;
         if (!NativeMethods.IsWindow(window.Hwnd) || !NativeMethods.IsIconic(window.Hwnd))
             return;
-        // A window that minimized AND dropped WS_VISIBLE is minimizing to the
-        // tray (X-button close on tray apps). Restoring it here fights the
-        // guest in a loop and would defeat the guest-initiated-hide teardown.
-        if (!NativeMethods.IsWindowVisible(window.Hwnd))
-            return;
+        // A window that minimizes AND drops WS_VISIBLE is minimizing to the
+        // tray (X-button close on tray apps) — restoring it here would fight
+        // the guest and defeat the guest-initiated-hide teardown. But a guest
+        // that does both (e.g. WindowState = Minimized; Hide();) fires this
+        // MINIMIZESTART-triggered check before its own very next line has
+        // taken effect — checking IsWindowVisible synchronously here can
+        // observe "iconic AND still visible" in that narrow gap and wrongly
+        // decide to restore. Defer briefly so an immediately-following Hide()
+        // has a chance to land first; re-check both flags at that point.
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            if (!NativeMethods.IsWindow(window.Hwnd) || !NativeMethods.IsIconic(window.Hwnd)
+                || !NativeMethods.IsWindowVisible(window.Hwnd))
+                return;
 
-        NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_RESTORE);
-        if (Group.Mode == GroupCaptureMode.Shepherd)
-        {
-            // _capture.Layout assumes a WS_CHILD reparented into ContentHostHwnd
-            // and positions relative to it at (0,0) with no SWP_NOMOVE — applied
-            // to a shepherd guest (a real top-level window) that would snap it
-            // to the screen origin instead of the content area.
+            NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_RESTORE);
             LayoutShepherdActiveWindow();
-        }
-        else if (ContentHostHwnd != IntPtr.Zero)
-        {
-            _capture.Layout(window, ContentHostHwnd, "restore");
-        }
+        };
+        timer.Start();
     }
 
     /// <summary>
-    /// Tracks a captured guest's interactive move/size modal loop. Chrome (and
-    /// other custom-frame apps) hit-tests its client-drawn tab strip as
-    /// HTCAPTION, and DefWindowProc's SC_MOVE loop moves WS_CHILD windows too,
-    /// so a frame-stripped guest can still be dragged around inside the host.
-    /// While the loop runs the drift watchdog stands down (re-clamping a window
-    /// under the user's cursor fights the drag); when it ends the guest is
-    /// snapped back to fill the content host.
+    /// Tracks a captured guest's interactive move/size modal loop. A shepherded
+    /// guest keeps its own real, visible title bar (see the audit's honest
+    /// tradeoffs), so a user can genuinely drag it by that title bar. On
+    /// MOVESIZEEND: if the guest ended up more than DragOutThresholdPx from its
+    /// docked position, treat it as an intentional pop-out (release the tab,
+    /// same as dragging it out via the tab strip — restores to the original
+    /// pre-capture placement, consistent with every other release path);
+    /// otherwise snap it back exactly (absorbs OS-level jitter). This replaces
+    /// the old Reparent-only drift-watchdog/reclamp-retry-timer trio with a
+    /// single event-driven check.
     /// </summary>
     public void NoteGuestMoveSize(CapturedWindow window, bool started)
     {
         if (started)
-        {
-            _guestInMoveSize = window.Hwnd;
             return;
-        }
-
-        if (_guestInMoveSize == window.Hwnd)
-            _guestInMoveSize = IntPtr.Zero;
-        ReclampGuest(window, "movesize");
-    }
-
-    /// <summary>
-    /// Re-applies the fill-clamp to a captured guest that moved or resized
-    /// itself within the content host. The visibility/iconic guards are
-    /// load-bearing, not hygiene: Layout uses SWP_SHOWWINDOW and force-restores
-    /// iconic windows, so an unguarded re-clamp against a guest that just hid
-    /// itself (tray-style close) would re-show it, fight the guest in a loop,
-    /// and defeat the guest-initiated-hide teardown.
-    /// </summary>
-    private void ReclampGuest(CapturedWindow window, string reason)
-    {
         if (_viewModel.ActiveTab?.Model != window)
             return;
-        if (ContentHostHwnd == IntPtr.Zero || !NativeMethods.IsWindow(window.Hwnd))
-            return;
-        if (!NativeMethods.IsWindowVisible(window.Hwnd) || NativeMethods.IsIconic(window.Hwnd))
-            return;
-        // This also excludes shepherd-mode guests: they are never reparented,
-        // so GetParent never equals ContentHostHwnd for them, and this
-        // Reparent-only clamp correctly leaves them alone (their own sync path
-        // is SyncShepherdActiveWindow/LayoutShepherdActiveWindow).
-        if (NativeMethods.GetParent(window.Hwnd) != ContentHostHwnd)
-            return;
-        if (NativeMethods.IsZoomed(window.Hwnd))
-        {
-            _log.Log($"LAYOUT[{reason}] skipped: guest 0x{window.Hwnd.ToInt64():X} is zoomed; retry scheduled.");
-            ScheduleReclampRetry(window, reason);
-            return;
-        }
-
-        CancelReclampRetry();
-        _capture.Layout(window, ContentHostHwnd, reason);
-    }
-
-    private void ScheduleReclampRetry(CapturedWindow window, string reason)
-    {
-        _reclampPendingWindow = window;
-        _reclampPendingReason = reason;
-        if (_reclampRetryTimer == null)
-        {
-            _reclampRetryTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
-            _reclampRetryTimer.Tick += ReclampRetryTimer_Tick;
-        }
-        _reclampRetryTimer.Stop();
-        _reclampRetryTimer.Start();
-    }
-
-    private void CancelReclampRetry()
-    {
-        _reclampRetryTimer?.Stop();
-        _reclampPendingWindow = null;
-        _reclampPendingReason = string.Empty;
-    }
-
-    private void ReclampRetryTimer_Tick(object? sender, EventArgs e)
-    {
-        _reclampRetryTimer?.Stop();
-        var window = _reclampPendingWindow;
-        if (window == null || _viewModel.ActiveTab?.Model != window)
-            return;
-        if (!NativeMethods.IsWindow(window.Hwnd) || NativeMethods.IsZoomed(window.Hwnd))
-            return;
-        ReclampGuest(window, _reclampPendingReason + "-retry");
-    }
-
-    private void DriftTimer_Tick(object? sender, EventArgs e)
-    {
-        if (WindowState == WindowState.Minimized)
+        if (!NativeMethods.IsWindow(window.Hwnd) || !NativeMethods.IsWindowVisible(window.Hwnd)
+            || NativeMethods.IsIconic(window.Hwnd) || NativeMethods.IsZoomed(window.Hwnd))
             return;
 
-        // If the active guest has hung, detach its input queue so TabDock's UI
-        // thread is not blocked by a dead guest. This is checked before the normal
-        // drift/layout work because a hung guest would also fail the geometry calls.
-        ContentHost.DetachIfGuestHung();
-
-        var window = _viewModel.ActiveTab?.Model;
-        if (window == null || ContentHostHwnd == IntPtr.Zero)
-            return;
-        if (window.Hwnd == _guestInMoveSize)
-            return; // Interactive drag in progress; MOVESIZEEND re-clamps.
-        if (!NativeMethods.IsWindow(window.Hwnd) ||
-            !NativeMethods.IsWindowVisible(window.Hwnd) ||
-            NativeMethods.IsIconic(window.Hwnd))
-            return;
-        if (NativeMethods.GetParent(window.Hwnd) != ContentHostHwnd)
-            return;
-        if (NativeMethods.IsZoomed(window.Hwnd))
-        {
-            _log.Log($"LAYOUT[drift] skipped: guest 0x{window.Hwnd.ToInt64():X} is zoomed");
-            return;
-        }
-
-        // The host is a borderless WS_CHILD, so its window rect IS its client
-        // area in screen coordinates; exact equality means the guest fills it.
+        NativeMethods.RECT docked = GetContentAreaScreenRect();
         NativeMethods.GetWindowRect(window.Hwnd, out NativeMethods.RECT guest);
-        NativeMethods.GetWindowRect(ContentHostHwnd, out NativeMethods.RECT host);
-        if (guest.left == host.left && guest.top == host.top &&
-            guest.right == host.right && guest.bottom == host.bottom)
-        {
-            _driftHwnd = IntPtr.Zero;
-            _driftCorrections = 0;
-            return;
-        }
+        bool movedFar = Math.Abs(guest.left - docked.left) > DragOutThresholdPx
+            || Math.Abs(guest.top - docked.top) > DragOutThresholdPx;
 
-        // A guest that keeps re-asserting its own geometry would otherwise turn
-        // this into a 1 Hz tug-of-war; degrade to a single diagnostic line.
-        if (window.Hwnd == _driftHwnd)
+        if (movedFar)
         {
-            _driftCorrections++;
-            if (_driftCorrections > MaxConsecutiveDriftCorrections)
-            {
-                if (_driftCorrections == MaxConsecutiveDriftCorrections + 1)
-                    _log.Log($"LAYOUT[drift] giving up on 0x{window.Hwnd.ToInt64():X}: still diverged after {MaxConsecutiveDriftCorrections} consecutive corrections.");
-                return;
-            }
+            _log.Log($"SHEPHERD[dragout] guest 0x{window.Hwnd.ToInt64():X} dragged to {guest.left},{guest.top} (docked was {docked.left},{docked.top}); releasing as pop-out.");
+            ReleaseCapturedWindow(window);
         }
         else
         {
-            _driftHwnd = window.Hwnd;
-            _driftCorrections = 1;
+            LayoutShepherdActiveWindow();
         }
-
-        _log.Log($"LAYOUT[drift] guest={WindowCaptureService.DescribeWindow(window.Hwnd)} host={host.left},{host.top},{host.Width}x{host.Height}");
-        ReclampGuest(window, "drift");
     }
 
     /// <summary>
@@ -818,38 +685,6 @@ public partial class ContainerWindow : Window
     {
         foreach (var tab in _viewModel.Tabs)
             tab.RefreshTitle();
-    }
-
-    private async System.Threading.Tasks.Task CheckRenderHealthAsync(CapturedWindow window)
-    {
-        try
-        {
-            bool healthy = await _renderHealth.CheckHealthAsync(window, ContentHostHwnd).ConfigureAwait(false);
-            window.RenderHealth = healthy;
-            _log.Log($"Render health for 0x{window.Hwnd.ToInt64():X} ('{window.DisplayLabel}'): {(healthy ? "healthy" : "unhealthy; releasing back to standalone")}");
-            if (!healthy)
-            {
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    if (_viewModel.Tabs.Any(t => t.Model == window))
-                    {
-                        ReleaseCapturedWindow(window);
-                        MessageBox.Show(
-                            $"'{window.DisplayLabel}' could not be embedded reliably and has been released back to a standalone window.",
-                            "Window could not be tabbed",
-                            MessageBoxButton.OK,
-                            MessageBoxImage.Information);
-                    }
-                });
-            }
-        }
-        catch (Exception ex)
-        {
-            // Render-health failure must not crash the container, but must still
-            // reach the field log — Debug.WriteLine alone is invisible outside a
-            // debugger (finding L14).
-            _log.LogException("CheckRenderHealthAsync", ex);
-        }
     }
 
     #region Drag reorder / drag-out release
