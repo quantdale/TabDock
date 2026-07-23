@@ -80,7 +80,9 @@ public sealed class PersistenceService
             }
 
             string json = JsonSerializer.Serialize(state, TabDockJsonContext.Default.PersistedState);
-            File.WriteAllText(_statePath, json);
+            string tempPath = _statePath + ".tmp";
+            File.WriteAllText(tempPath, json);
+            File.Move(tempPath, _statePath, overwrite: true);
             _log.Log($"Saved {state.Groups.Count} group(s) to {_statePath}");
         }
         catch (Exception ex)

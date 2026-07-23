@@ -81,6 +81,7 @@ public class NativeHwndHost : HwndHost
     protected override void DestroyWindowCore(HandleRef hwnd)
     {
         NativeMethods.DestroyWindow(hwnd.Handle);
+        _hwnd = IntPtr.Zero;
     }
 
     public IntPtr HostWindowHandle => _hwnd;

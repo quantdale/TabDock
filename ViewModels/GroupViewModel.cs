@@ -156,7 +156,10 @@ public sealed class GroupViewModel : ViewModelBase
         tab.CloseWindowRequested -= OnCloseWindowRequested;
         Tabs.RemoveAt(idx);
         if (Tabs.Count == 0)
+        {
             ActiveTab = null;
+            EmptiedByPopOut?.Invoke(this, EventArgs.Empty);
+        }
         else
             SetActiveTab(Tabs[Math.Min(idx, Tabs.Count - 1)]);
     }

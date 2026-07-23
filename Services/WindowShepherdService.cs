@@ -251,7 +251,10 @@ public sealed class WindowShepherdService
         if (!show)
         {
             NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
-            JournalHide(window);
+            // The guest hid itself (e.g. tray-style close). Do NOT journal it for
+            // rescue: force-showing it on the next launch would undo the user's
+            // intentional hide. Clear any existing journal entry instead.
+            JournalClear(window.Hwnd);
             SetTransitionsDisabled(window.Hwnd, false);
             _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide)");
             return;
@@ -324,15 +327,26 @@ public sealed class WindowShepherdService
         if (!File.Exists(JournalPath))
             return new HiddenWindowJournalFile();
         string json = File.ReadAllText(JournalPath);
-        return JsonSerializer.Deserialize(json, TabDockJsonContext.Default.HiddenWindowJournalFile)
-            ?? new HiddenWindowJournalFile();
+        try
+        {
+            return JsonSerializer.Deserialize(json, TabDockJsonContext.Default.HiddenWindowJournalFile)
+                ?? new HiddenWindowJournalFile();
+        }
+        catch (JsonException)
+        {
+            string corruptPath = $"{JournalPath}.corrupt.{DateTime.Now:yyyyMMddHHmmssfff}";
+            File.Move(JournalPath, corruptPath);
+            return new HiddenWindowJournalFile();
+        }
     }
 
     private static void SaveJournal(HiddenWindowJournalFile file)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(JournalPath)!);
         string json = JsonSerializer.Serialize(file, TabDockJsonContext.Default.HiddenWindowJournalFile);
-        File.WriteAllText(JournalPath, json);
+        string tempPath = JournalPath + ".tmp";
+        File.WriteAllText(tempPath, json);
+        File.Move(tempPath, JournalPath, overwrite: true);
     }
 
     /// <summary>

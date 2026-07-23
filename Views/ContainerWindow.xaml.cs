@@ -282,6 +282,11 @@ public partial class ContainerWindow : Window
         _viewModel.EmptiedByPopOut -= ViewModel_EmptiedByPopOut;
         _viewModel.Detach();
 
+        // Drop the active guest reference so any pending WM_ACTIVATE or restore
+        // timer that fires after the window has closed cannot act on a released
+        // guest (finding #3).
+        _shepherdActiveWindow = null;
+
         IntPtr hwnd = new WindowInteropHelper(this).Handle;
         _manager.UnregisterContainerHwnd(hwnd);
         if (ContentHost.HostWindowHandle != IntPtr.Zero)
@@ -572,7 +577,10 @@ public partial class ContainerWindow : Window
         // repositions the guest to the stale, pre-transition size. Force the
         // pending layout to flush first so the marker's HWND is already correct.
         UpdateLayout();
-        _shepherd.PositionAndShow(_shepherdActiveWindow, containerHwnd, GetContentAreaScreenRect());
+        NativeMethods.RECT rect = GetContentAreaScreenRect();
+        if (rect.Width == 0 || rect.Height == 0)
+            return;
+        _shepherd.PositionAndShow(_shepherdActiveWindow, containerHwnd, rect);
     }
 
     /// <summary>
@@ -585,6 +593,8 @@ public partial class ContainerWindow : Window
     private NativeMethods.RECT GetContentAreaScreenRect()
     {
         IntPtr hostHwnd = ContentHost.HostWindowHandle;
+        if (!NativeMethods.IsWindow(hostHwnd))
+            return new NativeMethods.RECT();
         NativeMethods.GetClientRect(hostHwnd, out NativeMethods.RECT rc);
         var topLeft = new NativeMethods.POINT { x = 0, y = 0 };
         NativeMethods.ClientToScreen(hostHwnd, ref topLeft);
