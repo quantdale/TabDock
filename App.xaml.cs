@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using Microsoft.Win32;
@@ -58,6 +59,11 @@ public partial class App : Application
             // that failed, create a best-effort logger now so the rest of startup can
             // still be diagnosed.
             _log ??= new LoggingService();
+
+            // Remove orphaned atomic-write temp files left behind by a prior run that
+            // died before File.Move completed. This is purely disk-litter cleanup;
+            // the real state.json / hidden-windows.json are never torn.
+            CleanupStaleTempFiles();
 
             _icons = new IconService();
             _shepherd = new WindowShepherdService(_log);
@@ -553,6 +559,46 @@ public partial class App : Application
         if (group != null && group.Members.Count == 0 && group.PersistedTabs.Count == 0)
         {
             _groups.RemoveGroup(group);
+        }
+    }
+
+    /// <summary>
+    /// Removes orphaned atomic-write temp files that a prior run may have left
+    /// behind if it died after <see cref="File.WriteAllText"/> but before
+    /// <see cref="File.Move"/>. Only files matching TabDock's own known temp
+    /// names in its own app-data directory are touched.
+    /// </summary>
+    private void CleanupStaleTempFiles()
+    {
+        try
+        {
+            string dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "TabDock");
+            if (!Directory.Exists(dir))
+                return;
+
+            string[] knownTempFiles = { "state.json.tmp", "hidden-windows.json.tmp" };
+            foreach (string name in knownTempFiles)
+            {
+                string path = Path.Combine(dir, name);
+                try
+                {
+                    if (File.Exists(path))
+                    {
+                        File.Delete(path);
+                        _log.Log($"STARTUP[cleanup] removed stale temp file: {path}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _log.LogException($"STARTUP[cleanup] failed to remove {path}", ex);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogException("STARTUP[cleanup] failed to enumerate temp files", ex);
         }
     }
 
