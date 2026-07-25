@@ -319,7 +319,7 @@ public partial class App : Application
 
         _events.WindowMinimized += (_, args) =>
         {
-            foreach (var group in _groups.Groups)
+            foreach (var group in _groups.Groups.ToList())
             {
                 var match = group.Members.FirstOrDefault(m => m.Hwnd == args.Hwnd);
                 if (match == null)
@@ -349,7 +349,7 @@ public partial class App : Application
         // window either way).
         _events.WindowForegroundChanged += (_, args) =>
         {
-            foreach (var group in _groups.Groups)
+            foreach (var group in _groups.Groups.ToList())
             {
                 if (!group.Members.Any(m => m.Hwnd == args.Hwnd))
                     continue;
@@ -413,7 +413,15 @@ public partial class App : Application
 
     private void OnGuestMoveSize(IntPtr hwnd, bool started)
     {
-        foreach (var group in _groups.Groups)
+        // Snapshot with ToList: a drag-out (MOVESIZEEND past the pop-out
+        // threshold) of the LAST tab releases it, which empties the group,
+        // closes its container, and removes the group from _groups.Groups —
+        // all synchronously, before this loop advances. Iterating the live
+        // collection would then throw "Collection was modified" and escalate
+        // to the dispatcher crash handler. (investigation_findings.md's
+        // "snapshot consistently" resolution: the mutating handler that note
+        // anticipated.)
+        foreach (var group in _groups.Groups.ToList())
         {
             var match = group.Members.FirstOrDefault(m => m.Hwnd == hwnd);
             if (match == null)
