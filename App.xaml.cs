@@ -312,6 +312,20 @@ public partial class App : Application
                 if (NativeMethods.IsWindowVisible(args.Hwnd))
                     continue; // Transient hide; the window is visible again.
 
+                // TabDock itself hides the ACTIVE guest when its container is
+                // minimized (ContainerWindow.StateChanged -> _shepherd.Hide),
+                // which fires the very same EVENT_OBJECT_HIDE as a guest-initiated
+                // tray-close and — unlike a tab-switch hide — leaves the active
+                // tab unchanged, so it passes every check above. Distinguish the
+                // two by container state: a genuine tray-close happens while the
+                // container is open; a minimize-hide happens because the container
+                // is minimized (the guest is re-shown on restore). Without this
+                // guard, minimizing a group would release its active tab as a
+                // hidden, orphaned window (and close a single-tab group outright).
+                if (_containers.TryGetValue(group.Id, out var hidContainer)
+                    && hidContainer.WindowState == WindowState.Minimized)
+                    continue;
+
                 _log.Log($"WinEvent: captured window 0x{args.Hwnd.ToInt64():X} hid itself (tray-style close); releasing its tab hidden.");
                 RemoveDeadMember(group, match, show: false);
             }

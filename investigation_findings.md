@@ -186,6 +186,14 @@ repeated-cycle validation.
 
 ---
 
+### H6. Minimizing a container releases (and orphans) its active tab — **FIXED (bug-hunt session)**
+- **Description:** `ContainerWindow.StateChanged` hides the active guest via `_shepherd.Hide` when the container is minimized. That `ShowWindow(SW_HIDE)` fires `EVENT_OBJECT_HIDE`, which — as `WinEventMonitor` documents — is **not** filtered by `WINEVENT_SKIPOWNPROCESS`, so it reaches App's `WindowHidden` handler. That handler only rejected **tab-switch** hides (active tab has moved by dispatch time) and **release** hides (dropped by the captured-window filter); the **minimize** hide leaves the active tab unchanged and the member still in `Group.Members`, so it passed every check and was misclassified as a guest-initiated tray-close.
+- **Impact:** Minimizing a group released its active tab as a hidden, orphaned window; a single-tab group additionally closed its now-empty container. Restoring never recovered the tab.
+- **Resolution (applied):** In the `WindowHidden` handler, skip the tray-close release when the group's container is in `WindowState.Minimized` — a genuine tray-close only happens while the container is open, and a restore re-shows the guest (and is already caught by the existing `IsWindowVisible` check). Both TabDock-initiated active-window hides are now accounted for: the tab-switch hide (filtered by the active-tab check) and the minimize hide (filtered by container state).
+- **Severity:** High (reproducible on the ordinary minimize path; silently loses the user's active window).
+
+---
+
 ## MEDIUM
 
 ### M1. `SetParent` NULL-return treated as failure — parentless top-level windows misclassified — **FIXED 2026-07-18 (session 2)**
