@@ -124,9 +124,11 @@ public sealed class WinEventMonitor : IDisposable
 
         // Every consumer of these events reacts only to captured member windows,
         // so filter by direct HWND match. Do NOT resolve GetAncestor(GA_ROOT) here:
-        // a captured window is a WS_CHILD of the TabDock container (its root is our
-        // own window, which the old filter rejected), and a window that just fired
-        // EVENT_OBJECT_DESTROY has no ancestors to walk at all.
+        // under the Shepherd model a captured window is never reparented, so it is
+        // its own root already (GetAncestor would just return the window itself,
+        // never a TabDock container, making it useless as an ownership filter) —
+        // and a window that just fired EVENT_OBJECT_DESTROY has no ancestors to
+        // walk at all regardless.
         if (!_isCapturedWindow(hwnd))
             return;
 

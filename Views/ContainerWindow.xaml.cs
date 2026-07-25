@@ -32,6 +32,12 @@ public partial class ContainerWindow : Window
     // container's entire sync loop for the active tab.
     private CapturedWindow? _shepherdActiveWindow;
 
+    // Coalesced timers for WM_ACTIVATE's guest re-assert and StateChanged's
+    // settled-snapshot diagnostic. Each holds at most one pending instance —
+    // stopped and replaced, never left to accumulate (AUDIT25-05).
+    private System.Windows.Threading.DispatcherTimer? _activateReassertTimer;
+    private System.Windows.Threading.DispatcherTimer? _stateSettledTimer;
+
     // Drag state (tab-strip reorder / drag-out)
     private TabViewModel? _draggedTab;
     private Point _dragStart;
@@ -153,14 +159,15 @@ public partial class ContainerWindow : Window
                 // visibility right before acting, so an in-flight self-hide
                 // has settled either way by the time this decides.
                 CapturedWindow activeWindow = _shepherdActiveWindow;
-                var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
-                timer.Tick += (_, _) =>
+                _activateReassertTimer?.Stop();
+                _activateReassertTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+                _activateReassertTimer.Tick += (_, _) =>
                 {
-                    timer.Stop();
+                    _activateReassertTimer!.Stop();
                     if (_shepherdActiveWindow == activeWindow && NativeMethods.IsWindowVisible(activeWindow.Hwnd))
                         _shepherd.BringToFront(activeWindow, hwnd, GetContentAreaScreenRect());
                 };
-                timer.Start();
+                _activateReassertTimer.Start();
             }
         }
         else if ((uint)msg == NativeMethods.WM_GETMINMAXINFO)
@@ -286,6 +293,8 @@ public partial class ContainerWindow : Window
         // timer that fires after the window has closed cannot act on a released
         // guest (finding #3).
         _shepherdActiveWindow = null;
+        _activateReassertTimer?.Stop();
+        _stateSettledTimer?.Stop();
 
         IntPtr hwnd = new WindowInteropHelper(this).Handle;
         _manager.UnregisterContainerHwnd(hwnd);
@@ -310,13 +319,14 @@ public partial class ContainerWindow : Window
 
         // Lightweight state snapshot after the transition settles. Retained (low
         // volume: once per maximize/restore) as a field-diagnosis aid.
-        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(750) };
-        timer.Tick += (_, _) =>
+        _stateSettledTimer?.Stop();
+        _stateSettledTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(750) };
+        _stateSettledTimer.Tick += (_, _) =>
         {
-            timer.Stop();
+            _stateSettledTimer!.Stop();
             LogStateSnapshot("settled");
         };
-        timer.Start();
+        _stateSettledTimer.Start();
     }
 
     private void LogStateSnapshot(string phase)

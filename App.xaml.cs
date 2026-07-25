@@ -118,6 +118,7 @@ public partial class App : Application
         catch (Exception ex)
         {
             _log?.LogException("FATAL Application_Startup", ex);
+            FlushJournalGuarded("startup failure");
             try
             {
                 _groups?.EmergencyReleaseAll();
@@ -145,6 +146,7 @@ public partial class App : Application
         }
         finally
         {
+            FlushJournalGuarded("application exit");
             _events?.Dispose();
             _hotkey?.Dispose();
             _log?.Dispose();
@@ -156,6 +158,7 @@ public partial class App : Application
         ContainerWindow.IsAppShuttingDown = true;
         _log?.LogException("DispatcherUnhandledException", e.Exception);
         SaveStateGuarded("dispatcher exception");
+        FlushJournalGuarded("dispatcher exception");
         try
         {
             _groups?.EmergencyReleaseAll();
@@ -173,6 +176,7 @@ public partial class App : Application
         ContainerWindow.IsAppShuttingDown = true;
         _log?.Log($"AppDomain unhandled exception. IsTerminating={e.IsTerminating}: {e.ExceptionObject}");
         SaveStateGuarded("AppDomain exception");
+        FlushJournalGuarded("AppDomain exception");
         try
         {
             _groups?.EmergencyReleaseAll();
@@ -189,6 +193,7 @@ public partial class App : Application
         ContainerWindow.IsAppShuttingDown = true;
         _log?.Log($"Session ending ({e.ReasonSessionEnding}); saving state and releasing captured windows.");
         SaveStateGuarded("session ending");
+        FlushJournalGuarded("session ending");
         try
         {
             _groups?.EmergencyReleaseAll();
@@ -212,6 +217,24 @@ public partial class App : Application
         catch (Exception ex)
         {
             _log?.LogException($"SaveState during {context}", ex);
+        }
+    }
+
+    /// <summary>
+    /// FlushJournal that can never throw (AUDIT25-01): forces the debounced
+    /// hidden-window crash-recovery journal to write immediately, called from
+    /// every exit/crash path so a pending debounced write is never lost to a
+    /// timer that never got the chance to fire.
+    /// </summary>
+    private void FlushJournalGuarded(string context)
+    {
+        try
+        {
+            _shepherd?.FlushJournal();
+        }
+        catch (Exception ex)
+        {
+            _log?.LogException($"FlushJournal during {context}", ex);
         }
     }
 

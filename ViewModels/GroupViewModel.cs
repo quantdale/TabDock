@@ -100,7 +100,13 @@ public sealed class GroupViewModel : ViewModelBase
 
         StartRenameCommand = new RelayCommand(_ => IsRenaming = true);
         FinishRenameCommand = new RelayCommand(_ => IsRenaming = false);
-        PickColorCommand = new RelayCommand(_ => AddWindowsRequested?.Invoke(this, EventArgs.Empty)); // placeholder; UI handles color picker directly
+        // Intentional no-op placeholder pending future UI wiring (item #6 /
+        // investigation_findings.md:285): PickColorCommand is unbound in any
+        // XAML file, so nothing currently invokes it. It previously invoked
+        // AddWindowsRequested by mistake, which would have silently opened the
+        // capture picker instead of picking a color if it ever became
+        // reachable. Fixed to do nothing rather than the wrong thing.
+        PickColorCommand = new RelayCommand(_ => { });
         CloseGroupCommand = new RelayCommand(_ => CloseRequested?.Invoke(this, EventArgs.Empty));
     }
 

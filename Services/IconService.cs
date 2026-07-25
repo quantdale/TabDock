@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Windows;
 using System.Windows.Interop;
@@ -12,6 +13,12 @@ namespace TabDock.Services;
 /// </summary>
 public sealed class IconService
 {
+    // Keyed by exe path so repeat windows of the same executable (the common
+    // case: multiple browser/terminal/IDE windows) don't re-run ExtractIconEx.
+    // A cached null means extraction failed for that path; it is not retried
+    // for the lifetime of this instance (AUDIT25-02).
+    private readonly Dictionary<string, ImageSource?> _iconCache = new();
+
     public string? GetProcessImagePath(uint pid)
     {
         return NativeMethods.GetProcessImagePath(pid);
@@ -31,6 +38,16 @@ public sealed class IconService
     }
 
     public ImageSource? GetFileIcon(string exePath)
+    {
+        if (_iconCache.TryGetValue(exePath, out ImageSource? cached))
+            return cached;
+
+        ImageSource? result = ExtractFileIcon(exePath);
+        _iconCache[exePath] = result;
+        return result;
+    }
+
+    private static ImageSource? ExtractFileIcon(string exePath)
     {
         // Try the small icon first; fall back to large.
         IntPtr hSmall = IntPtr.Zero;

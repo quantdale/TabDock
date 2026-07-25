@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Windows.Threading;
 using TabDock.Models;
 
 namespace TabDock.Services;
@@ -43,6 +44,18 @@ public sealed class WindowShepherdService
 
     private static readonly string JournalPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TabDock", "hidden-windows.json");
+
+    // In-memory journal state plus a debounce timer (AUDIT25-01). Both
+    // JournalHide and JournalClear mutate this in memory instead of re-reading
+    // hidden-windows.json from disk on every call. Only JournalClear's write is
+    // debounced through this timer, mirroring GroupManager.RequestSave; JournalHide
+    // writes synchronously (see its own doc comment for why). FlushJournal forces
+    // an immediate, synchronous write of any pending debounced clear, for
+    // App.xaml.cs exit/crash paths — it cannot help a hard force-kill (which
+    // bypasses those paths entirely), which is exactly why JournalHide never
+    // relies on it.
+    private HiddenWindowJournalFile? _journalCache;
+    private DispatcherTimer? _journalDebounce;
 
     public WindowShepherdService(LoggingService log)
     {
@@ -253,8 +266,14 @@ public sealed class WindowShepherdService
             NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
             // The guest hid itself (e.g. tray-style close). Do NOT journal it for
             // rescue: force-showing it on the next launch would undo the user's
-            // intentional hide. Clear any existing journal entry instead.
-            JournalClear(window.Hwnd);
+            // intentional hide. Clear any existing journal entry instead — and
+            // do it immediately (bypassing the debounce), because this window
+            // ends up hidden, not visible: a stale "hidden" entry left on disk
+            // by a force-kill mid-debounce would be indistinguishable from a
+            // real orphan and get incorrectly un-hidden by RescueOrphanedWindows
+            // (unlike PositionAndShow/Release(show:true)'s clears, where the
+            // window is already genuinely visible and a stale entry is harmless).
+            JournalClear(window.Hwnd, immediate: true);
             SetTransitionsDisabled(window.Hwnd, false);
             _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide)");
             return;
@@ -286,11 +305,22 @@ public sealed class WindowShepherdService
 
     #region Crash-recovery journal (docs/internal/deep-audit-2026-07-17.md, section 6.5)
 
+    /// <summary>
+    /// Journals a newly-hidden guest and writes it to disk immediately
+    /// (NOT debounced). This is the one journal write that must land before
+    /// an unpredictable future force-kill (Process.Kill()/Task Manager "End
+    /// Task"/taskkill /F) — those bypass every App.xaml.cs handler outright
+    /// (TerminateProcess allows no user-mode code to run afterward, so no
+    /// FlushJournal() call anywhere could rescue a debounced write here).
+    /// Still cheaper than the pre-AUDIT25-01 code: GetJournalCache() serves
+    /// the in-memory copy instead of re-reading hidden-windows.json from disk
+    /// on every call, so only the write half of the round trip remains.
+    /// </summary>
     private void JournalHide(CapturedWindow window)
     {
         try
         {
-            HiddenWindowJournalFile file = LoadJournal();
+            HiddenWindowJournalFile file = GetJournalCache();
             file.Entries.RemoveAll(e => e.Hwnd == window.Hwnd.ToInt64());
             file.Entries.Add(new HiddenWindowEntry
             {
@@ -298,6 +328,7 @@ public sealed class WindowShepherdService
                 Pid = window.ProcessId,
                 ExePath = window.ExePath,
             });
+            _journalDebounce?.Stop();
             SaveJournal(file);
         }
         catch (Exception ex)
@@ -306,19 +337,106 @@ public sealed class WindowShepherdService
         }
     }
 
-    private void JournalClear(IntPtr hwnd)
+    /// <summary>
+    /// Clears a guest's journal entry and, by default, debounces the disk
+    /// write (AUDIT25-01). Debouncing is safe ONLY when the guest ends up
+    /// genuinely visible: RescueOrphanedWindows unconditionally re-shows every
+    /// journaled entry regardless of current visibility, so a stale clear that
+    /// a force-kill catches mid-debounce merely causes a harmless redundant
+    /// ShowWindow on the next rescue.
+    ///
+    /// <paramref name="immediate"/> MUST be true for any call site where the
+    /// guest ends up intentionally left hidden instead — e.g. Release's
+    /// guest-initiated-hide (tray-style close) path. There, a stale on-disk
+    /// "hidden" entry surviving a crash is indistinguishable from a real
+    /// orphan awaiting rescue, so RescueOrphanedWindows would incorrectly
+    /// un-hide a window the user deliberately hid. That is a real behavior
+    /// change, not a harmless no-op, so it cannot be left to a debounce timer
+    /// that a hard force-kill can catch mid-flight — same reasoning as
+    /// JournalHide, just triggered from the clear side instead of the hide
+    /// side.
+    /// </summary>
+    private void JournalClear(IntPtr hwnd, bool immediate = false)
     {
         try
         {
-            HiddenWindowJournalFile file = LoadJournal();
+            HiddenWindowJournalFile file = GetJournalCache();
             int before = file.Entries.Count;
             file.Entries.RemoveAll(e => e.Hwnd == hwnd.ToInt64());
-            if (file.Entries.Count != before)
+            if (file.Entries.Count == before)
+                return;
+
+            if (immediate)
+            {
+                _journalDebounce?.Stop();
                 SaveJournal(file);
+            }
+            else
+            {
+                RequestJournalSave();
+            }
         }
         catch (Exception ex)
         {
             _log.LogException("WindowShepherdService.JournalClear", ex);
+        }
+    }
+
+    private HiddenWindowJournalFile GetJournalCache()
+    {
+        // Loaded once per process lifetime, on first mutation (not eagerly at
+        // construction): RescueOrphanedWindows runs before any Hide/Clear call
+        // and unconditionally deletes hidden-windows.json after consuming it, so
+        // loading here first would just re-read entries that rescue already
+        // consumed. All subsequent mutations act on this in-memory copy only.
+        return _journalCache ??= LoadJournal();
+    }
+
+    /// <summary>
+    /// Debounced disk write (AUDIT25-01) used only by JournalClear: coalesces
+    /// rapid clears (one per tab switch, as the newly-active tab's entry is
+    /// removed) into a single write ~300ms after the last one, mirroring
+    /// GroupManager.RequestSave. JournalHide never calls this — see its own
+    /// doc comment for why the hide write must stay synchronous. Every
+    /// designated App.xaml.cs exit/crash path also calls FlushJournal() so a
+    /// pending clear lands promptly on a graceful exit rather than lingering
+    /// (harmlessly) until the next rescue.
+    /// </summary>
+    private void RequestJournalSave()
+    {
+        if (_journalDebounce == null)
+        {
+            _journalDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+            _journalDebounce.Tick += (_, _) =>
+            {
+                _journalDebounce!.Stop();
+                if (_journalCache != null)
+                    SaveJournal(_journalCache);
+            };
+        }
+        _journalDebounce.Stop();
+        _journalDebounce.Start();
+    }
+
+    /// <summary>
+    /// Stops any pending debounced write and saves the in-memory journal to disk
+    /// immediately. Called from every App.xaml.cs exit/crash path so a pending
+    /// clear is never lost to a debounce timer that never got to fire on a
+    /// graceful exit or managed exception. Has nothing to do for a hard
+    /// force-kill — JournalHide never leaves anything pending in the first
+    /// place, by design. No-op if nothing has been journaled yet this session.
+    /// </summary>
+    public void FlushJournal()
+    {
+        try
+        {
+            _journalDebounce?.Stop();
+            if (_journalCache != null)
+                SaveJournal(_journalCache);
+        }
+        catch (Exception ex)
+        {
+            _log.LogException("WindowShepherdService.FlushJournal", ex);
         }
     }
 

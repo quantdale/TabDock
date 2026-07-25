@@ -143,7 +143,7 @@ internal static class Scenarios
         "keyboardinput", "keyboardinput-chrome", "keyboardinput-notepad", "keyboardinput-rapid-switch",
         "keyboardinput-chrome-altswitch", "keyboardinput-edge-altswitch", "keyboardinput-chrome-omnibox-altswitch",
         "realworkflow-altswitch", "directclick-foreground-pairing", "dragout-by-titlebar",
-        "crashkill-rescue", "realapp-multi-render",
+        "crashkill-rescue", "crashkill-rapidswitch-rescue", "crashkill-selfhide-not-rescued", "realapp-multi-render",
         "instant-tabswitch", "reattach-thenclick-othertab", "reattach-repeated-cycles",
         "picker-owner-is-requesting-container", "picker-owner-falls-back-when-container-closed",
         "rename-edge-cases", "multi-group-independent-interaction", "dragreorder-then-immediate-popout",
@@ -195,6 +195,8 @@ internal static class Scenarios
             "directclick-foreground-pairing" => DirectClickForegroundPairing,
             "dragout-by-titlebar" => DragOutByTitlebar,
             "crashkill-rescue" => CrashKillRescue,
+            "crashkill-rapidswitch-rescue" => CrashKillRapidSwitchRescue,
+            "crashkill-selfhide-not-rescued" => CrashKillSelfHideNotRescued,
             "realapp-multi-render" => RealAppMultiRender,
             "instant-tabswitch" => InstantTabSwitch,
             "reattach-thenclick-othertab" => ReattachThenClickOtherTab,
@@ -3469,6 +3471,161 @@ input.addEventListener('input', function() {
 
         ctx.Check(Util.WaitUntil(() => NativeMethods.IsWindowVisible(hiddenPig.Hwnd), 5000),
             "previously-hidden pig is visible again after the relaunch rescue");
+    }
+
+    // -------------------------------------------------------------------------
+    // 28b. crashkill-rapidswitch-rescue: regression guard for AUDIT25-01's
+    //      debounced JournalClear. Fires a rapid, no-settle-time burst of tab
+    //      switches (no wait between clicks, unlike instant-tabswitch's
+    //      poll-until-docked loop) and force-kills immediately after the last
+    //      one, before the ~300ms JournalClear debounce window can possibly
+    //      have elapsed. Verifies the pig left hidden by the final switch is
+    //      still rescued: JournalHide (WindowShepherdService) writes
+    //      synchronously on every call specifically so this holds regardless
+    //      of debounced JournalClear timing — a hard kill (TerminateProcess)
+    //      allows no App.xaml.cs handler to run, so nothing could rescue a
+    //      debounced write here if JournalHide were ever debounced too.
+    // -------------------------------------------------------------------------
+    private static void CrashKillRapidSwitchRescue(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "CKRSA", "--color", "blue");
+        GuestInfo pigB = SpawnPig(ctx, "CKRSB", "--color", "green");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
+        ctx.Check(TabCount(container) == 2, "2 tabs after capture");
+
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+
+        GuestInfo activeGuest = IsDocked(pigA.Hwnd, host) ? pigA : pigB;
+        GuestInfo otherGuest = ReferenceEquals(activeGuest, pigA) ? pigB : pigA;
+
+        const int switchCount = 6;
+        for (int i = 1; i <= switchCount; i++)
+        {
+            AutomationElement? otherTab = FindTabText(container, otherGuest.Title, out int count);
+            if (otherTab == null || count != 1)
+                throw new InvalidOperationException($"switch {i}: tab for '{otherGuest.Title}' not found uniquely (count={count}).");
+            (int tx, int ty) = Uia.Center(otherTab);
+            Input.ClickAt(tx, ty);
+            // No settle wait, deliberately: the point is to force-kill before any
+            // prior switch's debounced JournalClear write could possibly land.
+
+            (activeGuest, otherGuest) = (otherGuest, activeGuest);
+        }
+
+        // The pig left inactive by the final switch is the one JournalHide must
+        // have already durably written before we kill — with no dependency on
+        // settle time, a debounce timer, or any exit-handler flush.
+        GuestInfo hiddenPig = otherGuest;
+        GuestInfo dockedPig = activeGuest;
+
+        GuardedProc.Log("  Force-killing TabDock immediately after a rapid, no-settle-time tab-switch burst.");
+        ctx.TabDock.Kill();
+        ctx.Check(Util.WaitUntil(() => ctx.TabDock.HasExited, 5000), "TabDock force-killed");
+        Thread.Sleep(1000);
+
+        ctx.Check(dockedPig.Proc != null && !dockedPig.Proc.HasExited, "docked pig's process survived the force-kill");
+        ctx.Check(hiddenPig.Proc != null && !hiddenPig.Proc.HasExited, "hidden pig's process survived the force-kill");
+
+        long relaunchOffset = TabDockLog.RecordLogLength();
+        Process td2 = GuardedProc.SpawnGuarded(new ProcessStartInfo(TabDockExe)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(TabDockExe)!,
+        });
+        ctx.TabDock = td2;
+        ctx.TabDockPid = (uint)td2.Id;
+        ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
+        ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched (MainWindow up)");
+
+        ctx.Check(TabDockLog.WaitForLogLine(relaunchOffset, "SHEPHERD[rescue]", 10000),
+            "TabDock log gained a SHEPHERD[rescue] line on the relaunch");
+        ctx.Check(TabDockLog.ContainsNewLine(relaunchOffset, $"0x{hiddenPig.Hwnd.ToInt64():X}"),
+            "the rescue log specifically names the pig left hidden by the final rapid switch");
+
+        ctx.Check(Util.WaitUntil(() => NativeMethods.IsWindowVisible(hiddenPig.Hwnd), 5000),
+            "the pig hidden by the last rapid, no-settle-time switch is visible again after the relaunch rescue");
+    }
+
+    // -------------------------------------------------------------------------
+    // 28c. crashkill-selfhide-not-rescued: regression guard for a gap found
+    //      during AUDIT25-01 review — JournalClear's debounce is only safe
+    //      when the guest ends up genuinely visible (a stale entry just causes
+    //      a harmless redundant show). Release's guest-initiated-hide path
+    //      (tray-style close) is the opposite: the guest ends up intentionally
+    //      hidden, so a stale "hidden" entry surviving a crash would be
+    //      indistinguishable from a real orphan and get incorrectly
+    //      un-hidden by RescueOrphanedWindows. The fix made that one call site
+    //      pass JournalClear(hwnd, immediate: true). This scenario sets up the
+    //      exact precondition (a real JournalHide entry already on disk from
+    //      an earlier inactive-tab hide, then switched back to active so a
+    //      JournalClear is debounced-pending) and self-hides immediately,
+    //      force-killing right after — asserting the self-hidden guest is
+    //      NOT resurrected on relaunch and no SHEPHERD[rescue] line appears
+    //      at all (the journal must be empty, not merely "will end up
+    //      empty eventually").
+    // -------------------------------------------------------------------------
+    private static void CrashKillSelfHideNotRescued(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "CKSHA", "--hide-on-close", "--color", "blue");
+        GuestInfo pigB = SpawnPig(ctx, "CKSHB", "--hide-on-close", "--color", "green");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
+        ctx.Check(TabCount(container) == 2, "2 tabs after capture");
+
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+
+        // Whichever pig capture left inactive already has a real JournalHide
+        // entry on disk (Hide() runs on every non-active captured member as
+        // part of normal group formation — the same precondition
+        // crashkill-rescue itself relies on).
+        GuestInfo dockedPig = IsDocked(pigA.Hwnd, host) ? pigA : pigB;
+        GuestInfo targetPig = ReferenceEquals(dockedPig, pigA) ? pigB : pigA;
+        ctx.Check(!NativeMethods.IsWindowVisible(targetPig.Hwnd), $"'{targetPig.Title}' starts hidden (inactive tab, JournalHide already on disk)");
+
+        // Switch to targetPig: PositionAndShow -> JournalClear(debounced, pending).
+        AutomationElement? targetTab = FindTabText(container, targetPig.Title, out int count);
+        if (targetTab == null || count != 1)
+            throw new InvalidOperationException($"tab for '{targetPig.Title}' not found uniquely (count={count}).");
+        (int tx, int ty) = Uia.Center(targetTab);
+        Input.ClickAt(tx, ty);
+        ctx.Check(Util.WaitUntil(() => IsDocked(targetPig.Hwnd, host), 3000), $"switched to '{targetPig.Title}' (its JournalClear is now debounced-pending)");
+
+        // Immediately trigger guest-initiated self-hide (WM_CLOSE via the tab's
+        // context menu; --hide-on-close makes the pig hide instead of exit) —
+        // no settle wait beyond what confirming the switch above required.
+        long off = TabDockLog.RecordLogLength();
+        ClickTabMenuItem(ctx, container, targetPig.Title, "Close window");
+        ctx.Check(TabDockLog.WaitForLogLine(off, "hid itself (tray-style close)", 5000),
+            $"TabDock log gained 'hid itself (tray-style close)' for '{targetPig.Title}'");
+
+        GuardedProc.Log($"  Force-killing TabDock immediately after '{targetPig.Title}' self-hid.");
+        ctx.TabDock.Kill();
+        ctx.Check(Util.WaitUntil(() => ctx.TabDock.HasExited, 5000), "TabDock force-killed");
+        Thread.Sleep(1000);
+
+        ctx.Check(dockedPig.Proc != null && !dockedPig.Proc.HasExited, "the other pig's process survived the force-kill");
+        ctx.Check(targetPig.Proc != null && !targetPig.Proc.HasExited, "the self-hidden pig's process survived the force-kill");
+        ctx.Check(NativeMethods.IsWindow(targetPig.Hwnd) && !NativeMethods.IsWindowVisible(targetPig.Hwnd),
+            "the self-hidden pig stays hidden immediately after the kill");
+
+        long relaunchOffset = TabDockLog.RecordLogLength();
+        Process td2 = GuardedProc.SpawnGuarded(new ProcessStartInfo(TabDockExe)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(TabDockExe)!,
+        });
+        ctx.TabDock = td2;
+        ctx.TabDockPid = (uint)td2.Id;
+        ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
+        ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched (MainWindow up)");
+
+        Thread.Sleep(1500); // let RescueOrphanedWindows run (or correctly no-op) and settle
+
+        ctx.Check(!TabDockLog.ContainsNewLine(relaunchOffset, "SHEPHERD[rescue]"),
+            "no SHEPHERD[rescue] line on relaunch — the journal was already empty of the self-hidden pig's entry (the immediate clear landed before the kill, not the 300ms debounce)");
+        ctx.Check(!NativeMethods.IsWindowVisible(targetPig.Hwnd),
+            "the self-hidden pig was NOT incorrectly resurrected by rescue after the relaunch");
     }
 
     // -------------------------------------------------------------------------

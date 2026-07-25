@@ -9,7 +9,10 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>TabDock</AssemblyName>
     <RootNamespace>TabDock</RootNamespace>
-    <!-- The build environment cannot reach nuget.org for vulnerability audit data; disable it so the build is warning-free. -->
+    <!-- The build environment cannot reach nuget.org for vulnerability audit data; disable it so the build is warning-free.
+         This project currently has zero third-party NuGet dependencies, so there is nothing for the audit to flag today.
+         Re-verify the network constraint still holds and re-run an audit out-of-band before adding any NuGet dependency,
+         and before every release, so this suppression can't silently outlive its own justification (AUDIT25-04). -->
     <NuGetAudit>false</NuGetAudit>
     <!--
       The repository root also contains spike/test projects. Exclude their build artifacts
