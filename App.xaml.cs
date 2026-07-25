@@ -32,6 +32,13 @@ public partial class App : Application
     // Debounces EVENT_OBJECT_NAMECHANGE storms (see DebounceNameChanged).
     private readonly Dictionary<IntPtr, System.Windows.Threading.DispatcherTimer> _nameChangeDebounce = new();
 
+    // Re-entrancy guard for ShowCapturePicker. ShowDialog runs a nested
+    // dispatcher loop, which keeps pumping WM_HOTKEY to the HotkeyService sink
+    // and clicks to every container's "+" button — so a second picker can open
+    // on top of the first while it is still up, each with its own modal loop and
+    // its own capture pass over the same window list.
+    private bool _pickerOpen;
+
     public App()
     {
         // Create the logger and attach the AppDomain fatal handler before anything
@@ -269,7 +276,16 @@ public partial class App : Application
                 try { emptyContainer.Close(); }
                 catch (Exception ex) { _log.LogException("Close empty container", ex); }
             }
-            _groups.RemoveGroup(group);
+
+            // Same rule as OnContainerClosed, and load-bearing for the same reason
+            // (findings L12 / M5): PersistedTabs is populated only for a group
+            // restored from a previous session's state.json, so a non-empty one
+            // means real saved layout intent. Removing the group here regardless —
+            // which this path used to do — wiped that intent whenever the last
+            // live member of a restored, re-populated group was closed or
+            // tray-hidden, overriding the guard the close path applies.
+            if (group.PersistedTabs.Count == 0)
+                _groups.RemoveGroup(group);
         }
     }
 
@@ -411,8 +427,13 @@ public partial class App : Application
             if (!string.IsNullOrWhiteSpace(match.CustomLabel))
                 continue; // User label wins.
 
+            // GetWindowTextString never returns null — it reports an unreadable or
+            // zero-length title as string.Empty — so the old null check could not
+            // fire and an empty read (routine mid-teardown, or while a guest
+            // rebuilds its title) overwrote the last known title, blanking the
+            // tab's label permanently. Keep the previous title instead.
             string? newTitle = NativeMethods.GetWindowTextString(hwnd);
-            if (newTitle == null)
+            if (string.IsNullOrEmpty(newTitle))
                 continue;
 
             match.OriginalTitle = newTitle;
@@ -471,6 +492,29 @@ public partial class App : Application
     }
 
     private void ShowCapturePicker(Group? preselectedGroup)
+    {
+        // Holding Ctrl+Alt+G repeats WM_HOTKEY, and the nested modal loops run by
+        // ShowCapturePickerCore (the picker's own ShowDialog, plus the
+        // capture-failed MessageBox) keep dispatching those repeats — which
+        // re-entered here and stacked one picker per repeat.
+        if (_pickerOpen)
+        {
+            _log.Log("Capture picker is already open; ignoring the duplicate request.");
+            return;
+        }
+
+        _pickerOpen = true;
+        try
+        {
+            ShowCapturePickerCore(preselectedGroup);
+        }
+        finally
+        {
+            _pickerOpen = false;
+        }
+    }
+
+    private void ShowCapturePickerCore(Group? preselectedGroup)
     {
         var pickerVm = new CapturePickerViewModel(_groups, _icons);
         if (preselectedGroup != null)

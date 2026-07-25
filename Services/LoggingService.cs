@@ -22,7 +22,10 @@ public sealed class LoggingService : IDisposable
     private readonly BlockingCollection<string> _queue = new(QueueCapacity);
     private readonly Thread _writerThread;
     private long _droppedLines;
-    private bool _disposed;
+    // Volatile: exit/crash paths log from the UI thread, the WinEvent dispatch
+    // thread, and the AppDomain unhandled-exception thread, any of which can race
+    // Dispose().
+    private volatile bool _disposed;
 
     public LoggingService()
     {
@@ -41,13 +44,34 @@ public sealed class LoggingService : IDisposable
 
     public void Log(string message)
     {
+        // Anything logged after Dispose() is dropped rather than thrown at the
+        // caller: TryAdd on a completed BlockingCollection throws
+        // InvalidOperationException (and ObjectDisposedException once the queue
+        // itself is gone), and the callers here are exit and crash handlers —
+        // App.CurrentDomain_UnhandledException logs while the app may already have
+        // torn the logger down, and an exception raised there replaces the real
+        // failure with a logging failure.
+        if (_disposed)
+            return;
+
         string line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}";
 
-        // TryAdd(0) never blocks: a full queue means the writer thread is stalled
-        // (e.g. a slow disk), and a hot caller must not stall with it.
-        if (!_queue.TryAdd(line, 0))
+        try
         {
-            Interlocked.Increment(ref _droppedLines);
+            // TryAdd(0) never blocks: a full queue means the writer thread is stalled
+            // (e.g. a slow disk), and a hot caller must not stall with it.
+            if (!_queue.TryAdd(line, 0))
+            {
+                Interlocked.Increment(ref _droppedLines);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Dispose() completed the collection between the check above and here.
+        }
+        catch (ObjectDisposedException)
+        {
+            // Same race, one step further along.
         }
     }
 
@@ -58,23 +82,36 @@ public sealed class LoggingService : IDisposable
 
     private void WriterLoop()
     {
-        foreach (string line in _queue.GetConsumingEnumerable())
+        // The outer try covers the enumerator itself, not just the loop body: an
+        // exception escaping a background thread terminates the whole process, and
+        // GetConsumingEnumerable throws ObjectDisposedException if Dispose() ever
+        // gives up waiting for this thread and frees the queue underneath it — a
+        // crash on shutdown for nothing more than an unflushed log line.
+        try
         {
-            try
+            foreach (string line in _queue.GetConsumingEnumerable())
             {
-                RotateIfNeeded();
-                long dropped = Interlocked.Exchange(ref _droppedLines, 0);
-                string toWrite = dropped > 0
-                    ? line + Environment.NewLine + $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] ({dropped} log line(s) dropped: writer fell behind)" + Environment.NewLine
-                    : line + Environment.NewLine;
-                File.AppendAllText(_logFile, toWrite);
+                try
+                {
+                    RotateIfNeeded();
+                    long dropped = Interlocked.Exchange(ref _droppedLines, 0);
+                    string toWrite = dropped > 0
+                        ? line + Environment.NewLine + $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] ({dropped} log line(s) dropped: writer fell behind)" + Environment.NewLine
+                        : line + Environment.NewLine;
+                    File.AppendAllText(_logFile, toWrite);
+                }
+                catch (Exception ex)
+                {
+                    // Logger must not throw. Best effort only.
+                    try { File.AppendAllText(Path.Combine(_logDirectory, "TabDock.log.err"), $"Failed to log: {ex}{Environment.NewLine}"); }
+                    catch { }
+                }
             }
-            catch (Exception ex)
-            {
-                // Logger must not throw. Best effort only.
-                try { File.AppendAllText(Path.Combine(_logDirectory, "TabDock.log.err"), $"Failed to log: {ex}{Environment.NewLine}"); }
-                catch { }
-            }
+        }
+        catch (Exception ex)
+        {
+            try { File.AppendAllText(Path.Combine(_logDirectory, "TabDock.log.err"), $"Log writer stopped: {ex}{Environment.NewLine}"); }
+            catch { }
         }
     }
 
@@ -110,7 +147,11 @@ public sealed class LoggingService : IDisposable
             return;
         _disposed = true;
         _queue.CompleteAdding();
-        _writerThread.Join(TimeSpan.FromSeconds(2));
-        _queue.Dispose();
+        // Only free the queue once the writer has genuinely finished with it.
+        // Disposing it out from under a still-running writer (a stalled disk
+        // outlasting the 2s budget) faults that thread instead, and leaking a
+        // BlockingCollection in a process that is exiting anyway costs nothing.
+        if (_writerThread.Join(TimeSpan.FromSeconds(2)))
+            _queue.Dispose();
     }
 }

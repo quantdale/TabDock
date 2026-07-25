@@ -8,7 +8,7 @@ This repository already maintains `AGENTS.md` as the primary, actively-updated a
 
 A Windows desktop utility (C# / .NET 8 / WPF, `net8.0-windows`) that groups independent application windows (browser, terminal, editor, etc.) into a single container window with a browser-style tab strip. It does this by *positioning* guest windows over the container's content area, not by reparenting them (see Architecture below). No third-party NuGet packages — all native interop is P/Invoke declared in one place, `NativeMethods.cs`.
 
-Style facts that bite when writing new files: `ImplicitUsings` is **disabled** (every file needs explicit `using` directives), nullable reference types are enabled, and the project uses classic block namespaces, not file-scoped ones. New P/Invoke goes in `NativeMethods.cs` only.
+Style facts that bite when writing new files: `ImplicitUsings` is **disabled** (every file needs explicit `using` directives), nullable reference types are enabled, and the project uses **file-scoped** namespaces (`namespace TabDock.Services;`) in every source file — this doc previously claimed block namespaces, which no file has ever used. New P/Invoke goes in `NativeMethods.cs` only.
 
 ## Commands
 

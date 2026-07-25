@@ -49,8 +49,12 @@ public sealed class HotkeyService : IDisposable
             return;
         }
 
+        // MOD_NOREPEAT: without it, holding the combination auto-repeats WM_HOTKEY
+        // at the keyboard repeat rate. Every repeat is one more capture-picker
+        // request, and they queue up behind the picker's own modal loop instead of
+        // being coalesced.
         if (NativeMethods.RegisterHotKey(_source.Handle, HotkeyId,
-            NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT,
+            NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT,
             NativeMethods.VK_G))
         {
             _registered = true;

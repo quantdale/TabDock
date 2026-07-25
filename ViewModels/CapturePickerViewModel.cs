@@ -76,6 +76,20 @@ public sealed class CapturePickerViewModel : ViewModelBase
             if (_manager.IsOwnWindow(hwnd))
                 return true;
 
+            // A window that is already a member of some group must not be
+            // offered again. Capturing the same HWND twice produces two
+            // CapturedWindow members for one window — two tabs (possibly in two
+            // different containers) each positioning, hiding, and releasing it
+            // independently — and every WinEvent handler resolves the HWND with
+            // FirstOrDefault, so only the first duplicate ever receives the
+            // destroy/hide bookkeeping and the other is stranded as a tab
+            // pointing at a dead window. An INACTIVE tab's guest is hidden and
+            // so already filtered out by IsWindowVisible above; this catches the
+            // ACTIVE tab of every open group, which is genuinely on screen and
+            // would otherwise be listed like any other window.
+            if (_manager.IsCapturedWindow(hwnd))
+                return true;
+
             // Cloaked windows (suspended UWP apps, hidden ApplicationFrameHost
             // ghosts) are reported visible by IsWindowVisible but aren't actually
             // on screen; capturing one produces a tab with nothing behind it.

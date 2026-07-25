@@ -152,22 +152,52 @@ public sealed class GroupViewModel : ViewModelBase
         SetActiveTab(tvm);
     }
 
+    /// <summary>
+    /// Releases one tab back to standalone and re-derives the active tab.
+    /// Releasing an INACTIVE tab keeps the currently active one active: the
+    /// removal must not switch the user away from the window they are looking
+    /// at, which happens on the release of any background tab — context-menu
+    /// "Pop out" on one, or a background guest that closes or hides itself
+    /// (App.RemoveDeadMember routes both through here).
+    /// </summary>
     public void ReleaseTab(TabViewModel tab, bool show = true)
     {
         int idx = Tabs.IndexOf(tab);
         if (idx < 0)
             return;
+
+        // Snapshot by reference, before the removal: Group.ActiveIndex is a
+        // positional index into Members, so it silently points at a different
+        // member once an earlier one is removed and cannot be used to identify
+        // "which tab was active" afterwards.
+        TabViewModel? previouslyActive = ActiveTab;
+
         _manager.ReleaseTab(_group, idx, show);
         tab.PopOutRequested -= OnPopOutRequested;
         tab.CloseWindowRequested -= OnCloseWindowRequested;
         Tabs.RemoveAt(idx);
+
         if (Tabs.Count == 0)
         {
             ActiveTab = null;
             EmptiedByPopOut?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        if (previouslyActive != null && previouslyActive != tab && Tabs.Contains(previouslyActive))
+        {
+            // Unchanged active tab, but SetActiveTab still has to run: it is what
+            // re-syncs the model's positional ActiveIndex to the surviving tab's
+            // new index. ActiveTab itself does not change, so no ActiveTab
+            // PropertyChanged fires and the shepherd sync correctly stays put.
+            SetActiveTab(previouslyActive);
         }
         else
+        {
+            // The active tab itself was released: fall through to its neighbour
+            // (the tab that slid into its slot, or the new last tab).
             SetActiveTab(Tabs[Math.Min(idx, Tabs.Count - 1)]);
+        }
     }
 
     public void CloseGroup()
@@ -183,23 +213,10 @@ public sealed class GroupViewModel : ViewModelBase
         CloseRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    private void OnPopOutRequested(object? sender, TabViewModel tab)
-    {
-        int idx = Tabs.IndexOf(tab);
-        if (idx < 0)
-            return;
-        _manager.ReleaseTab(_group, idx);
-        tab.PopOutRequested -= OnPopOutRequested;
-        tab.CloseWindowRequested -= OnCloseWindowRequested;
-        Tabs.RemoveAt(idx);
-        if (Tabs.Count == 0)
-        {
-            ActiveTab = null;
-            EmptiedByPopOut?.Invoke(this, EventArgs.Empty);
-        }
-        else
-            SetActiveTab(Tabs[Math.Min(idx, Tabs.Count - 1)]);
-    }
+    // Pop-out is an ordinary visible release; it was a second, drifted copy of
+    // ReleaseTab's body (which is where the "keep the active tab active" rule
+    // lives), so it delegates instead of duplicating it.
+    private void OnPopOutRequested(object? sender, TabViewModel tab) => ReleaseTab(tab);
 
     private void OnCloseWindowRequested(object? sender, TabViewModel tab)
     {

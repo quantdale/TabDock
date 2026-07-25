@@ -32,11 +32,14 @@ public partial class ContainerWindow : Window
     // container's entire sync loop for the active tab.
     private CapturedWindow? _shepherdActiveWindow;
 
-    // Coalesced timers for WM_ACTIVATE's guest re-assert and StateChanged's
-    // settled-snapshot diagnostic. Each holds at most one pending instance —
-    // stopped and replaced, never left to accumulate (AUDIT25-05).
+    // Coalesced timers for WM_ACTIVATE's guest re-assert, StateChanged's
+    // settled-snapshot diagnostic, and the self-minimize restore check. Each
+    // holds at most one pending instance — stopped and replaced, never left to
+    // accumulate (AUDIT25-05) — and all three are stopped in
+    // ContainerWindow_Closed so nothing fires against a released guest.
     private System.Windows.Threading.DispatcherTimer? _activateReassertTimer;
     private System.Windows.Threading.DispatcherTimer? _stateSettledTimer;
+    private System.Windows.Threading.DispatcherTimer? _restoreMinimizedTimer;
 
     // Drag state (tab-strip reorder / drag-out)
     private TabViewModel? _draggedTab;
@@ -295,6 +298,7 @@ public partial class ContainerWindow : Window
         _shepherdActiveWindow = null;
         _activateReassertTimer?.Stop();
         _stateSettledTimer?.Stop();
+        _restoreMinimizedTimer?.Stop();
 
         IntPtr hwnd = new WindowInteropHelper(this).Handle;
         _manager.UnregisterContainerHwnd(hwnd);
@@ -499,12 +503,22 @@ public partial class ContainerWindow : Window
 
     /// <summary>
     /// Captures a top-level window and adds it as a new tab in this container.
-    /// Returns an error message if capture fails (e.g. UIPI, elevated window, own window).
+    /// Returns an error message if capture fails (e.g. UIPI, elevated window, own
+    /// window, or a window that is already docked in a group).
     /// </summary>
     public string? CaptureWindow(IntPtr hwnd)
     {
         if (_manager.IsOwnWindow(hwnd))
             return "Cannot capture a TabDock window (no nesting).";
+
+        // Defence in depth alongside the capture picker's own filter: two
+        // CapturedWindow members for one HWND would fight over positioning and
+        // hiding it, and only the first of them would ever be torn down by the
+        // destroy/hide WinEvent handlers (they all resolve a member by
+        // FirstOrDefault). Enforced here so every entry point is covered, not
+        // just the picker.
+        if (_manager.IsCapturedWindow(hwnd))
+            return "That window is already in a TabDock group.";
 
         CapturedWindow? cw = _shepherd.Capture(hwnd, out string? error);
         if (cw == null)
@@ -664,10 +678,22 @@ public partial class ContainerWindow : Window
         // observe "iconic AND still visible" in that narrow gap and wrongly
         // decide to restore. Defer briefly so an immediately-following Hide()
         // has a chance to land first; re-check both flags at that point.
-        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
-        timer.Tick += (_, _) =>
+        _restoreMinimizedTimer?.Stop();
+        _restoreMinimizedTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        _restoreMinimizedTimer.Tick += (_, _) =>
         {
-            timer.Stop();
+            _restoreMinimizedTimer!.Stop();
+
+            // The tab can also be released inside this same 200ms window — popped
+            // out, tray-closed, or torn down along with the whole container. By
+            // then Release has already restored the guest to its capture-time
+            // placement, which is legitimately a MINIMIZED one for a window that
+            // was captured while iconic, so an unguarded SW_RESTORE here silently
+            // undoes it. The active-tab check alone is not enough: a closed
+            // container keeps its view model intact, so also require the shepherd
+            // sync to still own this guest (ContainerWindow_Closed nulls it).
+            if (_shepherdActiveWindow != window || _viewModel.ActiveTab?.Model != window)
+                return;
             if (!NativeMethods.IsWindow(window.Hwnd) || !NativeMethods.IsIconic(window.Hwnd)
                 || !NativeMethods.IsWindowVisible(window.Hwnd))
                 return;
@@ -675,7 +701,7 @@ public partial class ContainerWindow : Window
             NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_RESTORE);
             LayoutShepherdActiveWindow();
         };
-        timer.Start();
+        _restoreMinimizedTimer.Start();
     }
 
     /// <summary>

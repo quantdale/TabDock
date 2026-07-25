@@ -161,7 +161,7 @@ Use this checklist before considering a build ready for use.
 - **Nullable reference types are enabled.** Mark nullable reference types with `?`.
 - **XML doc comments** are expected on public types and non-trivial members, especially in `Services/` and `Models/`.
 - **P/Invoke lives in one file only.** Add new native declarations to `NativeMethods.cs`; do not scatter them across the codebase.
-- **File-scoped namespaces** are not used; the project uses classic block namespaces (`namespace TabDock;`).
+- **File-scoped namespaces** are used throughout (`namespace TabDock.Services;`) — every source file in the main project declares its namespace this way, with no braces. Match that in new files. (This guide previously claimed the opposite; no file has ever used a block namespace.)
 - **Naming** follows standard .NET conventions: PascalCase for types/members, camelCase for locals/parameters, `_camelCase` for private fields.
 - **Null-forgiving operator** (`!`) is used sparingly where the compiler cannot prove non-null (e.g., service fields initialized in `Application_Startup`).
 

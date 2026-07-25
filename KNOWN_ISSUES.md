@@ -1,5 +1,128 @@
 # TabDock — Known Issues (H-series summary)
 
+## Session 4 (2026-07-25): static bug-hunt pass over the app code
+
+A read-only audit of the whole main project (no runtime validation available in
+this environment — **no .NET SDK, so nothing below was compiled or executed;
+treat every entry as reviewed-and-reasoned, not runtime-confirmed**). Ten
+defects found and fixed. None are in the Shepherd capture/z-order core; they
+cluster in tab-set bookkeeping, the picker, and shutdown paths.
+
+| Issue | Severity | Where |
+|-------|----------|-------|
+| An already-docked window could be captured a second time | High | `CapturePickerViewModel.Refresh`, `ContainerWindow.CaptureWindow` |
+| Releasing an INACTIVE tab switched the active tab | High | `GroupViewModel.ReleaseTab` |
+| `Group.ActiveIndex` not shifted when an earlier member is released | Medium | `GroupManager.ReleaseTab` |
+| Empty-group cleanup wiped a restored group's persisted layout intent | Medium | `App.RemoveDeadMember` |
+| Held `Ctrl+Alt+G` stacked one capture picker per key repeat | Medium | `App.ShowCapturePicker`, `HotkeyService.Register` |
+| Self-minimize restore timer outlived its container / its tab's release | Medium | `ContainerWindow.RestoreMinimizedWindow` |
+| An empty title read blanked a tab's label permanently | Low | `App.HandleNameChanged` |
+| Logging after `Dispose` threw; queue disposal could fault the writer thread | Low | `LoggingService` |
+| Persisted active-tab index was destroyed on the first restore+save | Low | `PersistenceService`, `Group` |
+| Launcher's "No groups yet" hint could never become visible | Low | `MainWindow.xaml` |
+
+**Double capture of one HWND.** The picker filtered its own windows, cloaked
+windows, tool windows, and invisible ones — but not windows already in a group.
+An inactive tab's guest is hidden and so was filtered incidentally by
+`IsWindowVisible`; the **active** tab's guest is genuinely on screen and was
+listed like any other window. Selecting it produced two `CapturedWindow` members
+for one HWND — possibly in two different containers, each positioning, hiding,
+and releasing it independently. Because every WinEvent handler resolves an HWND
+to a member with `FirstOrDefault`, only the first duplicate would ever receive
+the destroy/hide teardown, stranding the other as a tab pointing at a dead
+window. Fixed with a `GroupManager.IsCapturedWindow` filter in the picker plus a
+rejection in `ContainerWindow.CaptureWindow`, so non-picker entry points are
+covered too.
+
+**Releasing an inactive tab stole the active tab.** Both release paths
+(`ReleaseTab` and a near-duplicate copy in `OnPopOutRequested`) ended with
+`SetActiveTab(Tabs[Math.Min(idx, Tabs.Count - 1)])` — the neighbour of the
+*removed* tab, regardless of which tab was actually active. With tabs `[A,B,C]`
+and C active, right-click → "Pop out" on A left B active, not C. The same path
+serves a background guest closing or tray-hiding itself (`App.RemoveDeadMember`),
+so an unrelated app quitting in the background switched the user's view. Fixed
+by snapshotting `ActiveTab` by reference before the removal and keeping it when
+it survives; the pop-out duplicate now delegates to `ReleaseTab` instead of
+carrying its own drifted copy of the rule.
+
+**`Group.ActiveIndex` desync (the model-level half of the same bug).**
+`ActiveIndex` is positional and its setter does not re-run on a collection
+change, so removing a member *ahead* of the active one shifted that member down
+a slot while the index stayed put — the index now named its neighbour. Only
+reachable independently through `App.RemoveDeadMember`'s no-container fallback
+(the view-model path immediately re-derives the index), but fixed at the source
+in `GroupManager.ReleaseTab` so both paths are correct.
+
+**Empty-group cleanup contradicted its own documented guard.**
+`App.OnContainerClosed` deliberately requires `PersistedTabs.Count == 0` before
+removing an empty group — the load-bearing L12/M5 rule that keeps a group
+restored from a previous session from being deleted when its shell closes.
+`RemoveDeadMember` removed the group unconditionally, and it runs *after*
+closing the container, so it overrode that guard: closing (or tray-hiding) the
+last live member of a restored, re-populated group wiped the saved layout intent
+the guard exists to protect. Now applies the same condition.
+
+**Held hotkey stacked pickers.** `RegisterHotKey` was called without
+`MOD_NOREPEAT`, so holding `Ctrl+Alt+G` auto-repeats `WM_HOTKEY` at the keyboard
+repeat rate — and `ShowDialog`'s nested dispatcher loop keeps dispatching those
+repeats, re-entering `ShowCapturePicker` and opening a picker per repeat, each
+with its own modal loop and its own capture pass. Fixed with `MOD_NOREPEAT` plus
+an explicit re-entrancy guard (the guard also covers the container "+" button
+and the capture-failed `MessageBox`, which pumps messages too).
+
+**Self-minimize restore timer.** `RestoreMinimizedWindow`'s 200ms deferred check
+was a bare local `DispatcherTimer`: untracked, so `ContainerWindow_Closed` could
+not stop it (defeating the stated intent of the `_shepherdActiveWindow = null`
+line there, which only guards the *other* two timers), and its tick re-checked
+window flags but never re-checked that the tab still belonged to this container.
+A tab released inside that window — popped out, tray-closed, or torn down with
+the container — has already been restored to its capture-time placement, which
+is legitimately a *minimized* one for a window captured while iconic, and the
+stray `SW_RESTORE` silently undid it. Now a tracked field, stopped on close, and
+re-verified against both `_shepherdActiveWindow` and the active tab.
+
+**Blanked tab labels.** `HandleNameChanged` guarded with `if (newTitle == null)`,
+but `NativeMethods.GetWindowTextString` never returns null — it reports an
+unreadable or zero-length title as `string.Empty`. So a transient empty read
+(routine while a guest rebuilds its title, or mid-teardown) overwrote
+`OriginalTitle` with `""` and the tab's label stayed blank. Now skips empty reads
+and keeps the last known title.
+
+**Logger teardown.** Two related defects. `Log` called `_queue.TryAdd` with no
+guard, and `TryAdd` on a completed `BlockingCollection` throws
+`InvalidOperationException` — so any log line after `Dispose()` threw at its
+caller, and those callers are exit and crash handlers (notably
+`CurrentDomain_UnhandledException`, which can run on another thread and would
+have replaced the real failure with a logging failure). Separately, `Dispose`
+disposed the queue unconditionally after a 2s join, so a writer still blocked in
+a slow `File.AppendAllText` would fault on its next `MoveNext` with
+`ObjectDisposedException` — uncaught on a background thread, which terminates the
+process, i.e. a crash on shutdown for an unflushed log line. Fixed with a
+`volatile _disposed` fast-path plus try/catch in `Log`, an outer try around the
+whole `WriterLoop` enumeration, and disposing the queue only when the join
+actually succeeds.
+
+**Persisted active index.** `PersistenceService.Load` assigned the saved index to
+`Group.ActiveIndex`, whose setter clamps against `Members.Count` — always 0 for a
+restored group, so the value became -1 immediately and the next (debounced,
+frequent) save wrote that -1 back, discarding the intent on the first restore.
+Now carried in `Group.PersistedActiveIndex` and written back verbatim while the
+group is unpopulated, exactly mirroring how `PersistedTabs` already works.
+
+**Dead launcher hint.** `MainWindow.xaml`'s "No groups yet" `TextBlock` set
+`Visibility` as a **local** value bound through `BoolToVisibilityConverter` with
+`Groups.Count` — an `int`, so the converter's `value is true` test was never
+true — and a local value outranks style/trigger setters, so the `Count == 0`
+`DataTrigger` right below it could never apply either. The hint was therefore
+collapsed permanently and the empty launcher showed nothing at all. (The exact
+trap `ContainerWindow.xaml`'s rename-box comment already warns about.) Fixed by
+dropping the local value and putting the default in the style's own `Setter`.
+
+**Also corrected: a documentation error in `AGENTS.md` and `CLAUDE.md`.** Both
+stated that the project uses classic block namespaces and not file-scoped ones.
+Every source file in the main project uses file-scoped namespaces, and always
+has — the guidance was steering new files the wrong way.
+
 ## Session 3 (2026-07-18, later still): Shepherd migration — keyboard input closed by architecture change
 
 **User report:** captured browser windows (Chrome/Edge) lose keyboard input after
