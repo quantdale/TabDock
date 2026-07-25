@@ -186,6 +186,14 @@ repeated-cycle validation.
 
 ---
 
+### H6. Minimizing a container releases (and orphans) its active tab — **FIXED (bug-hunt session)**
+- **Description:** `ContainerWindow.StateChanged` hides the active guest via `_shepherd.Hide` when the container is minimized. That `ShowWindow(SW_HIDE)` fires `EVENT_OBJECT_HIDE`, which — as `WinEventMonitor` documents — is **not** filtered by `WINEVENT_SKIPOWNPROCESS`, so it reaches App's `WindowHidden` handler. That handler only rejected **tab-switch** hides (active tab has moved by dispatch time) and **release** hides (dropped by the captured-window filter); the **minimize** hide leaves the active tab unchanged and the member still in `Group.Members`, so it passed every check and was misclassified as a guest-initiated tray-close.
+- **Impact:** Minimizing a group released its active tab as a hidden, orphaned window; a single-tab group additionally closed its now-empty container. Restoring never recovered the tab.
+- **Resolution (applied):** In the `WindowHidden` handler, skip the tray-close release when the group's container is in `WindowState.Minimized` — a genuine tray-close only happens while the container is open, and a restore re-shows the guest (and is already caught by the existing `IsWindowVisible` check). Both TabDock-initiated active-window hides are now accounted for: the tab-switch hide (filtered by the active-tab check) and the minimize hide (filtered by container state).
+- **Severity:** High (reproducible on the ordinary minimize path; silently loses the user's active window).
+
+---
+
 ## MEDIUM
 
 ### M1. `SetParent` NULL-return treated as failure — parentless top-level windows misclassified — **FIXED 2026-07-18 (session 2)**
@@ -312,7 +320,7 @@ This session's Task 3 instrumentation (`STATE[...]` snapshots + per-state-change
 Currently collectible together in all flows, but any future path keeping a `Group` alive after its container closes leaks the VM via the model's event. **Resolution:** unsubscribe in `CloseGroup`/`Dispose`. **Severity:** Low
 
 ### L8. Inconsistent `Groups` snapshotting in WinEvent handlers
-`WindowMinimized`/`WindowNameChanged` iterate `_groups.Groups` directly; `WindowDestroyed`/`WindowHidden` use `.ToList()`. Safe today (the former don't mutate), but the asymmetry is a trap for future edits. **Resolution:** snapshot consistently. **Severity:** Low
+`WindowMinimized`/`WindowNameChanged` iterate `_groups.Groups` directly; `WindowDestroyed`/`WindowHidden` use `.ToList()`. The asymmetry was flagged as "safe today (the former don't mutate)" — but that stopped being true once `OnGuestMoveSize` (the MOVESIZEEND handler) began iterating `_groups.Groups` directly: a title-bar drag-out of the *last* tab in a group synchronously releases it → empties the group → closes its container → `RemoveGroup`, mutating `Groups` mid-`foreach` and throwing `InvalidOperationException`, which escalates to the dispatcher crash handler. **Resolution (applied):** all three direct-iteration sites (`WindowMinimized`, `WindowForegroundChanged`, `OnGuestMoveSize`) now snapshot with `.ToList()`, matching `WindowDestroyed`/`WindowHidden`/`HandleNameChanged`. **Severity:** was Low as written; the `OnGuestMoveSize` case is a real, reproducible crash (single-tab group, drag guest out by its title bar).
 
 ### L9. Double emergency-release on dispatcher crash
 `DispatcherUnhandledException` → `EmergencyReleaseAll` → `Shutdown(1)` → `Application_Exit` → `EmergencyReleaseAll` again. Largely idempotent (`IsWindow` guards) but re-runs `SetForegroundWindow` on already-released windows. **Severity:** Low
