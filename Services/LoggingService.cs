@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Text;
 using System.Threading;
 
 namespace TabDock.Services;
@@ -11,6 +12,17 @@ namespace TabDock.Services;
 /// so callers on hot paths (focus handling, layout, WinEvent dispatch) never
 /// block on file writes. The queue is bounded and non-blocking: if the writer
 /// falls behind, new lines are dropped rather than stalling the caller.
+///
+/// The writer keeps ONE append-mode handle open for the process lifetime and
+/// drains the queue in batches (PERF25-01). The previous implementation issued
+/// File.Exists + new FileInfo(...).Length + File.AppendAllText — an open, seek,
+/// write and close, plus two directory-metadata round trips — for every single
+/// line, which is the wrong shape for a logger that a container drag or a
+/// WinEvent storm can drive hundreds of lines per second. Size is now tracked
+/// from the stream position (free, already maintained by FileStream) instead of
+/// being re-stat'ed per line, and one Flush covers a whole batch rather than
+/// one per line. The file is opened with FileShare.ReadWrite so tailing it in
+/// another tool still works while TabDock holds it open.
 /// </summary>
 public sealed class LoggingService : IDisposable
 {
@@ -18,9 +30,20 @@ public sealed class LoggingService : IDisposable
     private readonly string _logFile;
     private const long MaxSize = 1 * 1024 * 1024; // 1 MB
     private const int QueueCapacity = 4096;
+    // Upper bound on lines coalesced into a single write+flush. Large enough
+    // that a burst costs one round trip, small enough that a stalled disk can
+    // never make a single write unboundedly large.
+    private const int MaxBatchLines = 256;
 
     private readonly BlockingCollection<string> _queue = new(QueueCapacity);
     private readonly Thread _writerThread;
+
+    // Writer-thread-only state. Nothing else may touch these: the writer thread
+    // owns the handle for its whole lifetime and closes it as it unwinds.
+    private readonly StringBuilder _batch = new(8 * 1024);
+    private FileStream? _stream;
+    private StreamWriter? _writer;
+
     private long _droppedLines;
     // Volatile: exit/crash paths log from the UI thread, the WinEvent dispatch
     // thread, and the AppDomain unhandled-exception thread, any of which can race
@@ -93,16 +116,36 @@ public sealed class LoggingService : IDisposable
             {
                 try
                 {
-                    RotateIfNeeded();
+                    _batch.Clear();
+                    _batch.Append(line).Append(Environment.NewLine);
+
+                    // Opportunistically absorb whatever else is already queued.
+                    // TryTake(out _) never blocks, so a quiet logger still writes
+                    // its single line immediately — this only coalesces bursts.
+                    int lines = 1;
+                    while (lines < MaxBatchLines && _queue.TryTake(out string? next))
+                    {
+                        _batch.Append(next).Append(Environment.NewLine);
+                        lines++;
+                    }
+
                     long dropped = Interlocked.Exchange(ref _droppedLines, 0);
-                    string toWrite = dropped > 0
-                        ? line + Environment.NewLine + $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] ({dropped} log line(s) dropped: writer fell behind)" + Environment.NewLine
-                        : line + Environment.NewLine;
-                    File.AppendAllText(_logFile, toWrite);
+                    if (dropped > 0)
+                    {
+                        _batch.Append('[').Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"))
+                              .Append("] (").Append(dropped).Append(" log line(s) dropped: writer fell behind)")
+                              .Append(Environment.NewLine);
+                    }
+
+                    WriteBatch();
                 }
                 catch (Exception ex)
                 {
-                    // Logger must not throw. Best effort only.
+                    // Logger must not throw. Best effort only. Drop the handle so
+                    // the next batch reopens it: the most likely cause of a write
+                    // failure is the file having been moved or deleted underneath
+                    // the open stream.
+                    CloseWriter();
                     try { File.AppendAllText(Path.Combine(_logDirectory, "TabDock.log.err"), $"Failed to log: {ex}{Environment.NewLine}"); }
                     catch { }
                 }
@@ -113,28 +156,92 @@ public sealed class LoggingService : IDisposable
             try { File.AppendAllText(Path.Combine(_logDirectory, "TabDock.log.err"), $"Log writer stopped: {ex}{Environment.NewLine}"); }
             catch { }
         }
+        finally
+        {
+            CloseWriter();
+        }
     }
 
-    private void RotateIfNeeded()
+    /// <summary>
+    /// Writes the accumulated batch through the persistent handle and flushes
+    /// once. Writer thread only. TextWriter.Write(StringBuilder) streams the
+    /// builder's chunks straight out, so batching costs no extra string
+    /// allocation on top of the queued lines themselves.
+    /// </summary>
+    private void WriteBatch()
     {
+        EnsureWriter();
+        if (_writer == null)
+            throw new IOException($"Log file '{_logFile}' is not open for append.");
+
+        _writer.Write(_batch);
+        // Flush per batch, not per line: a batch is normally a single line, so
+        // log durability against a force-kill is unchanged in the quiet case,
+        // and a burst costs one flush instead of hundreds.
+        _writer.Flush();
+        RotateIfNeeded();
+    }
+
+    private void EnsureWriter()
+    {
+        if (_writer != null)
+            return;
         try
         {
-            if (File.Exists(_logFile))
-            {
-                var info = new FileInfo(_logFile);
-                if (info.Length > MaxSize)
-                {
-                    string backup = _logFile + ".old";
-                    if (File.Exists(backup))
-                        File.Delete(backup);
-                    File.Move(_logFile, backup);
-                }
-            }
+            Directory.CreateDirectory(_logDirectory);
+            _stream = new FileStream(_logFile, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, 8192);
+            // No BOM, matching what File.AppendAllText produced before, so an
+            // existing log file keeps a single consistent encoding across the
+            // upgrade.
+            _writer = new StreamWriter(_stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+        catch
+        {
+            // Leave nothing half-open, and let the caller's handler record the
+            // failure in TabDock.log.err — the same diagnostic the per-line
+            // File.AppendAllText produced when it could not open the file.
+            CloseWriter();
+            throw;
+        }
+    }
+
+    private void CloseWriter()
+    {
+        try { _writer?.Dispose(); } catch { }
+        try { _stream?.Dispose(); } catch { }
+        _writer = null;
+        _stream = null;
+    }
+
+    /// <summary>
+    /// Rotates at <see cref="MaxSize"/> using the stream's own position rather
+    /// than re-stat'ing the file: FileStream already tracks it, and after the
+    /// batch flush above it is exact. Writer thread only, and only ever called
+    /// straight after a flush.
+    /// </summary>
+    private void RotateIfNeeded()
+    {
+        if (_stream == null || _stream.Position <= MaxSize)
+            return;
+
+        // The handle has to go before the move: an open file cannot be renamed
+        // on Windows.
+        CloseWriter();
+        try
+        {
+            string backup = _logFile + ".old";
+            if (File.Exists(backup))
+                File.Delete(backup);
+            File.Move(_logFile, backup);
         }
         catch
         {
             // Rotation is best effort.
         }
+
+        // Reopen either way — a failed rotation must not silently stop logging
+        // for the rest of the session.
+        EnsureWriter();
     }
 
     /// <summary>

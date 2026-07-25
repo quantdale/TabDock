@@ -699,6 +699,14 @@ public static partial class NativeMethods
     // -------------------------------------------------------------------------
     // Managed helpers around the raw imports
     // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// This process's ID, resolved once. It cannot change for the lifetime of
+    /// the process, and the no-nesting checks query it for every window the
+    /// capture picker enumerates (GroupManager.IsOwnWindow).
+    /// </summary>
+    public static readonly uint CurrentProcessId = GetCurrentProcessId();
+
     public static string? GetWindowTextString(IntPtr hWnd)
     {
         int len = GetWindowTextLength(hWnd);

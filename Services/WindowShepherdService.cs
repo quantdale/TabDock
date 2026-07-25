@@ -166,7 +166,12 @@ public sealed class WindowShepherdService
             NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
 
         JournalClear(window.Hwnd);
-        _log.Log($"SHEPHERD[position] guest={NativeMethods.DescribeWindow(window.Hwnd)} rect={screenRect.left},{screenRect.top},{screenRect.Width}x{screenRect.Height}");
+        // Deliberately NOT DescribeWindow here: this is the hottest logging site
+        // in the app (it runs on every LocationChanged/SizeChanged tick while a
+        // container is dragged or resized) and DescribeWindow costs five extra
+        // P/Invokes to report a rect that this line already carries — the one
+        // this call is in the middle of applying, at that.
+        _log.Log($"SHEPHERD[position] guest=0x{window.Hwnd.ToInt64():X} rect={screenRect.left},{screenRect.top},{screenRect.Width}x{screenRect.Height}");
     }
 
     /// <summary>
@@ -361,6 +366,13 @@ public sealed class WindowShepherdService
         try
         {
             HiddenWindowJournalFile file = GetJournalCache();
+            // The journal is empty in the overwhelmingly common case (nothing is
+            // hidden while a single-tab group is dragged around), and this runs
+            // from PositionAndShow on every drag tick. Bail before RemoveAll so
+            // that path allocates no predicate closure at all.
+            if (file.Entries.Count == 0)
+                return;
+
             int before = file.Entries.Count;
             file.Entries.RemoveAll(e => e.Hwnd == hwnd.ToInt64());
             if (file.Entries.Count == before)

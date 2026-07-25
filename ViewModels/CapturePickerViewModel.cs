@@ -69,10 +69,26 @@ public sealed class CapturePickerViewModel : ViewModelBase
         }
         SelectedGroupOption = Groups.FirstOrDefault();
 
+        // The filters below run for every top-level window on the desktop
+        // (typically a few hundred, of which a handful are real candidates), so
+        // they are ordered cheapest-first: two style/text reads eliminate the
+        // vast majority before the enumeration spends anything on a cross-process
+        // DWM query or on opening a process handle (PERF25-04). The set of
+        // windows offered is unchanged — every filter is independent of the
+        // others, so only the order in which they reject differs.
         NativeMethods.EnumWindows((hwnd, _) =>
         {
             if (!NativeMethods.IsWindowVisible(hwnd))
                 return true;
+
+            nint exStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
+            if (((long)exStyle & NativeMethods.WS_EX_TOOLWINDOW) != 0)
+                return true;
+
+            string? title = NativeMethods.GetWindowTextString(hwnd);
+            if (string.IsNullOrWhiteSpace(title))
+                return true;
+
             if (_manager.IsOwnWindow(hwnd))
                 return true;
 
@@ -80,8 +96,8 @@ public sealed class CapturePickerViewModel : ViewModelBase
             // offered again. Capturing the same HWND twice produces two
             // CapturedWindow members for one window — two tabs (possibly in two
             // different containers) each positioning, hiding, and releasing it
-            // independently — and every WinEvent handler resolves the HWND with
-            // FirstOrDefault, so only the first duplicate ever receives the
+            // independently — and the WinEvent handlers resolve an HWND to a
+            // single member, so only one duplicate would ever receive the
             // destroy/hide bookkeeping and the other is stranded as a tab
             // pointing at a dead window. An INACTIVE tab's guest is hidden and
             // so already filtered out by IsWindowVisible above; this catches the
@@ -93,16 +109,9 @@ public sealed class CapturePickerViewModel : ViewModelBase
             // Cloaked windows (suspended UWP apps, hidden ApplicationFrameHost
             // ghosts) are reported visible by IsWindowVisible but aren't actually
             // on screen; capturing one produces a tab with nothing behind it.
+            // Last, because it is the most expensive check here.
             int hr = NativeMethods.DwmGetWindowAttribute(hwnd, NativeMethods.DWMWA_CLOAKED, out bool cloaked, sizeof(uint));
             if (hr == 0 && cloaked)
-                return true;
-
-            nint exStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
-            if (((long)exStyle & NativeMethods.WS_EX_TOOLWINDOW) != 0)
-                return true;
-
-            string? title = NativeMethods.GetWindowTextString(hwnd);
-            if (string.IsNullOrWhiteSpace(title))
                 return true;
 
             NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
@@ -110,7 +119,11 @@ public sealed class CapturePickerViewModel : ViewModelBase
 
             var info = new WindowInfo(hwnd, title, exe)
             {
-                Icon = _icons.GetWindowIcon(hwnd),
+                // Resolve the icon from the path already in hand. GetWindowIcon
+                // would re-derive it, paying a second OpenProcess +
+                // QueryFullProcessImageName round trip per listed window for a
+                // string this method just read.
+                Icon = string.IsNullOrEmpty(exe) ? null : _icons.GetFileIcon(exe),
             };
             info.PropertyChanged += (_, _) =>
             {

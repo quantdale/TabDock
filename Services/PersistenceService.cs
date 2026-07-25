@@ -15,6 +15,10 @@ public sealed class PersistenceService
     private readonly LoggingService _log;
     private readonly string _statePath;
 
+    // The exact JSON last written to disk, so an unchanged save can skip the
+    // write + atomic-rename round trip entirely (PERF25-07).
+    private string? _lastSavedJson;
+
     public PersistenceService(LoggingService log)
     {
         _log = log;
@@ -84,9 +88,20 @@ public sealed class PersistenceService
             }
 
             string json = JsonSerializer.Serialize(state, TabDockJsonContext.Default.PersistedState);
+
+            // Saves are debounced onto every state change and then repeated
+            // outright by the exit/crash paths, so the same bytes are commonly
+            // written several times in a row. Skip the write when nothing
+            // changed (PERF25-07) — the file must still be on disk for the skip
+            // to be safe, otherwise a state.json deleted underneath a running
+            // TabDock would never be recreated.
+            if (string.Equals(json, _lastSavedJson, StringComparison.Ordinal) && File.Exists(_statePath))
+                return;
+
             string tempPath = _statePath + ".tmp";
             File.WriteAllText(tempPath, json);
             File.Move(tempPath, _statePath, overwrite: true);
+            _lastSavedJson = json;
             _log.Log($"Saved {state.Groups.Count} group(s) to {_statePath}");
         }
         catch (Exception ex)

@@ -16,8 +16,11 @@ public sealed class IconService
     // Keyed by exe path so repeat windows of the same executable (the common
     // case: multiple browser/terminal/IDE windows) don't re-run ExtractIconEx.
     // A cached null means extraction failed for that path; it is not retried
-    // for the lifetime of this instance (AUDIT25-02).
-    private readonly Dictionary<string, ImageSource?> _iconCache = new();
+    // for the lifetime of this instance (AUDIT25-02). The comparer is
+    // case-insensitive because Windows paths are: QueryFullProcessImageName can
+    // report the same executable with different casing for different processes,
+    // which used to miss the cache and re-extract the icon (PERF25-05).
+    private readonly Dictionary<string, ImageSource?> _iconCache = new(StringComparer.OrdinalIgnoreCase);
 
     public string? GetProcessImagePath(uint pid)
     {
@@ -39,6 +42,12 @@ public sealed class IconService
 
     public ImageSource? GetFileIcon(string exePath)
     {
+        // A member captured from a process whose image path could not be read
+        // carries an empty ExePath; there is nothing to extract, so skip the
+        // interop call rather than caching a failure under an empty key.
+        if (string.IsNullOrEmpty(exePath))
+            return null;
+
         if (_iconCache.TryGetValue(exePath, out ImageSource? cached))
             return cached;
 

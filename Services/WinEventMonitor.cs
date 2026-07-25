@@ -21,6 +21,7 @@ public sealed class WinEventMonitor : IDisposable
     private IntPtr _hookMinimize;
     private IntPtr _hookHide;
     private IntPtr _hookMoveSize;
+    private bool _running;
     private bool _disposed;
 
     public event EventHandler<WindowEventArgs>? WindowDestroyed;
@@ -59,10 +60,18 @@ public sealed class WinEventMonitor : IDisposable
         _callback = new NativeMethods.WinEventProc(OnWinEvent);
     }
 
+    /// <summary>
+    /// Installs the hooks. Idempotent, and safe to call again after
+    /// <see cref="Stop"/> — App starts and stops the monitor as captured
+    /// windows come and go, so that an idle TabDock is not paying to have every
+    /// menu, tooltip and title change on the desktop marshalled into its
+    /// message loop only to be filtered out (PERF25-03).
+    /// </summary>
     public void Start()
     {
-        if (_hookDestroy != IntPtr.Zero)
+        if (_running || _disposed)
             return;
+        _running = true;
 
         _uiContext = SynchronizationContext.Current;
 
@@ -80,8 +89,18 @@ public sealed class WinEventMonitor : IDisposable
         _log.Log($"WinEventMonitor started (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X})");
     }
 
+    /// <summary>
+    /// Removes the hooks. Idempotent. Must run on the thread that installed
+    /// them (the UI thread) — which every caller does, since the presence
+    /// notification that drives it is raised from the UI-thread-only group
+    /// collections.
+    /// </summary>
     public void Stop()
     {
+        if (!_running)
+            return;
+        _running = false;
+
         if (_hookDestroy != IntPtr.Zero)
         {
             NativeMethods.UnhookWinEvent(_hookDestroy);
