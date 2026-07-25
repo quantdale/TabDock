@@ -54,12 +54,20 @@
                     </ListView.ItemTemplate>
                 </ListView>
 
+                <!-- Visibility is driven entirely by the style Setter + the
+                     Groups.Count DataTrigger below. Do NOT set Visibility as a
+                     local attribute here: a local value outranks style/trigger
+                     setters, so the trigger could never show this hint. It
+                     previously carried a local Visibility bound through
+                     BoolToVisibilityConverter with Groups.Count (an int, never
+                     `true`) as its source, which collapsed the hint permanently —
+                     the empty-launcher state had no text at all. -->
                 <TextBlock Text="No groups yet. Click 'New group' to create one."
                            HorizontalAlignment="Center" VerticalAlignment="Center"
-                           Foreground="Gray"
-                           Visibility="{Binding Groups.Count, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=False}">
+                           Foreground="Gray">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding Groups.Count}" Value="0">
                                     <Setter Property="Visibility" Value="Visible" />

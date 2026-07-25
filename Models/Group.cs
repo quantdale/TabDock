@@ -62,6 +62,17 @@ public sealed class Group : INotifyPropertyChanged
     /// </summary>
     public List<PersistedTabMetadata> PersistedTabs { get; } = new();
 
+    /// <summary>
+    /// The active-tab index saved from the previous session, kept alongside
+    /// <see cref="PersistedTabs"/> and for exactly the same reason: a restored
+    /// group has no live <see cref="Members"/>, so assigning the loaded index to
+    /// <see cref="ActiveIndex"/> is clamped straight to -1 against an empty
+    /// collection, and the next (debounced, frequent) save wrote that -1 back —
+    /// discarding the intent on the first restore instead of carrying it forward.
+    /// Written back verbatim by PersistenceService while the group is unpopulated.
+    /// </summary>
+    public int PersistedActiveIndex { get; set; }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     private void SetProperty<T>(ref T field, T value, [CallerMemberName] string propertyName = "")

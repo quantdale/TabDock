@@ -158,10 +158,19 @@ public sealed class GroupManager
             return;
 
         var cw = group.Members[index];
+        int activeIndex = group.ActiveIndex;
         group.Members.RemoveAt(index);
         _shepherd.Release(cw, show);
 
-        if (group.ActiveIndex >= group.Members.Count)
+        // ActiveIndex is positional, and removing a member does not re-run its
+        // setter, so releasing a tab AHEAD of the active one shifts the active
+        // member down a slot while the index stays put — silently renaming the
+        // active tab to its neighbour. Follow the member instead. Only when the
+        // active member itself was the one released does the index have to move,
+        // clamped for the released-the-last-tab case.
+        if (index < activeIndex)
+            group.ActiveIndex = activeIndex - 1;
+        else if (group.ActiveIndex >= group.Members.Count)
             group.ActiveIndex = group.Members.Count - 1;
 
         _log.Log($"Released tab {index} from group {group.Id}");

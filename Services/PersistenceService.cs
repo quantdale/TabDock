@@ -36,7 +36,11 @@ public sealed class PersistenceService
                     Id = g.Id,
                     Name = g.Name,
                     AccentColor = g.AccentColor,
-                    ActiveIndex = g.ActiveIndex,
+                    // Mirrors the Tabs handling below: a group with no live members
+                    // has only loaded metadata, and Group.ActiveIndex clamps to -1
+                    // against an empty Members collection, so reading it here would
+                    // overwrite the restored index with -1 on the first save.
+                    ActiveIndex = g.Members.Count > 0 ? g.ActiveIndex : g.PersistedActiveIndex,
                 };
                 if (g.Members.Count > 0)
                 {
@@ -133,6 +137,10 @@ public sealed class PersistenceService
                     });
                 }
 
+                // Keep the loaded index as layout intent (see
+                // Group.PersistedActiveIndex) as well as assigning it, since the
+                // assignment is clamped to -1 while the group has no live members.
+                group.PersistedActiveIndex = pg.ActiveIndex;
                 group.ActiveIndex = pg.ActiveIndex;
                 result.Add(group);
             }
