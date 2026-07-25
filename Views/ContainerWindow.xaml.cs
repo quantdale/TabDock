@@ -600,7 +600,15 @@ public partial class ContainerWindow : Window
         // resizes its native HWND — reading its screen rect too early silently
         // repositions the guest to the stale, pre-transition size. Force the
         // pending layout to flush first so the marker's HWND is already correct.
-        UpdateLayout();
+        //
+        // Only when there IS pending layout, though: a plain container drag
+        // raises LocationChanged for every mouse tick without dirtying anything
+        // (a move changes where the content marker is, not how big it is), and
+        // an unconditional UpdateLayout made each of those ticks re-enter WPF's
+        // layout manager for nothing. Invalidation propagates to ancestors, so a
+        // dirty content marker always shows up as an invalid window here.
+        if (!IsMeasureValid || !IsArrangeValid)
+            UpdateLayout();
         NativeMethods.RECT rect = GetContentAreaScreenRect();
         if (rect.Width == 0 || rect.Height == 0)
             return;
@@ -743,12 +751,22 @@ public partial class ContainerWindow : Window
     }
 
     /// <summary>
-    /// Refreshes tab titles after an external window name change.
+    /// Refreshes the title of the one tab whose guest was renamed. A name
+    /// change concerns exactly one member, so invalidating every tab's Title
+    /// binding (as the previous RefreshTabTitles did) made WPF re-read and
+    /// re-measure every tab in the strip for each rename — and guests that
+    /// mirror document content into their caption rename constantly.
     /// </summary>
-    public void RefreshTabTitles()
+    public void RefreshTabTitle(CapturedWindow window)
     {
         foreach (var tab in _viewModel.Tabs)
-            tab.RefreshTitle();
+        {
+            if (tab.Model == window)
+            {
+                tab.RefreshTitle();
+                return;
+            }
+        }
     }
 
     #region Drag reorder / drag-out release

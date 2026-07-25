@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Windows;
 using System.Windows.Threading;
@@ -20,6 +22,52 @@ public sealed class GroupManager
     private readonly HashSet<IntPtr> _ownContainerHwnds = new();
     private readonly object _lock = new();
 
+    // O(1) HWND -> owning group + member index over every group's Members
+    // collection (PERF25-02). WinEventMonitor's filter consults this for EVERY
+    // system-wide destroy, hide, name-change, minimize, foreground and
+    // move/size event — a firehose that includes every menu and tooltip in
+    // every running process — and each of App's WinEvent handlers then repeated
+    // the same search with Groups.ToList() + FirstOrDefault. Both were an
+    // O(groups x members) scan plus per-event allocations on the single hottest
+    // path in the app; they are now one dictionary probe.
+    //
+    // The index is maintained from CollectionChanged rather than from the
+    // mutating call sites: members are added through GroupViewModel and removed
+    // through several distinct release paths, so hooking the collections is the
+    // only way to make it structurally impossible for the index to drift from
+    // Group.Members. UI thread only, exactly like the collections it mirrors.
+    private readonly Dictionary<IntPtr, CapturedMember> _capturedIndex = new();
+    private readonly Dictionary<Group, NotifyCollectionChangedEventHandler> _memberHandlers = new();
+    private bool _monitoringNeeded;
+
+    /// <summary>An indexed captured window together with the group that owns it.</summary>
+    public readonly struct CapturedMember
+    {
+        public CapturedMember(Group group, CapturedWindow window)
+        {
+            Group = group;
+            Window = window;
+        }
+
+        public Group Group { get; }
+        public CapturedWindow Window { get; }
+    }
+
+    /// <summary>
+    /// Raised when the number of captured windows crosses between zero and
+    /// non-zero. App uses it to run the out-of-process WinEvent hooks only while
+    /// there is actually something to observe (PERF25-03).
+    /// </summary>
+    public event EventHandler? MonitoringNeededChanged;
+
+    /// <summary>
+    /// True while at least one window is captured. With no captured windows
+    /// every WinEvent hook callback is guaranteed to be filtered out, so leaving
+    /// the hooks installed only pays the cost of marshalling desktop-wide UI
+    /// events into this process for nothing.
+    /// </summary>
+    public bool IsMonitoringNeeded => _capturedIndex.Count > 0;
+
     public ObservableCollection<Group> Groups { get; } = new();
 
     public GroupManager(WindowShepherdService shepherd, PersistenceService persistence, LoggingService log)
@@ -27,6 +75,7 @@ public sealed class GroupManager
         _shepherd = shepherd;
         _persistence = persistence;
         _log = log;
+        Groups.CollectionChanged += OnGroupsChanged;
     }
 
     public void RestoreState()
@@ -86,13 +135,15 @@ public sealed class GroupManager
             if (_ownContainerHwnds.Contains(hwnd))
                 return true;
 
-            IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
-            if (root != IntPtr.Zero && _ownContainerHwnds.Contains(root))
+            // Own-process check before the ancestor walk: it is the broader of
+            // the two (every container HWND is in this process anyway), and the
+            // picker runs this for every top-level window on the desktop.
+            NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
+            if (pid == NativeMethods.CurrentProcessId)
                 return true;
 
-            // Also guard against our own process.
-            NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
-            return pid == NativeMethods.GetCurrentProcessId();
+            IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
+            return root != IntPtr.Zero && _ownContainerHwnds.Contains(root);
         }
     }
 
@@ -103,19 +154,142 @@ public sealed class GroupManager
     /// </summary>
     public bool IsCapturedWindow(IntPtr hwnd)
     {
-        if (hwnd == IntPtr.Zero)
-            return false;
+        return hwnd != IntPtr.Zero && _capturedIndex.ContainsKey(hwnd);
+    }
 
-        foreach (var group in Groups)
+    /// <summary>
+    /// Resolves an HWND to its captured member and owning group in one probe.
+    /// An HWND can only ever be in one group (enforced by the picker's filter
+    /// and by ContainerWindow.CaptureWindow), so this returns the same result
+    /// the old scan-every-group loops did, without the per-event snapshot list
+    /// and predicate closures those needed. UI thread only.
+    /// </summary>
+    public bool TryGetCapturedMember(IntPtr hwnd, [MaybeNullWhen(false)] out Group group, [MaybeNullWhen(false)] out CapturedWindow member)
+    {
+        if (hwnd != IntPtr.Zero && _capturedIndex.TryGetValue(hwnd, out CapturedMember entry))
         {
-            foreach (var member in group.Members)
-            {
-                if (member.Hwnd == hwnd)
-                    return true;
-            }
+            group = entry.Group;
+            member = entry.Window;
+            return true;
         }
+
+        group = null;
+        member = null;
         return false;
     }
+
+    #region Captured-window index (PERF25-02)
+
+    private void OnGroupsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
+            RebuildIndex();
+            return;
+        }
+
+        if (e.OldItems != null)
+        {
+            foreach (Group group in e.OldItems)
+                DetachGroup(group);
+        }
+        if (e.NewItems != null)
+        {
+            foreach (Group group in e.NewItems)
+                AttachGroup(group);
+        }
+
+        NotifyMonitoringNeeded();
+    }
+
+    private void AttachGroup(Group group)
+    {
+        if (_memberHandlers.ContainsKey(group))
+            return;
+
+        // One handler instance per group so the group identity is captured for
+        // the index without needing a collection-to-group reverse map, and so
+        // it can be unsubscribed again on removal.
+        NotifyCollectionChangedEventHandler handler = (_, args) => OnMembersChanged(group, args);
+        _memberHandlers[group] = handler;
+        group.Members.CollectionChanged += handler;
+
+        foreach (CapturedWindow member in group.Members)
+            _capturedIndex[member.Hwnd] = new CapturedMember(group, member);
+    }
+
+    private void DetachGroup(Group group)
+    {
+        if (_memberHandlers.TryGetValue(group, out NotifyCollectionChangedEventHandler? handler))
+        {
+            group.Members.CollectionChanged -= handler;
+            _memberHandlers.Remove(group);
+        }
+
+        foreach (CapturedWindow member in group.Members)
+            RemoveFromIndex(member);
+    }
+
+    private void OnMembersChanged(Group group, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
+            RebuildIndex();
+            return;
+        }
+
+        // Order matters for Move/Replace, where the same instance appears in
+        // both lists: remove first, then re-add.
+        if (e.OldItems != null)
+        {
+            foreach (CapturedWindow member in e.OldItems)
+                RemoveFromIndex(member);
+        }
+        if (e.NewItems != null)
+        {
+            foreach (CapturedWindow member in e.NewItems)
+                _capturedIndex[member.Hwnd] = new CapturedMember(group, member);
+        }
+
+        NotifyMonitoringNeeded();
+    }
+
+    private void RemoveFromIndex(CapturedWindow member)
+    {
+        // Only drop the entry if it still points at THIS member. A recycled
+        // HWND value re-captured into another group before the old member's
+        // removal is processed must not have its live entry deleted.
+        if (_capturedIndex.TryGetValue(member.Hwnd, out CapturedMember entry) && ReferenceEquals(entry.Window, member))
+            _capturedIndex.Remove(member.Hwnd);
+    }
+
+    /// <summary>
+    /// Full rebuild, used for the Reset notification a Clear() raises (it
+    /// carries no item lists, so incremental maintenance is impossible).
+    /// </summary>
+    private void RebuildIndex()
+    {
+        foreach (KeyValuePair<Group, NotifyCollectionChangedEventHandler> pair in _memberHandlers)
+            pair.Key.Members.CollectionChanged -= pair.Value;
+        _memberHandlers.Clear();
+        _capturedIndex.Clear();
+
+        foreach (Group group in Groups)
+            AttachGroup(group);
+
+        NotifyMonitoringNeeded();
+    }
+
+    private void NotifyMonitoringNeeded()
+    {
+        bool needed = _capturedIndex.Count > 0;
+        if (needed == _monitoringNeeded)
+            return;
+        _monitoringNeeded = needed;
+        MonitoringNeededChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    #endregion
 
     public Group CreateGroup(string name = "Group", string accentColor = "#2196F3")
     {

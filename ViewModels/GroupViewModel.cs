@@ -29,7 +29,29 @@ public sealed class GroupViewModel : ViewModelBase
         set => _group.AccentColor = value;
     }
 
-    public Brush AccentBrush => (Brush)new Converters.ColorToBrushConverter().Convert(AccentColor, typeof(Brush), null!, System.Globalization.CultureInfo.InvariantCulture);
+    // ContainerWindow binds AccentBrush from several places (window background,
+    // caption strip, colour chip), and WPF re-reads the property for each of
+    // them on every change notification. Converting the colour string and
+    // allocating a fresh SolidColorBrush per read was pure waste; cache the
+    // frozen brush and rebuild it only when the colour actually changes
+    // (PERF25-06). A frozen brush is safe to share across all the bindings.
+    private static readonly Converters.ColorToBrushConverter s_colorToBrush = new();
+    private Brush? _accentBrush;
+    private string? _accentBrushSource;
+
+    public Brush AccentBrush
+    {
+        get
+        {
+            string color = AccentColor;
+            if (_accentBrush == null || !string.Equals(_accentBrushSource, color, StringComparison.Ordinal))
+            {
+                _accentBrush = (Brush)s_colorToBrush.Convert(color, typeof(Brush), null!, System.Globalization.CultureInfo.InvariantCulture);
+                _accentBrushSource = color;
+            }
+            return _accentBrush;
+        }
+    }
 
     public bool IsRenaming
     {
