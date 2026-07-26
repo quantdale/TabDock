@@ -22,6 +22,7 @@ public sealed class GroupManager
     private readonly HashSet<IntPtr> _ownContainerHwnds = new();
     private readonly object _lock = new();
 
+    /// <summary>O(1) index enabling WinEventMonitor's firehose of desktop-wide events to rapidly filter captured windows (PERF25-02).</summary>
     // O(1) HWND -> owning group + member index over every group's Members
     // collection (PERF25-02). WinEventMonitor's filter consults this for EVERY
     // system-wide destroy, hide, name-change, minimize, foreground and

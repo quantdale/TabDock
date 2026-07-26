@@ -21,10 +21,12 @@ public sealed class CapturedWindow
 
     public string CustomLabel { get; set; } = string.Empty;
 
+    /// <summary>Snapshot of the guest's placement at capture time; used to restore exact window state on release.</summary>
     public NativeMethods.WINDOWPLACEMENT OriginalPlacement { get; set; }
 
     public NativeMethods.RECT OriginalBounds { get; set; }
 
+    /// <summary>Tracks whether the guest was maximized at capture; restored to that state when released.</summary>
     public bool WasMaximized { get; set; }
 
     public string DisplayLabel => string.IsNullOrWhiteSpace(CustomLabel) ? OriginalTitle : CustomLabel;

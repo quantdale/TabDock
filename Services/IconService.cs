@@ -40,6 +40,7 @@ public sealed class IconService
         return GetFileIcon(exe);
     }
 
+    /// <summary>Retrieves and caches the icon for an executable path, avoiding repeated ExtractIconEx calls for frequently-captured apps.</summary>
     public ImageSource? GetFileIcon(string exePath)
     {
         // A member captured from a process whose image path could not be read
