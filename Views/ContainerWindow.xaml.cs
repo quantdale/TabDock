@@ -46,6 +46,7 @@ public partial class ContainerWindow : Window
     private Point _dragStart;
     private ListBoxItem? _draggedItem;
     private bool _isDragging;
+    /// <summary>Minimum pointer movement in pixels before drag gesture is recognized (avoids flaky tab activation on clicks).</summary>
     private const double DragThreshold = 4;
 
     // Tab-strip slot midpoints snapshotted at drag start. Drop targeting must
