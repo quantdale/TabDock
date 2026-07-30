@@ -49,6 +49,22 @@ In `browser-tabswitch-hidesafety`, after each switch *to* the browser tab, captu
 
 Each new/modified scenario satisfies the four rules by *using only the existing primitives* (`SpawnPig`/`SpawnNotepad` unique-title spawns, `Discover` PID/class/title verification, `EnsureClickable` never-click-blind, scenario-level try/finally `Cleanup`, no retry loops without re-discovery). The spec states the rules as requirements; tasks include a per-scenario checklist item. A runtime "safety wrapper" around all input was considered and rejected — it duplicates `GuardedProc`/`EnsureClickable` and adds a layer future scenarios would route around.
 
+### D6: Restored-group persisted-layout scenario re-captures before re-emptying
+
+`persist-kill` proves `OnContainerClosed`'s `PersistedTabs.Count == 0` guard (App.xaml.cs:815) by relaunching a restored empty shell and closing it clean — it never puts a live member back in first, so `RemoveDeadMember`'s separate, identically-motivated guard (App.xaml.cs:365) is only reasoned-about, never run. The new `restored-group-survives-member-reclose` scenario extends the same pattern one step further: capture, rename, kill, relaunch (restored shell), *re-capture* a pig into that shell, then destroy (WM_CLOSE) or tray-hide it — asserting `state.json` still carries the group name and original tab metadata afterward. This is additive to `persist-kill`, not a replacement, because the two guards are separate code paths and either could regress independently.
+
+### D7: Self-minimize timer race uses the guest's own native minimize button, not a new primitive
+
+The guest keeps its real title bar while docked (Architecture, CLAUDE.md), so its native minimize button is clickable the same way `dragout-by-titlebar` already clicks a guest's native title bar — no new GuineaPig switch or ValidationDriver primitive is needed, just `Input.ClickAt` at the guest's own caption-button coordinates (distinct from `ClickMinimizeButton`, which targets the container's custom chrome). `selfminimize-timer-vs-teardown` clicks the guest's minimize button, then immediately (well inside the 200ms window) either pops out its tab or closes the container, and asserts no spurious restore/reposition happens once the timer would have fired. Accepted as timing-sensitive (see Risks) because it is the only coverage for a real, fixed Medium-severity race (`KNOWN_ISSUES.md`:73-82) and the fix's own tracked-timer-plus-double-recheck design is exactly what a race window is needed to exercise.
+
+### D8: Launcher hint scenario is a pure UIA read, no input injection
+
+`launcher-empty-state-hint` never sends mouse/keyboard input to the hint element itself — it only reads the "No groups yet" `TextBlock`'s UIA `IsOffscreen`/bounding-rect state via `Uia.FromHwnd`/`FindDescendantByName` on the launcher `MainWindow`, first with zero groups (fresh TabDock launch) and again after one `CaptureIntoGroup` call. Because it's read-only against TabDock's own main window (not a foreign or user window), it trivially satisfies the ownership-scoping rule; it's included here anyway because it's the cheapest possible closer for a confirmed, currently-uncovered visibility bug (`KNOWN_ISSUES.md`:112-119).
+
+### D9: Orphan-window assertion becomes a blanket rule, not scenario-by-scenario opt-in
+
+`NoOrphanPigWindows` already exists and is already correct, but only two scenarios call it today. Rather than adding a new primitive, every new/modified scenario in this change calls it in its final assertion block, and the `e2e-input-safety` spec states this as a requirement so future scenarios inherit the expectation instead of it being tribal knowledge. Retrofitting it onto every *pre-existing* scenario is out of scope (large diff, no bug it would newly catch) — this change raises the bar for what it touches and adds, not a repo-wide sweep.
+
 ## Risks / Trade-offs
 
 - [H2 upper bound too tight → false failures on slow/loaded machines] → derive the constant from observed passing-run counts with generous headroom; flip-pair check (not the count) is the primary regression signal.
@@ -56,3 +72,5 @@ Each new/modified scenario satisfies the four rules by *using only the existing 
 - [Retargeting `browser-lifecycle` weakens it if `SHEPHERD[*]` line names drift] → mitigated by the spec rule itself: implementation verifies each asserted log substring exists in committed source before relying on it, and `docs/TESTING.md` is updated to match.
 - [Adding scenarios to `all` lengthens the routine run] → the additions are small pig flows (seconds each); the H6 scenario is the only one with minimize/restore settle waits.
 - [New scenarios inherit the known `ForceForeground` flake in foreground-holding sessions] → accept and document; none of the new `all` scenarios needs programmatic foreground beyond what `EnsureClickable` already handles.
+- [`selfminimize-timer-vs-teardown`'s 200ms window is tight relative to `all`-run machine variance] → the assertion is a bound ("no restore/reposition occurs"), not a stopwatch measurement; the scenario waits past 200ms (with headroom, e.g. 500ms) before asserting absence, so slow machines make the check stricter, not flakier — the risk is a false PASS on a very slow machine where the race never gets exercised, not a false FAIL, which is acceptable for a regression guard.
+- [Re-capturing into a restored empty shell in `restored-group-survives-member-reclose` depends on the same picker/capture flow as every other scenario] → no new risk beyond what `persist-kill` and `CaptureIntoGroup` already carry; the new part is only the destroy/hide-and-recheck step at the end.

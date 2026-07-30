@@ -33,10 +33,19 @@ All work is in `tests/ValidationDriver/TabDock.ValidationDriver/` (primarily `Sc
 - [ ] 5.3 `double-capture-refused`: capture a pig, reopen the picker (Ctrl+Alt+G), assert the captured pig's title is absent from the picker list (or selection is rejected) and the group is unchanged
 - [ ] 5.4 `persist-active-tab-index`: extend the `persist-kill` pattern — persist a group with active tab index > 0, kill, relaunch, let the debounced save run, assert `state.json` still records the original index
 
-## 6. Validation and docs
+## 6. Bug-hunt-derived flows with no automated coverage today (all join `AllOrder`)
 
-- [ ] 6.1 `dotnet build` the ValidationDriver project with zero warnings
-- [ ] 6.2 Supervised run: `all` passes with the new scenarios included; individually run each modified/new browser scenario with an available `--guest`
-- [ ] 6.3 Update `docs/TESTING.md`: scenario list, remove/rewrite the §A stale-instrumentation note for the retargeted scenarios, confirm §D reflects the now-enforced rule
-- [ ] 6.4 Update `AGENTS.md` testing section if the scenario inventory or `all` composition changed
-- [ ] 6.5 Final per-scenario audit against the four `e2e-input-safety` requirements (identity re-verification, ownership scoping, try/finally cleanup, no blind retries)
+Session-4 static-audit fixes (`KNOWN_ISSUES.md`, 2026-07-25) that are "reviewed-and-reasoned, not runtime-confirmed" and not exercised by any existing scenario, including the four in section 5.
+
+- [ ] 6.1 `restored-group-survives-member-reclose`: extend the `persist-kill` pattern one step further — capture + rename a pig, kill, relaunch (restored empty shell), re-capture a pig into that shell, then destroy the pig (WM_CLOSE) and separately (a second run of the same shape, or a second phase in this one) tray-hide it via `--hide-on-close`; assert `state.json` still contains the group name and original tab metadata after each. This is the `RemoveDeadMember` guard (`App.xaml.cs:365`), distinct from `persist-kill`'s `OnContainerClosed` guard (`:815`).
+- [ ] 6.2 `selfminimize-timer-vs-teardown`: capture a pig, click its own native title-bar minimize button (same technique family as `dragout-by-titlebar`, not `ClickMinimizeButton` which targets the container's chrome), then immediately pop out its tab (or close the container) well inside the 200ms `RestoreMinimizedWindow` delay; wait past the delay with headroom (e.g. 500ms) and assert the guest was not force-restored/repositioned by the stale timer
+- [ ] 6.3 `launcher-empty-state-hint`: on fresh TabDock launch with zero groups, read the "No groups yet" hint's UIA state (`IsOffscreen`/bounding rect) via `Uia.FromHwnd`/`FindDescendantByName` on the launcher window and assert it's visible; capture a pig into a new group and assert the hint is no longer visible
+- [ ] 6.4 Register all three in the dispatch table and `AllOrder`; verify they run as part of `all`
+
+## 7. Validation and docs
+
+- [ ] 7.1 `dotnet build` the ValidationDriver project with zero warnings
+- [ ] 7.2 Supervised run: `all` passes with the new scenarios included; individually run each modified/new browser scenario with an available `--guest`
+- [ ] 7.3 Update `docs/TESTING.md`: scenario list, remove/rewrite the §A stale-instrumentation note for the retargeted scenarios, confirm §D reflects the now-enforced rule
+- [ ] 7.4 Update `AGENTS.md` testing section if the scenario inventory or `all` composition changed
+- [ ] 7.5 Final per-scenario audit against the five `e2e-input-safety` requirements (identity re-verification, ownership scoping, try/finally cleanup, no blind retries, zero-orphan-window assertion) — for the last one, confirm every scenario touched or added in this change calls `NoOrphanPigWindows` (or equivalent) in its final assertions

@@ -29,3 +29,10 @@ A scenario SHALL NOT silently retry input injection or window operations against
 #### Scenario: A retry re-discovers rather than reuses a stale HWND
 - **WHEN** a scenario step must be attempted again after a failure
 - **THEN** it re-discovers the target window and re-verifies process/class/title before sending any further input — it never reuses an HWND captured before the failure
+
+### Requirement: Every scenario asserts zero orphaned guest windows survive its own run
+Cleanup running (the requirement above) is necessary but not sufficient — a scenario SHALL also assert, as part of its own pass/fail result, that no guest window it spawned remains on the desktop after its cleanup path completes. This SHALL use the existing `NoOrphanPigWindows` check (or its equivalent for non-pig guests) rather than a new primitive.
+
+#### Scenario: A scenario's own assertions catch a guest cleanup left behind
+- **WHEN** a scenario's cleanup path runs, whether on normal completion or after an assertion failure/exception
+- **THEN** the scenario's own checks include a final verification that zero windows belonging to guests it spawned remain — a leaked guest window fails the scenario rather than being silently left for the next scenario or a manual sweep to find

@@ -57,3 +57,24 @@ The suite SHALL include a scenario that restores a persisted group with a non-ze
 #### Scenario: First save after relaunch preserves the active tab index
 - **WHEN** state persisted with active tab index > 0 is restored on launch and the debounced save subsequently runs
 - **THEN** `state.json` still records the original active tab index rather than resetting it to 0
+
+### Requirement: A restored group's persisted layout survives its re-captured member being destroyed or hidden again
+The suite SHALL include a scenario that persists a group, force-kills and relaunches TabDock so the group restores as an empty shell, re-captures a guest into that shell, and then destroys or tray-hides that guest — verifying the group's name and tab metadata still remain in `state.json` rather than being wiped. This scenario SHALL run as part of `all`.
+
+#### Scenario: Re-emptying a restored group a second time does not wipe its persisted layout
+- **WHEN** a group restored from a previous session's `state.json` is re-populated with a captured guest, and that guest is then destroyed (window closed) or hides itself (tray-style close), leaving the group empty again
+- **THEN** the group's name and originally persisted tab metadata are still present in `state.json` afterward — the same guarantee `persist-kill` proves for a clean-exit empty shell, proven here for the member-destroyed/hidden path instead
+
+### Requirement: A guest's self-minimize restore timer cannot outlive its own tab or container
+The suite SHALL include a scenario that minimizes a captured guest via its own native minimize button and, before the deferred restore check fires, releases that guest's tab or closes its container — verifying no spurious restore or repositioning occurs afterward. This scenario SHALL run as part of `all`.
+
+#### Scenario: Tearing down a tab or container during the self-minimize restore delay leaves the guest alone
+- **WHEN** a captured guest is minimized via its own title-bar minimize button, and its tab is released (or its container is closed) before the restore-check delay elapses
+- **THEN** once that delay has fully elapsed, the guest has not been forced back to a restored/repositioned state by a stale timer tied to the now-defunct tab or container
+
+### Requirement: The launcher's empty-state hint tracks the actual group count
+The suite SHALL include a scenario that verifies the launcher's "No groups yet" hint is visible when zero groups exist and hidden once a group exists. This scenario SHALL run as part of `all`.
+
+#### Scenario: The hint appears with no groups and disappears once one exists
+- **WHEN** TabDock is launched fresh with zero groups
+- **THEN** the launcher's empty-state hint is visible (not offscreen/collapsed), and after a group is created the hint is no longer visible
