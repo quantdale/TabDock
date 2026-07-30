@@ -13,6 +13,13 @@ namespace TabDock.Services;
 /// </summary>
 public sealed class IconService
 {
+    private readonly LoggingService _log;
+
+    public IconService(LoggingService log)
+    {
+        _log = log;
+    }
+
     // Keyed by exe path so repeat windows of the same executable (the common
     // case: multiple browser/terminal/IDE windows) don't re-run ExtractIconEx.
     // A cached null means extraction failed for that path; it is not retried
@@ -57,7 +64,7 @@ public sealed class IconService
         return result;
     }
 
-    private static ImageSource? ExtractFileIcon(string exePath)
+    private ImageSource? ExtractFileIcon(string exePath)
     {
         // Try the small icon first; fall back to large.
         IntPtr hSmall = IntPtr.Zero;
@@ -65,6 +72,11 @@ public sealed class IconService
         try
         {
             uint count = NativeMethods.ExtractIconEx(exePath, 0, out hLarge, out hSmall, 1);
+            // 0xFFFFFFFF means the call itself failed (file unreadable), as
+            // opposed to 0 (no icons in file) — distinguishable only because
+            // the import now declares SetLastError.
+            if (count == 0xFFFFFFFF)
+                _log.Log($"ExtractIconEx failed for '{exePath}': {NativeMethods.FormatLastError()}");
             IntPtr hIcon = hSmall != IntPtr.Zero ? hSmall : hLarge;
             if (hIcon == IntPtr.Zero)
                 return null;

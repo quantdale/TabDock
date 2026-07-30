@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using System.Windows.Media;
 using TabDock.Models;
 
 namespace TabDock.Services;
@@ -98,6 +99,14 @@ public sealed class PersistenceService
             if (string.Equals(json, _lastSavedJson, StringComparison.Ordinal) && File.Exists(_statePath))
                 return;
 
+            // Preserve the previous state file so an interrupted write or a
+            // subsequent bad load never leaves the user with no recoverable copy.
+            if (File.Exists(_statePath))
+            {
+                string backupPath = _statePath + ".bak";
+                File.Copy(_statePath, backupPath, overwrite: true);
+            }
+
             string tempPath = _statePath + ".tmp";
             File.WriteAllText(tempPath, json);
             File.Move(tempPath, _statePath, overwrite: true);
@@ -126,38 +135,60 @@ public sealed class PersistenceService
             if (state?.Groups == null)
                 return result;
 
+            // A single null entry in the persisted array must not prevent the
+            // well-formed groups from restoring.
+            state.Groups.RemoveAll(g => g == null);
+
             foreach (var pg in state.Groups)
             {
-                var group = new Group
+                try
                 {
-                    Id = pg.Id == Guid.Empty ? Guid.NewGuid() : pg.Id,
-                    Name = string.IsNullOrWhiteSpace(pg.Name) ? "Group" : pg.Name,
-                    AccentColor = string.IsNullOrWhiteSpace(pg.AccentColor) ? "#2196F3" : pg.AccentColor,
-                };
+                    // A group with a syntactically valid but null Tabs list
+                    // restores as an empty group rather than throwing on enumeration.
+                    pg.Tabs ??= new List<PersistedTab>();
 
-                foreach (var pt in pg.Tabs)
-                {
-                    // Live HWNDs are not restored across reboots. Keep the metadata as
-                    // layout intent only; the group starts empty and the user re-populates it.
-                    group.PersistedTabs.Add(new PersistedTabMetadata
+                    string accent = string.IsNullOrWhiteSpace(pg.AccentColor) ? "#2196F3" : pg.AccentColor;
+                    if (!TryParseAccentColor(accent, out _))
                     {
-                        ExePath = pt.ExePath ?? string.Empty,
-                        OriginalTitle = pt.OriginalTitle ?? string.Empty,
-                        CustomLabel = pt.CustomLabel ?? string.Empty,
-                        Left = pt.Left,
-                        Top = pt.Top,
-                        Right = pt.Right,
-                        Bottom = pt.Bottom,
-                        WasMaximized = pt.WasMaximized,
-                    });
-                }
+                        _log.Log($"Invalid AccentColor '{pg.AccentColor}' for group {pg.Id}; falling back to default.");
+                        accent = "#2196F3";
+                    }
 
-                // Keep the loaded index as layout intent (see
-                // Group.PersistedActiveIndex) as well as assigning it, since the
-                // assignment is clamped to -1 while the group has no live members.
-                group.PersistedActiveIndex = pg.ActiveIndex;
-                group.ActiveIndex = pg.ActiveIndex;
-                result.Add(group);
+                    var group = new Group
+                    {
+                        Id = pg.Id == Guid.Empty ? Guid.NewGuid() : pg.Id,
+                        Name = string.IsNullOrWhiteSpace(pg.Name) ? "Group" : pg.Name,
+                        AccentColor = accent,
+                    };
+
+                    foreach (var pt in pg.Tabs)
+                    {
+                        // Live HWNDs are not restored across reboots. Keep the metadata as
+                        // layout intent only; the group starts empty and the user re-populates it.
+                        group.PersistedTabs.Add(new PersistedTabMetadata
+                        {
+                            ExePath = pt.ExePath ?? string.Empty,
+                            OriginalTitle = pt.OriginalTitle ?? string.Empty,
+                            CustomLabel = pt.CustomLabel ?? string.Empty,
+                            Left = pt.Left,
+                            Top = pt.Top,
+                            Right = pt.Right,
+                            Bottom = pt.Bottom,
+                            WasMaximized = pt.WasMaximized,
+                        });
+                    }
+
+                    // Keep the loaded index as layout intent (see
+                    // Group.PersistedActiveIndex) as well as assigning it, since the
+                    // assignment is clamped to -1 while the group has no live members.
+                    group.PersistedActiveIndex = pg.ActiveIndex;
+                    group.ActiveIndex = pg.ActiveIndex;
+                    result.Add(group);
+                }
+                catch (Exception groupEx)
+                {
+                    _log.LogException($"PersistenceService.Load group {pg?.Id}", groupEx);
+                }
             }
 
             _log.Log($"Restored {result.Count} group(s) from {_statePath}");
@@ -165,7 +196,55 @@ public sealed class PersistenceService
         catch (Exception ex)
         {
             _log.LogException("PersistenceService.Load", ex);
+            QuarantineCorruptStateFile();
         }
         return result;
+    }
+
+    private bool TryParseAccentColor(string value, out object? color)
+    {
+        color = null;
+        try
+        {
+            color = ColorConverter.ConvertFromString(value);
+            return color != null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void QuarantineCorruptStateFile()
+    {
+        try
+        {
+            if (!File.Exists(_statePath))
+                return;
+
+            string corruptPath = GetUniqueCorruptPath();
+            File.Move(_statePath, corruptPath);
+            _log.Log($"Quarantined corrupt state file to {corruptPath}");
+        }
+        catch (Exception quarantineEx)
+        {
+            _log.LogException("PersistenceService.Load quarantine", quarantineEx);
+        }
+    }
+
+    private string GetUniqueCorruptPath()
+    {
+        string basePath = $"{_statePath}.corrupt.{DateTime.Now:yyyyMMddHHmmssfff}";
+        if (!File.Exists(basePath))
+            return basePath;
+
+        for (int i = 1; i < 1000; i++)
+        {
+            string candidate = $"{basePath}.{i:D3}";
+            if (!File.Exists(candidate))
+                return candidate;
+        }
+
+        return $"{basePath}.{Guid.NewGuid():N}";
     }
 }

@@ -166,9 +166,6 @@ public static partial class NativeMethods
     [DllImport("user32.dll")]
     public static extern void PostQuitMessage(int nExitCode);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
-
     [DllImport("user32.dll")]
     public static extern bool TranslateMessage(ref MSG lpMsg);
 
@@ -274,7 +271,7 @@ public static partial class NativeMethods
     // -------------------------------------------------------------------------
     // shell32.dll
     // -------------------------------------------------------------------------
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern uint ExtractIconEx(string lpszFile, int nIconIndex, out IntPtr phiconLarge, out IntPtr phiconSmall, uint nIcons);
 
     // -------------------------------------------------------------------------
@@ -744,28 +741,60 @@ public static partial class NativeMethods
         }
     }
 
+    /// <summary>
+    /// Determines whether the process <paramref name="pid"/> runs with an
+    /// elevated token. The return value reports whether the CHECK succeeded;
+    /// <paramref name="elevated"/> is meaningful only when it returns true.
+    /// Callers that treat "check failed" as "not elevated" fail open — the
+    /// overload with <paramref name="errorDetail"/> makes the failure reason
+    /// visible instead.
+    /// </summary>
     public static bool IsProcessElevated(uint pid, out bool elevated)
     {
+        return IsProcessElevated(pid, out elevated, out _);
+    }
+
+    /// <summary>
+    /// Same check as <see cref="IsProcessElevated(uint, out bool)"/>, but on
+    /// failure also reports the native error via <paramref name="errorDetail"/>.
+    /// The error is captured immediately after each failing call, before any
+    /// cleanup (CloseHandle etc.) can clobber the thread's last-error value.
+    /// </summary>
+    public static bool IsProcessElevated(uint pid, out bool elevated, out string? errorDetail)
+    {
         elevated = false;
+        errorDetail = null;
         IntPtr hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
         if (hProcess == IntPtr.Zero)
+        {
+            errorDetail = $"OpenProcess: {FormatLastError()}";
             return false;
+        }
         try
         {
             if (!OpenProcessToken(hProcess, TOKEN_QUERY, out IntPtr hToken))
+            {
+                errorDetail = $"OpenProcessToken: {FormatLastError()}";
                 return false;
+            }
             try
             {
                 uint len = 0;
                 GetTokenInformation(hToken, TOKEN_INFORMATION_CLASS.TokenElevation, IntPtr.Zero, 0, out len);
                 if (len == 0)
+                {
+                    errorDetail = $"GetTokenInformation(size): {FormatLastError()}";
                     return false;
+                }
 
                 IntPtr buf = Marshal.AllocHGlobal((int)len);
                 try
                 {
                     if (!GetTokenInformation(hToken, TOKEN_INFORMATION_CLASS.TokenElevation, buf, len, out _))
+                    {
+                        errorDetail = $"GetTokenInformation: {FormatLastError()}";
                         return false;
+                    }
 
                     var te = Marshal.PtrToStructure<TOKEN_ELEVATION>(buf);
                     elevated = te.TokenIsElevated != 0;

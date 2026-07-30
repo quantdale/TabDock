@@ -71,9 +71,18 @@ public sealed class WinEventMonitor : IDisposable
     {
         if (_running || _disposed)
             return;
-        _running = true;
 
         _uiContext = SynchronizationContext.Current;
+        if (_uiContext == null)
+        {
+            // Without a UI-thread SynchronizationContext, OnWinEvent's only
+            // remaining path is to Raise on the WinEvent callback thread,
+            // which breaks UI-thread affinity for every subscriber. Refuse to
+            // start instead of silently degrading.
+            _log.Log("WinEventMonitor.Start: no SynchronizationContext on the calling thread; hooks not installed.");
+            return;
+        }
+        _running = true;
 
         uint flags = NativeMethods.WINEVENT_OUTOFCONTEXT | NativeMethods.WINEVENT_SKIPOWNPROCESS;
         _hookDestroy = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_DESTROY, NativeMethods.EVENT_OBJECT_DESTROY, IntPtr.Zero, _callback, 0, 0, flags);
@@ -85,6 +94,17 @@ public sealed class WinEventMonitor : IDisposable
         // These fire once per interactive drag start/end system-wide — low volume,
         // unlike EVENT_OBJECT_LOCATIONCHANGE, which is deliberately not hooked.
         _hookMoveSize = NativeMethods.SetWinEventHook(NativeMethods.EVENT_SYSTEM_MOVESIZESTART, NativeMethods.EVENT_SYSTEM_MOVESIZEEND, IntPtr.Zero, _callback, 0, 0, flags);
+
+        if (_hookDestroy == IntPtr.Zero || _hookForeground == IntPtr.Zero || _hookNameChange == IntPtr.Zero
+            || _hookMinimize == IntPtr.Zero || _hookHide == IntPtr.Zero || _hookMoveSize == IntPtr.Zero)
+        {
+            // A partial hook set silently drops whole event classes (e.g. no
+            // destroy hook means dead tabs never tear down). Unwind whatever
+            // did install and report failure rather than limping along.
+            _log.Log($"WinEventMonitor.Start: incomplete hook installation (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X}); unwinding.");
+            Stop();
+            return;
+        }
 
         _log.Log($"WinEventMonitor started (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X})");
     }
@@ -100,38 +120,33 @@ public sealed class WinEventMonitor : IDisposable
         if (!_running)
             return;
         _running = false;
+        // Drop the dispatch target so an in-flight native callback after this
+        // point cannot post onto a context we no longer own; Raise's _running
+        // guard discards anything already posted.
+        _uiContext = null;
 
-        if (_hookDestroy != IntPtr.Zero)
-        {
-            NativeMethods.UnhookWinEvent(_hookDestroy);
-            _hookDestroy = IntPtr.Zero;
-        }
-        if (_hookForeground != IntPtr.Zero)
-        {
-            NativeMethods.UnhookWinEvent(_hookForeground);
-            _hookForeground = IntPtr.Zero;
-        }
-        if (_hookNameChange != IntPtr.Zero)
-        {
-            NativeMethods.UnhookWinEvent(_hookNameChange);
-            _hookNameChange = IntPtr.Zero;
-        }
-        if (_hookMinimize != IntPtr.Zero)
-        {
-            NativeMethods.UnhookWinEvent(_hookMinimize);
-            _hookMinimize = IntPtr.Zero;
-        }
-        if (_hookHide != IntPtr.Zero)
-        {
-            NativeMethods.UnhookWinEvent(_hookHide);
-            _hookHide = IntPtr.Zero;
-        }
-        if (_hookMoveSize != IntPtr.Zero)
-        {
-            NativeMethods.UnhookWinEvent(_hookMoveSize);
-            _hookMoveSize = IntPtr.Zero;
-        }
+        Unhook(ref _hookDestroy, "destroy");
+        Unhook(ref _hookForeground, "foreground");
+        Unhook(ref _hookNameChange, "namechange");
+        Unhook(ref _hookMinimize, "minimize");
+        Unhook(ref _hookHide, "hide");
+        Unhook(ref _hookMoveSize, "movesize");
         _log.Log("WinEventMonitor stopped.");
+    }
+
+    /// <summary>
+    /// Unhooks one WinEvent hook, zeroing the field only on success — a failed
+    /// UnhookWinEvent leaves the hook installed, and zeroing anyway would leak
+    /// it with no handle left to retry.
+    /// </summary>
+    private void Unhook(ref IntPtr hook, string name)
+    {
+        if (hook == IntPtr.Zero)
+            return;
+        if (NativeMethods.UnhookWinEvent(hook))
+            hook = IntPtr.Zero;
+        else
+            _log.Log($"WinEventMonitor: UnhookWinEvent({name}, 0x{hook.ToInt64():X}) failed: {NativeMethods.FormatLastError()}");
     }
 
     private void OnWinEvent(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
@@ -169,6 +184,14 @@ public sealed class WinEventMonitor : IDisposable
 
     private void Raise(WindowEventArgs args)
     {
+        // A posted dispatch can outlive Stop() (its guard drops it here), and
+        // the guest may have been released between the native event and this
+        // hop — Windows aggressively recycles HWND values, so re-verify the
+        // HWND still names a captured window instead of acting on a stale
+        // snapshot of desktop state.
+        if (!_running || !_isCapturedWindow(args.Hwnd))
+            return;
+
         switch (args.EventType)
         {
             case NativeMethods.EVENT_OBJECT_DESTROY:

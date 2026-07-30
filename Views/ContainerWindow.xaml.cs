@@ -70,6 +70,12 @@ public partial class ContainerWindow : Window
     private IntPtr _containerHwnd;
     private IntPtr _contentHostHwnd;
 
+    // Re-entrancy guard for the close-confirm modal. The MessageBox pumps a
+    // nested dispatcher loop, so a guest destroying itself mid-prompt can fire
+    // EmptiedByPopOut and re-enter Close() on a window already inside Closing.
+    private bool _closePromptOpen;
+    private bool _closePending;
+
     /// <summary>
     /// Set by App before any exit/crash path calls Application.Shutdown so every
     /// open container's Closing handler skips the Yes/No/Cancel prompt instead of
@@ -91,6 +97,12 @@ public partial class ContainerWindow : Window
     /// </summary>
     public IntPtr ContentHostHwnd => ContentHost.HostWindowHandle;
 
+    /// <summary>
+    /// True while the close-confirm MessageBox is open. Used by App to defer
+    /// capture-picker requests until the prompt returns.
+    /// </summary>
+    public bool IsClosePromptOpen => _closePromptOpen;
+
     public ContainerWindow(GroupViewModel viewModel, GroupManager manager, WindowShepherdService shepherd, LoggingService log)
     {
         _viewModel = viewModel;
@@ -111,7 +123,17 @@ public partial class ContainerWindow : Window
         _viewModel.EmptiedByPopOut += ViewModel_EmptiedByPopOut;
     }
 
-    private void ViewModel_EmptiedByPopOut(object? sender, EventArgs e) => Close();
+    private void ViewModel_EmptiedByPopOut(object? sender, EventArgs e)
+    {
+        if (_closePromptOpen)
+        {
+            // The close-confirm prompt is already asking the user what to do with
+            // the group. Defer the empty-container close until the prompt returns.
+            _closePending = true;
+            return;
+        }
+        Close();
+    }
 
     private void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
@@ -127,7 +149,15 @@ public partial class ContainerWindow : Window
             // bug documented in TabsListBox_PreviewMouseLeftButtonDown, just
             // via a different trigger. Clearing it here costs nothing when
             // there was nothing to clear.
-            EndDrag();
+            //
+            // Scope it to the documented case: an in-flight drag whose tab
+            // actually LEFT the tab set. An unconditional EndDrag() here also
+            // fires on the selection change caused by the drag's own mousedown
+            // on an inactive tab (press -> select -> ActiveTab changed ->
+            // EndDrag), disarming the drag before the first MouseMove and
+            // swallowing every drag that starts on a non-active tab.
+            if (_isDragging && (_draggedTab == null || !_viewModel.Tabs.Contains(_draggedTab)))
+                EndDrag();
             SyncShepherdActiveWindow();
         }
     }
@@ -265,16 +295,36 @@ public partial class ContainerWindow : Window
         if (_viewModel.Tabs.Count == 0)
             return;
 
-        var result = MessageBox.Show(
-            this,
-            "Do you want to close the grouped applications?\n\nYes = close all apps\nNo = release windows back to standalone",
-            "Close group",
-            MessageBoxButton.YesNoCancel,
-            MessageBoxImage.Question);
+        MessageBoxResult result = MessageBoxResult.Cancel;
+        _closePromptOpen = true;
+        try
+        {
+            result = MessageBox.Show(
+                this,
+                "Do you want to close the grouped applications?\n\nYes = close all apps\nNo = release windows back to standalone",
+                "Close group",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question);
+        }
+        finally
+        {
+            _closePromptOpen = false;
+            if (_closePending)
+            {
+                _closePending = false;
+                if (result == MessageBoxResult.Cancel)
+                    Dispatcher.BeginInvoke(new Action(() => Close()));
+            }
+        }
 
         switch (result)
         {
             case MessageBoxResult.Yes:
+                // A guest may have destroyed itself while the prompt was open,
+                // emptying the tab list. Re-validate before acting.
+                if (_viewModel.Tabs.Count == 0)
+                    return;
+
                 // Snapshot HWNDs (with their owning PIDs for the recycle guard
                 // below) before CloseGroup clears the view model, then release
                 // windows back to standalone and ask each one to close normally.
@@ -525,6 +575,10 @@ public partial class ContainerWindow : Window
 
     private void AddWindow_Click(object sender, RoutedEventArgs e)
     {
+        // Defer the "+" button while the close-confirm prompt is open so the
+        // picker cannot stack on top of the modal dialog.
+        if (_closePromptOpen)
+            return;
         _viewModel.RequestAddWindows();
     }
 

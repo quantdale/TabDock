@@ -42,10 +42,13 @@ public sealed class HotkeyService : IDisposable
             WindowStyle = 0,
             ParentWindow = NativeMethods.HWND_MESSAGE,
         };
-        _source = new HwndSource(parameters);
-        if (_source.Handle == IntPtr.Zero)
+        try
         {
-            _log.Log("Hotkey sink window could not be created; global hotkey unavailable.");
+            _source = new HwndSource(parameters);
+        }
+        catch (Exception ex)
+        {
+            _log.LogException("Hotkey sink window creation failed; global hotkey unavailable.", ex);
             return;
         }
 

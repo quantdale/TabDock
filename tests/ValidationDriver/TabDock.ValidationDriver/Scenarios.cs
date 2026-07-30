@@ -76,16 +76,77 @@ internal sealed class Ctx
 
 internal static class Scenarios
 {
-    public const string TabDockExe = @"d:\Documents\tryPython\TabDock\bin\Debug\net8.0-windows\win-x64\TabDock.exe";
-    public const string PigExe = @"d:\Documents\tryPython\TabDock\tests\ValidationDriver\TabDock.GuineaPig\bin\Debug\net8.0-windows\TabDock.GuineaPig.exe";
-    private const string ChromeExe = "C:/Program Files/Google/Chrome/Application/chrome.exe";
-    // Confirmed present on this dev machine (see docs/internal/TEST_PLAN.md section 4).
-    private const string EdgeExe = "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
-    // NOT installed on this dev machine — case exists so the code path is
-    // written and reviewable, but it cannot be run/verified here (see
-    // docs/internal/TEST_PLAN.md section 4 and KNOWN_ISSUES.md).
-    private const string FirefoxExe = "C:/Program Files/Mozilla Firefox/firefox.exe";
+    // Resolved relative to the driver assembly's own location (walk up to the
+    // repo root, identified by TabDock.sln) so the driver runs on any machine,
+    // not just the original dev box (previously hardcoded d:\Documents\... paths).
+    public static readonly string TabDockExe = Path.Combine(RepoRoot, "bin", "Debug", "net8.0-windows", "win-x64", "TabDock.exe");
+    public static readonly string PigExe = Path.Combine(RepoRoot, "tests", "ValidationDriver", "TabDock.GuineaPig", "bin", "Debug", "net8.0-windows", "TabDock.GuineaPig.exe");
+    private static readonly string ChromeExe = FindExe(new[]
+    {
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Google", "Chrome", "Application", "chrome.exe"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Google", "Chrome", "Application", "chrome.exe"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Google", "Chrome", "Application", "chrome.exe"),
+    }, "chrome.exe");
+    private static readonly string EdgeExe = FindExe(new[]
+    {
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe"),
+    }, "msedge.exe");
+    // Firefox is not exercised on the dev machine (see docs/internal/TEST_PLAN.md
+    // section 4 and KNOWN_ISSUES.md) — the case exists so the code path is
+    // written and reviewable, but it cannot be run/verified there.
+    private static readonly string FirefoxExe = FindExe(new[]
+    {
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Mozilla Firefox", "firefox.exe"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Mozilla Firefox", "firefox.exe"),
+    }, "firefox.exe");
     private const string ContentHostClass = "TabDockContentHost";
+
+    /// <summary>
+    /// Locates the repo root by walking up from the driver assembly location
+    /// until the directory containing TabDock.sln is found.
+    /// </summary>
+    private static string RepoRoot
+    {
+        get
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir != null && !File.Exists(Path.Combine(dir.FullName, "TabDock.sln")))
+                dir = dir.Parent;
+            if (dir == null)
+                throw new InvalidOperationException($"Could not locate the TabDock repo root (TabDock.sln) above '{AppContext.BaseDirectory}'.");
+            return dir.FullName;
+        }
+    }
+
+    /// <summary>
+    /// Picks the first well-known install path that exists; otherwise falls back
+    /// to whatever a PATH lookup resolves, and finally to the bare executable
+    /// name (letting Process.Start's own search produce a clear error).
+    /// </summary>
+    private static string FindExe(string[] candidatePaths, string exeName)
+    {
+        foreach (string candidate in candidatePaths)
+        {
+            if (File.Exists(candidate))
+                return candidate;
+        }
+
+        string? pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (!string.IsNullOrEmpty(pathEnv))
+        {
+            foreach (string dir in pathEnv.Split(Path.PathSeparator))
+            {
+                if (dir.Length == 0)
+                    continue;
+                string candidate = Path.Combine(dir, exeName);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+        }
+
+        return exeName;
+    }
 
     private static readonly Random Rng = new Random();
 
@@ -148,6 +209,7 @@ internal static class Scenarios
         "picker-owner-is-requesting-container", "picker-owner-falls-back-when-container-closed",
         "rename-edge-cases", "multi-group-independent-interaction", "dragreorder-then-immediate-popout",
         "keyboard-only-tab-navigation", "crashkill-during-active-drag", "dwm-transitions-disabled-on-capture",
+        "dragprobe",
     };
 
     // -------------------------------------------------------------------------
@@ -172,6 +234,7 @@ internal static class Scenarios
             "hotkey-afterclose" => HotkeyAfterClose,
             "persist-kill" => PersistKill,
             "dragreorder" => DragReorder,
+            "dragprobe" => DragProbe,
             "chrometabdrag" => ChromeTabDrag,
             "realapp" => RealAppFillMaxHide,
             "closegroupprompt" => CloseGroupPrompt,
@@ -2049,6 +2112,139 @@ internal static class Scenarios
     }
 
     // -------------------------------------------------------------------------
+    // dragprobe: diagnostic companion to dragreorder for the "synthetic drag
+    // never reaches the WPF tab strip" failure mode (observed: app log shows
+    // zero drag activity for the whole drag window while UIA-driven clicks
+    // land fine). Instead of dragging blind, it first asks WindowFromPoint
+    // which top-level window actually sits under the drag start point — an
+    // obscuring window (e.g. an always-on-top or overlapping window owned by
+    // whatever session is driving the harness) receives the drag instead, and
+    // dragreorder then fails with no app-side evidence. If the tab strip is
+    // obscured, the probe repositions the container programmatically to a
+    // known-clear spot and retries, then runs the same reorder + drag-out
+    // assertions as dragreorder, so a PASS validates the full path and a FAIL
+    // names the window that stole the drag.
+    // -------------------------------------------------------------------------
+    private static void DragProbe(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "DPA", "--color", "red");
+        GuestInfo pigB = SpawnPig(ctx, "DPB", "--color", "blue");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
+        ctx.Check(TabCount(container) == 2, "2 tabs after capture");
+
+        bool fg = Input.ForceForeground(container);
+        GuardedProc.Log($"  DragProbe: ForceForeground(container)={fg}.");
+
+        (int sx, int sy, Rect leftRect, GuestInfo movedPig, int lx, int ly) = FindDragGeometry(ctx, container, pigA, pigB);
+
+        // Diagnostic 1: does the drag start point resolve to the container, or
+        // is something else on top of the tab strip? An obscuring window (the
+        // user's own browser sitting over the test area is the observed case)
+        // receives the drag instead of TabDock, and dragreorder then fails
+        // with zero app-side evidence. Informational only — the remedy below
+        // (temporary topmost) doesn't disturb the obscuring window.
+        bool madeTopmost = false;
+        if (RootAtPoint(sx, sy) != container)
+        {
+            GuardedProc.Log($"  DragProbe: drag start ({sx},{sy}) is covered by {DescribeHwnd(RootAtPoint(sx, sy))} — the drag would go there, not to TabDock. Pinning the container topmost for the drag instead of touching the other window.");
+            NativeMethods.SetWindowPos(container, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+            madeTopmost = true;
+            Thread.Sleep(300);
+        }
+
+        try
+        {
+            IntPtr startRoot = RootAtPoint(sx, sy);
+            GuardedProc.Log($"  DragProbe: drag start ({sx},{sy}) resolves to {DescribeHwnd(startRoot)}; container is {DescribeHwnd(container)}.");
+
+            // Diagnostic 2: plain-click the OTHER (leftmost) tab and require the
+            // app to log a tab switch. This isolates drag-specific failure from
+            // general mouse-delivery failure to the WPF container: if even a
+            // click doesn't switch tabs, no drag scenario can run in this
+            // session context at all.
+            long switchesBefore = TabDockLog.CountNewLines(ctx.LogOffset, "Switched group");
+            Input.ClickAt(lx, ly);
+            Thread.Sleep(600);
+            long switchesAfter = TabDockLog.CountNewLines(ctx.LogOffset, "Switched group");
+            ctx.Check(switchesAfter > switchesBefore, "plain click on a tab produces a tab switch (mouse delivery to the tab strip)");
+
+            // The tab-switch click shuffles z-order (the shepherd re-pairs the
+            // newly active guest and foreground shuffles), so whatever pinned
+            // state we had is unreliable now: re-pin topmost immediately before
+            // EVERY drag and verify the start point right at mousedown.
+            PinTopmostAndVerify(ctx, container, sx, sy, "reorder drag");
+            madeTopmost = true;
+
+            Input.MoveTo(sx, sy);
+            Thread.Sleep(60);
+            IntPtr downRoot = RootAtPoint(sx, sy);
+            Input.DragFromTo(sx, sy, (int)(leftRect.X + 8), sy, 14);
+            Thread.Sleep(600);
+            GuardedProc.Log($"  DragProbe: at reorder mousedown the point resolved to {DescribeHwnd(downRoot)}.");
+
+            ctx.Check(TabCount(container) == 2, "still 2 tabs after drag-reorder");
+            ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "Reordered tab") >= 1, "a reorder was applied (log)");
+            ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-reorder");
+
+            // Same drag-out half as dragreorder, so a probe PASS covers both paths.
+            NativeMethods.GetWindowRect(container, out NativeMethods.RECT rc);
+            int outX = (int)(leftRect.X + leftRect.Width / 2);
+            PinTopmostAndVerify(ctx, container, outX, sy, "drag-out");
+            Input.DragFromTo(outX, sy, rc.right + 150, rc.bottom + 150, 14);
+            ctx.Check(Util.WaitUntil(() => IsReleased(movedPig, host), 5000), $"moved pig '{movedPig.Title}' released by drag-out");
+            ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-out");
+            ctx.Check(movedPig.Proc != null && !movedPig.Proc.HasExited, "moved pig alive standalone");
+        }
+        finally
+        {
+            if (madeTopmost)
+            {
+                NativeMethods.SetWindowPos(container, NativeMethods.HWND_NOTOPMOST, 0, 0, 0, 0,
+                    NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+            }
+        }
+    }
+
+    private static void PinTopmostAndVerify(Ctx ctx, IntPtr container, int x, int y, string what)
+    {
+        NativeMethods.SetWindowPos(container, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        Thread.Sleep(250);
+        IntPtr root = RootAtPoint(x, y);
+        if (root != container)
+            GuardedProc.Log($"  DragProbe: even topmost-pinned, ({x},{y}) for the {what} resolves to {DescribeHwnd(root)} — the obscuring window is itself topmost.");
+        ctx.Check(root == container, $"{what} start point resolves to the container after topmost pin");
+    }
+
+    private static (int sx, int sy, Rect leftRect, GuestInfo movedPig, int lx, int ly) FindDragGeometry(Ctx ctx, IntPtr container, GuestInfo pigA, GuestInfo pigB)
+    {
+        AutomationElement? tabA = FindTabText(container, pigA.Title, out int cA);
+        AutomationElement? tabB = FindTabText(container, pigB.Title, out int cB);
+        if (tabA == null || cA != 1 || tabB == null || cB != 1)
+            throw new InvalidOperationException($"Tabs not found uniquely (A={cA}, B={cB}).");
+        Rect rA = Uia.GetElementRect(tabA);
+        Rect rB = Uia.GetElementRect(tabB);
+        bool aIsRight = rA.X > rB.X;
+        (int sx, int sy) = Uia.Center(aIsRight ? tabA : tabB);
+        (int lx, int ly) = Uia.Center(aIsRight ? tabB : tabA);
+        return (sx, sy, aIsRight ? rB : rA, aIsRight ? pigA : pigB, lx, ly);
+    }
+
+    private static IntPtr RootAtPoint(int x, int y)
+    {
+        IntPtr at = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = x, y = y });
+        return at == IntPtr.Zero ? IntPtr.Zero : NativeMethods.GetAncestor(at, NativeMethods.GA_ROOT);
+    }
+
+    private static string DescribeHwnd(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero)
+            return "(no window)";
+        return $"0x{hwnd.ToInt64():X} class='{NativeMethods.GetClassNameString(hwnd)}' title='{NativeMethods.GetWindowTextString(hwnd)}'";
+    }
+
+    // -------------------------------------------------------------------------
     // 17. chrometabdrag: drag a real captured Chrome window by its own
     //     client-drawn tab strip (Chrome hit-tests this as HTCAPTION, so the
     //     guest itself enters the same interactive move loop as a native
@@ -2521,7 +2717,7 @@ internal static class Scenarios
     {
         string htmlPath = CreateChromeInputTestPage();
         GuestInfo chrome = SpawnClassGuest(ctx, ChromeExe,
-            $"--user-data-dir=\"{Path.Combine(Path.GetTempPath(), "TabDockChromeProfile")}\" --disable-gpu --app=\"{htmlPath}\"",
+            $"--user-data-dir=\"{FreshProfileDir("TabDockChromeProfile")}\" --disable-gpu --app=\"{htmlPath}\"",
             "Chrome_WidgetWin_1", useShellExecute: true);
 
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, chrome);
@@ -2646,7 +2842,7 @@ document.getElementById('btn').addEventListener('click', function() {
     {
         string htmlPath = CreateChromeKeyboardTestPage();
         GuestInfo chrome = SpawnClassGuest(ctx, ChromeExe,
-            $"--user-data-dir=\"{Path.Combine(Path.GetTempPath(), "TabDockChromeProfile")}\" --disable-gpu --app=\"{htmlPath}\"",
+            $"--user-data-dir=\"{FreshProfileDir("TabDockChromeProfile")}\" --disable-gpu --app=\"{htmlPath}\"",
             "Chrome_WidgetWin_1", useShellExecute: true);
 
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, chrome);

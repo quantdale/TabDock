@@ -49,6 +49,22 @@ public sealed class LoggingService : IDisposable
     // thread, and the AppDomain unhandled-exception thread, any of which can race
     // Dispose().
     private volatile bool _disposed;
+    // Re-entrancy gate for Dispose: Interlocked.Exchange makes exactly one
+    // concurrent caller perform the teardown; the rest return immediately.
+    private int _disposeStarted;
+
+    // ---- Writer-thread-only failure-path state ----
+    // Cap on the .err fallback file: a persistent logging failure must not fill
+    // the disk. When the file exceeds this, it is truncated before appending.
+    private const long MaxErrFileSize = 64 * 1024;
+    // Consecutive identical error lines are suppressed so a tight failure loop
+    // does not spam the fallback file either.
+    private string? _lastErrLine;
+    // After a failed rotation, retry at most once per this many batches instead
+    // of churning a close/delete/move/open cycle on every batch for the rest of
+    // the session.
+    private const int RotationRetryEveryBatches = 20;
+    private int _batchesUntilRotationRetry;
 
     public LoggingService()
     {
@@ -90,11 +106,9 @@ public sealed class LoggingService : IDisposable
         }
         catch (InvalidOperationException)
         {
-            // Dispose() completed the collection between the check above and here.
-        }
-        catch (ObjectDisposedException)
-        {
-            // Same race, one step further along.
+            // Dispose() completed the collection between the check above and
+            // here. ObjectDisposedException (same race, one step further
+            // along) is covered too — it derives from InvalidOperationException.
         }
     }
 
@@ -146,20 +160,40 @@ public sealed class LoggingService : IDisposable
                     // failure is the file having been moved or deleted underneath
                     // the open stream.
                     CloseWriter();
-                    try { File.AppendAllText(Path.Combine(_logDirectory, "TabDock.log.err"), $"Failed to log: {ex}{Environment.NewLine}"); }
-                    catch { }
+                    WriteErrLine($"Failed to log: {ex}");
                 }
             }
         }
         catch (Exception ex)
         {
-            try { File.AppendAllText(Path.Combine(_logDirectory, "TabDock.log.err"), $"Log writer stopped: {ex}{Environment.NewLine}"); }
-            catch { }
+            WriteErrLine($"Log writer stopped: {ex}");
         }
         finally
         {
             CloseWriter();
         }
+    }
+
+    /// <summary>
+    /// Appends one line to the bounded <c>TabDock.log.err</c> fallback file.
+    /// Writer thread only. Two bounds keep a persistent logging failure from
+    /// filling the disk: consecutive identical lines are suppressed, and the
+    /// file is truncated once it exceeds <see cref="MaxErrFileSize"/>.
+    /// </summary>
+    private void WriteErrLine(string line)
+    {
+        if (line == _lastErrLine)
+            return;
+        _lastErrLine = line;
+
+        try
+        {
+            string errFile = Path.Combine(_logDirectory, "TabDock.log.err");
+            if (File.Exists(errFile) && new FileInfo(errFile).Length > MaxErrFileSize)
+                File.Delete(errFile);
+            File.AppendAllText(errFile, line + Environment.NewLine);
+        }
+        catch { }
     }
 
     /// <summary>
@@ -224,20 +258,35 @@ public sealed class LoggingService : IDisposable
         if (_stream == null || _stream.Position <= MaxSize)
             return;
 
+        // Back off after a failed rotation: without this, a File.Move that keeps
+        // failing (e.g. the file held open by another tool) costs a
+        // close/delete/move/open cycle on every batch for the rest of the session.
+        if (_batchesUntilRotationRetry > 0)
+        {
+            _batchesUntilRotationRetry--;
+            return;
+        }
+
         // The handle has to go before the move: an open file cannot be renamed
         // on Windows.
         CloseWriter();
+        bool rotated = false;
         try
         {
             string backup = _logFile + ".old";
             if (File.Exists(backup))
                 File.Delete(backup);
             File.Move(_logFile, backup);
+            rotated = true;
         }
         catch
         {
-            // Rotation is best effort.
+            // Rotation is best effort — schedule the next attempt on a bounded
+            // cadence rather than retrying on the very next batch.
+            _batchesUntilRotationRetry = RotationRetryEveryBatches;
         }
+        if (rotated)
+            _batchesUntilRotationRetry = 0;
 
         // Reopen either way — a failed rotation must not silently stop logging
         // for the rest of the session.
@@ -250,7 +299,10 @@ public sealed class LoggingService : IDisposable
     /// </summary>
     public void Dispose()
     {
-        if (_disposed)
+        // Re-entrant across threads: crash paths can race normal shutdown, and a
+        // second concurrent caller reaching CompleteAdding() would throw. Exactly
+        // one caller wins the exchange and performs the teardown.
+        if (Interlocked.Exchange(ref _disposeStarted, 1) != 0)
             return;
         _disposed = true;
         _queue.CompleteAdding();

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Windows;
 using Microsoft.Win32;
 using TabDock.Models;
@@ -25,9 +26,14 @@ public partial class App : Application
     private GroupManager _groups = null!;
     private WinEventMonitor _events = null!;
     private HotkeyService _hotkey = null!;
+    private Mutex? _singleInstanceMutex;
     private MainWindow? _mainWindow;
     private MainViewModel? _mainViewModel;
     private readonly Dictionary<Guid, ContainerWindow> _containers = new();
+
+    // True after Application_Exit disposes the WinEvent monitor. Guards the
+    // deferred Stop() posted by SyncWinEventMonitor from running after disposal.
+    private bool _winEventMonitorDisposed;
 
     // Debounces EVENT_OBJECT_NAMECHANGE storms (see DebounceNameChanged).
     private readonly Dictionary<IntPtr, System.Windows.Threading.DispatcherTimer> _nameChangeDebounce = new();
@@ -67,12 +73,22 @@ public partial class App : Application
             // still be diagnosed.
             _log ??= new LoggingService();
 
+            // Only one instance may run at a time: sharing state.json and the hidden-
+            // window journal between two processes leads to lost updates and double
+            // rescue attempts. Exit cleanly if another instance already holds the mutex.
+            if (!AcquireSingleInstanceMutex())
+            {
+                _log.Log("Another TabDock instance is already running. Exiting.");
+                Shutdown(0);
+                return;
+            }
+
             // Remove orphaned atomic-write temp files left behind by a prior run that
             // died before File.Move completed. This is purely disk-litter cleanup;
             // the real state.json / hidden-windows.json are never torn.
             CleanupStaleTempFiles();
 
-            _icons = new IconService();
+            _icons = new IconService(_log);
             _shepherd = new WindowShepherdService(_log);
             _persistence = new PersistenceService(_log);
             _groups = new GroupManager(_shepherd, _persistence, _log);
@@ -127,6 +143,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
+            ContainerWindow.IsAppShuttingDown = true;
             _log?.LogException("FATAL Application_Startup", ex);
             FlushJournalGuarded("startup failure");
             try
@@ -158,7 +175,10 @@ public partial class App : Application
         {
             FlushJournalGuarded("application exit");
             _events?.Dispose();
+            _winEventMonitorDisposed = true;
             _hotkey?.Dispose();
+            _singleInstanceMutex?.ReleaseMutex();
+            _singleInstanceMutex?.Dispose();
             _log?.Dispose();
         }
     }
@@ -185,15 +205,43 @@ public partial class App : Application
     {
         ContainerWindow.IsAppShuttingDown = true;
         _log?.Log($"AppDomain unhandled exception. IsTerminating={e.IsTerminating}: {e.ExceptionObject}");
-        SaveStateGuarded("AppDomain exception");
-        FlushJournalGuarded("AppDomain exception");
+
+        if (e.IsTerminating)
+        {
+            // Terminating exceptions can arrive on any thread and the runtime is
+            // about to tear the process down. Restrict the handler to thread-safe
+            // logging so it never races the UI thread's collection/journal mutation.
+            return;
+        }
+
+        // Non-terminating exceptions still have a live dispatcher. Marshal the
+        // UI-thread-affined work onto it with a short deadline so a deadlocked UI
+        // thread does not leave this arbitrary thread hung.
         try
         {
-            _groups?.EmergencyReleaseAll();
+            if (Dispatcher == null)
+            {
+                _log?.Log("AppDomain exception: no UI dispatcher available; skipping crash-time save/release.");
+                return;
+            }
+
+            Dispatcher.Invoke(() =>
+            {
+                SaveStateGuarded("AppDomain exception");
+                FlushJournalGuarded("AppDomain exception");
+                try
+                {
+                    _groups?.EmergencyReleaseAll();
+                }
+                catch (Exception ex)
+                {
+                    _log?.LogException("EmergencyReleaseAll during AppDomain exception", ex);
+                }
+            }, TimeSpan.FromSeconds(1));
         }
-        catch (Exception ex)
+        catch (Exception dispatchEx)
         {
-            _log?.LogException("EmergencyReleaseAll during AppDomain exception", ex);
+            _log?.LogException("AppDomain exception: dispatcher invocation timed out or failed; falling back to log-only", dispatchEx);
         }
     }
 
@@ -211,6 +259,33 @@ public partial class App : Application
         catch (Exception ex)
         {
             _log?.LogException("EmergencyReleaseAll during session ending", ex);
+        }
+
+        // Leave GroupManager in a coherent post-release state. If the logoff is
+        // cancelled by another application, there must be no captured HWNDs left in
+        // the index and no live hooks repositioning now-unmanaged windows.
+        try
+        {
+            if (_groups != null)
+            {
+                foreach (var group in _groups.Groups.ToList())
+                {
+                    group.Members.Clear();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _log?.LogException("Clearing group members during session ending", ex);
+        }
+
+        try
+        {
+            _events?.Stop();
+        }
+        catch (Exception ex)
+        {
+            _log?.LogException("Stopping WinEvent monitor during session ending", ex);
         }
     }
 
@@ -331,7 +406,9 @@ public partial class App : Application
         // another) must not have its hooks torn back down.
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (_events != null && !_groups.IsMonitoringNeeded)
+            if (_winEventMonitorDisposed || _events == null)
+                return;
+            if (!_groups.IsMonitoringNeeded)
                 _events.Stop();
         }));
     }
@@ -419,8 +496,11 @@ public partial class App : Application
         // z-order (purely cosmetic: input already routes to the guest
         // correctly regardless, since it is a real, untouched top-level
         // window either way).
-        _events.WindowForegroundChanged += (_, args) =>
+        _events.WindowForegroundChanged += (sender, args) =>
         {
+            // "sender" must be named, not "_": with a "_" parameter in scope,
+            // "out _" below would bind to that object instead of being a
+            // discard, and fail to compile against out CapturedWindow.
             if (!_groups.TryGetCapturedMember(args.Hwnd, out Group? group, out _))
                 return;
             if (_containers.TryGetValue(group.Id, out var container))
@@ -513,13 +593,14 @@ public partial class App : Application
         {
             OpenContainer(group);
         }
-        catch
+        catch (Exception ex)
         {
             // The group must not outlive a container that failed to open: it would
             // be saved on exit and re-opened at startup, turning a one-time failure
             // into a crash on every subsequent launch.
             _groups.RemoveGroup(group);
-            throw;
+            _log.LogException("OpenContainer for new group", ex);
+            MessageBox.Show(_mainWindow, "Could not open the container for the new group.", "TabDock", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -537,6 +618,15 @@ public partial class App : Application
         if (_pickerOpen)
         {
             _log.Log("Capture picker is already open; ignoring the duplicate request.");
+            return;
+        }
+
+        // Defer picker requests while a container close-confirm prompt is open.
+        // The prompt runs its own nested dispatcher loop, so a picker opened on
+        // top of it would stack modals and could be answered out of order.
+        if (_containers.Values.Any(c => c.IsClosePromptOpen))
+        {
+            _log.Log("Capture picker requested while a container close prompt is open; ignoring.");
             return;
         }
 
@@ -592,7 +682,17 @@ public partial class App : Application
         if (picker.Result.TargetGroupId == Guid.Empty)
         {
             group = _groups.CreateGroup();
-            OpenContainer(group);
+            try
+            {
+                OpenContainer(group);
+            }
+            catch (Exception ex)
+            {
+                _groups.RemoveGroup(group);
+                _log.LogException("OpenContainer for new group from capture picker", ex);
+                MessageBox.Show(picker, "Could not open the container for the new group.", "TabDock", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
         }
         else
         {
@@ -601,7 +701,17 @@ public partial class App : Application
             {
                 _log.Log($"Capture picker referenced unknown group {picker.Result.TargetGroupId}; creating new group.");
                 group = _groups.CreateGroup();
-                OpenContainer(group);
+                try
+                {
+                    OpenContainer(group);
+                }
+                catch (Exception ex)
+                {
+                    _groups.RemoveGroup(group);
+                    _log.LogException("OpenContainer for replacement group from capture picker", ex);
+                    MessageBox.Show(picker, "Could not open the container for the new group.", "TabDock", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
             }
         }
 
@@ -611,7 +721,16 @@ public partial class App : Application
         if (!_containers.TryGetValue(group.Id, out var container))
         {
             _log.Log($"No container open for group {group.Id}; opening one.");
-            container = OpenContainer(group);
+            try
+            {
+                container = OpenContainer(group);
+            }
+            catch (Exception ex)
+            {
+                _log.LogException($"OpenContainer for existing group {group.Id} from capture picker", ex);
+                MessageBox.Show(picker, "Could not open the container for this group.", "TabDock", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
         }
 
         foreach (var hwnd in picker.Result.SelectedHwnds)
@@ -645,14 +764,25 @@ public partial class App : Application
             return existing;
         }
 
-        var vm = new GroupViewModel(group, _groups, _icons);
+        var vm = new GroupViewModel(group, _groups, _icons, _log);
         // The container's "+" button funnels through this event; without the
         // subscription it is a dead control.
         vm.AddWindowsRequested += (_, _) => ShowCapturePicker(group);
-        var window = new ContainerWindow(vm, _groups, _shepherd, _log);
-        window.Closed += (_, _) => OnContainerClosed(group.Id);
+        ContainerWindow window;
+        try
+        {
+            window = new ContainerWindow(vm, _groups, _shepherd, _log);
+            window.Closed += (_, _) => OnContainerClosed(group.Id);
+            window.Show();
+        }
+        catch (Exception ex)
+        {
+            _log?.LogException($"OpenContainer failed for group {group.Id}", ex);
+            vm.Detach();
+            throw;
+        }
+
         _containers[group.Id] = window;
-        window.Show();
         _log.Log($"Opened container for group {group.Id}.");
         return window;
     }
@@ -685,6 +815,32 @@ public partial class App : Application
         if (group != null && group.Members.Count == 0 && group.PersistedTabs.Count == 0)
         {
             _groups.RemoveGroup(group);
+        }
+    }
+
+    /// <summary>
+    /// Acquires the global single-instance mutex. Returns false if another
+    /// TabDock process already owns it, in which case this instance must exit
+    /// without touching shared state files.
+    /// </summary>
+    private bool AcquireSingleInstanceMutex()
+    {
+        try
+        {
+            bool createdNew;
+            _singleInstanceMutex = new Mutex(initiallyOwned: true, name: @"Global\TabDock", createdNew: out createdNew);
+            if (!createdNew)
+            {
+                _singleInstanceMutex.Dispose();
+                _singleInstanceMutex = null;
+                return false;
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log?.LogException("AcquireSingleInstanceMutex", ex);
+            return false;
         }
     }
 

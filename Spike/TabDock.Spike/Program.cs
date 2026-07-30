@@ -19,7 +19,7 @@ internal static class Program
     // -------------------------------------------------------------------------
     // Guardrails
     // -------------------------------------------------------------------------
-    private const int MaxTotalSpawns = 3; // 1 Notepad + 1 host + 1 checker
+    private const int MaxTotalSpawns = 4; // 1 cmd + 1 host + 1 checker + 1 taskkill
     private const int OverallTimeoutMs = 15000;
     private const string SingleInstanceMutexName = "Global\\TabDockSurvivalSpike";
 
@@ -107,7 +107,7 @@ internal static class Program
         for (int i = 0; i < 100 && cmdHwnd == IntPtr.Zero; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            cmdHwnd = FindCmdWindow(out cmdPid);
+            cmdHwnd = FindCmdWindow(cmd.Id, out cmdPid);
             if (cmdHwnd == IntPtr.Zero)
             {
                 Log($"  attempt {i + 1}/100...");
@@ -126,7 +126,7 @@ internal static class Program
             throw new FileNotFoundException("Spike executable not found. Build the project first.", exePath);
 
         Log("Spawning host process...");
-        Process host = SpawnGuarded(() => StartChildProcess(exePath, $"--host {cmdHwnd.ToInt64()} \"{hostPidFile}\""));
+        Process host = SpawnGuarded(() => StartChildProcess(exePath, $"--host {cmdHwnd.ToInt64()} {cmdPid} \"{hostPidFile}\""));
 
         Log("Waiting for host PID file...");
         int hostPid = 0;
@@ -153,7 +153,7 @@ internal static class Program
         await Task.Delay(1500, cancellationToken);
 
         Log($"Killing host process {hostPid}...");
-        Process kill = StartChildProcess("taskkill", $"/F /PID {hostPid}");
+        Process kill = SpawnGuarded(() => StartChildProcess("taskkill", $"/F /PID {hostPid}"));
         kill.WaitForExit(5000);
 
         Log("Waiting for checker result...");
@@ -198,14 +198,50 @@ internal static class Program
     // -------------------------------------------------------------------------
     private static int RunHost(string[] args)
     {
-        if (args.Length < 3)
+        if (args.Length < 4)
         {
-            Console.WriteLine("Usage: --host <childHwnd> <pidFile>");
+            Console.WriteLine("Usage: --host <childHwnd> <childPid> <pidFile>");
             return 1;
         }
 
-        IntPtr childHwnd = new IntPtr(long.Parse(args[1]));
-        string pidFile = args[2];
+        // The child HWND/PID come in over the command line and are SetParent'd and
+        // restyled below — validate before touching anything: a malformed value
+        // must fail cleanly, and a window that is not the orchestrator's own
+        // spawned cmd.exe must never be reparented.
+        if (!long.TryParse(args[1], out long hwndValue) || hwndValue == 0)
+        {
+            Console.WriteLine($"Malformed --host HWND argument: '{args[1]}'");
+            return 1;
+        }
+        if (!int.TryParse(args[2], out int expectedChildPid) || expectedChildPid <= 0)
+        {
+            Console.WriteLine($"Malformed --host PID argument: '{args[2]}'");
+            return 1;
+        }
+
+        IntPtr childHwnd = new IntPtr(hwndValue);
+        string pidFile = args[3];
+
+        if (!IsWindow(childHwnd))
+        {
+            Console.WriteLine($"Refusing --host: 0x{hwndValue:X} is not a window.");
+            return 1;
+        }
+
+        var childClass = new StringBuilder(256);
+        GetClassName(childHwnd, childClass, childClass.Capacity);
+        GetWindowThreadProcessId(childHwnd, out uint childPid);
+        // Console windows are owned by conhost.exe; the spawned cmd is its
+        // parent (see FindCmdWindow), so accept either the cmd PID itself or a
+        // conhost whose parent is the expected cmd.
+        bool ownedByExpected = (int)childPid == expectedChildPid
+            || GetParentProcessId((int)childPid) == expectedChildPid;
+        if (!ownedByExpected
+            || !childClass.ToString().Equals("ConsoleWindowClass", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine($"Refusing --host: 0x{hwndValue:X} is class '{childClass}' owned by PID {childPid}, expected ConsoleWindowClass owned by PID {expectedChildPid}.");
+            return 1;
+        }
 
         try
         {
@@ -312,8 +348,19 @@ internal static class Program
             return 1;
         }
 
-        IntPtr childHwnd = new IntPtr(long.Parse(args[1]));
-        int hostPid = int.Parse(args[2]);
+        IntPtr childHwnd;
+        int hostPid;
+        if (!long.TryParse(args[1], out long hwndValue) || hwndValue == 0)
+        {
+            Console.WriteLine($"Malformed --checker HWND argument: '{args[1]}'");
+            return 1;
+        }
+        if (!int.TryParse(args[2], out hostPid) || hostPid <= 0)
+        {
+            Console.WriteLine($"Malformed --checker PID argument: '{args[2]}'");
+            return 1;
+        }
+        childHwnd = new IntPtr(hwndValue);
         string resultFile = args[3];
 
         Console.WriteLine($"Checker started. Watching host PID {hostPid}, child HWND 0x{childHwnd.ToInt64():X}");
@@ -436,11 +483,31 @@ internal static class Program
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
-    private static IntPtr FindCmdWindow(out int processId)
+    /// <summary>
+    /// Finds the main window of the specific <paramref name="expectedPid"/> cmd.exe
+    /// process this orchestrator spawned. Class/title matching alone is not enough:
+    /// a pre-existing console (or any window titled "...cmd.exe") that the user owns
+    /// would otherwise be reparented, restyled, and killed by the spike. The PID
+    /// check via GetWindowThreadProcessId is what confines the spike to its own
+    /// spawned process.
+    ///
+    /// Note: on Windows 10/11 a console window is owned by conhost.exe, not by
+    /// cmd.exe itself, so the window's PID is never cmd.Id directly. The spawned
+    /// cmd allocates a fresh console, whose conhost has the spawned cmd as its
+    /// parent — so ownership is verified as "window PID == cmd.Id, or window
+    /// PID's parent == cmd.Id" (parent looked up via a Toolhelp process
+    /// snapshot). A pre-existing console fails both arms: its conhost's parent
+    /// is a different cmd.exe.
+    /// </summary>
+    private static IntPtr FindCmdWindow(int expectedPid, out int processId)
     {
         processId = 0;
         IntPtr found = IntPtr.Zero;
         int localPid = 0;
+        // One snapshot per call, consulted only for windows that already match
+        // on class/title — building it per window made each retry attempt cost
+        // seconds and starved the overall timeout.
+        Dictionary<int, int> parentByPid = SnapshotParentPids();
 
         EnumWindows((hwnd, lParam) =>
         {
@@ -454,19 +521,60 @@ internal static class Program
 
             bool isCmd = className.ToString().Equals("ConsoleWindowClass", StringComparison.OrdinalIgnoreCase)
                 || title.ToString().Contains("cmd.exe", StringComparison.OrdinalIgnoreCase);
+            if (!isCmd || title.Length == 0)
+                return true;
 
-            if (isCmd && title.Length > 0)
-            {
-                found = hwnd;
-                uint pid = 0;
-                GetWindowThreadProcessId(hwnd, out pid);
-                localPid = (int)pid;
-                return false;
-            }
-            return true;
+            uint pid = 0;
+            GetWindowThreadProcessId(hwnd, out pid);
+            bool owned = (int)pid == expectedPid
+                || (parentByPid.TryGetValue((int)pid, out int parentPid) && parentPid == expectedPid);
+            if (!owned)
+                return true; // Not our spawned cmd.exe's console — never touch it.
+
+            found = hwnd;
+            localPid = (int)pid;
+            return false;
         }, IntPtr.Zero);
         processId = localPid;
         return found;
+    }
+
+    /// <summary>
+    /// Maps every PID in a Toolhelp32 process snapshot to its parent PID.
+    /// </summary>
+    private static Dictionary<int, int> SnapshotParentPids()
+    {
+        var map = new Dictionary<int, int>();
+        IntPtr snapshot = CreateToolhelp32Snapshot(NativeConstants.TH32CS_SNAPPROCESS, 0);
+        if (snapshot == new IntPtr(-1) || snapshot == IntPtr.Zero)
+            return map;
+        try
+        {
+            PROCESSENTRY32 entry = new PROCESSENTRY32 { dwSize = Marshal.SizeOf(typeof(PROCESSENTRY32)) };
+            if (Process32First(snapshot, ref entry))
+            {
+                do
+                {
+                    map[(int)entry.th32ProcessID] = (int)entry.th32ParentProcessID;
+                }
+                while (Process32Next(snapshot, ref entry));
+            }
+            return map;
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+    }
+
+    /// <summary>
+    /// Returns the parent PID of <paramref name="pid"/> via a Toolhelp32 process
+    /// snapshot, or 0 if the process cannot be found.
+    /// </summary>
+    private static int GetParentProcessId(int pid)
+    {
+        var map = SnapshotParentPids();
+        return map.TryGetValue(pid, out int parentPid) ? parentPid : 0;
     }
 
     private static IntPtr WindowProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
@@ -569,6 +677,31 @@ internal static class Program
     [DllImport("user32.dll")]
     private static extern IntPtr DefWindowProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool Process32First(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool Process32Next(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct PROCESSENTRY32
+    {
+        public int dwSize;
+        public int cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public int cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public int dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
+    }
+
     private struct RECT
     {
         public int left;
@@ -641,5 +774,6 @@ internal static class Program
         public const uint WM_DESTROY = 0x0002;
         public const uint GW_OWNER = 4;
         public const uint PROCESS_SYNCHRONIZE = 0x00100000;
+        public const uint TH32CS_SNAPPROCESS = 0x00000002;
     }
 }
