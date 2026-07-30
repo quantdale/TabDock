@@ -7,8 +7,8 @@ Several crash/exit paths and modal-loop re-entrancy seams in `App.xaml.cs` and `
 - The capture-picker path (`ShowCapturePickerCore`, `:592-614`) calls `CreateGroup()` + `OpenContainer(group)` with no try/catch, unlike `OnNewGroupRequested` (`:509-524`) which rolls back — a container-less group is saved and re-opened on every subsequent launch (crash loop), and the exception escapes the modal loop, terminating the app over a routine failure.
 - The startup-failure catch (`:128-141`) doesn't set `ContainerWindow.IsAppShuttingDown` (every other exit path does), so the close-confirm Yes/No/Cancel modal can appear during a fatal shutdown.
 - `ContainerWindow_Closing`'s `MessageBox` (`ContainerWindow.xaml.cs:256-261`) pumps queued WinEvent callbacks in a nested dispatcher loop: a guest destroying itself mid-prompt can re-enter `Close()` on a window already in `Closing`, and the global hotkey can stack a capture picker on top of the close prompt.
-- `OpenContainer` (`App.xaml.cs:648-656`): if `new ContainerWindow(...)` or `Show()` throws after the VM subscribed `_group.PropertyChanged` in its constructor, the VM leaks (held by the long-lived `Group`); `Detach()` only runs from `ContainerWindow_Closed`.
-- Deferred `WinEventMonitor.Stop` (`:332-336`) can fire after `Application_Exit` disposed `_events`.
+- `OpenContainer` (`App.xaml.cs:640-658`): if `new ContainerWindow(...)` or `Show()` throws after the VM subscribed `_group.PropertyChanged` in its constructor, the VM leaks (held by the long-lived `Group`); `Detach()` only runs from `ContainerWindow_Closed`.
+- Deferred `WinEventMonitor.Stop` (`:332-336`) can fire after `Application_Exit` disposed `_events` (`:160`). Today that is a silent no-op only incidentally — because `Stop` is idempotent (`if (!_running) return;`) and `_events` is never nulled — so the safety of this ordering depends on implementation details of `WinEventMonitor` rather than an explicit guard.
 
 ## What Changes
 
@@ -18,7 +18,7 @@ Several crash/exit paths and modal-loop re-entrancy seams in `App.xaml.cs` and `
 - **Startup-failure flag** — set `ContainerWindow.IsAppShuttingDown = true` as the first statement of the `Application_Startup` catch.
 - **Modal re-entrancy guard** — add a `_closePromptOpen` guard (same pattern as `_pickerOpen`): defer `EmptiedByPopOut`-driven `Close()` and picker requests until the prompt returns; re-check `_viewModel.Tabs.Count` after the `MessageBox` returns.
 - **VM leak** — try/catch around container construction/`Show()` in `OpenContainer`; call `vm.Detach()` on failure.
-- **Deferred stop guard** — guard the deferred `_events.Stop()` with a disposed/shutdown flag.
+- **Deferred stop guard** — guard the deferred `_events.Stop()` with a disposed/shutdown flag so its post-`Dispose` harmlessness is explicit rather than incidental to `Stop`'s idempotence.
 - **Adjacent one-liner** — `HotkeyService.Register`'s `Handle == IntPtr.Zero` branch is dead (`HwndSource` ctor throws instead); wrap construction in try/catch and log.
 
 ## Capabilities

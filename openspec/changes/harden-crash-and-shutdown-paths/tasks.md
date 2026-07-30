@@ -17,7 +17,7 @@
 ## 4. Shutdown flags and guards
 
 - [ ] 4.1 Set `ContainerWindow.IsAppShuttingDown = true` first in the `Application_Startup` catch block
-- [ ] 4.2 Guard the deferred `_events.Stop()` in `SyncWinEventMonitor` against a disposed monitor (shutdown flag)
+- [ ] 4.2 Guard the deferred `_events.Stop()` in `SyncWinEventMonitor` against firing after `Application_Exit` disposed the monitor (explicit disposed/shutdown flag; today this is a no-op only incidentally, via `Stop`'s idempotence)
 - [ ] 4.3 Wrap `HotkeyService.Register`'s `HwndSource` construction in try/catch with logging (replace the dead zero-handle branch)
 
 ## 5. Modal re-entrancy guard

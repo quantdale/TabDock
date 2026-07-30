@@ -28,7 +28,7 @@
 - [ ] 5.1 Only zero each hook field when `UnhookWinEvent` returns true; log `FormatLastError()` on failure
 - [ ] 5.2 Null `_uiContext` in `Stop`; guard `Raise` with `_running` and re-check `_isCapturedWindow(args.Hwnd)` at dispatch time
 - [ ] 5.3 In `Start`, verify all six hooks installed; log and unwind on partial failure
-- [ ] 5.4 Handle null `SynchronizationContext.Current` in `Start` (log and refuse, or capture in constructor)
+- [ ] 5.4 Handle a null `SynchronizationContext.Current` in `Start` explicitly (log and refuse to start, or capture a dispatcher context in the constructor) instead of silently relying on `OnWinEvent`'s callback-thread `Raise` fallback, which breaks UI-thread affinity
 
 ## 6. Validation
 

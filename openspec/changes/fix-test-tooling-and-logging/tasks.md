@@ -23,7 +23,7 @@
 
 ## 5. GetMessage signature
 
-- [ ] 5.1 Change `NativeMethods.GetMessage` return type to `int` (or delete the unused declaration)
+- [ ] 5.1 Delete the unused `NativeMethods.GetMessage` declaration (no call sites in the main project; the Spike declares its own `int`-returning version), or change its return type to `int` if a caller is anticipated
 
 ## 6. Validation
 
