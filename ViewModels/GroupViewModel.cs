@@ -256,7 +256,22 @@ public sealed class GroupViewModel : ViewModelBase
         // WinEvent drives the existing teardown; if it hides to the tray
         // instead, the guest-initiated-hide path does; and if it shows a save
         // prompt or ignores WM_CLOSE, the tab correctly stays alive.
-        NativeMethods.PostMessage(hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        //
+        // HWND-recycle guard immediately before posting: IsWindow above only
+        // proves the HWND value is currently a window, not that it is still
+        // OUR guest — the guest may have closed and Windows may already have
+        // reused the value for an unrelated window, which would then receive
+        // an arbitrary WM_CLOSE. Verify the owning PID matches the one stored
+        // at capture time.
+        NativeMethods.GetWindowThreadProcessId(hwnd, out uint currentPid);
+        if (currentPid != tab.Model.ProcessId)
+        {
+            _log.Log($"Close-window: skipping 0x{hwnd.ToInt64():X} — HWND recycled (expected PID {tab.Model.ProcessId}, now {currentPid}).");
+            ReleaseTab(tab);
+            return;
+        }
+        if (!NativeMethods.PostMessage(hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero))
+            _log.Log($"Close-window: PostMessage(WM_CLOSE) to 0x{hwnd.ToInt64():X} failed: {NativeMethods.FormatLastError()}");
     }
 
     public void RefreshIcon(TabViewModel tab)

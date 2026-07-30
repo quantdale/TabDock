@@ -95,7 +95,8 @@ public sealed class WindowShepherdService
         }
 
         var originalPlacement = new NativeMethods.WINDOWPLACEMENT { length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>() };
-        if (!NativeMethods.GetWindowPlacement(hwnd, out originalPlacement))
+        bool hasValidPlacement = NativeMethods.GetWindowPlacement(hwnd, out originalPlacement);
+        if (!hasValidPlacement)
         {
             _log.Log($"GetWindowPlacement failed for 0x{hwnd.ToInt64():X}: {NativeMethods.FormatLastError()}");
         }
@@ -109,6 +110,7 @@ public sealed class WindowShepherdService
             ExePath = NativeMethods.GetProcessImagePath(pid) ?? string.Empty,
             OriginalTitle = NativeMethods.GetWindowTextString(hwnd) ?? string.Empty,
             OriginalPlacement = originalPlacement,
+            HasValidPlacement = hasValidPlacement,
             OriginalBounds = bounds,
             WasMaximized = originalPlacement.showCmd == NativeMethods.SW_SHOWMAXIMIZED,
         };
@@ -176,18 +178,20 @@ public sealed class WindowShepherdService
 
     /// <summary>
     /// Hides an inactive shepherded guest. Safe to call on a window that is
-    /// already hidden or has been destroyed. Journals the guest so a
-    /// force-killed TabDock (which no longer destroys the guest — it was
-    /// never reparented — but also can't run its normal release-on-exit path)
-    /// doesn't leave it invisibly hidden forever; see
+    /// already hidden or has been destroyed. Journals the guest BEFORE hiding
+    /// it — a force-kill landing between the two would otherwise leave the
+    /// guest hidden on screen with no journal entry, exactly the orphan the
+    /// journal exists to rescue. The reversed order is safe:
+    /// <see cref="RescueOrphanedWindows"/> re-showing an already-visible
+    /// window is a documented harmless no-op. See
     /// <see cref="RescueOrphanedWindows"/>.
     /// </summary>
     public void Hide(CapturedWindow window)
     {
         if (!NativeMethods.IsWindow(window.Hwnd))
             return;
-        NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
         JournalHide(window);
+        NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
         _log.Log($"SHEPHERD[hide] guest=0x{window.Hwnd.ToInt64():X}");
     }
 
@@ -268,19 +272,41 @@ public sealed class WindowShepherdService
 
         if (!show)
         {
-            NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
             // The guest hid itself (e.g. tray-style close). Do NOT journal it for
             // rescue: force-showing it on the next launch would undo the user's
             // intentional hide. Clear any existing journal entry instead — and
-            // do it immediately (bypassing the debounce), because this window
-            // ends up hidden, not visible: a stale "hidden" entry left on disk
-            // by a force-kill mid-debounce would be indistinguishable from a
-            // real orphan and get incorrectly un-hidden by RescueOrphanedWindows
-            // (unlike PositionAndShow/Release(show:true)'s clears, where the
-            // window is already genuinely visible and a stale entry is harmless).
+            // do it immediately (bypassing the debounce), BEFORE the window ends
+            // up hidden: a stale "hidden" entry left on disk by a force-kill
+            // mid-debounce would be indistinguishable from a real orphan and get
+            // incorrectly un-hidden by RescueOrphanedWindows (unlike
+            // PositionAndShow/Release(show:true)'s clears, where the window is
+            // already genuinely visible and a stale entry is harmless).
             JournalClear(window.Hwnd, immediate: true);
+            NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
             SetTransitionsDisabled(window.Hwnd, false);
             _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide)");
+            return;
+        }
+
+        if (!window.HasValidPlacement)
+        {
+            // Capture-time GetWindowPlacement failed, so OriginalPlacement is
+            // zeroed — its showCmd (0 == SW_HIDE) would hide the released guest
+            // forever with its journal entry already cleared. Restore the
+            // capture-time bounds and show explicitly instead.
+            NativeMethods.SetWindowPos(
+                window.Hwnd,
+                NativeMethods.HWND_TOP,
+                window.OriginalBounds.left,
+                window.OriginalBounds.top,
+                window.OriginalBounds.Width,
+                window.OriginalBounds.Height,
+                NativeMethods.SWP_NOZORDER | NativeMethods.SWP_SHOWWINDOW);
+            NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_SHOW);
+            NativeMethods.SetForegroundWindow(window.Hwnd);
+            JournalClear(window.Hwnd);
+            SetTransitionsDisabled(window.Hwnd, false);
+            _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) via bounds fallback (no valid capture-time placement); guest={NativeMethods.DescribeWindow(window.Hwnd)}");
             return;
         }
 
@@ -292,7 +318,7 @@ public sealed class WindowShepherdService
             _log.Log($"SetWindowPlacement failed for 0x{window.Hwnd.ToInt64():X}: {NativeMethods.FormatLastError()}");
             NativeMethods.SetWindowPos(
                 window.Hwnd,
-                NativeMethods.HWND_TOP,
+                IntPtr.Zero,
                 window.OriginalBounds.left,
                 window.OriginalBounds.top,
                 window.OriginalBounds.Width,

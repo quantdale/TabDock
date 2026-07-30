@@ -1,6 +1,6 @@
 # TabDock — Agent Guide
 
-This file is a concise, accurate reference for AI coding agents working on the TabDock repository. It reflects the actual project contents; do not assume conventions that are not documented here.
+This file is a concise, accurate reference for AI coding agents working on the TabDock repository. It reflects the actual project contents; do not assume conventions that are not documented here. (`CLAUDE.md` at the repo root defers to this file as the primary agent guide.)
 
 ---
 
@@ -38,6 +38,8 @@ The main project disables implicit usings and enables nullable reference types:
 <ImplicitUsings>disable</ImplicitUsings>
 ```
 
+`TabDock.csproj` also sets `<NuGetAudit>false</NuGetAudit>` with an explanatory comment (AUDIT25-04): the build environment cannot reach nuget.org, and the project currently has zero third-party dependencies, so there is nothing to audit. Re-verify that justification out-of-band before adding any NuGet dependency and before every release.
+
 ---
 
 ## Solution structure
@@ -51,6 +53,8 @@ tests/ValidationDriver/               Not in TabDock.sln — build/run by projec
 ├── TabDock.ValidationDriver/         Real-input (SendInput) validation harness
 └── TabDock.GuineaPig/                Disposable WinForms target app it spawns
 ```
+
+The main csproj excludes `bin/**`, `obj/**`, `Spike/**`, `tests/**`, and `docs/**` from its default item globs. The ValidationDriver project compiles the main project's `NativeMethods.cs` into itself via a `<Compile Include="..\..\..\NativeMethods.cs" Link="..."/>` item — edits to `NativeMethods.cs` affect both.
 
 ### Main project code organization
 
@@ -74,11 +78,11 @@ tests/ValidationDriver/               Not in TabDock.sln — build/run by projec
 | `GroupManager` | Owns all groups; enforces flat, no-nesting rule; coordinates tab switching/reordering/release. Also maintains the O(1) HWND→member index every WinEvent lookup goes through (`IsCapturedWindow`/`TryGetCapturedMember`) and the `MonitoringNeededChanged` signal that gates the hooks |
 | `PersistenceService` | Saves/restores group metadata to `%APPDATA%\TabDock\state.json`; skips the write when the serialized state is unchanged |
 | `WinEventMonitor` | Out-of-process `SetWinEventHook` wrapper for destroy/rename/minimize/foreground events on captured windows. Filters by direct member-HWND match — never by `GetAncestor`, which cannot see an already-destroyed window's ancestors. `Start`/`Stop` are idempotent and restartable; App runs the hooks only while something is captured |
-| `HotkeyService` | Registers global `Ctrl+Alt+G` hotkey |
+| `HotkeyService` | Registers global `Ctrl+Alt+G` hotkey (with `MOD_NOREPEAT`, so holding the key does not stack capture pickers) |
 | `IconService` | Extracts executable icons for tab thumbnails, cached per (case-insensitive) exe path |
 | `LoggingService` | Rotating file logger in `%APPDATA%\TabDock\logs\TabDock.log`. Callers only enqueue; a background thread batches queued lines through one persistent append handle |
 
-`WindowCaptureService` (`SetParent`-based reparenting), `RenderHealthService` (`PrintWindow`-based black-frame detection), `DpiService` (DPI-forwarding to a reparented child), and `GuestActivationHelper` (synthetic activation messages) were deleted together in the Shepherd migration — all four existed solely to compensate for problems that `SetParent` reparenting caused and that Shepherd's never-reparent model doesn't have in the first place.
+`WindowCaptureService` (`SetParent`-based reparenting), `RenderHealthService` (`PrintWindow`-based black-frame detection), `DpiService` (DPI-forwarding to a reparented child), and `GuestActivationHelper` (synthetic activation messages) were deleted together in the Shepherd migration — all four existed solely to compensate for problems that `SetParent` reparenting caused and that Shepherd's never-reparent model doesn't have in the first place. They survive only as historical references in comments and docs.
 
 ---
 
@@ -102,6 +106,8 @@ Run the app:
 dotnet build TabDock.sln
 ```
 
+Note this builds only the main app and the Spike — the ValidationDriver/GuineaPig projects are not in the solution and must be built by project path.
+
 ### Publish a single-file executable
 
 ```powershell
@@ -120,6 +126,8 @@ This produces one distributable file with no external runtime dependency. Native
 
 ## Testing instructions
 
+`docs/TESTING.md` is the consolidated testing playbook — read it before validating changes. The short version:
+
 ### Automated real-input test
 
 `tests/ValidationDriver/TabDock.ValidationDriver` is a console harness that drives a fresh TabDock instance plus guinea-pig/real-app windows entirely through synthesized `SendInput` mouse/keyboard at UIA-read coordinates, then asserts on window state, pixels, and log output:
@@ -128,9 +136,13 @@ This produces one distributable file with no external runtime dependency. Native
 dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --yes <scenario|all>
 ```
 
+The harness expects `TabDock.exe` and `TabDock.GuineaPig.exe` to already be built in `bin\Debug\net8.0-windows\win-x64\`. `TabDock.GuineaPig` is a tiny WinForms app whose only job is to be captured/released/dragged while logging the window messages it receives; its command-line switches (`--title`, `--color`, `--pulse`, `--hide-on-close`, `--minimize-then-hide-on-close`, `--self-close-after`, `--click-counter-button`, `--text-box`) let scenarios exercise specific guest behaviors deterministically.
+
 Since a Shepherd guest is never reparented, "is this guest captured/released" can no longer be read off `WS_CHILD`/`GetParent` (both are permanently unchanged) — scenarios instead compare the guest's `GetWindowRect` against the container's content-area marker (`IsDocked`/`IsReleasedAndShown`/`IsReleasedAndHidden` helpers in `Scenarios.cs`). Notable scenarios beyond the general capture/release/tab-switch coverage: `dragout-by-titlebar` (drag the guest's own native title bar past/under the pop-out threshold), `directclick-foreground-pairing` (click the guest directly, bypassing TabDock's own UI, and verify z-order re-pairing), `crashkill-rescue` (force-kill TabDock with a hidden tab captured, relaunch, verify the crash-recovery journal restores it), `realapp-multi-render` (real apps, `PrintWindow`-verified live rendering, byte-identical placement/style/exstyle/parent before vs. after capture+release — this replaced the old, Reparent-only `tests/CaptureReleaseTest` project, since a `PrintWindow` capture of a GPU-rendered guest reads its own back-buffer directly and isn't affected by whatever else is on top of it on screen, unlike a `BitBlt`-based screen-region capture), and `keyboardinput-*-altswitch` (the direct regression test for the originally-reported "keyboard input stops after switching to another app and back" bug).
 
-The test requires interactive confirmation, spawns real applications, and kills them on completion or failure. Do not run it unattended on a production machine.
+The test requires interactive confirmation, spawns real applications, and kills them on completion or failure. Because it sends real input, do not touch the mouse or keyboard during a run, and do not run it unattended on a production machine. Known harness limitation: scenarios that must programmatically acquire foreground (`ForceForeground`) are flaky when the suite is driven from inside another foreground-holding interactive session (see `KNOWN_ISSUES.md`); treat such failures observed in that context as unverified until re-run standalone.
+
+Two PowerShell e2e scripts also live at `tests/e2e-capture-release.ps1` and `tests/e2e-stress-and-drag.ps1` — older one-off end-to-end checks against the published Release exe, written under the guarded-spawn pattern (see below).
 
 ### Manual test checklist
 
@@ -145,7 +157,7 @@ The `README.md` contains a detailed manual checklist covering:
 - Elevated-window UIPI handling
 - Force-kill via Task Manager
 - DPI changes across monitors
-- GPU-render recovery
+- Maximize/restore of the container with a docked guest
 
 Use this checklist before considering a build ready for use.
 
@@ -204,13 +216,21 @@ The pattern was made mandatory after a runaway self-recursion incident in `Spike
 - Render-health failures and window teardown are best-effort and must not crash the container.
 - `LoggingService` itself is fail-safe; it catches and suppresses its own exceptions.
 
+### Spec-driven changes (OpenSpec)
+
+The `openspec/` directory holds an OpenSpec workflow (`schema: spec-driven` in `openspec/config.yaml`): `openspec/changes/` contains change proposals (active and `archive/`), and `openspec/specs/` contains the current capability specs (`capture-picker-icons`, `container-activation-timers`, `group-color-picker`, `hidden-window-journal`). When making a behavior-level change, check whether a spec or change proposal covers that area and keep it in sync.
+
+### Issue history documents
+
+`KNOWN_ISSUES.md` and `investigation_findings.md` are running logs of past bug-hunt sessions (H/M/L-series issues, the Shepherd migration, harness findings). They are historical records, not a backlog — check them before "discovering" an already-documented issue or a known harness flake. `docs/internal/` also holds the original test plan (`TEST_PLAN.md`) and audit reports (`deep-audit-2026-07-17.md`, `audit-2026-07-25.md`).
+
 ---
 
 ## Security considerations
 
 - **Elevation:** TabDock ships as a standard-user application. It detects elevated target processes and rejects the capture with a clear message rather than auto-elevating itself.
-- **UIPI:** Capturing a window owned by a higher-integrity process is blocked by `SetParent` / `OpenProcessToken` checks.
-- **No external dependencies:** The project does not reference third-party NuGet packages, minimizing supply-chain surface area.
+- **UIPI:** Capturing a window owned by a higher-integrity process is blocked by OS-level checks; a non-elevated TabDock cannot position or foreground such a window either.
+- **No external dependencies:** The project does not reference third-party NuGet packages, minimizing supply-chain surface area. `NuGetAudit` is disabled in the csproj for documented environment reasons — re-verify before adding any dependency.
 - **Persistence:** Only metadata is written to `%APPDATA%\TabDock\state.json`. No application content, credentials, or HWNDs are persisted.
 - **Logs:** Diagnostic logs are written to `%APPDATA%\TabDock\logs\TabDock.log` and rotated at 1 MB.
 
@@ -235,5 +255,8 @@ These limitations are documented in `README.md` and should not be treated as bug
 ## Useful references
 
 - `README.md` — user-facing documentation, manual test checklist, and known limitations.
+- `docs/TESTING.md` — consolidated testing/validation playbook (harness reference, scenario list, repro techniques).
 - `docs/internal/guarded-spawn-pattern.md` — mandatory guardrails for any process-spawning code.
+- `docs/internal/perf-2026-07-25.md` — performance invariants and the reasoning behind them.
+- `KNOWN_ISSUES.md` / `investigation_findings.md` — historical bug-hunt and migration records.
 - `NativeMethods.cs` — authoritative reference for all native interop used by the project.

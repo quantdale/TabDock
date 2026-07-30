@@ -62,6 +62,14 @@ public partial class ContainerWindow : Window
     // than jitter to snap back. See NoteGuestMoveSize.
     private const int DragOutThresholdPx = 40;
 
+    // Container and content-marker HWNDs cached at Loaded time (both are known
+    // non-zero there). By Closed time WindowInteropHelper.Handle and
+    // ContentHost.HostWindowHandle already read IntPtr.Zero, so unregistering
+    // from live reads leaked stale values into GroupManager's no-nesting set —
+    // and Windows aggressively recycles HWND values for unrelated windows.
+    private IntPtr _containerHwnd;
+    private IntPtr _contentHostHwnd;
+
     /// <summary>
     /// Set by App before any exit/crash path calls Application.Shutdown so every
     /// open container's Closing handler skips the Yes/No/Cancel prompt instead of
@@ -200,10 +208,14 @@ public partial class ContainerWindow : Window
     private void ContainerWindow_Loaded(object sender, RoutedEventArgs e)
     {
         IntPtr hwnd = new WindowInteropHelper(this).EnsureHandle();
+        _containerHwnd = hwnd;
         _manager.RegisterContainerHwnd(hwnd);
 
         if (ContentHost.HostWindowHandle != IntPtr.Zero)
-            _manager.RegisterContainerHwnd(ContentHost.HostWindowHandle);
+        {
+            _contentHostHwnd = ContentHost.HostWindowHandle;
+            _manager.RegisterContainerHwnd(_contentHostHwnd);
+        }
 
         TabsListBox.PreviewMouseLeftButtonDown += TabsListBox_PreviewMouseLeftButtonDown;
         TabsListBox.MouseMove += TabsListBox_MouseMove;
@@ -263,17 +275,30 @@ public partial class ContainerWindow : Window
         switch (result)
         {
             case MessageBoxResult.Yes:
-                // Snapshot HWNDs before CloseGroup clears the view model, then release
+                // Snapshot HWNDs (with their owning PIDs for the recycle guard
+                // below) before CloseGroup clears the view model, then release
                 // windows back to standalone and ask each one to close normally.
-                var hwndsToClose = _viewModel.Tabs
-                    .Select(t => t.Model.Hwnd)
-                    .Where(h => h != IntPtr.Zero)
+                var windowsToClose = _viewModel.Tabs
+                    .Select(t => (t.Model.Hwnd, t.Model.ProcessId))
+                    .Where(w => w.Hwnd != IntPtr.Zero)
                     .ToList();
                 _viewModel.CloseGroup();
-                foreach (var hwnd in hwndsToClose)
+                foreach (var (hwnd, pid) in windowsToClose)
                 {
-                    if (NativeMethods.IsWindow(hwnd))
-                        NativeMethods.PostMessage(hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+                    if (!NativeMethods.IsWindow(hwnd))
+                        continue;
+                    // HWND-recycle guard: the window may have closed between the
+                    // snapshot and now, with its HWND value already reused by an
+                    // unrelated window. Never WM_CLOSE a window owned by another
+                    // process.
+                    NativeMethods.GetWindowThreadProcessId(hwnd, out uint currentPid);
+                    if (currentPid != pid)
+                    {
+                        _log.Log($"Close-group: skipping 0x{hwnd.ToInt64():X} — HWND recycled (expected PID {pid}, now {currentPid}).");
+                        continue;
+                    }
+                    if (!NativeMethods.PostMessage(hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero))
+                        _log.Log($"Close-group: PostMessage(WM_CLOSE) to 0x{hwnd.ToInt64():X} failed: {NativeMethods.FormatLastError()}");
                 }
                 break;
 
@@ -301,10 +326,11 @@ public partial class ContainerWindow : Window
         _stateSettledTimer?.Stop();
         _restoreMinimizedTimer?.Stop();
 
-        IntPtr hwnd = new WindowInteropHelper(this).Handle;
-        _manager.UnregisterContainerHwnd(hwnd);
-        if (ContentHost.HostWindowHandle != IntPtr.Zero)
-            _manager.UnregisterContainerHwnd(ContentHost.HostWindowHandle);
+        // Unregister the HWNDs cached at Loaded time — live reads return
+        // IntPtr.Zero by now, which would no-op and leak the stale values.
+        _manager.UnregisterContainerHwnd(_containerHwnd);
+        if (_contentHostHwnd != IntPtr.Zero)
+            _manager.UnregisterContainerHwnd(_contentHostHwnd);
     }
 
     private void ContainerWindow_StateChanged(object? sender, EventArgs e)

@@ -24,6 +24,14 @@ public sealed class CapturedWindow
     /// <summary>Snapshot of the guest's placement at capture time; used to restore exact window state on release.</summary>
     public NativeMethods.WINDOWPLACEMENT OriginalPlacement { get; set; }
 
+    /// <summary>
+    /// Whether <see cref="OriginalPlacement"/> came from a successful
+    /// GetWindowPlacement call. When false the struct is zeroed (showCmd ==
+    /// SW_HIDE) and Release must not apply it — it restores
+    /// <see cref="OriginalBounds"/> and shows the guest with SW_SHOW instead.
+    /// </summary>
+    public bool HasValidPlacement { get; set; }
+
     public NativeMethods.RECT OriginalBounds { get; set; }
 
     /// <summary>Tracks whether the guest was maximized at capture; restored to that state when released.</summary>
