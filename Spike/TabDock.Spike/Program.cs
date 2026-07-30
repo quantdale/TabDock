@@ -97,17 +97,35 @@ internal static class Program
         File.Delete(resultFile);
 
         Log("Spawning Command Prompt...");
-        Process cmd = SpawnGuarded(() => Process.Start(new ProcessStartInfo("cmd.exe") { UseShellExecute = true })!);
-        if (cmd == null)
+        // Snapshot the visible console windows BEFORE spawning: ownership of the
+        // window we are about to create is established by it being NEW (not in
+        // this set) plus having a cmd.exe child in its owning conhost — never by
+        // class/title matching, which is what made the original version reparent
+        // any pre-existing console the user happened to have open.
+        HashSet<IntPtr> preExistingConsoles = SnapshotVisibleConsoleWindows();
+
+        // Spawn cmd.exe hosted by an explicit conhost.exe. Two spawn facts make
+        // this awkward:
+        //  - Process.Start("cmd.exe") (or CreateProcess with CREATE_NEW_CONSOLE)
+        //    routes console allocation through the default terminal; when that
+        //    is Windows Terminal the console is headless ConPTY — no visible
+        //    ConsoleWindowClass window ever exists to reparent.
+        //  - conhost.exe sometimes hands the console off to a DIFFERENT conhost
+        //    instance and exits, so the returned Process is not necessarily the
+        //    window owner. Ownership is therefore verified below by diffing
+        //    visible console windows, not by the returned handle.
+        Process spawned = SpawnGuarded(() => Process.Start(new ProcessStartInfo("conhost.exe", "cmd.exe") { UseShellExecute = true })!);
+        if (spawned == null)
             throw new InvalidOperationException("Failed to start Command Prompt.");
 
         Log("Waiting for Command Prompt's main window...");
         IntPtr cmdHwnd = IntPtr.Zero;
         int cmdPid = 0;
+        int consoleOwnerPid = 0;
         for (int i = 0; i < 100 && cmdHwnd == IntPtr.Zero; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            cmdHwnd = FindCmdWindow(cmd.Id, out cmdPid);
+            cmdHwnd = FindNewConsoleWindow(preExistingConsoles, out cmdPid, out consoleOwnerPid);
             if (cmdHwnd == IntPtr.Zero)
             {
                 Log($"  attempt {i + 1}/100...");
@@ -118,7 +136,12 @@ internal static class Program
         if (cmdHwnd == IntPtr.Zero)
             throw new InvalidOperationException("Could not locate Command Prompt's main window.");
 
-        Log($"Command Prompt HWND: 0x{cmdHwnd.ToInt64():X}, PID: {cmdPid}");
+        // The returned Process may have exited after a handoff; track the conhost
+        // that actually owns the window so KillAllTracked tears down the whole
+        // console (conhost + its child cmd.exe) even on the abort paths.
+        TrackConsoleOwner(consoleOwnerPid);
+
+        Log($"Command Prompt HWND: 0x{cmdHwnd.ToInt64():X}, console owner PID: {consoleOwnerPid}, cmd PID: {cmdPid}");
 
         string exePath = GetOwnExePath();
         Log($"Using spike executable: {exePath}");
@@ -126,7 +149,7 @@ internal static class Program
             throw new FileNotFoundException("Spike executable not found. Build the project first.", exePath);
 
         Log("Spawning host process...");
-        Process host = SpawnGuarded(() => StartChildProcess(exePath, $"--host {cmdHwnd.ToInt64()} {cmdPid} \"{hostPidFile}\""));
+        Process host = SpawnGuarded(() => StartChildProcess(exePath, $"--host {cmdHwnd.ToInt64()} {consoleOwnerPid} \"{hostPidFile}\""));
 
         Log("Waiting for host PID file...");
         int hostPid = 0;
@@ -484,59 +507,160 @@ internal static class Program
     // Helpers
     // -------------------------------------------------------------------------
     /// <summary>
-    /// Finds the main window of the specific <paramref name="expectedPid"/> cmd.exe
-    /// process this orchestrator spawned. Class/title matching alone is not enough:
-    /// a pre-existing console (or any window titled "...cmd.exe") that the user owns
-    /// would otherwise be reparented, restyled, and killed by the spike. The PID
-    /// check via GetWindowThreadProcessId is what confines the spike to its own
-    /// spawned process.
-    ///
-    /// Note: on Windows 10/11 a console window is owned by conhost.exe, not by
-    /// cmd.exe itself, so the window's PID is never cmd.Id directly. The spawned
-    /// cmd allocates a fresh console, whose conhost has the spawned cmd as its
-    /// parent — so ownership is verified as "window PID == cmd.Id, or window
-    /// PID's parent == cmd.Id" (parent looked up via a Toolhelp process
-    /// snapshot). A pre-existing console fails both arms: its conhost's parent
-    /// is a different cmd.exe.
+    /// Returns the set of currently visible ConsoleWindowClass window handles.
     /// </summary>
-    private static IntPtr FindCmdWindow(int expectedPid, out int processId)
+    private static HashSet<IntPtr> SnapshotVisibleConsoleWindows()
     {
-        processId = 0;
-        IntPtr found = IntPtr.Zero;
-        int localPid = 0;
-        // One snapshot per call, consulted only for windows that already match
-        // on class/title — building it per window made each retry attempt cost
-        // seconds and starved the overall timeout.
-        Dictionary<int, int> parentByPid = SnapshotParentPids();
-
+        var set = new HashSet<IntPtr>();
         EnumWindows((hwnd, lParam) =>
         {
             if (!IsWindowVisible(hwnd))
                 return true;
-
             var className = new StringBuilder(256);
             GetClassName(hwnd, className, className.Capacity);
-            var title = new StringBuilder(256);
-            GetWindowText(hwnd, title, title.Capacity);
+            if (className.ToString().Equals("ConsoleWindowClass", StringComparison.OrdinalIgnoreCase))
+                set.Add(hwnd);
+            return true;
+        }, IntPtr.Zero);
+        return set;
+    }
 
-            bool isCmd = className.ToString().Equals("ConsoleWindowClass", StringComparison.OrdinalIgnoreCase)
-                || title.ToString().Contains("cmd.exe", StringComparison.OrdinalIgnoreCase);
-            if (!isCmd || title.Length == 0)
+    /// <summary>
+    /// Finds the console window this orchestrator just created: a VISIBLE
+    /// ConsoleWindowClass window that is not in <paramref name="preExisting"/>
+    /// and whose owning conhost process has a cmd.exe child. The new-window diff
+    /// is what confines the spike to its own console — a pre-existing console
+    /// the user owns is in <paramref name="preExisting"/> and is never even
+    /// considered, and the cmd-child check keeps a console created by someone
+    /// else mid-run from being adopted. HWND reuse across the diff window is
+    /// not a concern: a handle absent from the pre-spawn snapshot cannot be the
+    /// pre-existing console that was visible at snapshot time.
+    /// </summary>
+    private static IntPtr FindNewConsoleWindow(HashSet<IntPtr> preExisting, out int cmdPid, out int consoleOwnerPid)
+    {
+        cmdPid = 0;
+        consoleOwnerPid = 0;
+        IntPtr found = IntPtr.Zero;
+        int localOwner = 0;
+
+        EnumWindows((hwnd, lParam) =>
+        {
+            if (preExisting.Contains(hwnd) || !IsWindowVisible(hwnd))
                 return true;
-
-            uint pid = 0;
-            GetWindowThreadProcessId(hwnd, out pid);
-            bool owned = (int)pid == expectedPid
-                || (parentByPid.TryGetValue((int)pid, out int parentPid) && parentPid == expectedPid);
-            if (!owned)
-                return true; // Not our spawned cmd.exe's console — never touch it.
-
+            var className = new StringBuilder(256);
+            GetClassName(hwnd, className, className.Capacity);
+            if (!className.ToString().Equals("ConsoleWindowClass", StringComparison.OrdinalIgnoreCase))
+                return true;
             found = hwnd;
-            localPid = (int)pid;
+            GetWindowThreadProcessId(hwnd, out uint pid);
+            localOwner = (int)pid;
             return false;
         }, IntPtr.Zero);
-        processId = localPid;
+
+        Log($"  DBG FindNewConsoleWindow: found=0x{found.ToInt64():X} owner={localOwner} exe='{ExeNameOf(localOwner)}'");
+
+        if (found == IntPtr.Zero)
+            return IntPtr.Zero;
+
+        // Two ownership shapes observed in the wild:
+        //  - classic hosting (this machine, DelegationConsole/Terminal = conhost):
+        //    the console window is owned by the cmd.exe client process itself;
+        //  - ConPTY-style hosting: the window is owned by a conhost.exe that has
+        //    our cmd.exe as a child. Accept either; reject everything else.
+        if (ExeNameOf(localOwner).Equals("cmd.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            cmdPid = localOwner;
+            consoleOwnerPid = localOwner;
+            return found;
+        }
+
+        int child = FindChildProcessId(localOwner, "cmd.exe");
+        if (child == 0)
+            return IntPtr.Zero; // A new console, but not one running our cmd.exe.
+
+        cmdPid = child;
+        consoleOwnerPid = localOwner;
         return found;
+    }
+
+    /// <summary>
+    /// Returns the exe file name of a process, or an empty string if unknown.
+    /// </summary>
+    private static string ExeNameOf(int pid)
+    {
+        IntPtr snapshot = CreateToolhelp32Snapshot(NativeConstants.TH32CS_SNAPPROCESS, 0);
+        if (snapshot == new IntPtr(-1) || snapshot == IntPtr.Zero)
+            return string.Empty;
+        try
+        {
+            PROCESSENTRY32 entry = new PROCESSENTRY32 { dwSize = Marshal.SizeOf(typeof(PROCESSENTRY32)) };
+            if (Process32First(snapshot, ref entry))
+            {
+                do
+                {
+                    if ((int)entry.th32ProcessID == pid)
+                        return entry.szExeFile;
+                }
+                while (Process32Next(snapshot, ref entry));
+            }
+            return string.Empty;
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+    }
+
+    /// <summary>
+    /// Adds the process that owns the spawned console window to the tracked set
+    /// so KillAllTracked tears it down on every exit path.
+    /// </summary>
+    private static void TrackConsoleOwner(int ownerPid)
+    {
+        try
+        {
+            Process owner = Process.GetProcessById(ownerPid);
+            lock (SpawnLock)
+            {
+                SpawnedProcesses.Add(owner);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"Could not track console owner PID {ownerPid}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Returns the PID of a direct child of <paramref name="parentPid"/> whose
+    /// exe name matches <paramref name="exeName"/> (case-insensitive), or 0.
+    /// </summary>
+    private static int FindChildProcessId(int parentPid, string exeName)
+    {
+        IntPtr snapshot = CreateToolhelp32Snapshot(NativeConstants.TH32CS_SNAPPROCESS, 0);
+        if (snapshot == new IntPtr(-1) || snapshot == IntPtr.Zero)
+            return 0;
+        try
+        {
+            PROCESSENTRY32 entry = new PROCESSENTRY32 { dwSize = Marshal.SizeOf(typeof(PROCESSENTRY32)) };
+            if (Process32First(snapshot, ref entry))
+            {
+                do
+                {
+                    if ((int)entry.th32ParentProcessID == parentPid
+                        && entry.szExeFile.Equals(exeName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return (int)entry.th32ProcessID;
+                    }
+                }
+                while (Process32Next(snapshot, ref entry));
+            }
+            return 0;
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
     }
 
     /// <summary>
@@ -680,10 +804,10 @@ internal static class Program
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern bool Process32First(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern bool Process32Next(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
