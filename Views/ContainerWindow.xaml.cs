@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using TabDock.Infrastructure;
 using TabDock.Models;
 using TabDock.Services;
@@ -41,6 +42,14 @@ public partial class ContainerWindow : Window
     private System.Windows.Threading.DispatcherTimer? _activateReassertTimer;
     private System.Windows.Threading.DispatcherTimer? _stateSettledTimer;
     private System.Windows.Threading.DispatcherTimer? _restoreMinimizedTimer;
+
+    // The tab context menu most recently opened by TabsListBox_PreviewMouseRightButtonDown.
+    // Tracked so the WM_ACTIVATE reassert can tell "the user is interacting with the
+    // container's own chrome" (a right-clicked menu that must stay open) apart from a
+    // genuine guest-foregrounding intent. Cleared on the menu's Closed event and on
+    // container teardown; a destroyed menu reports IsOpen == false so a stale reference
+    // is harmless.
+    private ContextMenu? _openTabContextMenu;
 
     // Drag state (tab-strip reorder / drag-out)
     private TabViewModel? _draggedTab;
@@ -207,7 +216,8 @@ public partial class ContainerWindow : Window
                 _activateReassertTimer.Tick += (_, _) =>
                 {
                     _activateReassertTimer!.Stop();
-                    if (_shepherdActiveWindow == activeWindow && NativeMethods.IsWindowVisible(activeWindow.Hwnd))
+                    if (_shepherdActiveWindow == activeWindow && NativeMethods.IsWindowVisible(activeWindow.Hwnd)
+                        && !IsContainerChromeInteractionActive())
                         _shepherd.BringToFront(activeWindow, hwnd, GetContentAreaScreenRect());
                 };
                 _activateReassertTimer.Start();
@@ -260,6 +270,18 @@ public partial class ContainerWindow : Window
         // there is no WS_CHILD/HwndHost relationship to get this for free).
         LocationChanged += (_, _) => LayoutShepherdActiveWindow();
         SizeChanged += (_, _) => LayoutShepherdActiveWindow();
+        // The content marker's native HWND is resized inside NativeHwndHost's
+        // ArrangeOverride during WPF's layout pass, which runs asynchronously
+        // AFTER this window's SizeChanged/StateChanged (the native resize
+        // invalidation is queued for the dispatcher, so this Window's layout is
+        // still flagged valid — and UpdateLayout() is a no-op — when those fire).
+        // That leaves the guest glued to the stale pre-transition size on
+        // maximize/restore: neither the marker's own WPF SizeChanged nor
+        // UpdateLayout() help (HwndHost does not re-raise SizeChanged for a
+        // layout-driven resize, and there is no pending WPF layout yet when the
+        // synchronous handlers run). Re-glue instead at DispatcherPriority after
+        // layout, by which time the marker's HWND really has its new size.
+        LayoutUpdated += (_, _) => LayoutShepherdActiveWindow();
     }
 
     private void ContainerWindow_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -376,6 +398,7 @@ public partial class ContainerWindow : Window
         _activateReassertTimer?.Stop();
         _stateSettledTimer?.Stop();
         _restoreMinimizedTimer?.Stop();
+        _openTabContextMenu = null;
 
         // Unregister the HWNDs cached at Loaded time — live reads return
         // IntPtr.Zero by now, which would no-op and leak the stale values.
@@ -393,6 +416,12 @@ public partial class ContainerWindow : Window
             // A minimized container has no visible content area to overlay;
             // hide the docked guest along with it. Restoring re-positions and
             // re-shows it (LayoutShepherdActiveWindow uses SWP_SHOWWINDOW).
+            //
+            // The immediate call is only a best-effort first pass: StateChanged
+            // can fire before WPF has re-arranged the content marker to the new
+            // native size, so the marker's rect may be stale here. The
+            // LayoutUpdated hook (wired in the Loaded handler) re-glues the guest
+            // after the layout pass actually resizes the marker's native HWND.
             if (WindowState == WindowState.Minimized)
                 _shepherd.Hide(_shepherdActiveWindow);
             else
@@ -495,9 +524,31 @@ public partial class ContainerWindow : Window
                 {
                     menu.PlacementTarget = owner;
                     menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+                    // Track the open menu so the WM_ACTIVATE reassert guard can
+                    // see it before the 120ms timer fires (a context menu opened
+                    // by right-clicking a tab must not be closed by a reassert
+                    // that steals foreground to the guest).
+                    _openTabContextMenu = menu;
+                    menu.Closed += (_, _) => { if (_openTabContextMenu == menu) _openTabContextMenu = null; };
                     menu.IsOpen = true;
                 }));
         }
+    }
+
+    /// <summary>
+    /// True when the user is interacting with the container's own chrome rather
+    /// than intending to foreground the guest: an open tab context menu (Pop out /
+    /// Close window), the open accent-color menu, or the group rename box being
+    /// edited. The WM_ACTIVATE reassert uses this to avoid stealing foreground
+    /// from a chrome interaction 120ms after the click that opened it — doing so
+    /// would close the menu / drop focus out of the rename box.
+    /// </summary>
+    private bool IsContainerChromeInteractionActive()
+    {
+        if (_openTabContextMenu is { IsOpen: true }) return true;
+        if (ColorContextMenu.IsOpen) return true;
+        if (_viewModel.IsRenaming) return true;
+        return false;
     }
 
     /// <summary>
@@ -732,23 +783,37 @@ public partial class ContainerWindow : Window
         if (containerHwnd == IntPtr.Zero)
             return;
 
-        // StateChanged (maximize/restore) can fire before WPF's own layout pass
-        // has run the content marker's ArrangeOverride, which is what actually
-        // resizes its native HWND — reading its screen rect too early silently
-        // repositions the guest to the stale, pre-transition size. Force the
-        // pending layout to flush first so the marker's HWND is already correct.
-        //
-        // Only when there IS pending layout, though: a plain container drag
-        // raises LocationChanged for every mouse tick without dirtying anything
-        // (a move changes where the content marker is, not how big it is), and
-        // an unconditional UpdateLayout made each of those ticks re-enter WPF's
-        // layout manager for nothing. Invalidation propagates to ancestors, so a
-        // dirty content marker always shows up as an invalid window here.
+        // A plain container drag raises LocationChanged for every mouse tick
+        // without dirtying anything (a move changes where the content marker is,
+        // not how big it is), so only force a synchronous layout pass when one is
+        // actually pending — an unconditional UpdateLayout made each of those
+        // ticks re-enter WPF's layout manager for nothing.
         if (!IsMeasureValid || !IsArrangeValid)
             UpdateLayout();
         NativeMethods.RECT rect = GetContentAreaScreenRect();
         if (rect.Width == 0 || rect.Height == 0)
             return;
+        // Guard against redundant re-glues: this method is also reached from
+        // LayoutUpdated, which fires on every layout pass — including ones that
+        // do not move or resize the content marker at all (e.g. tab-strip
+        // reorders during a drag). Re-issuing PositionAndShow there would churn
+        // the guest/container z-order in the middle of the gesture. Skip the
+        // native calls when the guest ALREADY covers the target rect exactly
+        // (within a 1px epsilon for rounding) AND is visible. The test is
+        // "guest where it should be", not "target unchanged": NoteGuestMoveSize's
+        // snap-back re-glues a guest dragged a few pixels away from an
+        // otherwise-unchanged docked rect, and a tab switch targets a different
+        // (previously hidden) guest at the same rect — both must still re-glue.
+        const int epsilon = 1;
+        if (NativeMethods.IsWindowVisible(_shepherdActiveWindow.Hwnd))
+        {
+            NativeMethods.GetWindowRect(_shepherdActiveWindow.Hwnd, out NativeMethods.RECT guest);
+            if (Math.Abs(guest.left - rect.left) <= epsilon &&
+                Math.Abs(guest.top - rect.top) <= epsilon &&
+                Math.Abs(guest.right - rect.right) <= epsilon &&
+                Math.Abs(guest.bottom - rect.bottom) <= epsilon)
+                return;
+        }
         _shepherd.PositionAndShow(_shepherdActiveWindow, containerHwnd, rect);
     }
 

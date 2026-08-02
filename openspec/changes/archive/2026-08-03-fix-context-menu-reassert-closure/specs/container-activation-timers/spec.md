@@ -1,9 +1,4 @@
-# container-activation-timers
-
-## Purpose
-TBD — captures timer-coalescing behavior for `ContainerWindow`'s activation and state-change handlers, ensuring bursts of Windows messages don't spawn redundant, independently-running `DispatcherTimer` instances.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: At most one pending re-assert timer per ContainerWindow
 `ContainerWindow`'s `WM_ACTIVATE` handler (`Views/ContainerWindow.xaml.cs:142-164`) SHALL keep a single cancellable `DispatcherTimer` field for its 120ms guest re-assert delay. A new activation event that arrives while a prior re-assert timer is still pending SHALL stop and replace that prior timer rather than allocating an additional, independently-running one.
@@ -15,7 +10,7 @@ The re-assert timer's tick SHALL only call `BringToFront` when the container is 
 - **THEN** only the most recently scheduled re-assert timer is allowed to fire; any earlier pending timer for the same burst is stopped before it fires
 
 #### Scenario: Re-assert behavior is unchanged for a single activation
-- **WHEN** `WM_ACTIVATE` fires once with `WA_ACTIVE`/`WA_CLICKACTIVE` and a shepherded guest is active
+- **WHEN** `WM_ACTIVATE` fires once with `WA_ACTIVE`/`WA_CLICKACTIVE`, a shepherded guest is active, and no container chrome UI is open
 - **THEN** the guest's position/z-order is re-asserted via `BringToFront` after the same 120ms delay and the same visibility re-check as before this change, with no observable behavior difference in the single-activation case
 
 #### Scenario: Tab context menu stays open when the container is activated by the right-click
@@ -33,10 +28,3 @@ The re-assert timer's tick SHALL only call `BringToFront` when the container is 
 #### Scenario: Chrome-interaction suppression leaves the guest correctly placed
 - **WHEN** the re-assert is suppressed because container chrome UI is open
 - **THEN** the guest remains visible and positioned over the container's content area for the whole time the chrome UI is open
-
-### Requirement: At most one pending state-settled snapshot timer per ContainerWindow
-`ContainerWindow_StateChanged`'s diagnostic "settled" snapshot timer (`Views/ContainerWindow.xaml.cs:296-320`) SHALL keep a single cancellable `DispatcherTimer` field, independent of the re-assert timer above. A new state-change event that arrives while a prior settle timer is still pending SHALL stop and replace that prior timer.
-
-#### Scenario: Rapid maximize/restore toggling logs at most one settled snapshot per burst
-- **WHEN** the window's `WindowState` changes two or more times within 750ms of each other
-- **THEN** only one "settled" diagnostic log snapshot is produced for that burst, corresponding to the state after the last change, rather than one per intermediate state change

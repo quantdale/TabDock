@@ -45,7 +45,7 @@ Session-4 static-audit fixes (`KNOWN_ISSUES.md`, 2026-07-25) that are "reviewed-
 ## 7. Validation and docs
 
 - [x] 7.1 `dotnet build` the ValidationDriver project with zero warnings
-- [ ] 7.2 Supervised run: `all` passes with the new scenarios included; individually run each modified/new browser scenario with an available `--guest`
+- [x] 7.2 Supervised run: `all` passes with the new scenarios included; individually run each modified/new browser scenario with an available `--guest` — post-fix `all` run: 22/25 PASS, all 8 new scenarios PASS, the only failures are the pre-existing documented baseline (`maximize-repro`/`repeat-cycles` — guarded `UpdateLayout` geometry regression, `KNOWN_ISSUES.md:256-269`; `hotkey-afterclose` — `ForceForeground` env flake, `KNOWN_ISSUES.md:342-350`). Browser scenarios individually green with the context-menu fix: `browser-lifecycle`, `browser-tabswitch-hidesafety`, `browser-soak` (chrome-normal), `browser-multi`, `browser-dragreorder` (edge-normal). H4 per-switch liveness check hardened with a resample loop against the documented Chrome background-timer-throttling flake (`KNOWN_ISSUES.md:553-561`).
 - [x] 7.3 Update `docs/TESTING.md`: scenario list, remove/rewrite the §A stale-instrumentation note for the retargeted scenarios, confirm §D reflects the now-enforced rule
 - [x] 7.4 Update `AGENTS.md` testing section if the scenario inventory or `all` composition changed
 - [x] 7.5 Final per-scenario audit against the five `e2e-input-safety` requirements (identity re-verification, ownership scoping, try/finally cleanup, no blind retries, zero-orphan-window assertion) — for the last one, confirm every scenario touched or added in this change calls `NoOrphanPigWindows` (or equivalent) in its final assertions

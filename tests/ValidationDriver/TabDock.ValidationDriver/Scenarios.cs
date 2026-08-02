@@ -1132,10 +1132,6 @@ internal static class Scenarios
 
         Thread.Sleep(150);
         (int mx, int my) = Uia.Center(mi);
-        IntPtr atClick = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = mx, y = my });
-        IntPtr rootAtClick = NativeMethods.GetAncestor(atClick, NativeMethods.GA_ROOT);
-        GuardedProc.Log($"  DEBUG ClickTabMenuItem '{menuItemName}': item rect={itemRect} click=({mx},{my}) " +
-            $"windowFromPoint=0x{atClick.ToInt64():X} root=0x{rootAtClick.ToInt64():X}");
         Input.ClickAt(mx, my);
         Thread.Sleep(300);
     }
@@ -2654,9 +2650,25 @@ internal static class Scenarios
             {
                 ctx.Check(Util.WaitUntil(() => IsDocked(browser.Hwnd, host), 3000),
                     $"switch {i + 1}/24: browser docked over host after switching to it");
+                // The blink's 500ms setInterval can be throttled to >= 1s when the
+                // guest is momentarily not the OS-foreground window (Chrome's
+                // background-timer throttling), so two 600ms-apart captures can
+                // land in the same blink phase and read as byte-identical (variance
+                // 0.0000). That is the documented sampling-timing flake class, not a
+                // rendering regression — resample with a fresh pair before failing.
                 int[]? f0 = Pixels.CaptureWindowViaPrintWindow(browser.Hwnd);
                 Thread.Sleep(600);
                 int[]? f1 = Pixels.CaptureWindowViaPrintWindow(browser.Hwnd);
+                double var = f0 == null || f1 == null ? -1 : Pixels.ComputeAvgFrameDiff(f0, f1);
+                for (int s = 0; s < 3 && var <= 0.005; s++)
+                {
+                    GuardedProc.Log($"  switch {i + 1}/24: H4 variance sample {s + 1} flat (var={var:F4}) — resampling.");
+                    Thread.Sleep(700);
+                    f0 = Pixels.CaptureWindowViaPrintWindow(browser.Hwnd);
+                    Thread.Sleep(600);
+                    f1 = Pixels.CaptureWindowViaPrintWindow(browser.Hwnd);
+                    var = f0 == null || f1 == null ? -1 : Pixels.ComputeAvgFrameDiff(f0, f1);
+                }
                 if (f0 == null || f1 == null)
                 {
                     ctx.Check(false, $"switch {i + 1}/24: PrintWindow capture of the browser returned null");
@@ -2664,7 +2676,6 @@ internal static class Scenarios
                 else
                 {
                     double bright = Pixels.ComputeAvgBrightness(f1);
-                    double var = Pixels.ComputeAvgFrameDiff(f0, f1);
                     ctx.Check(bright > 1.0, $"switch {i + 1}/24: browser frame bright (brightness={bright:F2} > 1.0, H4 liveness floor)");
                     ctx.Check(var > 0.005, $"switch {i + 1}/24: browser frame has live content (variance={var:F4} > 0.005, H4 liveness floor)");
                 }

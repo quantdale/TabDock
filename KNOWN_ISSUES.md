@@ -632,3 +632,42 @@ regression — no app code path differs between the flaky and clean runs.
 - **Render-health one-shot check** (checked ~800ms after capture only, not a
   recurring loop) — explicitly out of scope for this round per instruction;
   accepted and documented, not implemented.
+
+## Session 5 (2026-08-03): seven-phase review + maximize/restore regression
+
+Seven-phase review (read the whole repo, verify the 7 specs, bug-hunt sweep,
+security review, build + full e2e `all` suite, regression-fix, report). The `all`
+suite surfaced a **genuine regression the suite previously could not catch**:
+
+- **Maximize/restore left the docked guest at the pre-transition size**
+  (`maximize-repro`, `repeat-cycles` FAILed). Root cause: `LayoutShepherdActiveWindow`
+  re-glues the guest by reading the content marker's native rect, but on
+  maximize/restore the marker's HWND is only actually resized by the WPF layout
+  pass that runs *asynchronously after* `StateChanged`/`SizeChanged` — at which
+  point `UpdateLayout()` is a no-op because this Window's own layout flags are
+  still valid for the old size. The unconditional `UpdateLayout()` from commit
+  `2e42942` (which fixed this originally) was disabled by PERF25-07's guard in
+  `1f75ed2c`, which wrongly assumed "a dirty content marker always shows up as an
+  invalid window here". Fixed by re-glueing from the `LayoutUpdated` event (fires
+  after every completed layout pass, i.e. after the marker's HWND really has its
+  new size), guarded by an exact-position short-circuit (skip the P/Invokes when
+  the guest already covers the target rect within 1px and is visible) so tab-strip
+  reorders, which fire `LayoutUpdated` without moving the marker, don't churn
+  z-order mid-gesture. Verified: `maximize-repro`, `repeat-cycles`, `dragreorder`,
+  `chrometabdrag` all PASS standalone and in the final full `all` run.
+- **`chrometabdrag` jitter-drag snap-back flake during loaded runs.** Real-Chrome
+  small-jitter drag (under the 40px pop-out threshold) occasionally FAILed to
+  snap back to docked during runs executed under heavy machine load (dozens of
+  msedge processes active mid-run). Passes standalone and in the final clean run;
+  the same `--pulse` zero-variance sampling flake (below) also reappeared once.
+- **Known non-issues re-confirmed:** `hotkey-afterclose` remains the documented
+  environment-specific `ForceForeground` limitation (all its hotkey core
+  assertions pass; the failure is "Could not bring the container to the
+  foreground — refusing to click blind" when the suite is driven from a
+  foreground-holding session); the `--pulse` pig zero-variance sampling flake in
+  `maximize-repro` (documented below, 2026-07-18 session) reappeared once in a
+  full-suite run under load and did not reproduce standalone.
+
+Final full `all` run on this session's tree: **25/26 PASS** (only the
+documented `hotkey-afterclose` environment flake failed), zero stderr, no
+leftover processes. Build: 0 warnings / 0 errors.

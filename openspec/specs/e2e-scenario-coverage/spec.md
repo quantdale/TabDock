@@ -1,6 +1,9 @@
-# e2e-scenario-coverage delta — expand-e2e-coverage (new capability)
+# e2e-scenario-coverage
 
-## ADDED Requirements
+## Purpose
+The end-to-end scenario inventory that `all` runs, including the regression-specific scenarios added in the expand-e2e-coverage change (H2 oscillation bounds, H4 render liveness, H6 minimize-retains-tabs, and the picker/persistence/no-nesting behavioral coverage).
+
+## Requirements
 
 ### Requirement: Assertions only reference instrumentation present in committed source
 No scenario SHALL assert on a log line, event, or signal that committed TabDock source does not emit. Before an assertion on log output is added or kept, the asserted substring SHALL be verified against the application source; assertions that fail this check SHALL be retargeted at an observable equivalent or removed.
@@ -29,6 +32,7 @@ A browser scenario SHALL verify, via `PrintWindow`-based capture of the guest's 
 #### Scenario: A black or frozen browser tab fails the scenario
 - **WHEN** a captured Chromium guest is switched away from and back to across repeated tab switches
 - **THEN** a `PrintWindow` capture after each switch to the browser shows live content above the brightness/variance floor — a black or frozen frame fails the scenario
+- **NOTES** the test page's 500ms blink can be throttled to ≥1s when the guest is momentarily not the OS-foreground window (Chrome background-timer throttling), so two 600ms-apart captures can land in the same blink phase and read as byte-identical (variance `0.0000`). This is the documented sampling-timing flake class, not a rendering regression — the harness re-samples with fresh frame pairs before failing, and still fails if every sample is flat or black.
 
 ### Requirement: Held capture hotkey opens exactly one picker
 The suite SHALL include a scenario that holds `Ctrl+Alt+G` (key repeat) and asserts exactly one capture picker exists. This scenario SHALL run as part of `all`.
