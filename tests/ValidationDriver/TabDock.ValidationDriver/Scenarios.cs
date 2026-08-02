@@ -1132,6 +1132,10 @@ internal static class Scenarios
 
         Thread.Sleep(150);
         (int mx, int my) = Uia.Center(mi);
+        IntPtr atClick = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = mx, y = my });
+        IntPtr rootAtClick = NativeMethods.GetAncestor(atClick, NativeMethods.GA_ROOT);
+        GuardedProc.Log($"  DEBUG ClickTabMenuItem '{menuItemName}': item rect={itemRect} click=({mx},{my}) " +
+            $"windowFromPoint=0x{atClick.ToInt64():X} root=0x{rootAtClick.ToInt64():X}");
         Input.ClickAt(mx, my);
         Thread.Sleep(300);
     }
@@ -2525,6 +2529,10 @@ internal static class Scenarios
 
         // Force a hide->show cycle of the guest within its own host by
         // minimizing/restoring the container itself (mirrors minrestore).
+        // Record the log offset BEFORE the cycle: the restore triggers a
+        // WM_ACTIVATE -> BringToFront churn at an unbounded delay, and the
+        // settle-wait below must be able to see it start.
+        long churnOff = TabDockLog.RecordLogLength();
         if (!Input.ForceForeground(container))
             throw new InvalidOperationException("Could not bring the browser container to the foreground — refusing to click blind.");
         NativeMethods.ShowWindow(container, NativeMethods.SW_MINIMIZE);
@@ -2536,8 +2544,43 @@ internal static class Scenarios
         ctx.Check(bAfter > 1.0, $"host bright again after minimize->restore hide/show cycle, i.e. no H4 smear residue ({bAfter:F2})");
         ctx.Check(GuestMatchesHost(browser.Hwnd, host, out string geoAfter), $"guest still fills host after hide/show ({geoAfter})");
 
-        ClickTabMenuItem(ctx, container, browser.EffectiveTabMatchKey, "Pop out");
-        ctx.Check(Util.WaitUntil(() => IsReleased(browser, host), 5000), "browser released by Pop out");
+        // The restore re-asserts the active guest's foreground via the container's
+        // WM_ACTIVATE -> BringToFront churn (SHEPHERD[bring-to-front] lines), whose
+        // start time is unbounded, and that churn CLOSES a context menu opened while
+        // it is active (see SelfMinimizeTimerVsTeardown). First wait for the churn to
+        // have started AND gone quiet — but the churn fires in sporadic waves with
+        // multi-second gaps between them, so a single quiet window can land between
+        // waves and the very next reassert eats the click. Treat the wait as
+        // best-effort and RETRY the pop-out: each attempt re-asserts the container's
+        // foreground and re-opens the menu, and once the last wave has died out an
+        // attempt lands cleanly.
+        bool released = false;
+        for (int attempt = 1; attempt <= 3 && !released; attempt++)
+        {
+            if (attempt > 1)
+            {
+                GuardedProc.Log($"  Pop-out attempt {attempt}: re-asserting foreground and retrying.");
+                if (!Input.ForceForeground(container))
+                    GuardedProc.Log("  Pop-out retry: ForceForeground failed — trying the menu click anyway.");
+            }
+            else if (!TabDockLog.WaitForChurnToSettle(churnOff, "SHEPHERD[bring-to-front]", 1200, 12000))
+            {
+                throw new InvalidOperationException("The guest reassert churn never started-and-settled after minimize->restore — refusing to open the Pop out menu into live churn.");
+            }
+            try
+            {
+                ClickTabMenuItem(ctx, container, browser.EffectiveTabMatchKey, "Pop out");
+            }
+            catch (InvalidOperationException ex)
+            {
+                GuardedProc.Log($"  Pop-out attempt {attempt} failed to open/click the menu: {ex.Message}");
+                continue;
+            }
+            released = Util.WaitUntil(() => IsReleased(browser, host), 5000);
+            if (!released)
+                GuardedProc.Log($"  Pop-out attempt {attempt} did not release the browser (menu likely eaten by churn); retrying.");
+        }
+        ctx.Check(released, "browser released by Pop out");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
         ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
     }
@@ -2825,7 +2868,21 @@ internal static class Scenarios
             throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
 
         long off = TabDockLog.RecordLogLength();
-        ClickMinimizeButton(container); // real click on the container's own minimize button
+        // Real click on the container's own minimize button. The container was
+        // JUST created and its WM_ACTIVATE -> 120ms BringToFront reassert
+        // (ContainerWindow.WndProc) can race the click: if the shepherd puts the
+        // docked guest on top between ForceForeground and the click, the first
+        // caption click is consumed as an activation instead of reaching the
+        // button. Retry once after re-asserting foreground — a real user's
+        // second click on the now-active window hits the button.
+        ClickMinimizeButton(container);
+        if (!Util.WaitUntil(() => NativeMethods.IsIconic(container), 1500))
+        {
+            GuardedProc.Log("  container not minimized after first caption click (foreground reassert race) — re-asserting foreground and clicking again.");
+            Input.ForceForeground(container);
+            Thread.Sleep(250);
+            ClickMinimizeButton(container);
+        }
         ctx.Check(Util.WaitUntil(() => NativeMethods.IsIconic(container), 3000), "container minimized after clicking its minimize button");
         Thread.Sleep(500);
         ctx.Check(TabCount(container) == 2, "2 tabs still present while the container is minimized");

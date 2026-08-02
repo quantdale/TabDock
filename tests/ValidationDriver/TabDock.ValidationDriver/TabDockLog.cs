@@ -82,6 +82,42 @@ internal static class TabDockLog
         return Util.WaitUntil(() => ContainsNewLine(offset, substring), timeoutMs, 150);
     }
 
+    /// <summary>
+    /// Waits until the churn identified by <paramref name="substring"/> has BOTH started
+    /// and then gone quiet since <paramref name="offset"/>, up to <paramref name="timeoutMs"/>.
+    /// The container's WM_ACTIVATE guest reassert (<c>SHEPHERD[bring-to-front]</c>) fires
+    /// at an unbounded delay after a minimize->restore (observed ~1.5s to ~8.4s, see
+    /// SelfMinimizeTimerVsTeardown), so merely waiting for a quiet window can return
+    /// BEFORE the churn starts. Requiring at least one matching line first guarantees we
+    /// only declare "settled" after the churn has actually fired and stopped — the state
+    /// a popup context menu needs to survive its open->click lifetime (an open menu gets
+    /// closed by an in-flight reassert). Returns false only if no start-then-quiet
+    /// sequence completed within the timeout.
+    /// </summary>
+    public static bool WaitForChurnToSettle(long offset, string substring, int quietMs, int timeoutMs)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        bool seen = false;
+        int quietCount = 0;
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            if (CountNewLines(offset, substring) > 0)
+            {
+                seen = true;
+                quietCount = 0;
+            }
+            else if (seen)
+            {
+                quietCount += 100;
+                if (quietCount >= quietMs)
+                    return true;
+            }
+            offset = RecordLogLength();
+            System.Threading.Thread.Sleep(100);
+        }
+        return false;
+    }
+
     /// <summary>All new lines since the offset as one dumpable block (empty string when none).</summary>
     public static string DumpNewLines(long offset)
     {
