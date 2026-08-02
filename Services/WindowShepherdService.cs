@@ -203,14 +203,7 @@ public sealed class WindowShepherdService
             LogPositioningFailureOnce(window.Hwnd, "SetWindowPos(guest)");
         }
 
-        if (!NativeMethods.SetWindowPos(
-            containerHwnd,
-            window.Hwnd,
-            0, 0, 0, 0,
-            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE))
-        {
-            LogPositioningFailureOnce(containerHwnd, "SetWindowPos(container)");
-        }
+        PairZOrderBehind(containerHwnd, window.Hwnd);
 
         JournalClear(window.Hwnd);
         // Deliberately NOT DescribeWindow here: this is the hottest logging site
@@ -219,6 +212,26 @@ public sealed class WindowShepherdService
         // P/Invokes to report a rect that this line already carries — the one
         // this call is in the middle of applying, at that.
         _log.Log($"SHEPHERD[position] guest=0x{window.Hwnd.ToInt64():X} rect={screenRect.left},{screenRect.top},{screenRect.Width}x{screenRect.Height}");
+    }
+
+    /// <summary>
+    /// Pins <paramref name="containerHwnd"/> immediately behind the guest in
+    /// z-order so nothing else can slot between them. This is the single
+    /// implementation of the z-order pin — <see cref="PositionAndShow"/> uses it
+    /// for its own glue, and the container's foreground-pairing path
+    /// (ContainerWindow.PairZOrderBehindGuest) delegates here too instead of
+    /// repeating the same native call with the same flags.
+    /// </summary>
+    public void PairZOrderBehind(IntPtr containerHwnd, IntPtr guestHwnd)
+    {
+        if (!NativeMethods.SetWindowPos(
+            containerHwnd,
+            guestHwnd,
+            0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE))
+        {
+            LogPositioningFailureOnce(containerHwnd, "SetWindowPos(container)");
+        }
     }
 
     /// <summary>

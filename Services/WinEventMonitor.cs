@@ -6,8 +6,8 @@ namespace TabDock.Services;
 
 /// <summary>
 /// Out-of-process SetWinEventHook wrapper. Marshals events to the UI thread
-/// so the GroupManager can react to destroyed/renamed/minimized/foregrounded
-/// captured windows.
+/// so GuestLifecycleService can react to destroyed/renamed/minimized/
+/// foregrounded captured windows.
 /// </summary>
 public sealed class WinEventMonitor : IDisposable
 {

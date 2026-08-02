@@ -16,6 +16,9 @@ namespace TabDock;
 /// WPF application entry point and orchestrator.
 /// Owns service lifetime, persisted-state load/save, global hotkey,
 /// container-window management, and the guaranteed emergency-release path.
+/// WinEvent-driven guest lifecycle is delegated to
+/// <see cref="GuestLifecycleService"/>; App only wires it in and gates the
+/// hooks.
 /// </summary>
 public partial class App : Application
 {
@@ -25,6 +28,7 @@ public partial class App : Application
     private PersistenceService _persistence = null!;
     private GroupManager _groups = null!;
     private WinEventMonitor _events = null!;
+    private GuestLifecycleService _guestLifecycle = null!;
     private HotkeyService _hotkey = null!;
     private Mutex? _singleInstanceMutex;
     private MainWindow? _mainWindow;
@@ -34,9 +38,6 @@ public partial class App : Application
     // True after Application_Exit disposes the WinEvent monitor. Guards the
     // deferred Stop() posted by SyncWinEventMonitor from running after disposal.
     private bool _winEventMonitorDisposed;
-
-    // Debounces EVENT_OBJECT_NAMECHANGE storms (see DebounceNameChanged).
-    private readonly Dictionary<IntPtr, System.Windows.Threading.DispatcherTimer> _nameChangeDebounce = new();
 
     // Re-entrancy guard for ShowCapturePicker. ShowDialog runs a nested
     // dispatcher loop, which keeps pumping WM_HOTKEY to the HotkeyService sink
@@ -95,7 +96,12 @@ public partial class App : Application
             _events = new WinEventMonitor(_groups.IsCapturedWindow, _log);
             _hotkey = new HotkeyService(_log);
 
-            WireWinEvents();
+            // All WinEvent-driven guest lifecycle policy (destroy/hide teardown,
+            // minimize restore, move/size drag-out, foreground pairing, title
+            // refresh) lives behind GuestLifecycleService.Attach; App only wires
+            // the module in and gates the hooks.
+            _guestLifecycle = new GuestLifecycleService(_groups, _containers, _log);
+            _guestLifecycle.Attach(_events);
             // The hooks observe the whole desktop, so they only earn their cost
             // while something is actually captured (PERF25-03).
             _groups.MonitoringNeededChanged += (_, _) => SyncWinEventMonitor();
@@ -324,50 +330,6 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Removes a member whose window is gone (destroyed) or has withdrawn itself
-    /// (guest-initiated hide): tab removal through the container's view model so
-    /// the tab strip, the active-tab selection, and Group.Members all stay in
-    /// sync (going through GroupManager.ReleaseTab alone leaves a stale
-    /// TabViewModel behind and desyncs Tabs indices from Members indices),
-    /// followed by empty-group container close. When <paramref name="show"/> is
-    /// false the release leaves the window hidden (tray-style close).
-    /// </summary>
-    private void RemoveDeadMember(Group group, CapturedWindow match, bool show)
-    {
-        if (_containers.TryGetValue(group.Id, out var container))
-        {
-            container.ReleaseCapturedWindow(match, show);
-        }
-        else
-        {
-            int index = group.Members.IndexOf(match);
-            if (index >= 0)
-                _groups.ReleaseTab(group, index, show);
-        }
-
-        if (group.Members.Count == 0)
-        {
-            // Close the container for the empty group.
-            if (_containers.TryGetValue(group.Id, out var emptyContainer))
-            {
-                _containers.Remove(group.Id);
-                try { emptyContainer.Close(); }
-                catch (Exception ex) { _log.LogException("Close empty container", ex); }
-            }
-
-            // Same rule as OnContainerClosed, and load-bearing for the same reason
-            // (findings L12 / M5): PersistedTabs is populated only for a group
-            // restored from a previous session's state.json, so a non-empty one
-            // means real saved layout intent. Removing the group here regardless —
-            // which this path used to do — wiped that intent whenever the last
-            // live member of a restored, re-populated group was closed or
-            // tray-hidden, overriding the guard the close path applies.
-            if (group.PersistedTabs.Count == 0)
-                _groups.RemoveGroup(group);
-        }
-    }
-
-    /// <summary>
     /// Installs the desktop-wide WinEvent hooks only while at least one window
     /// is captured, and removes them again when the last one is released
     /// (PERF25-03). Every hooked event — destroy, hide, name change, minimize,
@@ -411,179 +373,6 @@ public partial class App : Application
             if (!_groups.IsMonitoringNeeded)
                 _events.Stop();
         }));
-    }
-
-    private void WireWinEvents()
-    {
-        // Every handler below resolves the event's HWND through
-        // GroupManager.TryGetCapturedMember: one dictionary probe instead of the
-        // Groups.ToList() snapshot plus per-group FirstOrDefault scan these used
-        // to run per event (PERF25-02). The snapshot existed to survive a
-        // handler mutating Groups mid-iteration; a single lookup never iterates
-        // Groups at all, so that hazard is gone rather than merely guarded — and
-        // the result is identical, because an HWND can only be in one group.
-        _events.WindowDestroyed += (_, args) =>
-        {
-            if (!_groups.TryGetCapturedMember(args.Hwnd, out Group? group, out CapturedWindow? match))
-                return;
-
-            _log.Log($"WinEvent: captured window 0x{args.Hwnd.ToInt64():X} destroyed; removing its tab.");
-            RemoveDeadMember(group, match, show: true);
-        };
-
-        _events.WindowHidden += (_, args) =>
-        {
-            if (!_groups.TryGetCapturedMember(args.Hwnd, out Group? group, out CapturedWindow? match))
-                return;
-
-            // Inactive tabs are hidden by TabDock's own tab switching, so
-            // only a hide of the ACTIVE tab can be guest-initiated. By the
-            // time this queued event is dispatched, any TabDock-initiated
-            // switch has already completed and moved the active tab, so
-            // the just-hidden old tab is rejected here. Release-path hides
-            // never reach this handler at all: the member leaves
-            // Group.Members before Release() runs, so the monitor's
-            // captured-window filter drops the event.
-            if (group.ActiveIndex < 0 || group.ActiveIndex >= group.Members.Count
-                || group.Members[group.ActiveIndex] != match)
-                return;
-            if (!NativeMethods.IsWindow(args.Hwnd))
-                return; // EVENT_OBJECT_DESTROY owns this case.
-            if (NativeMethods.IsWindowVisible(args.Hwnd))
-                return; // Transient hide; the window is visible again.
-
-            // TabDock itself hides the ACTIVE guest when its container is
-            // minimized (ContainerWindow.StateChanged -> _shepherd.Hide),
-            // which fires the very same EVENT_OBJECT_HIDE as a guest-initiated
-            // tray-close and — unlike a tab-switch hide — leaves the active
-            // tab unchanged, so it passes every check above. Distinguish the
-            // two by container state: a genuine tray-close happens while the
-            // container is open; a minimize-hide happens because the container
-            // is minimized (the guest is re-shown on restore). Without this
-            // guard, minimizing a group would release its active tab as a
-            // hidden, orphaned window (and close a single-tab group outright).
-            if (_containers.TryGetValue(group.Id, out var hidContainer)
-                && hidContainer.WindowState == WindowState.Minimized)
-                return;
-
-            _log.Log($"WinEvent: captured window 0x{args.Hwnd.ToInt64():X} hid itself (tray-style close); releasing its tab hidden.");
-            RemoveDeadMember(group, match, show: false);
-        };
-
-        _events.WindowMinimized += (_, args) =>
-        {
-            if (!_groups.TryGetCapturedMember(args.Hwnd, out Group? group, out CapturedWindow? match))
-                return;
-
-            _log.Log($"WinEvent: captured window 0x{args.Hwnd.ToInt64():X} minimized; restoring it inside its tab.");
-            if (_containers.TryGetValue(group.Id, out var container))
-            {
-                container.RestoreMinimizedWindow(match);
-            }
-        };
-
-        // A guest entered/left its interactive move/size modal loop (e.g. the
-        // user dragged it by its own real title bar — a shepherded guest keeps
-        // one). The container decides on MOVESIZEEND whether that was jitter
-        // (snap back) or an intentional drag-out (release the tab).
-        _events.WindowMoveSizeStarted += (_, args) => OnGuestMoveSize(args.Hwnd, started: true);
-        _events.WindowMoveSizeEnded += (_, args) => OnGuestMoveSize(args.Hwnd, started: false);
-
-        // The guest became the system foreground window by some means other
-        // than the container's own BringToFront — the user alt-tabbed to it
-        // via Windows' own switcher, or clicked it directly instead of the
-        // tab strip. Keep the container paired immediately behind it in
-        // z-order (purely cosmetic: input already routes to the guest
-        // correctly regardless, since it is a real, untouched top-level
-        // window either way).
-        _events.WindowForegroundChanged += (sender, args) =>
-        {
-            // "sender" must be named, not "_": with a "_" parameter in scope,
-            // "out _" below would bind to that object instead of being a
-            // discard, and fail to compile against out CapturedWindow.
-            if (!_groups.TryGetCapturedMember(args.Hwnd, out Group? group, out _))
-                return;
-            if (_containers.TryGetValue(group.Id, out var container))
-                container.PairZOrderBehindGuest(args.Hwnd);
-        };
-
-        _events.WindowNameChanged += (_, args) => DebounceNameChanged(args.Hwnd);
-    }
-
-    // Some guests (e.g. Windows 11 Notepad) mirror document content into the
-    // window title, firing EVENT_OBJECT_NAMECHANGE on every keystroke. Handling
-    // each one synchronously (log line + tab-title refresh) turned ordinary
-    // typing into a UI-thread event storm. Coalesce rapid repeats per HWND and
-    // act once, 250ms after the last one, reading the title fresh at that point
-    // rather than trusting whichever event happened to trigger the timer.
-    private void DebounceNameChanged(IntPtr hwnd)
-    {
-        if (_nameChangeDebounce.TryGetValue(hwnd, out var timer))
-        {
-            timer.Stop();
-            timer.Start();
-            return;
-        }
-
-        timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
-        timer.Tick += (_, _) =>
-        {
-            timer!.Stop();
-            _nameChangeDebounce.Remove(hwnd);
-            HandleNameChanged(hwnd);
-        };
-        _nameChangeDebounce[hwnd] = timer;
-        timer.Start();
-    }
-
-    private void HandleNameChanged(IntPtr hwnd)
-    {
-        if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match))
-            return;
-        if (!string.IsNullOrWhiteSpace(match.CustomLabel))
-            return; // User label wins.
-
-        // GetWindowTextString never returns null — it reports an unreadable or
-        // zero-length title as string.Empty — so the old null check could not
-        // fire and an empty read (routine mid-teardown, or while a guest
-        // rebuilds its title) overwrote the last known title, blanking the
-        // tab's label permanently. Keep the previous title instead.
-        string? newTitle = NativeMethods.GetWindowTextString(hwnd);
-        if (string.IsNullOrEmpty(newTitle))
-            return;
-
-        // Nothing to repaint when the title is the one already on the tab: some
-        // guests re-announce an unchanged title repeatedly, and every one of
-        // those used to cost a log line and a binding invalidation.
-        if (string.Equals(match.OriginalTitle, newTitle, StringComparison.Ordinal))
-            return;
-
-        match.OriginalTitle = newTitle;
-        _log.Log($"WinEvent: title changed for 0x{hwnd.ToInt64():X} -> '{newTitle}'.");
-
-        if (_containers.TryGetValue(group.Id, out var container))
-        {
-            container.RefreshTabTitle(match);
-        }
-    }
-
-    private void OnGuestMoveSize(IntPtr hwnd, bool started)
-    {
-        // A drag-out (MOVESIZEEND past the pop-out threshold) of the LAST tab
-        // releases it, which empties the group, closes its container, and
-        // removes the group from _groups.Groups — all synchronously, inside the
-        // NoteGuestMoveSize call below. The old form of this method iterated
-        // _groups.Groups and needed a ToList() snapshot to survive that
-        // ("Collection was modified" otherwise, escalating to the dispatcher
-        // crash handler); resolving the member by index instead means there is
-        // no live enumeration in progress to invalidate.
-        if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match))
-            return;
-
-        if (_containers.TryGetValue(group.Id, out var container))
-        {
-            container.NoteGuestMoveSize(match, started);
-        }
     }
 
     private void OnNewGroupRequested(object? sender, EventArgs e)

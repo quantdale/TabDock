@@ -860,8 +860,7 @@ public partial class ContainerWindow : Window
         if (containerHwnd == IntPtr.Zero)
             return;
 
-        NativeMethods.SetWindowPos(containerHwnd, foregroundHwnd, 0, 0, 0, 0,
-            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        _shepherd.PairZOrderBehind(containerHwnd, foregroundHwnd);
     }
 
     #endregion

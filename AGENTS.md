@@ -60,7 +60,7 @@ The main csproj excludes `bin/**`, `obj/**`, `Spike/**`, `tests/**`, and `docs/*
 
 | Path | Responsibility |
 |------|----------------|
-| `App.xaml` / `App.xaml.cs` | Application entry point, service lifetime, global hotkey, container management, emergency release |
+| `App.xaml` / `App.xaml.cs` | Application entry point, service lifetime, global hotkey, container management, emergency release. WinEvent-driven guest lifecycle is wired in with one `GuestLifecycleService.Attach` call |
 | `NativeMethods.cs` | **All** P/Invoke declarations, native structs, constants, and helper wrappers |
 | `Services/` | Core business logic (see below) |
 | `Models/` | Data objects: `CapturedWindow`, `Group`, `PersistedState`, persistence DTOs |
@@ -74,8 +74,9 @@ The main csproj excludes `bin/**`, `obj/**`, `Spike/**`, `tests/**`, and `docs/*
 
 | Service | Responsibility |
 |---------|----------------|
-| `WindowShepherdService` | TabDock's only capture backend. Positions/shows/hides an external HWND over the container's content area via `SetWindowPos`/`ShowWindow` — never reparents or restyles it. Release restores the capture-time `WINDOWPLACEMENT`. Also owns the `hidden-windows.json` crash-recovery journal (see `RescueOrphanedWindows`) |
-| `GroupManager` | Owns all groups; enforces flat, no-nesting rule; coordinates tab switching/reordering/release. Also maintains the O(1) HWND→member index every WinEvent lookup goes through (`IsCapturedWindow`/`TryGetCapturedMember`) and the `MonitoringNeededChanged` signal that gates the hooks |
+| `WindowShepherdService` | TabDock's only capture backend. Positions/shows/hides an external HWND over the container's content area via `SetWindowPos`/`ShowWindow` — never reparents or restyles it. Release restores the capture-time `WINDOWPLACEMENT`. Also owns the `hidden-windows.json` crash-recovery journal (see `RescueOrphanedWindows`) and the single z-order pin implementation (`PairZOrderBehind`, shared with the container's foreground-pairing path) |
+| `GroupManager` | Owns all groups; enforces flat, no-nesting rule; coordinates tab switching/reordering/release (including member-by-reference release via `ReleaseMember`). Also maintains the O(1) HWND→member index every WinEvent lookup goes through (`IsCapturedWindow`/`TryGetCapturedMember`) and the `MonitoringNeededChanged` signal that gates the hooks |
+| `GuestLifecycleService` | The single consumer of `WinEventMonitor` events. Owns all WinEvent policy: destroy/hide teardown (guest-initiated-hide classification, empty-group container close), minimize restore, move/size drag-out routing, foreground z-order pairing, and the 250 ms name-change debounce. Interface is one `Attach(WinEventMonitor)` call; member resolution goes through `GroupManager.TryGetCapturedMember` |
 | `PersistenceService` | Saves/restores group metadata to `%APPDATA%\TabDock\state.json`; skips the write when the serialized state is unchanged |
 | `WinEventMonitor` | Out-of-process `SetWinEventHook` wrapper for destroy/rename/minimize/foreground events on captured windows. Filters by direct member-HWND match — never by `GetAncestor`, which cannot see an already-destroyed window's ancestors. `Start`/`Stop` are idempotent and restartable; App runs the hooks only while something is captured |
 | `HotkeyService` | Registers global `Ctrl+Alt+G` hotkey (with `MOD_NOREPEAT`, so holding the key does not stack capture pickers) |
@@ -199,7 +200,7 @@ The pattern was made mandatory after a runaway self-recursion incident in `Spike
 
 `docs/internal/perf-2026-07-25.md` records the `PERF25-NN` pass and the reasoning behind each change. Four of its results are invariants rather than local optimizations — breaking them reintroduces a cost the rest of the design assumes away:
 
-1. **Resolve a WinEvent HWND through `GroupManager`'s index, never by scanning.** `IsCapturedWindow` runs for every destroy/hide/rename/minimize/foreground/move-size event on the entire desktop, and the App handlers run for every one that survives it. Use `TryGetCapturedMember`; do not add a `Groups.ToList()` + `FirstOrDefault` scan back into a handler. The index is maintained from `Group.Members`' `CollectionChanged`, so new capture or release paths need no bookkeeping of their own — do not "help" it by mutating the index directly.
+1. **Resolve a WinEvent HWND through `GroupManager`'s index, never by scanning.** `IsCapturedWindow` runs for every destroy/hide/rename/minimize/foreground/move-size event on the entire desktop, and the `GuestLifecycleService` handlers run for every one that survives it. Use `TryGetCapturedMember`; do not add a `Groups.ToList()` + `FirstOrDefault` scan back into a handler. The index is maintained from `Group.Members`' `CollectionChanged`, so new capture or release paths need no bookkeeping of their own — do not "help" it by mutating the index directly.
 2. **The hooks are gated on `GroupManager.IsMonitoringNeeded`.** They are installed on the first capture and removed after the last release (deferred one dispatcher turn). Anything that needs a WinEvent while nothing is captured would have to change that gate deliberately — and would need a reason, since every current handler acts only on captured members.
 3. **Keep the hot log lines cheap.** `SHEPHERD[position]` is emitted per mouse tick during a container drag; do not add `DescribeWindow` (or any other P/Invoke-bearing helper) to it. Do keep emitting it per position — the `instant-tabswitch` ValidationDriver scenario waits for a fresh one after each switch.
 4. **`LoggingService` holds its log file open.** Read it with `FileShare.ReadWrite` (as `tests/ValidationDriver/TabDockLog.cs` does); a bare `File.ReadAllText` will hit a sharing violation while TabDock runs.

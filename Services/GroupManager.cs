@@ -352,6 +352,20 @@ public sealed class GroupManager
         RequestSave();
     }
 
+    /// <summary>
+    /// Releases a specific captured member back to standalone by reference.
+    /// Callers that hold a <see cref="CapturedWindow"/> (e.g. WinEvent-driven
+    /// teardown) would otherwise have to re-derive the positional index from
+    /// <see cref="Group.Members"/> themselves — a lookup that lived in two
+    /// different collections across two call paths before this method existed.
+    /// </summary>
+    public void ReleaseMember(Group group, CapturedWindow member, bool show = true)
+    {
+        int index = group.Members.IndexOf(member);
+        if (index >= 0)
+            ReleaseTab(group, index, show);
+    }
+
     public void CloseGroup(Group group)
     {
         // Release in reverse so indices stay stable.
