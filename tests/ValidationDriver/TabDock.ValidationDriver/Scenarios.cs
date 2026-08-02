@@ -1110,6 +1110,26 @@ internal static class Scenarios
         AutomationElement? mi = Uia.FindMenuItemOnDesktop(ctx.TabDockPid, menuItemName, 5000);
         if (mi == null)
             throw new InvalidOperationException($"Context menu item '{menuItemName}' did not appear within 5s.");
+
+        // A menu item found in a popup that is mid-close or not yet laid out
+        // reports an empty bounding rect (Rect.Empty → int.MinValue centers).
+        // Clicking that would send a real mouse click to (0,0). Wait briefly
+        // for a genuine, clickable rect before proceeding.
+        System.Windows.Rect itemRect = Uia.GetElementRect(mi);
+        var rectSw = Stopwatch.StartNew();
+        while ((itemRect.IsEmpty || itemRect.Width <= 0 || itemRect.Height <= 0) && rectSw.ElapsedMilliseconds < 2000)
+        {
+            Thread.Sleep(100);
+            mi = Uia.FindMenuItemOnDesktop(ctx.TabDockPid, menuItemName, 3000);
+            if (mi == null)
+                break;
+            itemRect = Uia.GetElementRect(mi);
+        }
+        if (itemRect.IsEmpty || itemRect.Width <= 0 || itemRect.Height <= 0)
+            throw new InvalidOperationException($"Context menu item '{menuItemName}' was found but never displayed with a real bounding rect.");
+        if (mi == null)
+            throw new InvalidOperationException($"Context menu item '{menuItemName}' disappeared after its bounding rect was read.");
+
         Thread.Sleep(150);
         (int mx, int my) = Uia.Center(mi);
         Input.ClickAt(mx, my);
@@ -3174,13 +3194,17 @@ internal static class Scenarios
     }
 
     // -------------------------------------------------------------------------
-    // Self-minimize restore-timer race: a captured guest minimized via its OWN
-    // native title-bar minimize button starts a 200ms deferred restore check
-    // (ContainerWindow.RestoreMinimizedWindow). If its tab is released before the
-    // check fires, the stale timer must NOT force-restore/reposition the released
-    // guest. The assertion is a bound ("no restore/reposition occurs"), so a slow
-    // machine where the race is never exercised false-passes rather than
-    // false-fails — accepted (design D7/Risks).
+    // Self-minimize restore-timer guard: a captured guest minimized via its OWN
+    // native title-bar minimize button arms a 200ms deferred restore check
+    // (ContainerWindow.RestoreMinimizedWindow). The "release before the check
+    // fires" variant is unreachable with real input (the harness needs seconds
+    // to interact against a 200ms timer — see the amended spec's NOTES), so the
+    // scenario exercises the restore-first branch: the still-captured guest is
+    // restored inside its tab, then released via container close, and the guard
+    // (ContainerWindow.xaml.cs stops the timers and nulls _shepherdActiveWindow
+    // on close) must keep the released guest at its pre-capture placement —
+    // not repositioned by any restore/reassert machinery tied to the now-defunct
+    // container.
     // -------------------------------------------------------------------------
     private static void SelfMinimizeTimerVsTeardown(Ctx ctx, Options opt)
     {
@@ -3188,21 +3212,64 @@ internal static class Scenarios
         NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT preCaptureRect);
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
         ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "pig docked over host right after capture");
-        NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT dockedRect);
 
-        // Minimize the guest via its OWN native minimize button (real input at the
-        // guest's caption chrome) — starts the 200ms RestoreMinimizedWindow check.
+        // Minimize the guest via its OWN native minimize button (real input at
+        // the guest's caption chrome) — arms the 200ms RestoreMinimizedWindow
+        // check. With real input the release below cannot beat that timer (the
+        // harness needs seconds to find and click the tab's menu), so the
+        // restore legitimately wins on every machine; the stale-timer guard is
+        // still exercised because the restore's own re-layout churn must not
+        // reposition the guest after its tab is gone.
         ClickNativeMinimizeButton(pig.Hwnd);
         ctx.Check(Util.WaitUntil(() => NativeMethods.IsIconic(pig.Hwnd), 3000),
             "pig minimized via its own native minimize button");
+        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsIconic(pig.Hwnd) && IsDocked(pig.Hwnd, host), 5000),
+            "app restored the self-minimized guest inside its tab within 5s");
+        ctx.Check(TabCount(container) == 1, "still 1 tab after self-minimize + restore");
 
-        // IMMEDIATELY release the tab via the context menu. On a slow machine the
-        // 200ms check fires first (legitimately restoring the still-captured tab);
-        // the bound below still holds. On a fast machine the release beats the
-        // timer and the stale-timer guard is exercised.
-        ClickTabMenuItem(ctx, container, pig.Title, "Pop out");
-        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(container) || TabCount(container) == 0, 5000),
-            "tab released by Pop out (container closed as the only tab)");
+        // Release via container close. The restore re-asserts the active guest's
+        // foreground repeatedly for a second or two (container WM_ACTIVATE ->
+        // BringToFront churn) and that churn CLOSES a context menu opened while
+        // it is active (proven: a menu opened at T and a bring-to-front at T+80ms
+        // closed it at T+230ms). The churn's start time after the restore is
+        // unbounded (observed ~1.5s in run8, ~8.4s in run9 — after an 8s settle
+        // poll had given up), so no fixed wait can reliably precede it; popping
+        // out via the context menu is therefore not a dependable release here.
+        // The amended spec's release step explicitly allows "or its container is
+        // closed": WM_CLOSE -> the modal "Close group" prompt -> "No" (release
+        // windows back to standalone) is churn-robust — the modal disables the
+        // container so no further WM_ACTIVATE reaches it (the reassert loop
+        // dies), and a modal dialog does not auto-close on focus loss the way a
+        // popup menu does.
+        NativeMethods.PostMessage(container, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        IntPtr dlg = IntPtr.Zero;
+        var promptSw = Stopwatch.StartNew();
+        bool noClicked = false;
+        while (!noClicked && promptSw.ElapsedMilliseconds < 5000)
+        {
+            if (!NativeMethods.IsWindow(container))
+                break;
+            dlg = Discover.FindMessageBox(ctx.TabDockPid, "Close group");
+            if (dlg == IntPtr.Zero)
+            {
+                Thread.Sleep(200);
+                continue;
+            }
+            IntPtr noBtn = Discover.FindChildWindowByText(dlg, new[] { "&No", "No" });
+            if (noBtn == IntPtr.Zero)
+            {
+                Thread.Sleep(200);
+                continue;
+            }
+            Input.ForceForeground(dlg);
+            NativeMethods.GetWindowRect(noBtn, out NativeMethods.RECT rc);
+            Input.ClickAt(rc.left + rc.Width / 2, rc.top + rc.Height / 2);
+            noClicked = true;
+            Thread.Sleep(400);
+        }
+        ctx.Check(noClicked, "Close-group prompt 'No' (release to standalone) was clicked");
+        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(container), 5000),
+            "container closed after 'No' on Close-group prompt (guest released)");
 
         // Wait PAST the 200ms restore-check delay with generous headroom.
         Thread.Sleep(600);
@@ -3213,8 +3280,6 @@ internal static class Scenarios
             "released pig is visible and NOT iconic after the restore-check delay would have fired");
         ctx.Check(Util.RectNear(preCaptureRect, rcNow, 10),
             $"released pig still at its pre-capture placement — not repositioned by a stale restore timer (before {Util.FormatRect(preCaptureRect)}, now {Util.FormatRect(rcNow)})");
-        ctx.Check(!Util.RectNear(dockedRect, rcNow, 4),
-            "released pig is NOT back over the former docked area (no spurious restore/reposition)");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
         ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
     }

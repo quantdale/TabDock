@@ -19,6 +19,15 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // The driver must read screen coordinates in the same (physical-pixel)
+        // space TabDock operates in, or pre/post-capture rect comparisons break:
+        // a DPI-unaware process gets GetWindowRect results DPI-virtualized (0.8x
+        // on a 125% monitor), and WPF/UIA init later flips this process to
+        // PerMonitorV2 mid-run — so the same window reads virtualized before a
+        // capture and physical after. Declare PerMonitorV2 up front so every
+        // read is consistently physical.
+        NativeMethods.SetProcessDpiAwarenessContext(NativeMethods.DpiAwarenessContextPerMonitorV2);
+
         var opt = new Options();
         var scenarios = new List<string>();
         for (int i = 0; i < args.Length; i++)

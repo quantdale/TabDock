@@ -134,6 +134,7 @@
                      ItemsSource="{Binding Tabs}"
                      SelectedItem="{Binding ActiveTab, Mode=OneWay}"
                      SelectionChanged="TabsListBox_SelectionChanged"
+                     PreviewMouseRightButtonDown="TabsListBox_PreviewMouseRightButtonDown"
                      Background="Transparent"
                      BorderThickness="0"
                      Focusable="False"

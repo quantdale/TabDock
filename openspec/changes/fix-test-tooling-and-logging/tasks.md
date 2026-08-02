@@ -28,5 +28,5 @@
 ## 6. Validation
 
 - [x] 6.1 `dotnet build TabDock.sln` and the Spike/ValidationDriver projects clean
-- [ ] 6.2 Run the Spike with a pre-existing console window open and confirm it is untouched
+- [x] 6.2 Run the Spike with a pre-existing console window open and confirm it is untouched
 - [x] 6.3 Run ValidationDriver `all` to confirm the harness still passes after path/profile changes

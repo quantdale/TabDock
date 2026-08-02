@@ -18,8 +18,15 @@ internal static class GuardedProc
     /// <summary>Spawn budget per scenario; the counter resets after each scenario's cleanup.</summary>
     public const int MaxTotalSpawns = 12;
 
-    /// <summary>Absolute cap across a whole run (never reset) as a second line of defense for "all".</summary>
-    public const int MaxTotalSpawnsHard = 60;
+    /// <summary>
+    /// Absolute cap across a whole run (never reset) as a second line of defense
+    /// for "all". The suite was 18 scenarios (≈40 spawns) when the previous
+    /// value of 60 was set; the expand-e2e-coverage change grew "all" to 26
+    /// scenarios, whose measured run-wide usage is ≈66 spawns (persist-active-tab-index
+    /// alone consumes 5: TabDock + 3 pigs + relaunch). 90 keeps a generous
+    /// headroom over the observed count while still bounding a runaway loop.
+    /// </summary>
+    public const int MaxTotalSpawnsHard = 90;
 
     public const string SingleInstanceMutexName = "Global\\TabDockValidationDriver";
 

@@ -187,6 +187,12 @@ public static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern uint GetDpiForWindow(IntPtr hwnd);
 
+    /// <summary>DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 — the -4 sentinel.</summary>
+    public static readonly IntPtr DpiAwarenessContextPerMonitorV2 = new IntPtr(-4);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SetProcessDpiAwarenessContext(IntPtr dpiAwarenessContext);
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
 

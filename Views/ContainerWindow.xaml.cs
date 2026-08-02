@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -463,6 +464,61 @@ public partial class ContainerWindow : Window
         {
             _viewModel.SetActiveTab(tab);
         }
+    }
+
+    /// <summary>
+    /// Right-clicking a tab opens its context menu (Pop out / Close window)
+    /// WITHOUT switching the active tab. WPF's ListBoxItem selects the item on
+    /// right-button-down by default, which would silently activate the tab under
+    /// the cursor before the menu even opens — making "Pop out" on a background
+    /// tab switch the user away from the tab they are looking at. That defeats
+    /// the keep-active guarantee in GroupViewModel.ReleaseTab, which is only
+    /// reachable when the released tab is genuinely inactive, so it is unreachable
+    /// via the context menu while right-click selects first. Swallowing the
+    /// routed event at the ListBox leaves selection untouched, and the tab's
+    /// context menu is opened manually at the cursor instead.
+    /// </summary>
+    private void TabsListBox_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is DependencyObject src
+            && ItemsControl.ContainerFromElement(TabsListBox, src) is ListBoxItem item
+            && FindTabContextMenuOwner(item) is FrameworkElement owner
+            && owner.ContextMenu is ContextMenu menu)
+        {
+            e.Handled = true;
+            // Open on a dispatcher callback rather than inline: a context menu
+            // opened synchronously inside a mouse-down handler (while the right
+            // button is still held) can fail to display or close immediately —
+            // deferring past the current input event is the reliable pattern.
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input,
+                new Action(() =>
+                {
+                    menu.PlacementTarget = owner;
+                    menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+                    menu.IsOpen = true;
+                }));
+        }
+    }
+
+    /// <summary>
+    /// Finds the element that owns the tab's context menu by walking the visual
+    /// tree under a tab's ListBoxItem — the menu is declared on the Border in
+    /// the tab's DataTemplate (Views/ContainerWindow.xaml), not on the
+    /// ListBoxItem itself.
+    /// </summary>
+    private static FrameworkElement? FindTabContextMenuOwner(DependencyObject item)
+    {
+        var stack = new Stack<DependencyObject>();
+        stack.Push(item);
+        while (stack.Count > 0)
+        {
+            DependencyObject cur = stack.Pop();
+            if (cur is FrameworkElement fe && fe.ContextMenu != null)
+                return fe;
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(cur); i++)
+                stack.Push(VisualTreeHelper.GetChild(cur, i));
+        }
+        return null;
     }
 
     private void TitleText_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
