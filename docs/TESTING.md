@@ -52,7 +52,10 @@ Core scenarios (from `Program.cs` / `Scenarios.cs`):
 rename, popout, closewin, closewin-hide, selfclose, selfhide, selfminhide,
 tabswitch-hidesafety, minrestore, maximize-repro, repeat-cycles, crossfeature,
 hotkey-afterclose, persist-kill, dragreorder, chrometabdrag, closegroupprompt,
-exitpopulated
+exitpopulated,
+container-minimize-retains-tabs, hotkey-hold-single-picker, popout-inactive-keeps-active,
+double-capture-refused, persist-active-tab-index, restored-group-survives-member-reclose,
+selfminimize-timer-vs-teardown, launcher-empty-state-hint
 ```
 
 Run `all` to execute the core scenarios in order, fresh TabDock per scenario:
@@ -91,7 +94,14 @@ Options:
   --guest KIND   guest app for maximize-repro: pig (default), wt, chrome-nogpu, chrome-gpu
 ```
 
-> **Note:** The harness code references log substrings such as `LAYOUT[drift]` and `LAYOUT[movesize]` for assertions. As of the last source audit, these patterns exist in `TabDockLog.cs` but were **not** found in the main TabDock application source. Treat any scenario that asserts on them as potentially stale until you confirm the corresponding instrumentation is committed.
+> **Note:** The `LAYOUT[drift]`/`LAYOUT[movesize]`/`LAYOUT[capture]` and `unhealthy`
+> log assertions that used to reference instrumentation absent from committed
+> source were removed or retargeted in the `expand-e2e-coverage` change. Every
+> remaining log-substring assertion (e.g. `SHEPHERD[position]`,
+> `SHEPHERD[dragout]`, `SHEPHERD[rescue]`, `Reordered tab`, `hid itself`,
+> `destroyed; removing its tab`, `Global hotkey Ctrl+Alt+G pressed`) has been
+> verified against committed application source. No scenario may assert on
+> instrumentation absent from committed source — see §D.
 
 ---
 
@@ -196,6 +206,6 @@ The project has a standing safety rule: **do not run synthesized mouse/keyboard 
 
 ---
 
-## D. Known stale-doc risk
+## D. No assertion may reference instrumentation absent from committed source
 
-TabDock has had documentation and tests reference instrumentation that was not actually present in committed code (the `LAYOUT[...]` log assertions are a confirmed example). Before relying on any doc claim in a test or repro — especially a claim of the form "the app logs X on every Y" — verify it against actual committed source in under two minutes. If you cannot confirm it, treat it as unconfirmed and either verify it or update the doc before depending on it.
+TabDock previously had documentation and tests reference instrumentation that was not actually present in committed code (the `LAYOUT[...]` and `unhealthy` log assertions are the confirmed examples; both were removed/retargeted in `expand-e2e-coverage`). The rule is now enforced by spec (`e2e-scenario-coverage`): before a scenario asserts on a log line, event, or signal, the asserted substring SHALL be verified against committed application source; assertions that fail the check SHALL be retargeted at an observable equivalent (window geometry, `SHEPHERD[*]` lines, pixel checks) or removed — they must never pass vacuously or fail unconditionally. Before relying on any doc claim in a test or repro — especially a claim of the form "the app logs X on every Y" — verify it against actual committed source in under two minutes; if you cannot confirm it, treat it as unconfirmed and either verify it or update the doc before depending on it.

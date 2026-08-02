@@ -156,6 +156,12 @@ internal static class Scenarios
         "tabswitch-hidesafety", "minrestore", "maximize-repro", "repeat-cycles", "crossfeature",
         "hotkey-afterclose", "persist-kill", "dragreorder", "chrometabdrag",
         "closegroupprompt", "exitpopulated",
+        // expand-e2e-coverage additions: each guards an H-series bug that had no
+        // automated coverage before this change. All are pig-only/hermetic (the
+        // launcher-hint one is a pure UIA read) and join `all` per the spec.
+        "container-minimize-retains-tabs", "hotkey-hold-single-picker", "popout-inactive-keeps-active",
+        "double-capture-refused", "persist-active-tab-index", "restored-group-survives-member-reclose",
+        "selfminimize-timer-vs-teardown", "launcher-empty-state-hint",
     };
 
     /// <summary>
@@ -239,6 +245,14 @@ internal static class Scenarios
             "realapp" => RealAppFillMaxHide,
             "closegroupprompt" => CloseGroupPrompt,
             "exitpopulated" => ExitPopulated,
+            "container-minimize-retains-tabs" => ContainerMinimizeRetainsTabs,
+            "hotkey-hold-single-picker" => HotkeyHoldSinglePicker,
+            "popout-inactive-keeps-active" => PopOutInactiveKeepsActive,
+            "double-capture-refused" => DoubleCaptureRefused,
+            "persist-active-tab-index" => PersistActiveTabIndex,
+            "restored-group-survives-member-reclose" => RestoredGroupSurvivesMemberReclose,
+            "selfminimize-timer-vs-teardown" => SelfMinimizeTimerVsTeardown,
+            "launcher-empty-state-hint" => LauncherEmptyStateHint,
             "browser-lifecycle" => BrowserLifecycle,
             "browser-tabswitch-hidesafety" => BrowserTabSwitchHideSafety,
             "browser-dragreorder" => BrowserDragReorder,
@@ -1787,7 +1801,7 @@ internal static class Scenarios
             GuardedProc.Log($"  cycle {cycle}: brightnessAfterRestore={bRest:F2} varianceAfterRestore={vRest:F4}");
 
             string newLines = TabDockLog.DumpNewLines(cycOff);
-            GuardedProc.Log($"  cycle {cycle}: new TabDock log lines (MAXCLICK/STATE/LAYOUT instrumentation):");
+            GuardedProc.Log($"  cycle {cycle}: new TabDock log lines (MAXCLICK/STATE/SHEPHERD instrumentation):");
             Console.WriteLine(newLines.Length > 0 ? newLines : "  (none)");
             Console.Out.Flush();
 
@@ -2089,11 +2103,23 @@ internal static class Scenarios
         GuestInfo movedPig = aIsRight ? pigA : pigB;
         Rect leftRect = aIsRight ? rB : rA;
         (int sx, int sy) = Uia.Center(aIsRight ? tabA : tabB);
+        long dragOff = TabDockLog.RecordLogLength(); // scope reorder analysis to THIS drag only
         Input.DragFromTo(sx, sy, (int)(leftRect.X + 8), sy, 14);
         Thread.Sleep(600);
 
         ctx.Check(TabCount(container) == 2, "still 2 tabs after drag-reorder");
-        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "Reordered tab") >= 1, "a reorder was applied (log)");
+        // H2 oscillation guard: a correct (frozen-midpoint) drag produces a small,
+        // bounded number of `Reordered tab` lines; the H2 bug produced hundreds of
+        // A<->B flips per drag and passed the old `>= 1` check. The flip-pair check
+        // (a reorder X->Y directly followed by Y->X) is the primary, machine-speed-
+        // independent regression signal; the count is a generous churn ceiling.
+        // Observed on a passing run: a handful of reorders (single digits); the bound
+        // below carries generous headroom — confirm/tighten via the 7.2 supervised run.
+        const int MaxReordersPerDrag = 20;
+        (int reorderCount, int flipPairs) = TabDockLog.AnalyzeReorders(dragOff);
+        ctx.Check(reorderCount >= 1, "a reorder was applied (log)");
+        ctx.Check(flipPairs == 0, $"zero immediate flip-back pairs during the drag (H2 oscillation) — got {flipPairs}");
+        ctx.Check(reorderCount <= MaxReordersPerDrag, $"reorder count within bound (<= {MaxReordersPerDrag}, H2 churn ceiling) — got {reorderCount}");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-reorder");
         ctx.Check(pigA.Proc != null && !pigA.Proc.HasExited && pigB.Proc != null && !pigB.Proc.HasExited,
             "both pigs alive after drag-reorder");
@@ -2109,6 +2135,7 @@ internal static class Scenarios
         ctx.Check(Util.WaitUntil(() => IsReleased(movedPig, host), 5000), $"moved pig '{movedPig.Title}' released by drag-out");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-out");
         ctx.Check(movedPig.Proc != null && !movedPig.Proc.HasExited, "moved pig alive standalone");
+        ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
     }
 
     // -------------------------------------------------------------------------
@@ -2469,7 +2496,8 @@ internal static class Scenarios
         GuestInfo browser = SpawnGuest(ctx, opt.Guest);
         long capOff = TabDockLog.RecordLogLength();
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, browser);
-        ctx.Check(TabDockLog.ContainsNewLine(capOff, "LAYOUT[capture]"), "TabDock log gained a LAYOUT[capture] line");
+        ctx.Check(Util.WaitUntil(() => IsDocked(browser.Hwnd, host), 3000), "guest docked over host content area at capture (Shepherd positioning)");
+        ctx.Check(TabDockLog.WaitForLogLine(capOff, "SHEPHERD[position]", 3000), "TabDock log gained a SHEPHERD[position] line for the guest at capture");
         ctx.Check(GuestMatchesHost(browser.Hwnd, host, out string geoCap), $"guest rect == host client rect at capture ({geoCap})");
 
         (double bBefore, _) = SampleHost(host);
@@ -2488,14 +2516,10 @@ internal static class Scenarios
         ctx.Check(bAfter > 1.0, $"host bright again after minimize->restore hide/show cycle, i.e. no H4 smear residue ({bAfter:F2})");
         ctx.Check(GuestMatchesHost(browser.Hwnd, host, out string geoAfter), $"guest still fills host after hide/show ({geoAfter})");
 
-        List<string> drift = TabDockLog.FindDriftWithoutPrecedingMovesize(ctx.LogOffset);
-        ctx.Check(drift.Count == 0, drift.Count == 0
-            ? "no LAYOUT[drift] fired without a preceding LAYOUT[movesize]"
-            : $"UNEXPECTED bare drift line(s): {string.Join(" | ", drift)}");
-
         ClickTabMenuItem(ctx, container, browser.EffectiveTabMatchKey, "Pop out");
         ctx.Check(Util.WaitUntil(() => IsReleased(browser, host), 5000), "browser released by Pop out");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+        ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
     }
 
     // -------------------------------------------------------------------------
@@ -2514,6 +2538,26 @@ internal static class Scenarios
 
         if (!Input.ForceForeground(container))
             throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+
+        // H4 render check across tab switches: drive the browser to a deterministic
+        // local test page (white background + blinking black square) so per-switch
+        // brightness and inter-frame variance can be hard-asserted — no live URL,
+        // no browser-theme dependence (the white background dominates).
+        string renderUrl = new Uri(CreateBrowserRenderTestPage()).AbsoluteUri;
+        AutomationElement? browserTab = FindTabText(container, browser.EffectiveTabMatchKey, out int browserTabCount);
+        if (browserTab == null || browserTabCount != 1)
+            throw new InvalidOperationException($"Browser tab for '{browser.EffectiveTabMatchKey}' not found uniquely (count={browserTabCount}).");
+        (int btx, int bty) = Uia.Center(browserTab);
+        Input.ClickAt(btx, bty);
+        ctx.Check(Util.WaitUntil(() => IsDocked(browser.Hwnd, host), 3000), "browser is the active (docked) tab before navigation");
+        if (!Input.ForceForeground(browser.Hwnd))
+            throw new InvalidOperationException("Could not bring the browser to the foreground — refusing to type blind.");
+        Input.SendCtrlL();
+        Thread.Sleep(300);
+        Input.TypeText(renderUrl);
+        Input.SendKey(Input.VK_RETURN);
+        Thread.Sleep(2000); // let the page load
+
         bool everyClickOk = true;
         for (int i = 0; i < 24; i++)
         {
@@ -2536,6 +2580,32 @@ internal static class Scenarios
                 ctx.Check(false, $"click {i + 1}/24: tab count still 3 (got {tabs})");
                 break;
             }
+
+            // H4: after every switch TO the browser, hard-assert it is live-rendering.
+            // PrintWindow (PW_RENDERFULLCONTENT) reads the guest's own back-buffer,
+            // so on-screen occlusion cannot fake a black frame. Floors are the ones
+            // proven by maximize-repro/realapp-multi-render: brightness > 1.0 (a
+            // black/blank frame fails) and inter-frame variance > 0.005 (the test
+            // page's blinking square guarantees visible change between frames).
+            if (guests[idx] == browser)
+            {
+                ctx.Check(Util.WaitUntil(() => IsDocked(browser.Hwnd, host), 3000),
+                    $"switch {i + 1}/24: browser docked over host after switching to it");
+                int[]? f0 = Pixels.CaptureWindowViaPrintWindow(browser.Hwnd);
+                Thread.Sleep(600);
+                int[]? f1 = Pixels.CaptureWindowViaPrintWindow(browser.Hwnd);
+                if (f0 == null || f1 == null)
+                {
+                    ctx.Check(false, $"switch {i + 1}/24: PrintWindow capture of the browser returned null");
+                }
+                else
+                {
+                    double bright = Pixels.ComputeAvgBrightness(f1);
+                    double var = Pixels.ComputeAvgFrameDiff(f0, f1);
+                    ctx.Check(bright > 1.0, $"switch {i + 1}/24: browser frame bright (brightness={bright:F2} > 1.0, H4 liveness floor)");
+                    ctx.Check(var > 0.005, $"switch {i + 1}/24: browser frame has live content (variance={var:F4} > 0.005, H4 liveness floor)");
+                }
+            }
         }
         if (everyClickOk)
             ctx.Check(true, "tab count stayed 3 after every one of the 24 clicks (real browser included)");
@@ -2545,10 +2615,7 @@ internal static class Scenarios
         ctx.Check(browser.Proc != null && !browser.Proc.HasExited
                 && (IsDocked(browser.Hwnd, host) || IsReleasedAndHidden(browser.Hwnd)),
             $"real browser '{browser.Title}' alive and still captured (docked over host or hidden inactive tab) after 24 switches");
-        List<string> drift = TabDockLog.FindDriftWithoutPrecedingMovesize(ctx.LogOffset);
-        ctx.Check(drift.Count == 0, drift.Count == 0
-            ? "no LAYOUT[drift] fired without a preceding LAYOUT[movesize]"
-            : $"UNEXPECTED bare drift line(s): {string.Join(" | ", drift)}");
+        ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
     }
 
     // -------------------------------------------------------------------------
@@ -2576,11 +2643,18 @@ internal static class Scenarios
         GuestInfo movedGuest = browserIsRight ? browser : pig;
         Rect leftRect = browserIsRight ? rPig : rBrowser;
         (int sx, int sy) = Uia.Center(browserIsRight ? tabBrowser : tabPig);
+        long dragOff = TabDockLog.RecordLogLength(); // scope reorder analysis to THIS drag only
         Input.DragFromTo(sx, sy, (int)(leftRect.X + 8), sy, 14);
         Thread.Sleep(600);
 
         ctx.Check(TabCount(container) == 2, "still 2 tabs after drag-reorder");
-        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "Reordered tab") >= 1, "a reorder was applied (log)");
+        // H2 oscillation guard (see dragreorder): zero flip-back pairs + a bounded
+        // reorder count. The flip-pair check is the primary signal; the count is a churn ceiling.
+        const int MaxReordersPerDrag = 20;
+        (int reorderCount, int flipPairs) = TabDockLog.AnalyzeReorders(dragOff);
+        ctx.Check(reorderCount >= 1, "a reorder was applied (log)");
+        ctx.Check(flipPairs == 0, $"zero immediate flip-back pairs during the drag (H2 oscillation) — got {flipPairs}");
+        ctx.Check(reorderCount <= MaxReordersPerDrag, $"reorder count within bound (<= {MaxReordersPerDrag}, H2 churn ceiling) — got {reorderCount}");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-reorder");
         ctx.Check(browser.Proc != null && !browser.Proc.HasExited && pig.Proc != null && !pig.Proc.HasExited,
             "both the real browser and the pig are alive after drag-reorder");
@@ -2590,6 +2664,7 @@ internal static class Scenarios
         ctx.Check(Util.WaitUntil(() => IsReleased(movedGuest, host), 5000), $"moved guest '{movedGuest.Title}' released by drag-out");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-out");
         ctx.Check(movedGuest.Proc != null && !movedGuest.Proc.HasExited, "moved guest alive standalone");
+        ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
     }
 
     // -------------------------------------------------------------------------
@@ -2626,8 +2701,8 @@ internal static class Scenarios
                     && (IsDocked(g.Hwnd, host) || IsReleasedAndHidden(g.Hwnd)),
                 $"'{g.Title}' alive and still captured (docked over host or hidden inactive tab) after the multi-browser switch pass");
         }
-        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "unhealthy") == 0, "no false-positive render-health 'unhealthy' verdict for either browser");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+        ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
     }
 
     // -------------------------------------------------------------------------
@@ -2674,8 +2749,536 @@ internal static class Scenarios
         }
 
         ctx.Check(browser.Proc != null && !browser.Proc.HasExited, $"real browser '{browser.Title}' survived {cycles} switch cycles");
-        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "unhealthy") == 0, "no false-positive render-health verdict across the soak run");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines across the whole soak run");
+        ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
+    }
+
+    /// <summary>
+    /// Real-clicks a GUEST's own native title-bar minimize button (the standard
+    /// Windows caption chrome a shepherded guest keeps), distinct from
+    /// ClickMinimizeButton which targets the container's custom WPF chrome. Finds
+    /// the button via UIA by its localized name first (standard caption buttons
+    /// are exposed as Button elements named "Minimize"); falls back to the same
+    /// DPI-scaled 46px caption-button pixel math the container helpers use
+    /// (minimize = 3rd button from the right).
+    /// </summary>
+    private static void ClickNativeMinimizeButton(IntPtr guest)
+    {
+        int x, y;
+        AutomationElement? el = Uia.FromHwnd(guest);
+        int count = 0;
+        AutomationElement? minBtn = el == null
+            ? null
+            : Uia.FindDescendantByName(el, ControlType.Button, "Minimize", null, out count);
+        if (minBtn != null && count == 1)
+        {
+            (x, y) = Uia.Center(minBtn);
+            GuardedProc.Log($"  ClickNativeMinimizeButton: UIA 'Minimize' button at ({x},{y}).");
+        }
+        else
+        {
+            NativeMethods.GetWindowRect(guest, out NativeMethods.RECT rc);
+            double scale = NativeMethods.GetDpiForWindow(guest) / 96.0;
+            x = rc.right - (int)(2.5 * 46 * scale);
+            y = rc.top + (int)(16 * scale);
+            GuardedProc.Log($"  ClickNativeMinimizeButton: UIA 'Minimize' not found (count={count}); pixel offset ({x},{y}).");
+        }
+        if (!EnsureClickable(guest, x, y))
+            throw new InvalidOperationException("Could not bring the guest to the foreground and its minimize button is obscured — refusing to click blind.");
+        Input.ClickAt(x, y);
+    }
+
+    // -------------------------------------------------------------------------
+    // H6 regression: minimizing a populated container via its OWN minimize button
+    // must retain every tab; on restore the active guest is re-docked. The H6 bug
+    // misclassified the active guest's minimize-hide as a tray-close and released
+    // its tab hidden. Pig-only, hermetic → joins `all`.
+    // -------------------------------------------------------------------------
+    private static void ContainerMinimizeRetainsTabs(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "CMA", "--color", "red");
+        GuestInfo pigB = SpawnPig(ctx, "CMB", "--color", "blue");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
+        ctx.Check(TabCount(container) == 2, "2 tabs after capture");
+
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+
+        long off = TabDockLog.RecordLogLength();
+        ClickMinimizeButton(container); // real click on the container's own minimize button
+        ctx.Check(Util.WaitUntil(() => NativeMethods.IsIconic(container), 3000), "container minimized after clicking its minimize button");
+        Thread.Sleep(500);
+        ctx.Check(TabCount(container) == 2, "2 tabs still present while the container is minimized");
+
+        // Restoring is not the path that regressed (minimizing was), so a plain
+        // ShowWindow(SW_RESTORE) suffices for the restore half.
+        NativeMethods.ShowWindow(container, NativeMethods.SW_RESTORE);
+        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsIconic(container), 3000), "container restored (no longer minimized)");
+        Thread.Sleep(800);
+
+        ctx.Check(TabCount(container) == 2, "2 tabs retained after minimize/restore (H6 regression)");
+        bool aDocked = IsDocked(pigA.Hwnd, host);
+        bool bDocked = IsDocked(pigB.Hwnd, host);
+        bool aHidden = IsReleasedAndHidden(pigA.Hwnd);
+        bool bHidden = IsReleasedAndHidden(pigB.Hwnd);
+        ctx.Check((aDocked && bHidden) || (bDocked && aHidden),
+            "after restore exactly one guest is docked over the host and the other is hidden (tab set intact)");
+        ctx.Check(TabDockLog.CountNewLines(off, "hid itself (tray-style close)") == 0,
+            "zero 'hid itself (tray-style close)' release lines from the container minimize (H6 regression)");
+        ctx.Check(TabDockLog.CountNewLines(off, "destroyed; removing its tab") == 0,
+            "zero 'destroyed; removing its tab' lines from the container minimize");
+        ctx.Check(TabDockLog.CountNewLines(off, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+        ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
+    }
+
+    // -------------------------------------------------------------------------
+    // Holding Ctrl+Alt+G (~2 s, simulating keyboard auto-repeat of 'G' with the
+    // modifiers held) must open exactly ONE capture picker — MOD_NOREPEAT
+    // (HotkeyService.Register) suppresses the WM_HOTKEY repeats that used to
+    // stack one picker per repeat. Pig-independent.
+    // -------------------------------------------------------------------------
+    private static void HotkeyHoldSinglePicker(Ctx ctx, Options opt)
+    {
+        // SendInput does not auto-repeat (that comes from the keyboard hardware),
+        // so simulate a held key the way it behaves at the hotkey registration:
+        // Ctrl+Alt down, then a rapid series of G down/up taps for ~2 s — each tap
+        // would have re-fired WM_HOTKEY without MOD_NOREPEAT.
+        Input.SendKeyDown(Input.VK_CONTROL);
+        Input.SendKeyDown(Input.VK_MENU);
+        var hold = Stopwatch.StartNew();
+        while (hold.ElapsedMilliseconds < 2000)
+        {
+            Input.SendKeyDown(Input.VK_G);
+            Input.SendKeyUp(Input.VK_G);
+            Thread.Sleep(120);
+        }
+        Input.SendKeyUp(Input.VK_MENU);
+        Input.SendKeyUp(Input.VK_CONTROL);
+        Thread.Sleep(800); // settle any queued opens
+
+        var pickers = new List<IntPtr>();
+        foreach (IntPtr h in Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true))
+        {
+            string t = NativeMethods.GetWindowTextString(h) ?? string.Empty;
+            if (t == "Capture windows")
+                pickers.Add(h);
+        }
+        ctx.Check(pickers.Count == 1, $"holding Ctrl+Alt+G opened exactly one capture picker (got {pickers.Count})");
+
+        if (pickers.Count == 1)
+        {
+            if (!Input.ForceForeground(pickers[0]))
+                throw new InvalidOperationException("Could not bring the picker to the foreground — refusing to click blind.");
+            Input.SendKey(Input.VK_ESCAPE);
+            ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(pickers[0]), 3000), "picker dismissed with Esc");
+        }
+        foreach (IntPtr h in Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true))
+        {
+            string t = NativeMethods.GetWindowTextString(h) ?? string.Empty;
+            if (t == "Capture windows")
+                ctx.Check(false, "a capture picker is still open after Esc dismissal — expected zero");
+        }
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+    }
+
+    // -------------------------------------------------------------------------
+    // Popping out an INACTIVE tab must not disturb the active tab (GroupViewModel
+    // fix). 3 pigs in one group; make the rightmost tab (index 2) active; pop out
+    // the LEFTMOST (inactive) tab via the context menu; assert the active tab is
+    // unchanged and its guest is still docked.
+    // -------------------------------------------------------------------------
+    private static void PopOutInactiveKeepsActive(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "POA", "--color", "red");
+        GuestInfo pigB = SpawnPig(ctx, "POB", "--color", "green");
+        GuestInfo pigC = SpawnPig(ctx, "POC", "--color", "blue");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB, pigC);
+        ctx.Check(TabCount(container) == 3, "3 tabs after capture");
+
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+
+        // Find the rightmost (index 2) and leftmost (index 0) tabs by their rects.
+        GuestInfo? rightmost = null;
+        double rightmostX = double.MinValue;
+        GuestInfo? leftmost = null;
+        double leftmostX = double.MaxValue;
+        foreach (GuestInfo g in new[] { pigA, pigB, pigC })
+        {
+            AutomationElement? t = FindTabText(container, g.Title, out int c);
+            if (t == null || c != 1)
+                throw new InvalidOperationException($"Tab for '{g.Title}' not found uniquely (count={c}).");
+            double x = Uia.GetElementRect(t).X;
+            if (x > rightmostX) { rightmostX = x; rightmost = g; }
+            if (x < leftmostX) { leftmostX = x; leftmost = g; }
+        }
+        if (rightmost == null || leftmost == null)
+            throw new InvalidOperationException("Could not determine tab positions.");
+
+        // Make the rightmost tab (index 2) active by real-clicking it.
+        AutomationElement? tabActive = FindTabText(container, rightmost.Title, out _);
+        (int tx, int ty) = Uia.Center(tabActive!);
+        Input.ClickAt(tx, ty);
+        Thread.Sleep(500);
+        ctx.Check(Util.WaitUntil(() => IsDocked(rightmost.Hwnd, host), 3000),
+            $"rightmost tab ('{rightmost.Title}') is active (docked) after clicking it");
+
+        // Pop out the LEFTMOST (inactive) tab.
+        ClickTabMenuItem(ctx, container, leftmost.Title, "Pop out");
+        ctx.Check(Util.WaitUntil(() => IsReleasedAndShown(leftmost.Hwnd, host), 5000), "inactive leftmost tab popped out (released standalone)");
+        ctx.Check(Util.WaitUntil(() => TabCount(container) == 2, 3000), "container now holds 2 tabs");
+
+        ctx.Check(IsDocked(rightmost.Hwnd, host),
+            $"active tab unchanged — the former rightmost tab ('{rightmost.Title}') is still docked over host");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+        ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
+    }
+
+    // -------------------------------------------------------------------------
+    // An already-captured window cannot be captured twice: the picker excludes
+    // windows already in a group (CapturePickerViewModel.Refresh), so reopening
+    // the picker must NOT offer the captured pig's title, and the group is
+    // unchanged after dismissal.
+    // -------------------------------------------------------------------------
+    private static void DoubleCaptureRefused(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "DC", "--color", "blue");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+        ctx.Check(TabCount(container) == 1, "1 tab after capture");
+        int tabsBefore = TabCount(container);
+
+        if (!Input.ForceForeground(ctx.MainHwnd))
+            throw new InvalidOperationException("Could not bring the launcher to the foreground — refusing to click blind.");
+        Thread.Sleep(300);
+        Input.SendHotkeyCtrlAltG();
+        IntPtr pickerHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 10000);
+        if (pickerHwnd == IntPtr.Zero)
+            throw new InvalidOperationException("'Capture windows' picker did not appear within 10s.");
+        AutomationElement? picker = Uia.FromHwnd(pickerHwnd);
+        if (picker == null)
+            throw new InvalidOperationException("Picker HWND found but UIA FromHandle failed.");
+        if (!Input.ForceForeground(pickerHwnd))
+            throw new InvalidOperationException("Could not bring the capture picker to the foreground — refusing to click blind.");
+        Thread.Sleep(800);
+
+        // The captured pig's title must be absent from the picker's window list.
+        int titleMatches = 0;
+        Uia.FindDescendantByName(picker, ControlType.Text, null, pig.Title, out titleMatches);
+        ctx.Check(titleMatches == 0,
+            $"already-captured pig '{pig.Title}' is NOT offered by the reopened picker (double-capture guard)");
+
+        Input.SendKey(Input.VK_ESCAPE);
+        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(pickerHwnd), 3000), "picker dismissed with Esc");
+        ctx.Check(TabCount(container) == tabsBefore, "group unchanged after the reopened picker was dismissed");
+        ctx.Check(IsDocked(pig.Hwnd, host), "captured pig still docked over host (group intact)");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+        ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
+    }
+
+    // -------------------------------------------------------------------------
+    // A persisted non-zero active-tab index must survive restore and the first
+    // post-restore save (PersistenceService.Save: ActiveIndex = Members.Count > 0
+    // ? ActiveIndex : PersistedActiveIndex). Extends the persist-kill pattern.
+    // -------------------------------------------------------------------------
+    private static void PersistActiveTabIndex(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "ATIA", "--color", "red");
+        GuestInfo pigB = SpawnPig(ctx, "ATIB", "--color", "green");
+        GuestInfo pigC = SpawnPig(ctx, "ATIC", "--color", "blue");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB, pigC);
+        ctx.Check(TabCount(container) == 3, "3 tabs after capture");
+
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+
+        // Rename the group so the restored shell is positively identifiable.
+        AutomationElement containerEl = Uia.FromHwnd(container)
+            ?? throw new InvalidOperationException("Container UIA element unavailable.");
+        AutomationElement? caption = Uia.FindDescendantByName(containerEl, ControlType.Text, "Group", null, out int capCount);
+        if (caption == null || capCount != 1)
+            throw new InvalidOperationException($"Container caption 'Group' not found uniquely (count={capCount}).");
+        (int cx, int cy) = Uia.Center(caption);
+        bool renamed = false;
+        for (int attempt = 0; attempt < 3 && !renamed; attempt++)
+        {
+            Input.DoubleClickAt(cx, cy);
+            Thread.Sleep(300);
+            Input.TypeText("TDVAL-ATIIDX");
+            Input.SendKey(Input.VK_RETURN);
+            renamed = Util.WaitUntil(() => NativeMethods.GetWindowTextString(container) == "TDVAL-ATIIDX", 2000);
+        }
+        ctx.Check(renamed, "group renamed to TDVAL-ATIIDX");
+
+        // Make the rightmost tab (index 2) active — the active index is now > 0.
+        GuestInfo? rightmost = null;
+        double rightmostX = double.MinValue;
+        foreach (GuestInfo g in new[] { pigA, pigB, pigC })
+        {
+            AutomationElement? t = FindTabText(container, g.Title, out int c);
+            if (t == null || c != 1)
+                throw new InvalidOperationException($"Tab for '{g.Title}' not found uniquely (count={c}).");
+            double x = Uia.GetElementRect(t).X;
+            if (x > rightmostX) { rightmostX = x; rightmost = g; }
+        }
+        if (rightmost == null)
+            throw new InvalidOperationException("Could not determine the rightmost tab.");
+        AutomationElement? tabActive = FindTabText(container, rightmost.Title, out _);
+        (int tx, int ty) = Uia.Center(tabActive!);
+        Input.ClickAt(tx, ty);
+        Thread.Sleep(500);
+        ctx.Check(Util.WaitUntil(() => IsDocked(rightmost.Hwnd, host), 3000),
+            $"rightmost tab active (index 2) — docked guest is '{rightmost.Title}'");
+        ctx.Check(Util.WaitUntil(() => StateJsonContains("\"ActiveIndex\": 2"), 5000),
+            "state.json recorded active-tab index 2 (debounced save)");
+
+        // Force-kill, relaunch, and let the first post-restore save run: the index
+        // must NOT be reset to 0.
+        ctx.TabDock.Kill();
+        ctx.Check(Util.WaitUntil(() => ctx.TabDock.HasExited, 5000), "TabDock force-killed");
+        Thread.Sleep(1000);
+        Process td2 = GuardedProc.SpawnGuarded(new ProcessStartInfo(TabDockExe)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(TabDockExe)!,
+        });
+        ctx.TabDock = td2;
+        ctx.TabDockPid = (uint)td2.Id;
+        ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
+        ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched (MainWindow up)");
+        IntPtr restored = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TDVAL-ATIIDX", 10000);
+        ctx.Check(restored != IntPtr.Zero, "restored container 'TDVAL-ATIIDX' opened after relaunch");
+        if (restored != IntPtr.Zero)
+            ctx.Containers.Add(restored);
+
+        Thread.Sleep(1000); // let the restored empty shell settle
+        foreach (IntPtr h in Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true))
+            NativeMethods.PostMessage(h, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        ctx.Check(Util.WaitUntil(() => ctx.TabDock.HasExited, 8000), "relaunched TabDock exited cleanly");
+        ctx.Check(StateJsonContains("TDVAL-ATIIDX"), "group name survived the clean-exit save");
+        ctx.Check(StateJsonContains("\"ActiveIndex\": 2"),
+            "active-tab index 2 survived the first post-restore save (not reset to 0)");
+        ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
+    }
+
+    // -------------------------------------------------------------------------
+    // RemoveDeadMember guard (App.xaml.cs): a restored group's persisted layout
+    // (name + original tab metadata) must survive its re-captured live member
+    // being destroyed (WM_CLOSE) or tray-hidden (--hide-on-close) — the path
+    // persist-kill's empty-shell clean exit never exercises. Each teardown kind
+    // is a phase; a kill+relaunch between re-opens the emptied shell's container.
+    // -------------------------------------------------------------------------
+    private static void RestoredGroupSurvivesMemberReclose(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "RS", "--color", "red");
+        (IntPtr container1, _) = CaptureIntoGroup(ctx, pigA);
+        ctx.Check(Util.WaitUntil(() => StateJsonContains(pigA.Title), 5000),
+            "state.json contains the captured tab's title (debounced save)");
+
+        AutomationElement containerEl = Uia.FromHwnd(container1)
+            ?? throw new InvalidOperationException("Container UIA element unavailable.");
+        AutomationElement? caption = Uia.FindDescendantByName(containerEl, ControlType.Text, "Group", null, out int capCount);
+        if (caption == null || capCount != 1)
+            throw new InvalidOperationException($"Container caption 'Group' not found uniquely (count={capCount}).");
+        if (!Input.ForceForeground(container1))
+            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+        (int cx, int cy) = Uia.Center(caption);
+        bool renamed = false;
+        for (int attempt = 0; attempt < 3 && !renamed; attempt++)
+        {
+            Input.DoubleClickAt(cx, cy);
+            Thread.Sleep(300);
+            Input.TypeText("TDVAL-RSMR");
+            Input.SendKey(Input.VK_RETURN);
+            renamed = Util.WaitUntil(() => NativeMethods.GetWindowTextString(container1) == "TDVAL-RSMR", 2000);
+        }
+        ctx.Check(renamed, "group renamed to TDVAL-RSMR");
+        ctx.Check(Util.WaitUntil(() => StateJsonContains("TDVAL-RSMR"), 3000), "state.json contains the group rename");
+
+        Process Relaunch() => GuardedProc.SpawnGuarded(new ProcessStartInfo(TabDockExe)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(TabDockExe)!,
+        });
+
+        // Phase 2a: re-capture a pig into the restored shell, then DESTROY it.
+        GuardedProc.Log("  Force-killing TabDock (Process.Kill, no graceful shutdown).");
+        ctx.TabDock.Kill();
+        ctx.Check(Util.WaitUntil(() => ctx.TabDock.HasExited, 5000), "TabDock force-killed");
+        Thread.Sleep(1000);
+        ctx.TabDock = Relaunch();
+        ctx.TabDockPid = (uint)ctx.TabDock.Id;
+        ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
+        ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched (MainWindow up)");
+        IntPtr restored = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TDVAL-RSMR", 10000);
+        ctx.Check(restored != IntPtr.Zero, "restored container 'TDVAL-RSMR' opened after relaunch");
+        if (restored != IntPtr.Zero)
+            ctx.Containers.Add(restored);
+        IntPtr restoredHost = IntPtr.Zero;
+        Util.WaitUntil(() => (restoredHost = Discover.FindChildByClass(restored, ContentHostClass)) != IntPtr.Zero, 5000, 150);
+
+        GuestInfo pigB = SpawnPig(ctx, "RS2", "--color", "green");
+        CaptureIntoExistingGroupViaAddButton(ctx, restored, restoredHost, pigB);
+        ctx.Check(Util.WaitUntil(() => IsDocked(pigB.Hwnd, restoredHost), 5000),
+            $"pig '{pigB.Title}' re-captured into the restored shell");
+        ctx.Check(TabCount(restored) == 1, "restored shell holds 1 live tab");
+
+        NativeMethods.PostMessage(pigB.Hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        ctx.Check(Util.WaitUntil(() => pigB.Proc!.HasExited, 5000), "re-captured pig exited after WM_CLOSE");
+        ctx.Check(Util.WaitUntil(() => StateJsonContains("TDVAL-RSMR"), 5000),
+            "group name survived the re-captured member being destroyed (RemoveDeadMember guard)");
+        ctx.Check(Util.WaitUntil(() => StateJsonContains(pigA.Title), 5000),
+            "original tab metadata survived the re-captured member being destroyed (not wiped)");
+
+        // Phase 2b: relaunch again, re-capture, tray-hide via --hide-on-close.
+        ctx.TabDock.Kill();
+        ctx.Check(Util.WaitUntil(() => ctx.TabDock.HasExited, 5000), "TabDock force-killed (phase 2b)");
+        Thread.Sleep(1000);
+        ctx.TabDock = Relaunch();
+        ctx.TabDockPid = (uint)ctx.TabDock.Id;
+        ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
+        IntPtr restored2 = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TDVAL-RSMR", 10000);
+        ctx.Check(restored2 != IntPtr.Zero, "restored container 'TDVAL-RSMR' reopened after second relaunch");
+        if (restored2 != IntPtr.Zero)
+            ctx.Containers.Add(restored2);
+        IntPtr restoredHost2 = IntPtr.Zero;
+        Util.WaitUntil(() => (restoredHost2 = Discover.FindChildByClass(restored2, ContentHostClass)) != IntPtr.Zero, 5000, 150);
+
+        GuestInfo pigC = SpawnPig(ctx, "RS3", "--color", "blue", "--hide-on-close", "--close-button");
+        CaptureIntoExistingGroupViaAddButton(ctx, restored2, restoredHost2, pigC);
+        ctx.Check(Util.WaitUntil(() => IsDocked(pigC.Hwnd, restoredHost2) || IsReleasedAndHidden(pigC.Hwnd), 5000),
+            $"pig '{pigC.Title}' re-captured into the restored shell (phase 2b)");
+        AutomationElement? tabC = FindTabText(restored2, pigC.Title, out int tabCount);
+        if (tabC == null || tabCount != 1)
+            throw new InvalidOperationException($"Tab for '{pigC.Title}' not found uniquely (count={tabCount}).");
+        (int txc, int tyc) = Uia.Center(tabC);
+        Input.ClickAt(txc, tyc);
+        Thread.Sleep(500);
+        ctx.Check(Util.WaitUntil(() => IsDocked(pigC.Hwnd, restoredHost2), 3000), "pigC is the active (docked) tab");
+
+        AutomationElement pigEl = Uia.FromHwnd(pigC.Hwnd) ?? throw new InvalidOperationException("Pig UIA element unavailable.");
+        AutomationElement? closeBtn = Uia.FindDescendantByName(pigEl, ControlType.Button, "X-CLOSE", null, out int closeCount);
+        if (closeBtn == null || closeCount != 1)
+            throw new InvalidOperationException($"X-CLOSE button not found uniquely in pig (count={closeCount}).");
+        if (!Input.ForceForegroundRoot(pigC.Hwnd))
+            throw new InvalidOperationException("Could not bring the captured pig to the foreground — refusing to click blind.");
+        (int bx, int by) = Uia.Center(closeBtn);
+        Input.ClickAt(bx, by);
+        ctx.Check(Util.WaitUntil(() => IsReleasedAndHidden(pigC.Hwnd), 5000), "pigC hidden (tray-style close)");
+        ctx.Check(Util.WaitUntil(() => StateJsonContains("TDVAL-RSMR"), 5000),
+            "group name survived the re-captured member being tray-hidden (RemoveDeadMember guard)");
+        ctx.Check(Util.WaitUntil(() => StateJsonContains(pigA.Title), 5000),
+            "original tab metadata survived the re-captured member being tray-hidden (not wiped)");
+
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+        ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
+    }
+
+    // -------------------------------------------------------------------------
+    // Self-minimize restore-timer race: a captured guest minimized via its OWN
+    // native title-bar minimize button starts a 200ms deferred restore check
+    // (ContainerWindow.RestoreMinimizedWindow). If its tab is released before the
+    // check fires, the stale timer must NOT force-restore/reposition the released
+    // guest. The assertion is a bound ("no restore/reposition occurs"), so a slow
+    // machine where the race is never exercised false-passes rather than
+    // false-fails — accepted (design D7/Risks).
+    // -------------------------------------------------------------------------
+    private static void SelfMinimizeTimerVsTeardown(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "SMT", "--color", "red");
+        NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT preCaptureRect);
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "pig docked over host right after capture");
+        NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT dockedRect);
+
+        // Minimize the guest via its OWN native minimize button (real input at the
+        // guest's caption chrome) — starts the 200ms RestoreMinimizedWindow check.
+        ClickNativeMinimizeButton(pig.Hwnd);
+        ctx.Check(Util.WaitUntil(() => NativeMethods.IsIconic(pig.Hwnd), 3000),
+            "pig minimized via its own native minimize button");
+
+        // IMMEDIATELY release the tab via the context menu. On a slow machine the
+        // 200ms check fires first (legitimately restoring the still-captured tab);
+        // the bound below still holds. On a fast machine the release beats the
+        // timer and the stale-timer guard is exercised.
+        ClickTabMenuItem(ctx, container, pig.Title, "Pop out");
+        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(container) || TabCount(container) == 0, 5000),
+            "tab released by Pop out (container closed as the only tab)");
+
+        // Wait PAST the 200ms restore-check delay with generous headroom.
+        Thread.Sleep(600);
+
+        NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT rcNow);
+        ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "pig process still alive after teardown");
+        ctx.Check(NativeMethods.IsWindowVisible(pig.Hwnd) && !NativeMethods.IsIconic(pig.Hwnd),
+            "released pig is visible and NOT iconic after the restore-check delay would have fired");
+        ctx.Check(Util.RectNear(preCaptureRect, rcNow, 10),
+            $"released pig still at its pre-capture placement — not repositioned by a stale restore timer (before {Util.FormatRect(preCaptureRect)}, now {Util.FormatRect(rcNow)})");
+        ctx.Check(!Util.RectNear(dockedRect, rcNow, 4),
+            "released pig is NOT back over the former docked area (no spurious restore/reposition)");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+        ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
+    }
+
+    // -------------------------------------------------------------------------
+    // The launcher's "No groups yet" empty-state hint must be visible with zero
+    // groups and hidden once a group exists (MainWindow.xaml DataTrigger on
+    // Groups.Count). Pure UIA read — no input is ever sent to the hint element.
+    // -------------------------------------------------------------------------
+    private static void LauncherEmptyStateHint(Ctx ctx, Options opt)
+    {
+        AutomationElement? mainEl = Uia.FromHwnd(ctx.MainHwnd);
+        ctx.Check(mainEl != null, "launcher MainWindow UIA element available");
+        int hintCount = 0;
+        AutomationElement? hint = mainEl == null
+            ? null
+            : Uia.FindDescendantByName(mainEl, ControlType.Text, null, "No groups yet", out hintCount);
+        ctx.Check(hint != null && hintCount == 1, $"launcher empty-state hint 'No groups yet' found uniquely (count={hintCount})");
+
+        bool hintVisible = false;
+        if (hint != null)
+        {
+            try
+            {
+                hintVisible = !hint.Current.IsOffscreen
+                    && !hint.Current.BoundingRectangle.IsEmpty
+                    && hint.Current.BoundingRectangle.Width > 0
+                    && hint.Current.BoundingRectangle.Height > 0;
+            }
+            catch (Exception ex)
+            {
+                GuardedProc.Log($"  LauncherEmptyStateHint: reading hint UIA state threw: {ex.Message}");
+            }
+        }
+        ctx.Check(hintVisible, "empty-state hint is visible (not offscreen/collapsed) with zero groups");
+
+        // Capture a pig into a new group; the hint must disappear.
+        GuestInfo pig = SpawnPig(ctx, "LEH", "--color", "blue");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+        ctx.Check(TabCount(container) == 1, "1 tab after capture");
+
+        AutomationElement? mainEl2 = Uia.FromHwnd(ctx.MainHwnd);
+        int hintCount2 = 0;
+        AutomationElement? hint2 = mainEl2 == null
+            ? null
+            : Uia.FindDescendantByName(mainEl2, ControlType.Text, null, "No groups yet", out hintCount2);
+        bool hintGone = false;
+        try
+        {
+            hintGone = hint2 == null || hintCount2 == 0
+                || hint2.Current.IsOffscreen
+                || hint2.Current.BoundingRectangle.IsEmpty
+                || hint2.Current.BoundingRectangle.Width == 0
+                || hint2.Current.BoundingRectangle.Height == 0;
+        }
+        catch (Exception ex)
+        {
+            hintGone = true;
+            GuardedProc.Log($"  LauncherEmptyStateHint: hint2 UIA read threw: {ex.Message}");
+        }
+        ctx.Check(hintGone, "empty-state hint is no longer visible once a group exists");
+        ctx.Check(IsDocked(pig.Hwnd, host), "captured pig docked over host");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
+        ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
     }
 
     // -------------------------------------------------------------------------
@@ -2757,6 +3360,36 @@ button { padding: 24px 48px; font-size: 24px; }
 document.getElementById('btn').addEventListener('click', function() {
     document.body.style.backgroundColor = '#00aa00';
 });
+</script>
+</body>
+</html>");
+        return path;
+    }
+
+    /// <summary>
+    /// Deterministic local page for the H4 Chromium live-render check: a white
+    /// page with a black square that blinks on a 500ms cycle. Brightness stays
+    /// high (white background) while the blinking square guarantees inter-frame
+    /// variance &gt; 0 — a black/frozen PrintWindow capture fails both floors.
+    /// </summary>
+    private static string CreateBrowserRenderTestPage()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "TabDock-Validation");
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "browser-render-test.html");
+        File.WriteAllText(path, @"<!DOCTYPE html>
+<html>
+<head><meta charset='utf-8'><style>
+body { margin: 0; width: 100vw; height: 100vh; background: white; }
+#blink { position: fixed; top: 20px; left: 20px; width: 120px; height: 120px; background: black; }
+</style></head>
+<body>
+<div id='blink'></div>
+<script>
+setInterval(function() {
+    var el = document.getElementById('blink');
+    el.style.opacity = el.style.opacity === '0' ? '1' : '0';
+}, 500);
 </script>
 </body>
 </html>");

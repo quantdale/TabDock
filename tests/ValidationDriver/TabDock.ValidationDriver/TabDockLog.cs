@@ -89,79 +89,64 @@ internal static class TabDockLog
     }
 
     /// <summary>
-    /// Checks whether any real (non-"skipped"/"giving up") LAYOUT[drift] correction
-    /// fired for a guest with no LAYOUT[movesize] line for that same guest HWND in
-    /// the preceding <paramref name="windowMs"/> milliseconds. See
-    /// docs/internal/TEST_PLAN.md section 5.5: this is the decider for whether the
-    /// 1s drift watchdog is doing real work (catching programmatic self-moves the
-    /// MOVESIZEEND hook cannot see) or is redundant with it. Returns the offending
-    /// line(s) so a caller can log concrete evidence either way.
+    /// Analyzes the `Reordered tab {old}->{new} in group ...` lines (GroupManager.MoveTab,
+    /// Services/GroupManager.cs) appended since <paramref name="offset"/>: returns the total
+    /// reorder count and the number of immediate flip-back pairs — a reorder X→Y directly
+    /// followed by Y→X for the same dragged tab. That reversal is the structural signature
+    /// of the H2 drag-reorder oscillation (a tab dragged across a neighbor's midpoint
+    /// re-fires MoveTab on every mouse tick, swapping back and forth), and it is
+    /// machine-speed-independent, unlike a raw count. The count is a secondary churn
+    /// ceiling: a correct frozen-midpoint drag produces a small bounded number of reorders,
+    /// while the H2 bug produced hundreds of A↔B flips per drag.
+    ///
+    /// Hand-simulated sanity check (task 2.4): the lines "Reordered tab 1->0 in group g"
+    /// then "Reordered tab 0->1 in group g" parse to (old=1,new=0) then (old=0,new=1);
+    /// prev.Old(1)==newIndex(1) and prev.New(0)==oldIndex(0) → one flip-back pair, count=2.
+    /// The same direction twice ("1->0","1->0") → count=2, flips=0. A single "1->0" →
+    /// count=1, flips=0. All as expected.
     /// </summary>
-    public static List<string> FindDriftWithoutPrecedingMovesize(long offset, int windowMs = 2000)
+    public static (int ReorderCount, int FlipBackPairs) AnalyzeReorders(long offset)
     {
-        var offenders = new List<string>();
-        string[] lines = ReadNewLines(offset);
-
-        var movesizeTimesByGuest = new Dictionary<string, List<DateTime>>();
-        var parsed = new List<(DateTime Time, string Line)>();
-        foreach (string line in lines)
+        int count = 0;
+        int flips = 0;
+        (int Old, int New)? prev = null;
+        foreach (string line in ReadNewLines(offset))
         {
-            DateTime? t = ParseTimestamp(line);
-            if (t == null)
+            int idx = line.IndexOf("Reordered tab ", StringComparison.Ordinal);
+            if (idx < 0)
                 continue;
-            parsed.Add((t.Value, line));
-            if (line.Contains("LAYOUT[movesize]", StringComparison.Ordinal))
-            {
-                string? guest = ExtractGuestToken(line);
-                if (guest != null)
-                {
-                    if (!movesizeTimesByGuest.TryGetValue(guest, out var list))
-                        movesizeTimesByGuest[guest] = list = new List<DateTime>();
-                    list.Add(t.Value);
-                }
-            }
-        }
-
-        foreach (var (time, line) in parsed)
-        {
-            if (!line.Contains("LAYOUT[drift]", StringComparison.Ordinal))
+            if (!TryParseReorder(line, idx + "Reordered tab ".Length, out int oldIndex, out int newIndex))
                 continue;
-            if (line.Contains("skipped", StringComparison.OrdinalIgnoreCase) || line.Contains("giving up", StringComparison.OrdinalIgnoreCase))
-                continue; // Not a real correction — no guest was actually repositioned.
-
-            string? guest = ExtractGuestToken(line);
-            bool hasRecentMovesize = guest != null
-                && movesizeTimesByGuest.TryGetValue(guest, out var times)
-                && times.Exists(mt => mt <= time && (time - mt).TotalMilliseconds <= windowMs);
-
-            if (!hasRecentMovesize)
-                offenders.Add(line);
+            count++;
+            if (prev.HasValue && prev.Value.Old == newIndex && prev.Value.New == oldIndex)
+                flips++;
+            prev = (oldIndex, newIndex);
         }
-        return offenders;
+        return (count, flips);
     }
 
-    /// <summary>Extracts the "guest=0x...." token (hwnd only, ignoring the rest of the descriptor) for correlation.</summary>
-    private static string? ExtractGuestToken(string line)
+    private static bool TryParseReorder(string line, int start, out int oldIndex, out int newIndex)
     {
-        int idx = line.IndexOf("guest=0x", StringComparison.Ordinal);
-        if (idx < 0)
-            return null;
-        int start = idx + "guest=0x".Length;
-        int end = start;
-        while (end < line.Length && Uri.IsHexDigit(line[end]))
-            end++;
-        return end > start ? line.Substring(start, end - start) : null;
+        oldIndex = 0;
+        newIndex = 0;
+        int i = start;
+        if (!TryReadInt(line, ref i, out oldIndex))
+            return false;
+        if (i + 1 >= line.Length || line[i] != '-' || line[i + 1] != '>')
+            return false;
+        i += 2;
+        return TryReadInt(line, ref i, out newIndex);
     }
 
-    private static DateTime? ParseTimestamp(string line)
+    private static bool TryReadInt(string line, ref int i, out int value)
     {
-        // Lines are "[yyyy-MM-dd HH:mm:ss.fff] message...".
-        if (line.Length < 25 || line[0] != '[')
-            return null;
-        int close = line.IndexOf(']');
-        if (close < 0)
-            return null;
-        string stamp = line.Substring(1, close - 1);
-        return DateTime.TryParse(stamp, out DateTime dt) ? dt : (DateTime?)null;
+        value = 0;
+        int begin = i;
+        while (i < line.Length && (uint)(line[i] - '0') <= 9u)
+        {
+            value = value * 10 + (line[i] - '0');
+            i++;
+        }
+        return i > begin;
     }
 }
