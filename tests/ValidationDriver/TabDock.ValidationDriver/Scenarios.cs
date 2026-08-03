@@ -1096,6 +1096,26 @@ internal static class Scenarios
         return clickable;
     }
 
+    /// <summary>
+    /// Verifies a real click at (x, y) will land on <paramref name="target"/>:
+    /// WindowFromPoint at the point must resolve (via GA_ROOT) to the target.
+    /// Returns Zero when clickable; otherwise logs which window actually sits
+    /// at the point and returns its root HWND. Unlike
+    /// <see cref="EnsureClickable"/>, this runs unconditionally — even a
+    /// successful ForceForeground does not un-cover the point, and the
+    /// covering window swallows both the click and any typed text.
+    /// </summary>
+    private static IntPtr FindObstructingWindow(IntPtr target, int x, int y)
+    {
+        IntPtr atPoint = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = x, y = y });
+        IntPtr rootAtPoint = NativeMethods.GetAncestor(atPoint, NativeMethods.GA_ROOT);
+        if (rootAtPoint == target)
+            return IntPtr.Zero;
+        string windowText = rootAtPoint == IntPtr.Zero ? "(none)" : NativeMethods.GetWindowTextString(rootAtPoint) ?? "(untitled)";
+        GuardedProc.Log($"  clickability: click point ({x},{y}) resolves to 0x{rootAtPoint.ToInt64():X} '{windowText}' instead of 0x{target.ToInt64():X} — target obscured, skipping this attempt.");
+        return rootAtPoint;
+    }
+
     private static void ClickTabMenuItem(Ctx ctx, IntPtr container, string guestTitle, string menuItemName)
     {
         AutomationElement? tab = FindTabText(container, guestTitle, out int count);
@@ -1519,18 +1539,35 @@ internal static class Scenarios
         NativeMethods.GetWindowRect(container, out NativeMethods.RECT rcBefore);
         if (!Input.ForceForeground(container))
             throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
-        (int cx, int cy) = Uia.Center(caption);
-        Input.DoubleClickAt(cx, cy);
-        Thread.Sleep(300);
-        Input.TypeText("TDVAL-Renamed");
-        Input.SendKey(Input.VK_RETURN);
+        // Retry with a clickability gate: ForceForeground succeeding does not
+        // guarantee the caption point is unobstructed, and a covering top-level
+        // window silently swallows both the double-click and the typed text
+        // (observed on 2026-08-03: rename failed while an overlapping window
+        // covered the caption; the same step passed on attempt 1 in the same
+        // run as soon as the desktop was clear).
+        bool renamed = false;
+        for (int attempt = 0; attempt < 3 && !renamed; attempt++)
+        {
+            if (attempt > 0)
+                Input.ForceForeground(container);
+            AutomationElement? cap = Uia.FindDescendantByName(containerEl, ControlType.Text, "Group", null, out int cnt);
+            if (cap == null || cnt != 1)
+                break;
+            (int cx, int cy) = Uia.Center(cap);
+            if (FindObstructingWindow(container, cx, cy) != IntPtr.Zero)
+                continue;
+            Input.DoubleClickAt(cx, cy);
+            Thread.Sleep(300);
+            Input.TypeText("TDVAL-Renamed");
+            Input.SendKey(Input.VK_RETURN);
+            renamed = Util.WaitUntil(() => NativeMethods.GetWindowTextString(container) == "TDVAL-Renamed", 2000);
+        }
 
+        ctx.Check(renamed, "container window text became 'TDVAL-Renamed' within 2s");
         ctx.Check(!NativeMethods.IsZoomed(container), "double-click did not maximize the container");
         NativeMethods.GetWindowRect(container, out NativeMethods.RECT rcAfter);
         ctx.Check(Util.RectNear(rcBefore, rcAfter, 0),
             $"container rect unchanged (before {Util.FormatRect(rcBefore)}, after {Util.FormatRect(rcAfter)})");
-        ctx.Check(Util.WaitUntil(() => NativeMethods.GetWindowTextString(container) == "TDVAL-Renamed", 2000),
-            "container window text became 'TDVAL-Renamed' within 2s");
         ctx.Check(Util.WaitUntil(() => StateJsonContains("TDVAL-Renamed"), 3000),
             "state.json contains 'TDVAL-Renamed' without exiting TabDock");
     }
@@ -1808,6 +1845,16 @@ internal static class Scenarios
             ClickMaximizeButton(container);
             Thread.Sleep(1500);
             (double bMax, double vMax) = SampleHost(host);
+            // The pig's --pulse toggles its background every 500 ms and the two
+            // SampleHost frames are ~1500 ms apart (3 pulse periods), so the
+            // frames can land on the same phase and read variance=0 with a
+            // perfectly live window (observed: brightness 228, variance 0.0000).
+            // Re-sample at a different phase before treating it as frozen.
+            for (int retry = 0; retry < 3 && vMax <= 0.005; retry++)
+            {
+                Thread.Sleep(700);
+                (bMax, vMax) = SampleHost(host);
+            }
             DumpGeometry(ctx, container, host, guest, $"cycle{cycle} after-maximize");
             bool geoMaxOk = GuestMatchesHost(guest.Hwnd, host, out string geoMax);
             GuardedProc.Log($"  cycle {cycle}: brightnessAfterMax={bMax:F2} varianceAfterMax={vMax:F4}");
@@ -1816,6 +1863,11 @@ internal static class Scenarios
             ClickMaximizeButton(container);
             Thread.Sleep(1500);
             (double bRest, double vRest) = SampleHost(host);
+            for (int retry = 0; retry < 3 && vRest <= 0.005; retry++)
+            {
+                Thread.Sleep(700);
+                (bRest, vRest) = SampleHost(host);
+            }
             DumpGeometry(ctx, container, host, guest, $"cycle{cycle} after-restore");
             bool geoRestOk = GuestMatchesHost(guest.Hwnd, host, out string geoRest);
             GuardedProc.Log($"  cycle {cycle}: brightnessAfterRestore={bRest:F2} varianceAfterRestore={vRest:F4}");
@@ -1898,6 +1950,8 @@ internal static class Scenarios
             bool renamed = false;
             for (int attempt = 0; attempt < 3 && !renamed; attempt++)
             {
+                if (FindObstructingWindow(container, cx, cy) != IntPtr.Zero)
+                    continue;
                 Input.DoubleClickAt(cx, cy);
                 Thread.Sleep(300);
                 Input.TypeText("TDVAL-Renamed");
@@ -1996,9 +2050,13 @@ internal static class Scenarios
             ctx.Check(addBtn != null, "container '+' button located via UIA");
             if (addBtn != null)
             {
-                if (!Input.ForceForeground(container))
-                    throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
+                // Compute the point before attempting foreground; if
+                // ForceForeground fails, fall back to the point-obscured check
+                // (same pattern as ClickAddWindowButton) — a real click at an
+                // unobstructed point grants foreground via click-to-activate.
                 (int ax, int ay) = Uia.Center(addBtn);
+                if (!EnsureClickable(container, ax, ay))
+                    throw new InvalidOperationException("Could not bring the container to the foreground and its '+' button is obscured — refusing to click blind.");
                 Input.ClickAt(ax, ay);
                 IntPtr picker2 = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 6000);
                 ctx.Check(picker2 != IntPtr.Zero, "picker appeared from container '+' with launcher closed");
