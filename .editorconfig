@@ -1,0 +1,45 @@
+# TabDock .editorconfig
+# Encodes the code style conventions documented in AGENTS.md: file-scoped
+# namespaces, explicit usings, nullable reference types, _camelCase private
+# fields, and 4-space indentation (verified against existing sources).
+
+root = true
+
+[*]
+charset = utf-8
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.md]
+trim_trailing_whitespace = false
+
+# ------------------------------------------------------------------------------
+# Indentation: 4 spaces for C#, XAML, and MSBuild sources (matches the repo)
+# ------------------------------------------------------------------------------
+[*.{cs,xaml,csproj,sln}]
+indent_style = space
+indent_size = 4
+
+# ------------------------------------------------------------------------------
+# C# style rules
+# ------------------------------------------------------------------------------
+[*.cs]
+# File-scoped namespaces are used throughout (e.g. namespace TabDock.Services;)
+csharp_style_namespace_declarations = file_scoped:suggestion
+
+# Explicit usings, placed before the file-scoped namespace declaration
+csharp_using_directive_placement = outside_namespace:suggestion
+
+# System usings first, then project usings
+dotnet_sort_system_directives_first = true
+
+# Private fields use _camelCase
+dotnet_naming_rule.private_fields_should_be_underscore_camel_case.severity = suggestion
+dotnet_naming_rule.private_fields_should_be_underscore_camel_case.symbols = private_fields
+dotnet_naming_rule.private_fields_should_be_underscore_camel_case.style = underscore_camel_case
+
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+
+dotnet_naming_style.underscore_camel_case.required_prefix = _
+dotnet_naming_style.underscore_camel_case.capitalization = camel_case

@@ -1,0 +1,31 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build main solution (TabDock app + Spike)
+        run: dotnet build TabDock.sln -c Release --nologo
+
+      - name: Build ValidationDriver harness
+        run: dotnet build tests/ValidationDriver/TabDock.ValidationDriver/TabDock.ValidationDriver.csproj -c Release --nologo
+
+      # The GuineaPig must be built without a -r RID: the harness resolves its exe at
+      # bin\Debug\net8.0-windows\ with no win-x64 subdirectory (see docs/TESTING.md).
+      - name: Build GuineaPig (no RID)
+        run: dotnet build tests/ValidationDriver/TabDock.GuineaPig/TabDock.GuineaPig.csproj -c Release --nologo

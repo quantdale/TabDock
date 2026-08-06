@@ -1,7 +1,7 @@
 # persistence-resilience
 
 ## Purpose
-TBD — covers robustness of persisted group metadata in `state.json`, including tolerance for malformed entries, preservation of corrupt files, accent-color validation, and the single-instance guard that protects shared persistence files.
+Covers robustness of persisted group metadata in `state.json`, including tolerance for malformed entries, preservation of corrupt files, accent-color validation, and the single-instance guard that protects shared persistence files.
 
 ## Requirements
 

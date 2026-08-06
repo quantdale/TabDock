@@ -11,8 +11,9 @@ using System.Threading.Tasks;
 namespace TabDock.Spike;
 
 /// <summary>
-/// Survival spike: reparent Notepad into a throwaway host window, kill the host,
-/// and check whether Notepad's HWND is still alive afterwards.
+/// Survival spike: reparent a Command Prompt into a throwaway host window, kill
+/// the host, and check whether the Command Prompt's HWND is still alive
+/// afterwards.
 /// </summary>
 internal static class Program
 {
@@ -305,7 +306,7 @@ internal static class Program
                 return 1;
             }
 
-            // Reparent Notepad into the host and strip its caption/border styles.
+            // Reparent the Command Prompt into the host and strip its caption/border styles.
             SetParent(childHwnd, hostHwnd);
 
             nint style = GetWindowLongPtr(childHwnd, NativeConstants.GWL_STYLE);

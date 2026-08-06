@@ -4,10 +4,11 @@ namespace TabDock.Models;
 
 /// <summary>
 /// A top-level window shepherded into a TabDock group (see
-/// Services/WindowShepherdService.cs). Nothing about the guest is ever
-/// mutated — no SetParent, no style/ex-style change, no owner change — so
-/// this only needs to snapshot enough to restore its on-screen placement and
-/// activation state on release, not undo any surgery.
+/// Services/WindowShepherdService.cs). The guest's window identity is never
+/// mutated — no SetParent, no style/ex-style change, no owner change — only
+/// reversible placement, z-order, visibility, and DWM transition-suppression
+/// changes are applied. This only needs to snapshot enough to restore its
+/// on-screen placement and activation state on release, not undo any surgery.
 /// </summary>
 public sealed class CapturedWindow
 {

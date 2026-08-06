@@ -94,7 +94,7 @@ repeated-cycle validation.
 ## HIGH
 
 ### H1. Render-health auto-release is never invoked for captured windows (documented recovery feature is dead) — **FIXED 2026-07-12**
-- **Fix:** `ContainerWindow.CaptureWindow` now routes through `AddCapturedWindow`, so `CheckRenderHealthAsync` (the releasing check) runs on every real capture; it sets and logs `CapturedWindow.RenderHealth` (consumed by the `STATE[...]` snapshot). The duplicate log-only check in `WindowCaptureService.Capture` was removed along with its now-dead `_renderHealth` field. Validated end-to-end (`renderhealth` scenario): a genuinely black-painting GuineaPig guest is detected unhealthy ~1s after capture and auto-released with the notification MessageBox; a white guest is not.
+- **Fix:** `ContainerWindow.CaptureWindow` now routes through `AddCapturedWindow`, so `CheckRenderHealthAsync` (the releasing check) runs on every real capture; it sets and logs `CapturedWindow.RenderHealth` (consumed by the `STATE[...]` snapshot). The duplicate log-only check in `WindowCaptureService.Capture` was removed along with its now-dead `_renderHealth` field. Validated end-to-end (`renderhealth` scenario — historical: the `renderhealth` guarding test was deleted with the Reparent backend, superseded by `realapp-multi-render`): a genuinely black-painting GuineaPig guest is detected unhealthy ~1s after capture and auto-released with the notification MessageBox; a white guest is not.
 - **Where:** `Views/ContainerWindow.xaml.cs` (`CaptureWindow` vs `AddCapturedWindow`); `Services/WindowCaptureService.cs:123-128`
 - **Description:** CLAUDE.md describes render health as "a recovery loop … triggers automatic release back to standalone." The only method that actually releases an unhealthy window, `ContainerWindow.AddCapturedWindow` → `CheckRenderHealthAsync`, has **no callers**. The real capture path (`ContainerWindow.CaptureWindow` → `_viewModel.AddCapturedWindow`) never runs a health check. `WindowCaptureService.Capture` schedules its own check that only *logs* and sets `cw.RenderHealth` — a flag nothing reads.
 - **Why it matters:** Black/frozen GPU/Electron/DirectX tabs — the exact failure the feature exists for — are never auto-released. The window stays as a dead-looking black tab.
@@ -181,7 +181,7 @@ repeated-cycle validation.
   `TabDockLog.FindDriftWithoutPrecedingMovesize` assertion) — the 1s watchdog is
   present but never had to fire alone against any real-input scenario run this
   session. Guarding tests: `chrometabdrag`, `browser-tabswitch-hidesafety`,
-  `browser-lifecycle`, `browser-dragreorder`.
+  `browser-lifecycle`, `browser-dragreorder`. *(historical: the `LAYOUT[*]` instrumentation and the `FindDriftWithoutPrecedingMovesize` assertion were removed post-Shepherd)*
 - **Severity:** High (co-produced the reported smear together with H4)
 
 ---

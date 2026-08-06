@@ -16,8 +16,12 @@
   </trustInfo>
 
   <!--
-    Per-Monitor-V2 DPI awareness is required for SetParent to behave predictably
-    when child and parent windows run under different DPI awareness contexts.
+    Per-Monitor-V2 DPI awareness is required for correct per-monitor DPI of the
+    container window and its tab strip: WPF lays out in DIPs that resolve against
+    the process awareness, and under PerMonitorV2 each top-level window tracks
+    its own monitor's DPI. (Previously justified by SetParent behaving
+    predictably across DPI-awareness contexts; that backend was deleted — guests
+    are never reparented and keep their own native DPI handling.)
   -->
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>

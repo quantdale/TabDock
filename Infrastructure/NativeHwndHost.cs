@@ -22,8 +22,10 @@ namespace TabDock.Infrastructure;
 /// docs/internal/deep-audit-2026-07-17.md traces the recurring keyboard-input
 /// bugs directly to cross-process SetParent + AttachThreadInput, and TabDock
 /// now exclusively uses the "Shepherd" model (Services/WindowShepherdService.cs)
-/// — a captured guest stays a completely unmodified top-level window; Windows
-/// manages its focus and activation exactly as if TabDock didn't exist.
+/// — a captured guest keeps its identity as a top-level window: no style/parent/
+/// owner mutation, only reversible placement, z-order, visibility, and DWM
+/// transition-suppression changes. Windows manages its focus and activation
+/// exactly as if TabDock didn't exist.
 /// </summary>
 public class NativeHwndHost : HwndHost
 {

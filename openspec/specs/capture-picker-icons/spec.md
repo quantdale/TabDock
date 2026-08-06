@@ -1,7 +1,7 @@
 # capture-picker-icons
 
 ## Purpose
-TBD — captures icon-caching behavior for the capture picker's `IconService`, ensuring icons for windows sharing an executable path are extracted at most once per process lifetime.
+Captures icon-caching behavior for the capture picker's `IconService`, ensuring icons for windows sharing an executable path are extracted at most once per process lifetime.
 
 ## Requirements
 

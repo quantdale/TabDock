@@ -1,0 +1,45 @@
+##
+# TabDock .gitattributes
+# Repository: TabDock (.NET 8 / WPF / C# 12, Windows desktop utility)
+#
+# Line-ending policy. The working tree intentionally mixes CRLF sources
+# (C#/XAML/MSBuild files expected by Visual Studio and the WPF toolchain)
+# and LF files (docs, PowerShell scripts, YAML/JSON). `* text=auto` keeps
+# every text file normalized to LF in the repository; the per-type `eol=`
+# rules below pin checkout line endings so they are stable regardless of a
+# developer's `core.autocrlf` setting.
+#
+# NOTE: after this file lands, the maintainer must run a one-time
+# `git add --renormalize .` to rewrite the index with these attributes.
+# (Agents must not run git commands - this is a manual, one-time step.)
+##
+
+* text=auto
+
+# ------------------------------------------------------------------------------
+# CRLF on checkout: Windows-native toolchain sources
+# ------------------------------------------------------------------------------
+*.cs     text eol=crlf
+*.xaml   text eol=crlf
+*.csproj text eol=crlf
+*.sln    text eol=crlf
+
+# ------------------------------------------------------------------------------
+# LF on checkout: docs, scripts, and config
+# ------------------------------------------------------------------------------
+*.md    text eol=lf
+*.ps1   text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+
+# ------------------------------------------------------------------------------
+# Binary assets: never normalized, never diffed as text
+# ------------------------------------------------------------------------------
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.bmp  binary
+*.ico  binary
+*.pdf  binary

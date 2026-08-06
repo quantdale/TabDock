@@ -3,11 +3,24 @@ schema: spec-driven
 # Project context (optional)
 # This is shown to AI when creating artifacts.
 # Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Tech stack: C# 12 / .NET 8 / WPF (net8.0-windows), Windows 10/11 x64.
+  Native interop is P/Invoke only - no third-party NuGet packages.
+  Capture model: "Shepherd" - guests are never reparented; TabDock positions
+  and z-orders the external HWND over the container's content area.
+  Architecture: Services/ (GroupManager, WindowShepherdService,
+  GuestLifecycleService, WinEventMonitor, PersistenceService, HotkeyService,
+  IconService, LoggingService), Models/, ViewModels/, Views/,
+  Infrastructure/NativeHwndHost, Converters/.
+  Code style: file-scoped namespaces, explicit usings (ImplicitUsings
+  disabled), nullable reference types enabled, XML doc comments on public
+  types, all P/Invoke centralized in NativeMethods.cs.
+  Workflow: OpenSpec (spec-driven) - change proposals live in
+  openspec/changes/, capability specs in openspec/specs/.
+  Testing: tests/ValidationDriver (TabDock.ValidationDriver + GuineaPig)
+  drives TabDock via real SendInput at UIA-read coordinates; scenarios must
+  never assert on log instrumentation absent from committed source. See
+  docs/TESTING.md.
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.

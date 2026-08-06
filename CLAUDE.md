@@ -17,7 +17,7 @@ Build the main app:
 dotnet build TabDock.csproj
 ```
 
-Build the whole solution (main app + test harness + spike):
+Build the whole solution (main app + spike only — the solution does **not** include the test harness, which builds by project path):
 ```powershell
 dotnet build TabDock.sln
 ```
@@ -34,7 +34,7 @@ dotnet publish TabDock.csproj -c Release -r win-x64 --self-contained true -p:Pub
 
 Run the real-input validation driver (drives a fresh TabDock plus guinea-pig windows entirely through synthesized `SendInput` mouse/keyboard at UIA-read coordinates, then asserts on window state, pixels (`PrintWindow` for GPU-rendered guests — see Architecture below; `BitBlt` elsewhere), and both TabDock's and the pigs' message logs; interactive, spawns real apps — pass `--yes` to skip confirmation):
 ```powershell
-dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- [--yes] [--cycles N] [--guest pig|wt|chrome-nogpu|chrome-gpu] <scenario|all>
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- [--yes] [--cycles N] [--guest pig|wt|chrome-nogpu|chrome-gpu|chrome-normal|edge-normal|firefox-normal|codex|chatgptclassic] <scenario|all>
 ```
 `TabDock.GuineaPig` is the disposable target app it spawns. Neither `ValidationDriver` project is in `TabDock.sln` — build/run them by project path.
 

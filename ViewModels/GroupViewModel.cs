@@ -85,12 +85,13 @@ public sealed class GroupViewModel : ViewModelBase
 
     /// <summary>
     /// Raised when popping out the last tab leaves this group with zero members.
-    /// The destroy/hide WinEvent paths (App.RemoveDeadMember) already close an
-    /// emptied container automatically; pop-out via drag-out or the context menu
-    /// was the one path that left an empty container open indefinitely (finding
-    /// L11). Distinct from CloseRequested (raised by CloseGroup, itself invoked
-    /// from inside ContainerWindow's own Closing handler) to avoid re-entering
-    /// Window.Close from within its own Closing event.
+    /// The destroy/hide WinEvent paths (GuestLifecycleService.RemoveDeadMember)
+    /// already close an emptied container automatically; pop-out via drag-out or
+    /// the context menu was the one path that left an empty container open
+    /// indefinitely (finding L11). Distinct from CloseRequested (raised by
+    /// CloseGroup, itself invoked from inside ContainerWindow's own Closing
+    /// handler) to avoid re-entering Window.Close from within its own Closing
+    /// event.
     /// </summary>
     public event EventHandler? EmptiedByPopOut;
 
@@ -182,7 +183,7 @@ public sealed class GroupViewModel : ViewModelBase
     /// removal must not switch the user away from the window they are looking
     /// at, which happens on the release of any background tab — context-menu
     /// "Pop out" on one, or a background guest that closes or hides itself
-    /// (App.RemoveDeadMember routes both through here).
+    /// (GuestLifecycleService.RemoveDeadMember routes both through here).
     /// </summary>
     public void ReleaseTab(TabViewModel tab, bool show = true)
     {

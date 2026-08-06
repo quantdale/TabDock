@@ -1,7 +1,7 @@
 # container-activation-timers
 
 ## Purpose
-TBD — captures timer-coalescing behavior for `ContainerWindow`'s activation and state-change handlers, ensuring bursts of Windows messages don't spawn redundant, independently-running `DispatcherTimer` instances.
+Captures timer-coalescing behavior for `ContainerWindow`'s activation and state-change handlers, ensuring bursts of Windows messages don't spawn redundant, independently-running `DispatcherTimer` instances.
 
 ## Requirements
 

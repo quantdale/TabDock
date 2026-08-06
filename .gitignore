@@ -169,3 +169,17 @@ Transcript*.txt
 setup.exe
 output/
 artifacts/
+
+# ------------------------------------------------------------------------------
+# Node.js tooling (defensive; no Node projects in the repo today)
+# ------------------------------------------------------------------------------
+node_modules/
+
+# ------------------------------------------------------------------------------
+# Per-machine agent/IDE local settings
+# ------------------------------------------------------------------------------
+# Machine-specific tool state (e.g. Claude Code permission settings). These
+# were previously protected only by one developer's global gitignore; the
+# repo must ignore them for everyone.
+.claude/settings.local.json
+**/settings.local.json

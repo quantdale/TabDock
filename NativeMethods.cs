@@ -24,6 +24,7 @@ public static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
 
+    // DRIVER-ONLY: used by tests/ValidationDriver via link-include
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
 
@@ -57,6 +58,7 @@ public static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
+    // DRIVER-ONLY: used by tests/ValidationDriver via link-include
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr GetParent(IntPtr hWnd);
 
@@ -127,9 +129,7 @@ public static partial class NativeMethods
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
 
-    [DllImport("user32.dll")]
-    public static extern bool IsChild(IntPtr hWndParent, IntPtr hWnd);
-
+    // DRIVER-ONLY: used by tests/ValidationDriver via link-include
     [DllImport("user32.dll")]
     public static extern IntPtr WindowFromPoint(POINT Point);
 
@@ -145,23 +145,20 @@ public static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
+    // DRIVER-ONLY: used by tests/ValidationDriver via link-include
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr GetDC(IntPtr hWnd);
 
+    // DRIVER-ONLY: used by tests/ValidationDriver via link-include
     [DllImport("user32.dll")]
     public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
 
+    // DRIVER-ONLY: used by tests/ValidationDriver via link-include
     [DllImport("user32.dll")]
     public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
 
-    [DllImport("user32.dll")]
-    public static extern bool EnableWindow(IntPtr hWnd, bool bEnable);
-
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
-
-    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
-    public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll")]
     public static extern void PostQuitMessage(int nExitCode);
@@ -196,12 +193,11 @@ public static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool RedrawWindow(IntPtr hWnd, IntPtr lprcUpdate, IntPtr hrgnUpdate, uint flags);
-
+    // DRIVER-ONLY: used by tests/ValidationDriver via link-include
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SetCursorPos(int x, int y);
 
+    // DRIVER-ONLY: used by tests/ValidationDriver via link-include
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetCursorPos(out POINT lpPoint);
 
@@ -289,6 +285,7 @@ public static partial class NativeMethods
     [DllImport("gdi32.dll", SetLastError = true)]
     public static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int nWidth, int nHeight);
 
+    // DRIVER-ONLY: used by tests/ValidationDriver via link-include
     [DllImport("gdi32.dll", SetLastError = true)]
     public static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFO pbmi, uint iUsage, out IntPtr ppvBits, IntPtr hSection, uint dwOffset);
 
@@ -307,12 +304,10 @@ public static partial class NativeMethods
     [DllImport("gdi32.dll", SetLastError = true)]
     public static extern int GetObject(IntPtr hgdiobj, int cbBuffer, out BITMAP lpvObject);
 
-    [DllImport("gdi32.dll", SetLastError = true)]
-    public static extern int GetDIBits(IntPtr hdc, IntPtr hbm, uint uStartScan, uint cScanLines, IntPtr lpvBits, ref BITMAPINFO lpbmi, uint uUsage);
-
     [DllImport("gdi32.dll")]
     public static extern uint GetPixel(IntPtr hdc, int nXPos, int nYPos);
 
+    // DRIVER-ONLY: used by tests/ValidationDriver via link-include
     [DllImport("gdi32.dll", SetLastError = true)]
     public static extern bool BitBlt(IntPtr hdcDest, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, uint dwRop);
 
@@ -321,9 +316,6 @@ public static partial class NativeMethods
     // -------------------------------------------------------------------------
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr hwnd, uint dwAttribute, out bool pvAttribute, uint cbAttribute);
-
-    [DllImport("dwmapi.dll")]
-    public static extern int DwmIsCompositionEnabled(out bool pfEnabled);
 
     [DllImport("dwmapi.dll")]
     public static extern int DwmSetWindowAttribute(IntPtr hwnd, uint dwAttribute, ref int pvAttribute, uint cbAttribute);

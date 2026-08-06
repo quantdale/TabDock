@@ -10,20 +10,24 @@ namespace TabDock.Services;
 
 /// <summary>
 /// TabDock's only capture backend (docs/internal/deep-audit-2026-07-17.md,
-/// section 6). A shepherded guest remains an unmodified top-level window for
-/// its entire captured lifetime: no SetParent, no style/ex-style mutation, no
-/// DPI-message forwarding, no cross-thread input attachment. Instead, the
-/// guest is positioned directly over the container's content area and brought
-/// to the true top of the z-order (SetWindowPos with hwndInsertAfter =
-/// HWND_TOP — passing the container itself here would place the guest
+/// section 6). A shepherded guest is never restyled, reparented, or re-owned
+/// for its entire captured lifetime: no SetParent, no style/ex-style mutation,
+/// no owner change, no DPI-message forwarding, no cross-thread input
+/// attachment. The only mutations are reversible presentation state —
+/// placement, z-order, visibility, and DWM transition suppression
+/// (DWMWA_TRANSITIONS_FORCEDISABLED, set at capture, restored on release).
+/// Instead, the guest is positioned directly over the container's content area
+/// and brought to the true top of the z-order (SetWindowPos with hwndInsertAfter
+/// = HWND_TOP — passing the container itself here would place the guest
 /// *behind* it, since hwndInsertAfter precedes hWnd in z-order), then the
 /// container is immediately pinned right behind the guest so nothing else can
 /// slot between them. Hidden with ShowWindow(SW_HIDE) when it is not the
 /// active tab.
 ///
-/// Because nothing about the guest is mutated, release is symmetric and
-/// simple: restore the placement snapshotted at capture time. There is no
-/// style/owner/parent surgery to get wrong, no permanently-downgraded DPI
+/// Because none of those mutations touch the guest's identity (style/parent/
+/// owner), release is symmetric and simple: restore the placement snapshotted
+/// at capture time, re-show it, and undo the DWM transition suppression. There
+/// is no style/owner/parent surgery to get wrong, no permanently-downgraded DPI
 /// awareness, and no compositor invalidation from reparenting — the guest
 /// renders and receives input exactly as if it were never touched. This is
 /// what eliminates the keyboard-input bug class the project used to have:
@@ -318,9 +322,11 @@ public sealed class WindowShepherdService
 
     /// <summary>
     /// Releases a shepherded guest back to its original placement. Because
-    /// nothing about the guest was mutated while docked (no style, no parent,
-    /// no owner), this only needs to restore the placement snapshotted at
-    /// capture — there is no style/owner/parent surgery to undo. When
+    /// nothing about the guest's identity was mutated while docked (no style,
+    /// no parent, no owner — only reversible placement, z-order, visibility,
+    /// and DWM transition-suppression changes), this only needs to restore the
+    /// placement snapshotted at capture and undo the transition suppression —
+    /// there is no style/owner/parent surgery to undo. When
     /// <paramref name="show"/> is false the window is left hidden
     /// (guest-initiated hide / tray-style close) and journaled the same as
     /// <see cref="Hide"/>.

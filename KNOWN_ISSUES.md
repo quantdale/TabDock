@@ -426,7 +426,7 @@ request (`docs/internal/TEST_PLAN.md`); it does not replace
 
 | ID | Issue | Status | Guarding test(s) |
 |----|-------|--------|-------------------|
-| H1 | Render-health auto-release never invoked | Fixed + covered | `renderhealth` |
+| H1 | Render-health auto-release never invoked | Fixed + covered | `renderhealth` (deleted with the Reparent backend; superseded by `realapp-multi-render`) |
 | H2 | Drag-reorder oscillation (fires every MouseMove) | Fixed + covered (real browser too) | `dragreorder`, `browser-dragreorder` |
 | H3 | Global hotkey throws after MainWindow closed | Fixed + covered | `hotkey-afterclose` |
 | H4 | Content-host NULL background brush (smear) | Fixed + covered (real browser too) | `chrometabdrag`, `browser-lifecycle` |
@@ -628,7 +628,7 @@ regression — no app code path differs between the flaky and clean runs.
   self-repositioning guest (e.g. an app that moves itself programmatically
   after capture), so the "is the watchdog still earning its keep" question
   from the original validation checklist is answered "yes for these
-  scenarios," not "yes universally."
+  scenarios," not "yes universally." *(historical: `LAYOUT[*]` instrumentation and its assertions were removed post-Shepherd)*
 - **Render-health one-shot check** (checked ~800ms after capture only, not a
   recurring loop) — explicitly out of scope for this round per instruction;
   accepted and documented, not implemented.

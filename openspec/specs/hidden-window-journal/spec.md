@@ -1,7 +1,7 @@
 # hidden-window-journal
 
 ## Purpose
-TBD — captures the in-memory caching and write-durability semantics of `WindowShepherdService`'s hidden-window journal (`hidden-windows.json`), balancing crash-safety for hides against write-amplification for clears.
+Captures the in-memory caching and write-durability semantics of `WindowShepherdService`'s hidden-window journal (`hidden-windows.json`), balancing crash-safety for hides against write-amplification for clears.
 
 ## Requirements
 

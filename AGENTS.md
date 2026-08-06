@@ -137,13 +137,13 @@ This produces one distributable file with no external runtime dependency. Native
 dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --yes <scenario|all>
 ```
 
-The harness expects `TabDock.exe` and `TabDock.GuineaPig.exe` to already be built in `bin\Debug\net8.0-windows\win-x64\`. `TabDock.GuineaPig` is a tiny WinForms app whose only job is to be captured/released/dragged while logging the window messages it receives; its command-line switches (`--title`, `--color`, `--pulse`, `--hide-on-close`, `--minimize-then-hide-on-close`, `--self-close-after`, `--click-counter-button`, `--text-box`) let scenarios exercise specific guest behaviors deterministically.
+The harness expects `TabDock.exe` to be built in `bin\Debug\net8.0-windows\win-x64\` and resolves the pig at `tests\ValidationDriver\TabDock.GuineaPig\bin\Debug\net8.0-windows\TabDock.GuineaPig.exe` — note the missing `win-x64` RID (see `Scenarios.cs:83`) — so build `TabDock.GuineaPig` **without** `-r win-x64`. `TabDock.GuineaPig` is a tiny WinForms app whose only job is to be captured/released/dragged while logging the window messages it receives; its command-line switches (`--title`, `--color`, `--pulse`, `--hide-on-close`, `--minimize-then-hide-on-close`, `--self-close-after`, `--click-counter-button`, `--text-box`) let scenarios exercise specific guest behaviors deterministically.
 
 Since a Shepherd guest is never reparented, "is this guest captured/released" can no longer be read off `WS_CHILD`/`GetParent` (both are permanently unchanged) — scenarios instead compare the guest's `GetWindowRect` against the container's content-area marker (`IsDocked`/`IsReleasedAndShown`/`IsReleasedAndHidden` helpers in `Scenarios.cs`). Notable scenarios beyond the general capture/release/tab-switch coverage: `dragout-by-titlebar` (drag the guest's own native title bar past/under the pop-out threshold), `directclick-foreground-pairing` (click the guest directly, bypassing TabDock's own UI, and verify z-order re-pairing), `crashkill-rescue` (force-kill TabDock with a hidden tab captured, relaunch, verify the crash-recovery journal restores it), `realapp-multi-render` (real apps, `PrintWindow`-verified live rendering, byte-identical placement/style/exstyle/parent before vs. after capture+release — this replaced the old, Reparent-only `tests/CaptureReleaseTest` project, since a `PrintWindow` capture of a GPU-rendered guest reads its own back-buffer directly and isn't affected by whatever else is on top of it on screen, unlike a `BitBlt`-based screen-region capture), and `keyboardinput-*-altswitch` (the direct regression test for the originally-reported "keyboard input stops after switching to another app and back" bug). The `expand-e2e-coverage` change added eight pig-only scenarios to `all` — `container-minimize-retains-tabs` (H6), `hotkey-hold-single-picker`, `popout-inactive-keeps-active`, `double-capture-refused`, `persist-active-tab-index`, `restored-group-survives-member-reclose`, `selfminimize-timer-vs-teardown`, `launcher-empty-state-hint` — hardened `dragreorder`/`browser-dragreorder` with the H2 oscillation bound (flip-back-pair + churn-ceiling assertions on `Reordered tab` lines), extended `browser-tabswitch-hidesafety` with per-switch `PrintWindow` live-render checks (H4), and enforced the rule that no scenario may assert on log instrumentation absent from committed source.
 
 The test requires interactive confirmation, spawns real applications, and kills them on completion or failure. Because it sends real input, do not touch the mouse or keyboard during a run, and do not run it unattended on a production machine. Known harness limitation: scenarios that must programmatically acquire foreground (`ForceForeground`) are flaky when the suite is driven from inside another foreground-holding interactive session (see `KNOWN_ISSUES.md`); treat such failures observed in that context as unverified until re-run standalone.
 
-Two PowerShell e2e scripts also live at `tests/e2e-capture-release.ps1` and `tests/e2e-stress-and-drag.ps1` — older one-off end-to-end checks against the published Release exe, written under the guarded-spawn pattern (see below).
+The two legacy PowerShell e2e scripts (`tests/e2e-capture-release.ps1`, `tests/e2e-stress-and-drag.ps1`) were removed: their Reparent-era assertions are invalid under the Shepherd never-reparent model (e.g. a vacuous `GetParent == 0` check), they hardcoded machine paths, and the ValidationDriver harness above supersedes them.
 
 ### Manual test checklist
 
@@ -217,9 +217,21 @@ The pattern was made mandatory after a runaway self-recursion incident in `Spike
 - Render-health failures and window teardown are best-effort and must not crash the container.
 - `LoggingService` itself is fail-safe; it catches and suppresses its own exceptions.
 
+### Commit messages
+
+One-line short imperative summary; no bare URLs and no `progress`/`WIP` placeholders as the summary.
+
+### Known dead/inert code (do not clean up)
+
+- `MainViewModel.SelectedGroup` — bound in `MainWindow.xaml` but never consumed.
+- `GroupViewModel.CloseGroupCommand` / `CloseRequested` — no binding and no subscriber.
+- `GroupViewModel.PickColorCommand` — deliberate inert placeholder (documented no-op; see `openspec/specs/group-color-picker`).
+- `IconService.GetWindowIcon(IntPtr)` — no production callers; kept for the tests.
+- Many `NativeMethods.cs` declarations exist solely for the ValidationDriver via its link-include of the file (annotated `Test-harness only` in the source) — an "unused code" cleanup pass will break the driver build.
+
 ### Spec-driven changes (OpenSpec)
 
-The `openspec/` directory holds an OpenSpec workflow (`schema: spec-driven` in `openspec/config.yaml`): `openspec/changes/` contains change proposals (active and `archive/`), and `openspec/specs/` contains the current capability specs (`capture-picker-icons`, `container-activation-timers`, `group-color-picker`, `hidden-window-journal`). When making a behavior-level change, check whether a spec or change proposal covers that area and keep it in sync.
+The `openspec/` directory holds an OpenSpec workflow (`schema: spec-driven` in `openspec/config.yaml`): `openspec/changes/` currently holds only archived proposals under `archive/` — there are no active proposals — and `openspec/specs/` contains the 11 current capability specs: `capture-picker-icons`, `container-activation-timers`, `crash-shutdown-coherence`, `diagnostics-logging`, `e2e-input-safety`, `e2e-scenario-coverage`, `elevation-guard`, `group-color-picker`, `hidden-window-journal`, `persistence-resilience`, `test-tooling-safety`. When making a behavior-level change, check whether a spec or change proposal covers that area and keep it in sync. The OpenSpec workflow skills/commands are vendored across the agent-tool directories (`.claude/`, `.cursor/`, `.cline/`/`.clinerules/`, `.codex/`, `.kimi/`, `.kimi-code/`, `.kilocode/`, `.opencode/`) and are regenerated by the `openspec` CLI — do not hand-edit a single copy. The canonical copies live in `.claude/skills/` and `.claude/commands/opsx/`; every other copy is machine-generated output. After each `openspec` CLI regeneration, re-mirror them with `scripts\sync-agent-configs.ps1`, which applies each tool's filename/frontmatter convention and rewrites `/opsx:` references to `/opsx-` for the dash-form tools (`.cursor`, `.opencode`). Hand-edits to any non-`.claude` copy will be overwritten — edit `.claude` instead.
 
 ### Issue history documents
 
@@ -261,3 +273,4 @@ These limitations are documented in `README.md` and should not be treated as bug
 - `docs/internal/perf-2026-07-25.md` — performance invariants and the reasoning behind them.
 - `KNOWN_ISSUES.md` / `investigation_findings.md` — historical bug-hunt and migration records.
 - `NativeMethods.cs` — authoritative reference for all native interop used by the project.
+- `docs/ARCHITECTURE.md` — system map, WinEvent event→handler table, log-line index.

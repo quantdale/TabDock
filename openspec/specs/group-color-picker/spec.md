@@ -1,7 +1,7 @@
 # group-color-picker
 
 ## Purpose
-TBD — captures the intended (non-)behavior of `GroupViewModel.PickColorCommand`, clarifying it as a documented no-op rather than a misdirected trigger for the capture picker.
+Captures the intended (non-)behavior of `GroupViewModel.PickColorCommand`, clarifying it as a documented no-op rather than a misdirected trigger for the capture picker.
 
 ## Requirements
 

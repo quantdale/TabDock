@@ -143,4 +143,3 @@ Log rotation keeps the current file under 1 MB; older logs are moved to `TabDock
 ## License
 
 This is a reference implementation. Use and modify at your own risk.
-# TabDock

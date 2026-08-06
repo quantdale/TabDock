@@ -1,7 +1,7 @@
 # test-tooling-safety
 
 ## Purpose
-TBD - captures the ownership-validation, guarded-spawn compliance, and portability semantics of the Spike and ValidationDriver test tooling.
+Captures the ownership-validation, guarded-spawn compliance, and portability semantics of the Spike and ValidationDriver test tooling.
 
 ## Requirements
 

@@ -1,5 +1,12 @@
 # Real-Browser Regression Test Suite — Plan
 
+> **⚠ HISTORICAL DOCUMENT — pre-Shepherd; do not treat as current guidance.**
+> This plan predates the Shepherd migration and describes the **deleted**
+> `tests/CaptureReleaseTest` project, with Reparent-era pass/fail criteria
+> (e.g. `WS_CHILD`/`GetParent` assertions) that are invalid under the current
+> never-reparent Shepherd capture model. The Reparent backend is deleted.
+> Retained for history only. **Current validation guidance: `docs/TESTING.md`.**
+
 Phase 1 deliverable for the "Real-Browser Regression Test Suite" build request.
 Written 2026-07-18, against commit `053a7d1` (H2/H4/H5 fixes) on branch
 `claude/tabdock-frame-smear-h2-plan-zsh3hq`.

@@ -491,6 +491,16 @@ public partial class ContainerWindow : Window
     {
         if (TabsListBox.SelectedItem is TabViewModel tab)
         {
+            // SelectedItem is bound OneWay to ActiveTab (ContainerWindow.xaml),
+            // so a programmatic switch first runs SetActiveTab -> SwitchActiveTab
+            // (which updates Group.ActiveIndex) and only then echoes back here as
+            // a selection change. In that echo case the switch already happened —
+            // calling SetActiveTab again would log a second "Switched group" and
+            // reset the save debounce for nothing. A genuine user click arrives
+            // before any ActiveIndex update, so the indices never match and the
+            // switch proceeds exactly as before.
+            if (Group.ActiveIndex == _viewModel.Tabs.IndexOf(tab))
+                return;
             _viewModel.SetActiveTab(tab);
         }
     }
@@ -701,9 +711,10 @@ public partial class ContainerWindow : Window
 
         // Defence in depth alongside the capture picker's own filter: two
         // CapturedWindow members for one HWND would fight over positioning and
-        // hiding it, and only the first of them would ever be torn down by the
-        // destroy/hide WinEvent handlers (they all resolve a member by
-        // FirstOrDefault). Enforced here so every entry point is covered, not
+        // hiding it, and only one of them would ever be torn down — the
+        // destroy/hide WinEvent handlers resolve the HWND through GroupManager's
+        // O(1) TryGetCapturedMember index (PERF25-02), which maps each HWND to a
+        // single member. Enforced here so every entry point is covered, not
         // just the picker.
         if (_manager.IsCapturedWindow(hwnd))
             return "That window is already in a TabDock group.";

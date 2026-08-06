@@ -8,7 +8,7 @@ namespace TabDock.ValidationDriver;
 /// <summary>
 /// Real-input validation driver for TabDock.
 ///
-/// Usage: TabDock.ValidationDriver.exe [--yes] [--cycles N] [--guest pig|wt|chrome-nogpu|chrome-gpu] &lt;scenario|all&gt;
+/// Usage: TabDock.ValidationDriver.exe [--yes] [--cycles N] [--guest pig|wt|chrome-nogpu|chrome-gpu|chrome-normal|edge-normal|firefox-normal|codex|chatgptclassic] [--list] &lt;scenario|all&gt;
 ///
 /// Spawns a fresh TabDock plus guinea-pig windows, drives them exclusively with real
 /// SendInput mouse/keyboard events at UIA-read coordinates, and asserts on window state,
@@ -45,9 +45,11 @@ internal static class Program
                     break;
                 case "--guest":
                     if (i + 1 >= args.Length)
-                        return Usage("--guest requires a value (pig|wt|chrome-nogpu|chrome-gpu).");
+                        return Usage("--guest requires a value (pig|wt|chrome-nogpu|chrome-gpu|chrome-normal|edge-normal|firefox-normal|codex|chatgptclassic).");
                     opt.Guest = args[++i];
                     break;
+                case "--list":
+                    return ListScenarios();
                 default:
                     if (args[i].StartsWith("--", StringComparison.Ordinal))
                         return Usage($"Unknown option '{args[i]}'.");
@@ -163,7 +165,7 @@ internal static class Program
     {
         if (error != null)
             Console.WriteLine($"Error: {error}");
-        Console.WriteLine("Usage: TabDock.ValidationDriver.exe [--yes] [--cycles N] [--guest pig|wt|chrome-nogpu|chrome-gpu] <scenario|all>");
+        Console.WriteLine("Usage: TabDock.ValidationDriver.exe [--yes] [--cycles N] [--guest pig|wt|chrome-nogpu|chrome-gpu|chrome-normal|edge-normal|firefox-normal|codex|chatgptclassic] [--list] <scenario|all>");
         Console.WriteLine();
         Console.WriteLine("Scenarios:");
         foreach (string s in Scenarios.AllOrder)
@@ -173,7 +175,30 @@ internal static class Program
         Console.WriteLine("Options:");
         Console.WriteLine("  --yes          skip the interactive confirmation (supervised runs)");
         Console.WriteLine("  --cycles N     cycle count for maximize-repro (default 3) and repeat-cycles (default 5)");
-        Console.WriteLine("  --guest KIND   guest app for maximize-repro: pig (default), wt, chrome-nogpu, chrome-gpu");
+        Console.WriteLine("  --guest KIND   guest app for scenarios that need one: pig (default), wt, chrome-nogpu, chrome-gpu, chrome-normal, edge-normal, firefox-normal, codex, chatgptclassic");
+        Console.WriteLine("  --list         print every dispatchable scenario name, grouped by registration array, and exit");
         return 1;
+    }
+
+    private static int ListScenarios()
+    {
+        Console.WriteLine("AllOrder (what 'all' runs, fresh TabDock per scenario):");
+        foreach (string s in Scenarios.AllOrder)
+            Console.WriteLine($"  {s}");
+        Console.WriteLine();
+        Console.WriteLine("BrowserOnlyScenarios (need --guest chrome-normal|edge-normal|firefox-normal):");
+        foreach (string s in Scenarios.BrowserOnlyScenarios)
+            Console.WriteLine($"  {s}");
+        Console.WriteLine();
+        Console.WriteLine("StandaloneExtraScenarios (each spawns its own guest):");
+        foreach (string s in Scenarios.StandaloneExtraScenarios)
+            Console.WriteLine($"  {s}");
+        Console.WriteLine();
+        Console.WriteLine("RealAppGuestKinds (--guest value for realapp):");
+        foreach (string s in Scenarios.RealAppGuestKinds)
+            Console.WriteLine($"  {s}");
+        Console.WriteLine();
+        Console.WriteLine("Also dispatchable but not in the arrays above: realapp, browser-multi.");
+        return 0;
     }
 }

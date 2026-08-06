@@ -1,7 +1,7 @@
 # diagnostics-logging
 
 ## Purpose
-TBD - captures the bounded-fallback, rotation-backoff, and thread-safe-disposal semantics of `LoggingService`'s failure paths.
+Captures the bounded-fallback, rotation-backoff, and thread-safe-disposal semantics of `LoggingService`'s failure paths.
 
 ## Requirements
 
