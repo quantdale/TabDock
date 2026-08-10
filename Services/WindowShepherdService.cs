@@ -134,6 +134,35 @@ public sealed class WindowShepherdService
             }
         }
 
+        // DPI-unaware guests run in a DWM-virtualized 96-DPI coordinate space
+        // (their coordinates are scaled by the system DPI). TabDock glues
+        // guests with PHYSICAL-pixel rects, so at any non-100% system scale an
+        // unaware guest would be stretched and misplaced no matter what rect we
+        // hand it. Refuse capture (mirroring the elevation refusal) instead of
+        // silently producing broken geometry — the same error channel tells the
+        // picker why. Per-monitor-aware and system-aware guests are fine
+        // (system-aware matches on single-DPI systems; per-monitor-aware tracks
+        // the container on every monitor).
+        try
+        {
+            IntPtr guestContext = NativeMethods.GetWindowDpiAwarenessContext(hwnd);
+            if (guestContext != IntPtr.Zero
+                && NativeMethods.AreDpiAwarenessContextsEqual(guestContext, NativeMethods.DpiAwarenessContextUnaware)
+                && NativeMethods.GetDpiForSystem() != 96)
+            {
+                error = "This window is not DPI-aware and can only be captured reliably at 100% display scaling.";
+                _log.Log($"Shepherd capture blocked: DPI-unaware target 0x{hwnd.ToInt64():X} at system DPI {NativeMethods.GetDpiForSystem()}");
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            // A failed awareness probe must not abort capture: on the exotic
+            // OS/API combinations where this throws, geometry is as good as it
+            // ever was — log and continue.
+            _log.LogException("Shepherd capture: DPI-awareness probe failed", ex);
+        }
+
         var originalPlacement = new NativeMethods.WINDOWPLACEMENT { length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>() };
         bool hasValidPlacement = NativeMethods.GetWindowPlacement(hwnd, out originalPlacement);
         if (!hasValidPlacement)
@@ -259,6 +288,72 @@ public sealed class WindowShepherdService
     }
 
     /// <summary>
+    /// Positions both split guests and re-pins the container in a single
+    /// compositor transaction (BeginDeferWindowPos / DeferWindowPos /
+    /// EndDeferWindowPos) instead of three separate SetWindowPos calls. The
+    /// atomic batch removes the visible pane separation that occurred between
+    /// the individual writes (the top pane moved while the bottom pane was
+    /// still at its old position). Falls back to per-guest PositionGuest +
+    /// PairZOrderBehind if the deferred handle cannot be created. The container
+    /// is inserted below the bottom (partner) guest, preserving the local
+    /// top -> partner -> container z-order invariant.
+    /// </summary>
+    public void PositionGuestsDeferred(CapturedWindow top, NativeMethods.RECT topRect, CapturedWindow bottom, NativeMethods.RECT bottomRect, IntPtr containerHwnd)
+    {
+        if (!NativeMethods.IsWindow(top.Hwnd) || !NativeMethods.IsWindow(bottom.Hwnd))
+            return;
+
+        if (NativeMethods.IsIconic(top.Hwnd) || NativeMethods.IsZoomed(top.Hwnd))
+            NativeMethods.ShowWindow(top.Hwnd, NativeMethods.SW_RESTORE);
+        if (NativeMethods.IsIconic(bottom.Hwnd) || NativeMethods.IsZoomed(bottom.Hwnd))
+            NativeMethods.ShowWindow(bottom.Hwnd, NativeMethods.SW_RESTORE);
+
+        IntPtr hdwp = NativeMethods.BeginDeferWindowPos(3);
+        if (hdwp == IntPtr.Zero)
+        {
+            FallbackPosition(top, topRect, bottom, bottomRect, containerHwnd);
+            return;
+        }
+
+        bool deferredOk = NativeMethods.DeferWindowPos(hdwp, top.Hwnd, NativeMethods.HWND_TOP, topRect.left, topRect.top, topRect.Width, topRect.Height, NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW)
+            && NativeMethods.DeferWindowPos(hdwp, bottom.Hwnd, top.Hwnd, bottomRect.left, bottomRect.top, bottomRect.Width, bottomRect.Height, NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW)
+            && NativeMethods.DeferWindowPos(hdwp, containerHwnd, bottom.Hwnd, 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        bool applied = NativeMethods.EndDeferWindowPos(hdwp);
+
+        if (!deferredOk || !applied)
+        {
+            // A failed deferred batch applies NOTHING (EndDeferWindowPos returns
+            // FALSE if any entry failed). The panes would silently stay at their
+            // old rects until the next re-glue tick, with the success log below
+            // claiming they moved. Fall back to the per-guest path — same rects,
+            // same z semantics — and log the failure at most once per window
+            // (a persistent failure — e.g. a guest that became elevated
+            // mid-capture — would otherwise spam the log on every drag tick).
+            // Self-healing on the next tick either way.
+            LogPositioningFailureOnce(top.Hwnd, "DeferWindowPos(batch)");
+            FallbackPosition(top, topRect, bottom, bottomRect, containerHwnd);
+            return;
+        }
+
+        JournalClear(top.Hwnd);
+        JournalClear(bottom.Hwnd);
+        _log.Log($"SHEPHERD[position] guest=0x{top.Hwnd.ToInt64():X} rect={topRect.left},{topRect.top},{topRect.Width}x{topRect.Height}");
+        _log.Log($"SHEPHERD[position] guest=0x{bottom.Hwnd.ToInt64():X} rect={bottomRect.left},{bottomRect.top},{bottomRect.Width}x{bottomRect.Height}");
+    }
+
+    /// <summary>
+    /// Per-guest fallback for <see cref="PositionGuestsDeferred"/> when the
+    /// deferred batch cannot be created or fails: same rects, same z-order
+    /// semantics (top above bottom above container), just not atomic.
+    /// </summary>
+    private void FallbackPosition(CapturedWindow top, NativeMethods.RECT topRect, CapturedWindow bottom, NativeMethods.RECT bottomRect, IntPtr containerHwnd)
+    {
+        PositionGuest(top, topRect, NativeMethods.HWND_TOP);
+        PositionGuest(bottom, bottomRect, top.Hwnd);
+        PairZOrderBehind(containerHwnd, bottom.Hwnd);
+    }
+
+    /// <summary>
     /// Raises a TabDock container for a short-lived piece of TabDock-owned UI
     /// (for example a context menu or an owned capture dialog). Guests remain
     /// visible; this only changes which surface is on top while the UI is open.
@@ -288,10 +383,17 @@ public sealed class WindowShepherdService
     {
         // Both the foreground and desktop-reorder WinEvent paths converge here.
         // A repair itself can generate another reorder event, so avoid issuing
-        // a second native mutation once the next visible window is already the
-        // requested insert-after target. This keeps the event-driven repair
-        // bounded without weakening the local guest/container invariant.
-        if (NextVisibleWindow(guestHwnd) == containerHwnd)
+        // a second native mutation once the local pairing invariant already
+        // holds — the container sits BELOW the guest. The invariant check is
+        // an upward walk (skipping invisible helper windows), not a strict
+        // adjacency probe: a WS_EX_TOPMOST guest lives in a different z-order
+        // band (taskbar etc. sit between it and the container, so "immediately
+        // below" is unachievable even though the guest IS above the container),
+        // and hidden IME helpers are inserted next to any touched window.
+        // Both cases must not trigger a pin that can never succeed (and would
+        // otherwise repeat on every relayout pass). This keeps the event-driven
+        // repair bounded without weakening the local guest/container invariant.
+        if (IsContainerBelowGuest(containerHwnd, guestHwnd))
             return;
 
         bool ok = NativeMethods.SetWindowPos(
@@ -305,16 +407,27 @@ public sealed class WindowShepherdService
         }
     }
 
-    private static IntPtr NextVisibleWindow(IntPtr hwnd)
+    /// <summary>
+    /// True when <paramref name="containerHwnd"/> sits BELOW
+    /// <paramref name="guestHwnd"/> in the z-order — the local
+    /// guest-above-container pairing invariant. Walks GW_HWNDPREV (upward) from
+    /// the container, skipping invisible helper windows (IME etc.), until the
+    /// guest is reached (healthy) or the walk ends (the container is above the
+    /// guest and a pin is needed). Correct where a strict-adjacency probe is
+    /// not: topmost guests live in a separate z-order band, so "immediately
+    /// below" is impossible even though the guest IS above the container, and
+    /// hidden intermediates must never trigger repairs.
+    /// </summary>
+    public bool IsContainerBelowGuest(IntPtr containerHwnd, IntPtr guestHwnd)
     {
-        IntPtr next = NativeMethods.GetWindow(hwnd, NativeMethods.GW_HWNDNEXT);
-        while (next != IntPtr.Zero)
+        IntPtr cur = NativeMethods.GetWindow(containerHwnd, NativeMethods.GW_HWNDPREV);
+        while (cur != IntPtr.Zero)
         {
-            if (NativeMethods.IsWindowVisible(next))
-                return next;
-            next = NativeMethods.GetWindow(next, NativeMethods.GW_HWNDNEXT);
+            if (cur == guestHwnd)
+                return true;
+            cur = NativeMethods.GetWindow(cur, NativeMethods.GW_HWNDPREV);
         }
-        return IntPtr.Zero;
+        return false;
     }
 
     /// <summary>

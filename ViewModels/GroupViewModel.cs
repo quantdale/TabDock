@@ -1,5 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Windows.Input;
 using System.Windows.Media;
 using TabDock.Models;
@@ -21,7 +22,16 @@ public sealed class GroupViewModel : ViewModelBase
     public string Name
     {
         get => _group.Name;
-        set => _group.Name = value;
+        set
+        {
+            // Reject blank/whitespace-only renames so a group can never become
+            // an empty, invisible entry in the launcher/group list. Keep the
+            // existing name when the user clears the box.
+            string? trimmed = value?.Trim();
+            if (string.IsNullOrWhiteSpace(trimmed))
+                return;
+            _group.Name = trimmed;
+        }
     }
 
     public string AccentColor
@@ -62,6 +72,14 @@ public sealed class GroupViewModel : ViewModelBase
 
     public ObservableCollection<TabViewModel> Tabs { get; } = new();
 
+    // Tab-strip projection: mirrors Tabs when no split is active; while a split
+    // pair exists it replaces the LEFT member's slot with a single composite
+    // item ([ A | B ]) and suppresses the RIGHT member's ordinary tab. The
+    // underlying Tabs collection remains authoritative for identity and order —
+    // this is a presentation-layer concept only (SplitCompositeViewModel).
+    public ObservableCollection<object> DisplayTabs { get; } = new();
+    private SplitCompositeViewModel? _splitComposite;
+
     public TabViewModel? ActiveTab
     {
         get => _activeTab;
@@ -79,9 +97,11 @@ public sealed class GroupViewModel : ViewModelBase
     public ICommand FinishRenameCommand { get; }
     public ICommand PickColorCommand { get; }
     public ICommand CloseGroupCommand { get; }
+    public ICommand DeleteGroupCommand { get; }
 
     public event EventHandler? CloseRequested;
     public event EventHandler? AddWindowsRequested;
+    public event EventHandler? DeleteGroupRequested;
 
     /// <summary>
     /// Raised when popping out the last tab leaves this group with zero members.
@@ -109,6 +129,10 @@ public sealed class GroupViewModel : ViewModelBase
 
         _group.PropertyChanged += OnGroupPropertyChanged;
 
+        // The strip projection mirrors every Tabs mutation; subscribe before
+        // populating so DisplayTabs is filled by the same Add events.
+        Tabs.CollectionChanged += Tabs_CollectionChanged;
+
         foreach (var m in group.Members)
         {
             var tvm = new TabViewModel(m);
@@ -133,6 +157,80 @@ public sealed class GroupViewModel : ViewModelBase
         // reachable. Fixed to do nothing rather than the wrong thing.
         PickColorCommand = new RelayCommand(_ => { });
         CloseGroupCommand = new RelayCommand(_ => CloseRequested?.Invoke(this, EventArgs.Empty));
+        DeleteGroupCommand = new RelayCommand(_ => DeleteGroupRequested?.Invoke(this, EventArgs.Empty));
+    }
+
+    /// <summary>
+    /// Switches the tab strip to the composite representation for a split pair:
+    /// the LEFT member's slot becomes a single [ A | B ] item and the RIGHT
+    /// member's ordinary tab is suppressed. Presentation only — Tabs keeps both
+    /// members and their order.
+    /// </summary>
+    public void SetSplitComposite(TabViewModel left, TabViewModel right)
+    {
+        if (left == null || right == null || ReferenceEquals(left, right))
+            return;
+        _splitComposite = new SplitCompositeViewModel(left, right);
+        RebuildDisplayTabs();
+    }
+
+    /// <summary>
+    /// Restores the ordinary one-tab-per-member strip after split exit.
+    /// </summary>
+    public void ClearSplitComposite()
+    {
+        _splitComposite = null;
+        RebuildDisplayTabs();
+    }
+
+    private void RebuildDisplayTabs()
+    {
+        DisplayTabs.Clear();
+        SplitCompositeViewModel? composite = _splitComposite;
+        if (composite == null)
+        {
+            foreach (TabViewModel t in Tabs)
+                DisplayTabs.Add(t);
+            return;
+        }
+        foreach (TabViewModel t in Tabs)
+        {
+            if (ReferenceEquals(t, composite.Right))
+                continue; // suppressed while the pair exists
+            if (ReferenceEquals(t, composite.Left))
+                DisplayTabs.Add(composite);
+            else
+                DisplayTabs.Add(t);
+        }
+    }
+
+    private void Tabs_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (_splitComposite != null)
+        {
+            // A mutation while a pair exists changes the projection wholesale.
+            RebuildDisplayTabs();
+            return;
+        }
+        // No composite: mirror the mutation exactly. Add/Remove/Move keep the
+        // ListBox item containers alive, which the anti-oscillation tab-drag
+        // behaviour depends on — a clear-and-rebuild would recreate containers
+        // on every reorder and re-enable the oscillation feedback loop.
+        switch (e.Action)
+        {
+            case NotifyCollectionChangedAction.Add:
+                DisplayTabs.Insert(e.NewStartingIndex, Tabs[e.NewStartingIndex]);
+                break;
+            case NotifyCollectionChangedAction.Remove:
+                DisplayTabs.RemoveAt(e.OldStartingIndex);
+                break;
+            case NotifyCollectionChangedAction.Move:
+                DisplayTabs.Move(e.OldStartingIndex, e.NewStartingIndex);
+                break;
+            case NotifyCollectionChangedAction.Reset:
+                RebuildDisplayTabs();
+                break;
+        }
     }
 
     public void SetActiveTab(TabViewModel tab)
@@ -217,10 +315,25 @@ public sealed class GroupViewModel : ViewModelBase
             // PropertyChanged fires and the shepherd sync correctly stays put.
             SetActiveTab(previouslyActive);
         }
+        else if (ActiveTab != null && Tabs.Contains(ActiveTab))
+        {
+            // The active tab itself was released, but the split-exit path
+            // (ContainerWindow.HandleSplitMemberRemoved, fired synchronously by
+            // Tabs.RemoveAt above) already promoted the pair's survivor as the
+            // new active tab. The positional neighbour pick below would
+            // disagree with that promotion whenever the removed member was the
+            // split's active member and a third tab exists — silently hiding
+            // the promoted survivor and showing the neighbour instead (the
+            // "one pane fails to render after interacting with the partner"
+            // defect). Honor the already-promoted active tab; SetActiveTab
+            // still re-syncs the model's positional ActiveIndex.
+            SetActiveTab(ActiveTab);
+        }
         else
         {
-            // The active tab itself was released: fall through to its neighbour
-            // (the tab that slid into its slot, or the new last tab).
+            // The active tab itself was released through an ordinary path: fall
+            // through to its neighbour (the tab that slid into its slot, or the
+            // new last tab).
             SetActiveTab(Tabs[Math.Min(idx, Tabs.Count - 1)]);
         }
     }

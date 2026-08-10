@@ -1,81 +1,123 @@
 # Agent state
 
-## Production-ready milestone closure — 2026-08-10
+## UI/UX hardening campaign — Round 5: supervised closure COMPLETE (2026-08-11)
 
-Status: production readiness **PASS**. The vertical split-screen, guest
-z-order stabilization, inline capture/group UX, tab X/middle-click pop-out
-behavior, native move/resize re-glue, and final direct-click pairing fix are
-implemented, documented, archived, and validated. The final milestone commit
-is the next repository action; its hash is intentionally not embedded in this
-same commit and will be reported after creation.
+Objective: goal-del-leter.txt — resolve the two newly confirmed product defects
+(split not persistent; post-drag blanking), preserve the protected behaviors
+(smooth live-drag, maximize/restore, popups), complete the supervised
+ValidationDriver closure, sync OpenSpec/docs/state, then certify and commit the
+customer-ready milestone.
 
-The direct-click root cause was that direct guest activation reliably emitted a
-desktop-level `EVENT_OBJECT_REORDER` (`GetDesktopWindow`, `OBJID_CLIENT`,
-`CHILDID_SELF`) while `EVENT_SYSTEM_FOREGROUND` could be delayed or coalesced.
-`WinEventMonitor` now installs the narrowly filtered reorder hook, snapshots
-foreground HWND at callback time, validates it again after UI dispatch, and
-routes repair through the existing `WindowShepherdService` pairing policy.
-`PairZOrderBehind` avoids duplicate writes when the container is already
-adjacent.
+Baseline: branch `main`, HEAD `448e8ef`; working tree carries the entire
+uncommitted campaign. Shepherd/no-reparent preserved; `WindowShepherdService`
+remains the sole positioning/z-order owner.
 
-## Architecture and UX invariants
+## Round-4 fixes (carried, all build-clean)
 
-- Captured guests remain independent top-level windows: no reparenting,
-  `WS_CHILD` conversion, owner mutation, or guest style/exstyle containment
-  mutation.
-- `WindowShepherdService` is the authoritative capture, journal, positioning,
-  and local guest/container z-order policy. There is no global `HWND_BOTTOM`
-  repair, competing z-order subsystem, aggressive polling, or sleep workaround
-  in production code.
-- Split mode is exactly two visible members in deterministic LEFT/RIGHT
-  physical-pixel panes; pair identity is reference-based and lifecycle-safe.
-- Journal-before-hide, O(1) captured-HWND lookup, and the existing crash-rescue
-  rules remain intact.
-- Routine capture is inline in the container. In-window Group switching and
-  `+ New group` remain available; the launcher/picker is retained only as the
-  deliberate fallback for global-hotkey/no-container capture.
-- Tab X and middle-click perform Pop out and keep the external process alive;
-  explicit Close window remains the WM_CLOSE action. Native guest title-bar
-  movement/resize is re-glued to its assigned pane rather than popping out.
-- This milestone does not claim a single-container architecture.
+### Defect 1 — split is NOT persistent (user-confirmed)
+Single funnel `ActiveTab` change → `SyncShepherdActiveWindow` called
+`ExitSplit(keepActive: C)` for any non-member activation. **Fix:** split branch
+rejects non-member activation (journal-safe hide `SPLIT[persist]`, active tab
+reverted to the focused member via `FocusSplitMember`); Ctrl+Tab cycles only the
+pair; `TabsListBox_PreviewMouseLeftButtonDown` swallows non-member tab clicks
+during split (× buttons excluded); `TabsListBox_SelectionChanged` guarded with
+`_inSelectionSync` re-entrancy guard (this guard also fixed a REAL stack
+overflow observed live during batch runs: the ListBox IsSelected↔IsActive
+TwoWay ping-pong when the revert re-activates the focused member).
 
-## Validation
+### Defect 2 — post-drag blanking (user-confirmed)
+**Fix:** `WM_EXITSIZEMOVE` → one coalesced `RequestRelayout()` (final
+reconciliation); redundant-glue short-circuit now validates the local pairing
+(`WindowShepherdService.IsContainerBelowGuest` upward GW_HWNDPREV walk skipping
+invisible windows) before skipping writes; gated off while chrome is raised.
+Healthy steady state: 0 native writes; broken pairing: exactly 1 idempotent pin.
 
-Passed:
+## Round-5 findings DURING supervised validation (new)
 
-- `dotnet build TabDock.csproj`
-- `dotnet build TabDock.sln`
-- `dotnet build tests\ValidationDriver\TabDock.GuineaPig\TabDock.GuineaPig.csproj`
-- `dotnet build tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj`
-- `.\scripts\validate.ps1`
-- `openspec validate --all --no-interactive` — 11/11 current items
-- `dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --list`
-- High-risk smoke scenarios, each in a fresh supervised driver process:
-  `directclick-foreground-pairing`, `contextmenu-render-stability`,
-  `split-contextmenu-render-stability`, `chrome-click-render-stability`,
-  `split-directclick`, `split-native-move-reassert`,
-  `split-native-resize-reassert`, `tab-closebutton-popout`, and
-  `tab-middleclick-popout`.
+1. **PRODUCT BUG — close-group prompt covered by the docked guest.** The 120ms
+   `WM_ACTIVATE` reassert (`ContainerWindow.WndProc`) fired ~120ms after the
+   user clicks the container's × (the click activates the container), raising
+   the docked guest ABOVE the just-shown "Close group" MessageBox — its
+   Yes/No/Cancel buttons ended up covered by the guest (proven live:
+   WindowFromPoint at the Yes button resolved to the guest). Real users would
+   be unable to close a populated group via the ×. **Fix (one line):**
+   `IsContainerChromeInteractionActive()` now includes `_closePromptOpen`.
+   Verified: `exitpopulated`/`closegroupprompt` PASS.
 
-Recorded closure evidence also includes 10/10 direct-click cycles with
-189–213 ms repair windows, the adjacent split/render/input/tab/native-re-glue
-regressions, and a supervised Chrome + Edge + Windows Terminal torture run
-covering external foreground steals, browser chrome, split focus,
-move/maximize/minimize/restore, pop-out, re-capture, and group switching.
+2. **HARNESS — split-composite middle-click never reached the app.** Root cause:
+   an environmental layout collision — the ×-popped member C (released to its
+   own placement) overlapped the container's strip left half, and WindowFromPoint
+   at the click point resolved to C, not the container. Fix: `MoveContainerClearOf`
+   (moves the container to a work-area corner clear of the released guest before
+   the middle-click step) + WindowFromPoint probe in `Input.MiddleClickAt` +
+   `EnsureClickable` before the click.
 
-The completed OpenSpec change is archived at
-`openspec/changes/archive/2026-08-10-2026-08-10-vertical-split-screen`.
-There are no known critical blockers for this milestone.
+3. **HARNESS stale assumptions rewritten** (all latent — never run before this
+   session):
+   - `split-maximize-restore-no-overlap`: each cycle ended MAXIMIZED but started
+     assuming NORMAL → cycle-end normalization added.
+   - `split-drag-release-render-stability`: half-click coordinates were computed
+     once but the container oscillates ±130px per drag cycle → per-cycle UIA
+     re-read; also the "already-focused member click logs no SPLIT[focus]" case
+     is now structurally impossible.
+   - `exitpopulated` (M6): the launcher is HIDDEN while a container is open
+     (documented design) → rewritten to the reachable flow: caption-× real
+     click → "Close group" prompt → Yes → launcher reappears → Exit; Yes click
+     and Exit click retried (first click on a fresh modal can be consumed by
+     activation).
+   - `persist-kill`/`persist-active-tab-index`/`restored-group-survives-member-reclose`:
+     single-pass WM_CLOSE exit broke because closing the last container
+     RE-SHOWS the launcher → `CloseAllWindowsUntilExit` (repeat close waves);
+     relaunch "MainWindow up" check was racy (restored container hides the
+     launcher within ~50ms of startup) → wait for ANY visible top-level window.
+   - `CaptureIntoExistingGroupViaAddButton` + reattach/hotkey-afterclose:
+     the container's "+" opens the INLINE capture panel, not the standalone
+     "Capture windows" picker (design change) → rewritten to drive the inline
+     panel (row toggle + "Add selected" + toggle-close); reattach rename retried.
 
-## Repository checkpoint
+## Supervised ValidationDriver closure — COMPLETE (user palac present)
 
-- Branch: `main`.
-- Pre-closure HEAD: `71f8e3c854c7800b80d1d082fcb0b140079109ce`.
-- The complete validated milestone is ready for one coherent local commit.
-- Do not push or create a tag unless a later request explicitly authorizes it.
+- Batch 1 (split core, 6): ALL PASS (incl. split-click-third, split-composite).
+- Batch 2 (persistence/focus, 5): ALL PASS (incl. NEW split-third-tab-hover-persists,
+  split-third-tab-click-persists).
+- Batch 3 (window state, 6): ALL PASS (split-maximize-restore-no-overlap etc.).
+- Batch 4 (movement, 6): ALL PASS (incl. NEW drag-release-render-stability,
+  split-drag-release-render-stability).
+- Batch 5 (popup/chrome, 7): ALL PASS.
+- Batch 6 (group lifecycle, 6 + reattach pair): ALL PASS.
+- Batch 7 (legacy, 11): ALL PASS.
+- Stress (goal §40): split-focus-bidirectional 30, hover-persists 30,
+  click-persists 25, split-repeat-cycles 25, drag-release 30, split-drag 30,
+  maximize-restore 20, contextmenu 20, group-dropdown 20, add-window-toggle 20
+  (the three popup scenarios were extended to honor --cycles) — ALL PASS.
+- Batch G real apps: browser-lifecycle --guest chrome-normal PASS,
+  browser-lifecycle --guest edge-normal PASS, maximize-repro --guest wt PASS.
+- Failures encountered were classified per goal §41: 1 PRODUCT BUG (close-prompt
+  covered — fixed in production), the rest HARNESS/STALE-ASSUMPTION or
+  ENVIRONMENTAL-INPUT (released-guest overlap), each fixed at the harness layer.
+
+## Final static validation (post all fixes)
+- `dotnet build` ×4 (TabDock.csproj, TabDock.sln, GuineaPig, ValidationDriver):
+  0 warnings / 0 errors.
+- `scripts/validate.ps1`: PASS.
+- `TabDock.exe --selftest-geometry`: PASS (14,718,730 checks, 0 failures).
+- `openspec validate --all --no-interactive`: 12/12 PASS.
+
+## Docs / OpenSpec
+- `docs/ARCHITECTURE.md`, `docs/TESTING.md`, `README.md`, waypoint Round 4-5,
+  openspec change `tabdock-ui-ux-hardening` (proposal/design/tasks/delta spec)
+  synced. Final Round-5 notes (close-prompt guard, validation ledger) appended
+  to the waypoint.
+
+## Commit policy
+One milestone commit after the final diff audit; stage ONLY campaign files
+(`goal-del-leter.txt` stays untracked — pre-existing prompt material). Do NOT
+push / PR / tag.
 
 ## Next action
-
-Stage and review the complete intended production-ready milestone, create the
-single closure commit, then verify `git status`, `git log -1 --oneline`,
-`git rev-parse HEAD`, and `git show --stat --oneline HEAD`.
+1. Final `git diff` audit (SetParent/GWL/HWND_BOTTOM/sleep/polling greps — done,
+   clean; bounded probes retained: WindowFromPoint in Input.MiddleClickAt and
+   the per-cycle click probes).
+2. Append Round-5 ledger to `docs/internal/ui-ux-stabilization-waypoint.md`.
+3. Stage + commit the milestone (`feat: harden TabDock UI and split-screen
+   interactions`).

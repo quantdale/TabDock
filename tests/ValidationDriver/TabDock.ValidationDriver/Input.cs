@@ -163,6 +163,7 @@ internal static class Input
     public static void MiddleClickAt(int x, int y)
     {
         MoveTo(x, y);
+        GuardedProc.Log($"  middle-click at ({x},{y}) windowFromPoint=0x{NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = x, y = y }).ToInt64():X}");
         Thread.Sleep(40);
         SendMouse(NativeMethods.MOUSEEVENTF_MIDDLEDOWN);
         Thread.Sleep(40);
@@ -220,6 +221,42 @@ internal static class Input
     {
         SendMouse(NativeMethods.MOUSEEVENTF_LEFTUP);
         Thread.Sleep(40);
+    }
+
+    /// <summary>
+    /// One continuous drag through multiple waypoints: press at (xs[0], ys[0]),
+    /// interpolate stepsPerSegment moves per segment (15 ms apart), release at
+    /// the last waypoint. Unlike chaining DragFromTo calls (which release and
+    /// re-press between segments, splitting the gesture into several independent
+    /// native move loops), this composes PressLeftButtonHeld/MoveWhileHeld/
+    /// ReleaseLeftButtonHeld into ONE modal move loop with many intermediate
+    /// WM_WINDOWPOSCHANGED events — the shape needed to exercise drag
+    /// finalization after a multi-segment trajectory.
+    /// </summary>
+    public static void DragPolyline(int[] xs, int[] ys, int stepsPerSegment = 8)
+    {
+        if (xs == null || ys == null || xs.Length != ys.Length || xs.Length < 2)
+            throw new ArgumentException("DragPolyline needs at least two matching waypoints.");
+        if (stepsPerSegment < 2)
+            stepsPerSegment = 2;
+
+        PressLeftButtonHeld(xs[0], ys[0]);
+        try
+        {
+            for (int s = 1; s < xs.Length; s++)
+            {
+                for (int i = 1; i <= stepsPerSegment; i++)
+                {
+                    int x = xs[s - 1] + (xs[s] - xs[s - 1]) * i / stepsPerSegment;
+                    int y = ys[s - 1] + (ys[s] - ys[s - 1]) * i / stepsPerSegment;
+                    MoveWhileHeld(x, y);
+                }
+            }
+        }
+        finally
+        {
+            ReleaseLeftButtonHeld();
+        }
     }
 
     /// <summary>Types text as KEYEVENTF_UNICODE down/up pairs, one character at a time.</summary>

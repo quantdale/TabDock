@@ -169,10 +169,20 @@ internal static partial class Scenarios
         "split-popout-left", "split-popout-right", "split-selfclose", "split-native-move-reassert",
         "split-native-resize-reassert", "split-contextmenu-render-stability", "split-closebutton-left",
         "split-closebutton-right", "split-click-third",
+        "split-third-tab-hover-persists", "split-third-tab-click-persists",
+        "split-drag-release-render-stability", "drag-release-render-stability",
         "split-directclick", "split-repeat-cycles", "contextmenu-render-stability",
         "chrome-click-render-stability", "tab-closebutton-popout", "tab-middleclick-popout",
         "capture-inline-ui", "group-create-inline",
         "three-app-torture",
+        "group-dropdown-stability", "add-window-toggle", "group-rename-menu",
+        "group-delete-populated", "split-composite",
+        // Split-symmetry / window-state hardening (goal §4-§14): regression
+        // scenarios for the partner-member pop-out defect, bidirectional
+        // member focus, initiator/partner permutation, and maximize/restore
+        // pane partitioning.
+        "split-three-tab-partner-popout", "split-focus-bidirectional",
+        "split-partner-permutation", "split-maximize-restore-no-overlap",
     };
 
     /// <summary>
@@ -281,6 +291,10 @@ internal static partial class Scenarios
             "split-closebutton-left" => SplitCloseButtonLeft,
             "split-closebutton-right" => SplitCloseButtonRight,
             "split-click-third" => SplitClickThird,
+            "split-third-tab-hover-persists" => SplitThirdTabHoverPersists,
+            "split-third-tab-click-persists" => SplitThirdTabClickPersists,
+            "split-drag-release-render-stability" => SplitDragReleaseRenderStability,
+            "drag-release-render-stability" => DragReleaseRenderStability,
             "split-directclick" => SplitDirectClick,
             "split-repeat-cycles" => SplitRepeatCycles,
             "contextmenu-render-stability" => ContextMenuRenderStability,
@@ -289,6 +303,15 @@ internal static partial class Scenarios
             "tab-middleclick-popout" => TabMiddleClickPopout,
             "capture-inline-ui" => CaptureInlineUi,
             "group-create-inline" => GroupCreateInline,
+            "group-dropdown-stability" => GroupDropdownStability,
+            "add-window-toggle" => AddWindowToggle,
+            "group-rename-menu" => GroupRenameMenu,
+            "group-delete-populated" => GroupDeletePopulated,
+            "split-composite" => SplitComposite,
+            "split-three-tab-partner-popout" => SplitThreeTabPartnerPopout,
+            "split-focus-bidirectional" => SplitFocusBidirectional,
+            "split-partner-permutation" => SplitPartnerPermutation,
+            "split-maximize-restore-no-overlap" => SplitMaximizeRestoreNoOverlap,
             "three-app-torture" => ThreeAppTorture,
             "browser-lifecycle" => BrowserLifecycle,
             "browser-tabswitch-hidesafety" => BrowserTabSwitchHideSafety,
@@ -1291,68 +1314,40 @@ internal static partial class Scenarios
     {
         var before = new HashSet<IntPtr>(Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true));
 
+        // The container's "+" opens the INLINE capture panel, not the standalone
+        // "Capture windows" picker (that window remains only for the launcher/
+        // hotkey fallback). Drive the panel through the container's own UIA
+        // tree: toggle each guest's row, then submit with "Add selected".
         ClickAddWindowButton(existingContainer);
-        IntPtr pickerHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 10000);
-        if (pickerHwnd == IntPtr.Zero)
-            throw new InvalidOperationException("'Capture windows' picker did not appear within 10s from the container's '+' button.");
-        AutomationElement? picker = Uia.FromHwnd(pickerHwnd);
-        if (picker == null)
-            throw new InvalidOperationException("Picker HWND found but UIA FromHandle failed.");
-        if (!Input.ForceForeground(pickerHwnd))
-            throw new InvalidOperationException("Could not bring the capture picker to the foreground — refusing to click blind.");
-        Thread.Sleep(600);
-        Thread.Sleep(1000);
+        AutomationElement? root = Uia.FromHwnd(existingContainer);
+        if (root == null)
+            throw new InvalidOperationException("Container UIA root unavailable while inline capture is open.");
 
         foreach (GuestInfo g in guests)
         {
-            // Same robust row-find loop as CaptureIntoGroup (scroll/refresh retry
-            // for a virtualized or not-yet-enumerated row) — duplicated rather
-            // than shared because CaptureIntoGroup must not be modified.
-            AutomationElement? row = null;
+            // Row-find with a bounded wait: the picker enumerates windows
+            // asynchronously after the panel opens.
+            AutomationElement? textEl = null;
             var rowSw = Stopwatch.StartNew();
-            InvalidOperationException? lastMiss = null;
-            int scrolls = 0;
-            while (row == null && rowSw.ElapsedMilliseconds < 12000)
+            while (textEl == null && rowSw.ElapsedMilliseconds < 12000)
             {
-                try { row = FindPickerRow(picker, g.Title); }
-                catch (InvalidOperationException ex)
+                textEl = Uia.FindDescendantByName(root, ControlType.Text, null, g.Title, out int textCount);
+                if (textEl == null || textCount != 1)
                 {
-                    lastMiss = ex;
-                    AutomationElement? list = Uia.FindFirstOfType(picker, ControlType.List);
-                    if (list != null && scrolls < 8)
-                    {
-                        Rect lr = Uia.GetElementRect(list);
-                        Input.ScrollWheel((int)(lr.X + lr.Width / 2), (int)(lr.Y + lr.Height / 2), -2);
-                        scrolls++;
-                    }
-                    else
-                    {
-                        AutomationElement? refreshBtn = Uia.FindDescendantByName(picker, ControlType.Button, "Refresh", null, out int rc);
-                        if (refreshBtn != null && rc == 1)
-                        {
-                            (int fx, int fy) = Uia.Center(refreshBtn);
-                            Input.ClickAt(fx, fy);
-                        }
-                        scrolls = 0;
-                    }
+                    textEl = null;
                     Thread.Sleep(300);
                 }
             }
-            if (row == null)
-                throw lastMiss ?? new InvalidOperationException($"Picker row for '{g.Title}' not found.");
-
-            AutomationElement? textEl = Uia.FindDescendantByName(picker, ControlType.Text, null, g.Title, out int textCount);
-            if (textEl == null || textCount != 1)
-                throw new InvalidOperationException($"Picker text label for '{g.Title}' not found uniquely (count={textCount}) — cannot toggle safely.");
+            if (textEl == null)
+                throw new InvalidOperationException($"Inline panel row for '{g.Title}' not found within 12s.");
+            AutomationElement? row = Uia.NearestAncestorOfType(textEl, ControlType.CheckBox) ?? textEl;
 
             bool toggledOn = false;
             for (int attempt = 0; attempt < 3 && !toggledOn; attempt++)
             {
-                Rect r = Uia.GetElementRect(row);
                 (int cx, int cy) = attempt switch
                 {
                     0 => Uia.Center(textEl),
-                    1 => ((int)(r.X + 5), (int)(r.Y + r.Height / 2)),
                     _ => Uia.Center(row),
                 };
                 Input.ClickAt(cx, cy);
@@ -1376,16 +1371,17 @@ internal static partial class Scenarios
                 }
             }
             if (!toggledOn)
-                throw new InvalidOperationException($"Picker row for '{g.Title}' did not toggle on after real clicks or toggle pattern fallback.");
+                throw new InvalidOperationException($"Inline panel row for '{g.Title}' did not toggle on after real clicks or toggle pattern fallback.");
             Thread.Sleep(200);
         }
 
-        AutomationElement? groupBtn = Uia.FindDescendantByName(picker, ControlType.Button, "Group these", null, out int btnCount);
-        if (groupBtn == null || btnCount != 1)
-            throw new InvalidOperationException($"'Group these' button not found uniquely (count={btnCount}).");
-        (int bx, int by) = Uia.Center(groupBtn);
-        Input.ClickAt(bx, by);
-        Util.WaitUntil(() => !NativeMethods.IsWindow(pickerHwnd), 5000);
+        AutomationElement? addBtn = Uia.FindDescendantByName(root, ControlType.Button, "Add selected", null, out int addCount);
+        if (addBtn == null || addCount != 1)
+            throw new InvalidOperationException($"Inline 'Add selected' button not found uniquely (count={addCount}).");
+        (int ax, int ay) = Uia.Center(addBtn);
+        Input.ClickAt(ax, ay);
+        // The inline panel closes itself after adding.
+        Util.WaitUntil(() => Uia.FindDescendantByName(root, ControlType.Button, "Add selected", null, out _) == null, 5000);
 
         var after = new HashSet<IntPtr>(Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true));
         List<IntPtr> newWindows = after.Except(before).ToList();
@@ -1429,6 +1425,29 @@ internal static partial class Scenarios
     }
 
     /// <summary>True if the guest is visible but NOT docked over the host — i.e. released back to its own placement (or never captured).</summary>
+    /// <summary>
+    /// Posts WM_CLOSE to every top-level window of the process (visible or
+    /// hidden) repeatedly until the process exits or the timeout elapses.
+    /// A single pass is insufficient: closing the last container makes the
+    /// launcher REAPPEAR (documented design — App.xaml.cs OnContainerClosed
+    /// re-shows the launcher when the last container closes), so a clean exit
+    /// can need two waves of WM_CLOSE (container, then launcher).
+    /// Returns true if the process exited within the timeout.
+    /// </summary>
+    private static bool CloseAllWindowsUntilExit(uint pid, Process proc, int timeoutMs)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            if (proc.HasExited)
+                return true;
+            foreach (IntPtr h in Discover.GetTopLevelWindowsByPid(pid, visibleOnly: false))
+                NativeMethods.PostMessage(h, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+            Thread.Sleep(300);
+        }
+        return proc.HasExited;
+    }
+
     private static bool IsReleasedAndShown(IntPtr guest, IntPtr host)
     {
         return NativeMethods.IsWindow(guest) && NativeMethods.IsWindowVisible(guest) && !IsDocked(guest, host);

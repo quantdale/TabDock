@@ -48,17 +48,25 @@ internal static partial class Scenarios
         ctx.Check(Util.WaitUntil(() => IsDocked(pigB.Hwnd, host), 3000),
             "clicking tab B after the reattach worked (no stale Mouse.Capture swallowing the click)");
 
-        // The "+" add-window header button must still open the picker; cancel
-        // without completing a capture.
+        // The "+" add-window header button must still open the INLINE capture
+        // surface after the reattach (the standalone "Capture windows" picker
+        // window is the launcher/hotkey fallback only); close it with the
+        // documented second-click toggle without completing a capture.
         ClickAddWindowButton(container);
-        IntPtr picker = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 5000);
-        ctx.Check(picker != IntPtr.Zero, "'+' add-window button opened the picker after the reattach");
-        if (picker != IntPtr.Zero)
+        AutomationElement? panelRoot = Uia.FromHwnd(container);
+        bool panelOpened = panelRoot != null && Util.WaitUntil(() =>
+            Uia.FindDescendantByName(panelRoot, ControlType.Button, "Add selected", null, out _) != null, 5000);
+        ctx.Check(panelOpened, "'+' add-window button opened the inline capture surface after the reattach");
+        Thread.Sleep(300);
+        ClickAddWindowButton(container);
+        bool panelClosed = Util.WaitUntil(() =>
         {
-            Input.ForceForeground(picker);
-            Input.SendKey(Input.VK_ESCAPE);
-            ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(picker), 3000), "picker dismissed with Esc without capturing");
-        }
+            AutomationElement? r = Uia.FromHwnd(container);
+            if (r == null)
+                return false;
+            return Uia.FindDescendantByName(r, ControlType.Button, "Add selected", null, out _) == null;
+        }, 3000);
+        ctx.Check(panelClosed, "inline capture surface dismissed with the second '+' click");
 
         // Minimize / restore.
         ClickMinimizeButton(container);
@@ -66,13 +74,18 @@ internal static partial class Scenarios
         NativeMethods.ShowWindow(container, NativeMethods.SW_RESTORE);
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsIconic(container), 3000), "container restored (test cleanup step, not the restore gesture itself)");
 
-        // Rename (mirrors the `rename` scenario's exact pattern).
+        // Rename (mirrors the `rename` scenario's exact pattern). Retried: the
+        // first double-click right after the restore can be consumed by the
+        // window's own activation (observed live).
         AutomationElement containerEl = Uia.FromHwnd(container)
             ?? throw new InvalidOperationException("Container UIA element unavailable.");
         AutomationElement? caption = Uia.FindDescendantByName(containerEl, ControlType.Text, "Group", null, out int capCount);
         ctx.Check(caption != null && capCount == 1, $"caption title TextBlock 'Group' found uniquely after reattach (count={capCount})");
-        if (caption != null && capCount == 1)
+        bool renamed = false;
+        for (int attempt = 0; attempt < 3 && !renamed; attempt++)
         {
+            if (caption == null || capCount != 1)
+                break;
             (int cx, int cy) = Uia.Center(caption);
             if (!EnsureClickable(container, cx, cy))
                 throw new InvalidOperationException("Could not bring the container to the foreground and its caption is obscured — refusing to click blind.");
@@ -80,9 +93,9 @@ internal static partial class Scenarios
             Thread.Sleep(300);
             Input.TypeText("TDVAL-Reattached");
             Input.SendKey(Input.VK_RETURN);
-            ctx.Check(Util.WaitUntil(() => NativeMethods.GetWindowTextString(container) == "TDVAL-Reattached", 2000),
-                "rename after the reattach worked (container title changed)");
+            renamed = Util.WaitUntil(() => NativeMethods.GetWindowTextString(container) == "TDVAL-Reattached", 2000);
         }
+        ctx.Check(renamed, "rename after the reattach worked (container title changed)");
 
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
         ctx.Check(pigA.Proc != null && !pigA.Proc.HasExited && pigB.Proc != null && !pigB.Proc.HasExited, "both pigs alive throughout");
@@ -126,15 +139,22 @@ internal static partial class Scenarios
         ctx.Check(Util.WaitUntil(() => IsDocked(pigA.Hwnd, host), 3000),
             "clicking the OTHER tab after 3 reattach cycles worked (no accumulated stale Mouse.Capture)");
 
+        // Inline capture surface must still open (and toggle-close) after 3
+        // reattach cycles; the standalone picker is the launcher fallback only.
         ClickAddWindowButton(container);
-        IntPtr picker = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 5000);
-        ctx.Check(picker != IntPtr.Zero, "'+' add-window button still opens the picker after 3 reattach cycles");
-        if (picker != IntPtr.Zero)
+        AutomationElement? panelRoot = Uia.FromHwnd(container);
+        bool panelOpened = panelRoot != null && Util.WaitUntil(() =>
+            Uia.FindDescendantByName(panelRoot, ControlType.Button, "Add selected", null, out _) != null, 5000);
+        ctx.Check(panelOpened, "'+' add-window button still opens the inline capture surface after 3 reattach cycles");
+        Thread.Sleep(300);
+        ClickAddWindowButton(container);
+        ctx.Check(Util.WaitUntil(() =>
         {
-            Input.ForceForeground(picker);
-            Input.SendKey(Input.VK_ESCAPE);
-            ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(picker), 3000), "picker dismissed with Esc without capturing");
-        }
+            AutomationElement? r = Uia.FromHwnd(container);
+            if (r == null)
+                return false;
+            return Uia.FindDescendantByName(r, ControlType.Button, "Add selected", null, out _) == null;
+        }, 3000), "inline capture surface dismissed with the second '+' click after 3 cycles");
 
         ClickMinimizeButton(container);
         ctx.Check(Util.WaitUntil(() => NativeMethods.IsIconic(container), 3000), "minimize still works after 3 reattach cycles");

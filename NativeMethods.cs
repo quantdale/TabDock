@@ -58,6 +58,16 @@ public static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
+        // Atomic multi-window positioning (used to move both split panes plus
+        // the container in a single compositor transaction, eliminating the
+        // visible pane separation that separate SetWindowPos calls produce).
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr BeginDeferWindowPos(int nNumWindows);
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool DeferWindowPos(IntPtr hWinPosInfo, IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool EndDeferWindowPos(IntPtr hWinPosInfo);
+
     // DRIVER-ONLY: used by tests/ValidationDriver via link-include
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr GetParent(IntPtr hWnd);
@@ -196,7 +206,30 @@ public static partial class NativeMethods
     public static extern bool SetProcessDpiAwarenessContext(IntPtr dpiAwarenessContext);
 
     [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr GetWindowDpiAwarenessContext(IntPtr hwnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool AreDpiAwarenessContextsEqual(IntPtr dpiContextA, IntPtr dpiContextB);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern uint GetDpiForSystem();
+
+    /// <summary>DPI_AWARENESS_CONTEXT_UNAWARE — the -1 sentinel (legacy, DWM-virtualized coordinate space).</summary>
+    public static readonly IntPtr DpiAwarenessContextUnaware = new IntPtr(-1);
+
+    [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MONITORENUMPROC lpfnEnum, IntPtr dwData);
+
+    public delegate bool MONITORENUMPROC(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);
+
+    /// <summary>MONITORINFOF_PRIMARY — the monitor is the primary display.</summary>
+    public const uint MONITORINFOF_PRIMARY = 0x1;
+
+    /// <summary>SM_CMONITORS — number of display monitors (includes pseudo-monitors).</summary>
+    public const int SM_CMONITORS = 80;
 
     // DRIVER-ONLY: used by tests/ValidationDriver via link-include
     [DllImport("user32.dll", SetLastError = true)]
@@ -433,6 +466,9 @@ public static partial class NativeMethods
     public const uint WM_NCCALCSIZE = 0x0083;
     public const uint WM_MOUSEACTIVATE = 0x0021;
     public const uint WM_HOTKEY = 0x0312;
+        public const uint WM_WINDOWPOSCHANGED = 0x0047;
+        public const uint WM_ENTERSIZEMOVE = 0x0231;
+        public const uint WM_EXITSIZEMOVE = 0x0232;
 
     public const uint MA_ACTIVATE = 1;
     public const uint MA_ACTIVATEANDEAT = 2;

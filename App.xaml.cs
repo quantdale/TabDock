@@ -74,6 +74,21 @@ public partial class App : Application
             // still be diagnosed.
             _log ??= new LoggingService();
 
+            // Deterministic split-geometry self-test mode (goal §27/§28): runs the
+            // partition matrix + seeded fuzz with no windows, no input, no single
+            // instance — usable on ANY machine (including a friend's) and by the
+            // ValidationDriver as a standalone hermetic check. Exit 0 = all checks
+            // pass; exit 1 = any failure. Must run before the mutex/UI setup.
+            if (e.Args.Any(a => a.Equals("--selftest-geometry", StringComparison.OrdinalIgnoreCase)))
+            {
+                var (checks, failures) = SplitGeometry.RunSelfTest(_log.Log);
+                _log.Log($"SELFTEST[geometry] checks={checks} failures={failures} result={(failures == 0 ? "PASS" : "FAIL")}");
+                // Application_Exit disposes the logger and releases the (never
+                // acquired) mutex; no explicit cleanup needed here.
+                Shutdown(failures == 0 ? 0 : 1);
+                return;
+            }
+
             // Only one instance may run at a time: sharing state.json and the hidden-
             // window journal between two processes leads to lost updates and double
             // rescue attempts. Exit cleanly if another instance already holds the mutex.
@@ -108,6 +123,11 @@ public partial class App : Application
             WindowShepherdService.RescueOrphanedWindows(_log);
             _groups.RestoreState();
 
+            // Bounded environment fingerprint (goal §16): one startup block —
+            // OS/.NET/bitness + full monitor layout — so customer/friend-machine
+            // reports are diagnosable even when the machine is not reachable.
+            _log.Log($"ENV[startup] {EnvironmentFingerprint.Platform} | {EnvironmentFingerprint.DescribeMonitors()}");
+
             _mainViewModel = new MainViewModel(_groups);
             _mainViewModel.NewGroupRequested += OnNewGroupRequested;
             _mainViewModel.CaptureRequested += OnCaptureRequested;
@@ -125,6 +145,20 @@ public partial class App : Application
             _hotkey.Register();
             _hotkey.HotkeyPressed += (_, _) => OnCaptureRequested(this, EventArgs.Empty);
             _mainWindow.Show();
+
+            // Startup DPI (goal §16): the startup fingerprint runs before the
+            // launcher exists, so the system DPI for the session is captured
+            // once the launcher is on screen. Bounded — one line at startup.
+            try
+            {
+                IntPtr launcherHwnd = new System.Windows.Interop.WindowInteropHelper(_mainWindow).Handle;
+                if (launcherHwnd != IntPtr.Zero)
+                    _log.Log($"ENV[launcher] {EnvironmentFingerprint.DescribeWindowMonitor(launcherHwnd)}");
+            }
+            catch (Exception ex)
+            {
+                _log.LogException("ENV[launcher]", ex);
+            }
 
             // Open containers for groups restored from persistence. Live HWNDs are not
             // restored across reboots, so these groups start empty; the container is kept

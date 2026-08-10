@@ -137,6 +137,45 @@ internal static class Uia
         }
     }
 
+    /// <summary>
+    /// Finds descendants of <paramref name="root"/> whose AutomationId matches
+    /// <paramref name="automationId"/> (exact, ordinal). Returns the first
+    /// match; <paramref name="matchCount"/> lets callers refuse ambiguous
+    /// results. AutomationId lookups are locale- and label-change-proof, which
+    /// plain-text lookups are not (goal §33).
+    /// </summary>
+    public static AutomationElement? FindDescendantByAutomationId(
+        AutomationElement root,
+        string automationId,
+        out int matchCount)
+    {
+        matchCount = 0;
+        AutomationElement? found = null;
+        try
+        {
+            AutomationElementCollection all = root.FindAll(
+                TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.AutomationIdProperty, automationId));
+            foreach (AutomationElement el in all)
+            {
+                string id;
+                try { id = el.Current.AutomationId ?? string.Empty; }
+                catch { continue; }
+                if (string.Equals(id, automationId, StringComparison.Ordinal))
+                {
+                    matchCount++;
+                    found ??= el;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // Return whatever was found before the failure; matchCount reflects it.
+            Console.WriteLine($"    [uia] FindDescendantByAutomationId EXCEPTION: {ex.GetType().Name}: {ex.Message}");
+        }
+        return found;
+    }
+
     public static int CountChildrenOfType(AutomationElement root, ControlType type)
     {
         try

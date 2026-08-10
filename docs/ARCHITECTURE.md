@@ -94,6 +94,18 @@ skip redundant re-glues when the guest already covers it within 1 px, then `Posi
 `HWND_TOP` + `SWP_SHOWWINDOW`, `PairZOrderBehind(container, guest)`
 (`WindowShepherdService.cs:225-235`), `JournalClear`, `SHEPHERD[position]`.
 
+### Movement synchronization
+
+Container move/resize re-glues the guest(s) to the content marker. Every
+trigger — the native `WM_WINDOWPOSCHANGED` (hooked in `WndProc` so the guest is
+re-glued in the same native message flow as the container's own movement),
+`LocationChanged`, `SizeChanged`, and the post-layout `LayoutUpdated` — funnels
+into one coalesced `RequestRelayout()` (a pending flag + a single
+Render-priority dispatcher callback), so at most one batch of native
+reposition calls is issued per WPF frame instead of 3-5, and the batch always
+runs after WPF has arranged the content marker to its final rect. This removed
+the per-frame double-move/backward-jump that made dragging look glitchy.
+
 ### Vertical split screen (two guests)
 
 From a captured tab's context menu, TabDock can display exactly two guests
@@ -109,17 +121,81 @@ an in-window panel; the standalone picker remains for the fallback path.
 - **State** — `_splitLeft`/`_splitRight` hold `CapturedWindow` references
   (identity, not index, so the pair survives tab reordering); `_splitForeground`
   tracks which member is z-order-top. Split is runtime-only (not persisted).
+- **Composite tab (presentation only)** — the strip renders the pair as ONE
+  visual item `[ A | B ]` (a subtle central separator) instead of two unrelated
+  tabs: `GroupViewModel.DisplayTabs` is the strip projection
+  (`SplitCompositeViewModel` wraps the two member `TabViewModel`s; the RIGHT
+  member's ordinary tab is suppressed while the pair exists; the composite
+  occupies the LEFT member's visual position; exit restores ordinary tabs in
+  `Group.Members` order). Domain identity is never merged — the two
+  `CapturedWindow`s remain separate members. The projection mirrors `Tabs`
+  exactly when no split is active (Add/Remove/Move mirrored so ListBox
+  containers survive reorders).
 - **Enter/exit** — `EnterSplit(left, right)` / `ExitSplit(keepActive)` route
   through the context menu (`ConfigureSplitMenuItems`: disabled below two tabs,
   direct action at exactly two, submenu at three+, `Exit split screen` when
-  active). Clicking a split member keeps the split; clicking a non-paired tab
-  exits it. Departing members are hidden via `_shepherd.Hide` (journal-before-hide
-  preserved); neither member is ever released by a split transition.
+  active). Clicking a composite HALF keeps the split and focuses that member
+  without hiding the partner (no ordinary tab-selection path can misinterpret a
+  member as needing to hide the other). **The pair is the persistent selected
+  tab-strip unit**: clicking or hovering a NON-paired tab leaves the pair
+  untouched — `SyncShepherdActiveWindow` rejects the non-member activation,
+  hides it only when it was newly visible (a fresh capture — journal-safe, one
+  bounded `SPLIT[persist]` line), and reverts the logical active tab to the
+  focused member via `FocusSplitMember`. Split ends ONLY from an explicit
+  `Exit split screen` / Split Screen replacement, or a structural member
+  removal (pop-out, ×, middle-click, self-close/hide, group deletion). Ctrl+Tab
+  while split cycles between the two members only.
+  Per-half × / middle-click pop THAT member out; right-click builds a
+  member-specific menu (Pop out / Close window plus the split-aware items).
+  Composite dragging is disabled while split is active (the composite is not a
+  drag unit; normal-mode drag reorder is unchanged). Departing members are
+  hidden via `_shepherd.Hide` (journal-before-hide preserved); neither member
+  is ever released by a split transition.
 - **Layout** — `LayoutSplitPanes` derives LEFT/RIGHT halves from the content
-  rect (`leftW = Width/2`, right gets the remainder; no DPI conversion) and
-  establishes the local order `foreground guest → partner guest → container`.
-  The 1px redundant-glue guard is per-pane; the container is paired below the
-  partner without being pushed behind unrelated desktop windows.
+  rect via `SplitGeometry.Partition` (`leftW = Width/2`, right gets the
+  remainder; no DPI conversion; the single deterministic definition, also
+  exercised by `--selftest-geometry`) and establishes the local order
+  `foreground guest → partner guest → container`. The 1px redundant-glue guard
+  is per-pane; when a re-glue is needed both panes plus the container pin are
+  written in ONE compositor transaction (`PositionGuestsDeferred`:
+  `BeginDeferWindowPos`/`DeferWindowPos`/`EndDeferWindowPos`, with per-entry
+  return checks and a per-guest fallback on failure) so the panes never
+  visibly separate mid-write. The container is paired below the partner
+  without being pushed behind unrelated desktop windows. When both panes are
+  already glued, the cheap pin runs ONLY after verifying the pair's actual
+  order (`GetWindow(top, GW_HWNDNEXT) == bottom`) — a strip-initiated focus
+  switch (which raises no guest natively) would otherwise wedge the container
+  between the panes and occlude the just-focused member.
+- **Focused member (one canonical operation)** — `FocusSplitMember(member)`
+  is the ONLY path that focuses a member of the active pair: it updates
+  `_splitForeground` (z-top) and `_shepherdActiveWindow` (logical active +
+  tab highlight + `Group.ActiveIndex`), emits the bounded `SPLIT[focus]`
+  diagnostic (only when the focused member changes), re-glues both panes with
+  the member on top, and grants the member real foreground. Every entry point
+  routes through it: composite half click, active-tab sync, direct guest click
+  (WinEvent), and the WM_ACTIVATE reassert — so LEFT and RIGHT are peers after
+  split creation and no initiator/partner asymmetry can arise. It never
+  changes split membership or hides the partner.
+- **Survivor promotion** — when a member leaves the group the split ends and
+  the survivor is promoted to the single visible guest; `ReleaseTab` honors
+  that promotion (no positional neighbour pick may hide or displace the
+  survivor afterwards).
+- **Window-state reconciliation** — minimize hides the visible guest(s)
+  synchronously; restore/maximize re-glues through the coalesced post-layout
+  pass (`RequestRelayout`), never synchronously against the pre-transition
+  marker rect, so the FINAL content rect is authoritative for every
+  `Normal↔Maximized↔Minimized` combination. One bounded `STATE[transition]`
+  line records the pre-layout rect for diagnosability.
+- **Drag-end reconciliation** — `WM_EXITSIZEMOVE` (the container's own native
+  move/resize loop end) now schedules ONE coalesced `RequestRelayout()` instead
+  of only clearing `_inNativeMoveLoop`. The modal move loop keeps the dragged
+  window at the top of the z-order, and its final z-order finalization can land
+  AFTER the last per-frame re-glue — leaving the container above its guest with
+  the guest's rect still exactly matching the content area (the redundant-glue
+  guard would otherwise skip every later repair, blanking the content area
+  until a tab switch re-glued it). The post-loop pass re-validates both
+  geometry and the local pairing; the per-frame drag path itself is untouched
+  (still one coalesced Render-priority pass, no new per-frame writes).
 - **Lifecycle** — split-aware `SyncShepherdActiveWindow`, `StateChanged`,
   `NoteGuestMoveSize` (drag-out measured against the member's own pane),
   `RestoreMinimizedWindow`, `PairZOrderBehindGuest`, and the WM_ACTIVATE
@@ -128,7 +204,8 @@ an in-window panel; the standalone picker remains for the fallback path.
   leaving the group (pop-out, drag-out, self-close, self-hide) ends the split and
   promotes the survivor to the single visible guest.
 - **Primitives** — `WindowShepherdService.PositionGuest` (position one guest at a
-  z-order slot), `SetForeground` (foreground without repositioning),
+  z-order slot), `PositionGuestsDeferred` (atomic two-guest + container batch),
+  `SetForeground` (foreground without repositioning),
   `RaiseContainerForChrome` (temporary TabDock UI), and `PairZOrderBehind` (the
   single local container/guest ordering primitive).
 
@@ -143,8 +220,31 @@ change during popup interaction. Guests remain independent top-level windows and
 ordinary unrelated desktop windows are not displaced by a global `HWND_BOTTOM`
 operation.
 
+**Local pairing invariant.** The single-guest redundant-glue guard
+(`LayoutShepherdActiveWindow`) validates geometry AND the local pairing before
+skipping its native writes: the container must sit BELOW the guest. The check is
+the shepherd's upward `GW_HWNDPREV` walk
+(`WindowShepherdService.IsContainerBelowGuest`, skipping invisible helper
+windows) — NOT a strict-adjacency probe, which would fail forever (and churn a
+`SetWindowPos` per relayout pass) for a `WS_EX_TOPMOST` guest living in a
+separate z-order band, would false-trigger on hidden IME helpers, and would
+reorder unrelated TabDock containers. The same invariant guards
+`PairZOrderBehind`'s no-op path, so a healthy steady state issues ZERO native
+writes and a broken pairing heals with exactly one `SetWindowPos` (idempotent
+afterwards). The repair is skipped while chrome is intentionally raised above
+the guests (context menu / color menu / group menu / capture panel / rename
+box / close-group confirm dialog); the popup-close path reconciles the stack
+with `forceZOrder`. The close-group/delete-group confirm dialog is included in
+that guard (`_closePromptOpen` in
+`ContainerWindow.IsContainerChromeInteractionActive`): without it the 120ms
+`WM_ACTIVATE` reassert that follows clicking the container's × raises the
+docked guest above the just-shown MessageBox and covers its buttons (found
+live during supervised validation; `exitpopulated`/`closegroupprompt` cover
+it).
+
 Log vocabulary: `SPLIT[enter]`, `SPLIT[exit]`, `SPLIT[replace]`,
-`SPLIT[member-gone]`.
+`SPLIT[member-gone]`, `SPLIT[persist]` (a newly-visible non-member hidden to
+preserve the pair's visible set).
 
 ### Release
 
@@ -183,6 +283,27 @@ container `Close` (`ContainerWindow.xaml.cs:136-146`, `GroupViewModel.cs:204-208
 - Tab context-menu **Pop out** (`GroupViewModel.cs:243`).
 
 ---
+
+### Cross-machine hardening
+
+- **DPI-aware guests only at non-100% scale.** Capture refuses a DPI-unaware
+  guest when `GetDpiForSystem() != 96` (its DWM-virtualized 96-DPI coordinate
+  space cannot be glued with physical-pixel rects); the awareness probe is
+  fail-open. System-aware guests work on single-DPI systems (mixed-DPI
+  multi-monitor is a documented limitation). The Shepherd physical-pixel
+  convention itself is unchanged.
+- **Environment fingerprint** (`Services/EnvironmentFingerprint.cs`): one
+  `ENV[startup]` line (OS version/build, .NET runtime, bitness, full monitor
+  table with bounds/work/primary via `EnumDisplayMonitors`), one
+  `ENV[launcher]` line (system DPI once the launcher exists), one
+  `ENV[container]` line per open container (rects, window state, active
+  monitor, DPI, guest), and the `STATE[settled]` snapshot carries the platform
+  and guest executable. Bounded — never per-frame — so customer logs are
+  self-describing.
+- **Deterministic partition self-test**: `TabDock.exe --selftest-geometry`
+  runs `SplitGeometry.RunSelfTest` (matrix widths 1..4096 × heights × origins
+  incl. negative, odd widths, 100 k seeded fuzz rects, seed 20260810) with no
+  UI/input, logs `SELFTEST[geometry]`, exits 0/1.
 
 ## 3. WinEvent pipeline: event → handler → effect
 
@@ -283,6 +404,13 @@ tests and agents may rely on:
 | `WinEventMonitor started (hooks: …)` / `WinEventMonitor stopped.` | `WinEventMonitor.cs:109` / `:134` | Hook lifecycle |
 | `EMERGENCY RELEASE: …` | `GroupManager.cs:397` | Exit/crash release |
 | `Saved {n} group(s) to …` | `PersistenceService.cs:114` | state.json write |
+| `SPLIT[enter]/[exit]/[replace]/[member-gone]` | `ContainerWindow.xaml.cs` | Split lifecycle transitions |
+| `SPLIT[focus] guest=0x…` | `ContainerWindow.xaml.cs` (`FocusSplitMember`) | Focused split member changed (bounded: only on member change) |
+| `SHEPHERD[split-foreground]` | `WindowShepherdService.cs` (`SetForeground`) | Split member given real foreground |
+| `STATE[transition] winState=… hostRect=…` | `ContainerWindow.xaml.cs` (`StateChanged`) | One line per window-state transition (pre-layout rect diagnostic) |
+| `ENV[startup]` / `ENV[launcher]` / `ENV[container]` | `App.xaml.cs` / `ContainerWindow.xaml.cs` | Environment fingerprint (startup, launcher DPI, per-container) |
+| `SELFTEST[geometry]` | `App.xaml.cs` (`--selftest-geometry`) | Deterministic partition self-test result |
+| `Shepherd capture blocked: DPI-unaware target…` | `WindowShepherdService.cs` (`Capture`) | DPI-unaware guest refused at non-100% scale |
 
 Rules:
 - **The log file is held open for the process lifetime** (`FileShare.ReadWrite`, `LoggingService.cs:226`);

@@ -403,4 +403,151 @@ internal static partial class Scenarios
             "both remaining pigs alive");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
     }
+
+    // -------------------------------------------------------------------------
+    // drag-release-render-stability (goal §19/§21): with ONE captured guest
+    // visible (normal mode), drag the CONTAINER's caption through a
+    // multi-segment trajectory (right, down, left, up, diagonal, return — many
+    // intermediate WM_WINDOWPOSCHANGED events), release, then IMMEDIATELY —
+    // without ANY tab interaction — assert the guest is still visible, live,
+    // glued to the full content rect, and the TOP window at the content
+    // center (a covered-but-correctly-sized guest must FAIL). A test that
+    // switches tabs before asserting would be invalid: tab switching itself
+    // repairs the post-drag blanking defect this scenario guards.
+    // -------------------------------------------------------------------------
+    private static void DragReleaseRenderStability(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "DRS-A", "--color", "red", "--pulse");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "guest docked full-width at capture");
+        EnsureContainerInWorkArea(ctx, container);
+
+        NativeMethods.RECT hostRect = Discover.GetClientScreenRect(host);
+        int centerX = hostRect.left + hostRect.Width / 2;
+        int centerY = hostRect.top + hostRect.Height / 2;
+
+        int cycles = Math.Max(20, opt.Cycles ?? 20);
+        for (int i = 1; i <= cycles; i++)
+        {
+            NativeMethods.GetWindowRect(container, out NativeMethods.RECT rcBefore);
+            int sx = rcBefore.left + rcBefore.Width / 2 + (i % 2 == 1 ? -60 : 60);
+            int sy = rcBefore.top + 16; // WindowChrome CaptionHeight=32 band
+            (int[] xs, int[] ys) = BuildDragTrajectory(container, sx, sy, mirrored: i % 2 == 1);
+            if (!EnsureClickable(container, sx, sy))
+                throw new InvalidOperationException("Could not bring the container to the foreground — refusing to drag blind.");
+
+            long dragOff = TabDockLog.RecordLogLength();
+            Input.DragPolyline(xs, ys, stepsPerSegment: 8);
+            Thread.Sleep(250); // Render-priority final reconciliation
+
+            NativeMethods.GetWindowRect(container, out NativeMethods.RECT rcAfter);
+            ctx.Check(Math.Abs(rcAfter.left - rcBefore.left) > 8 || Math.Abs(rcAfter.top - rcBefore.top) > 8,
+                $"cycle {i}: container actually moved (Δ=({rcAfter.left - rcBefore.left},{rcAfter.top - rcBefore.top}))");
+            ctx.Check(TabDockLog.CountNewLines(dragOff, "SHEPHERD[position]") >= 2,
+                $"cycle {i}: multiple re-glue events during the drag (multi-segment trajectory)");
+            ctx.Check(NativeMethods.IsWindowVisible(pig.Hwnd), $"cycle {i}: guest visible immediately after release");
+            ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000),
+                $"cycle {i}: guest glued to the full content rect");
+            ctx.Check(Util.WaitUntil(() => TopWindowPidAt(centerX, centerY) == pig.Pid, 3000),
+                $"cycle {i}: guest is the TOP window at the content center (not covered)");
+            ctx.Check(TabCount(container) == 1, $"cycle {i}: still one tab (no switch, no pop-out)");
+            ctx.Check(TabDockLog.CountNewLines(dragOff, "EXCEPTION") == 0, $"cycle {i}: no EXCEPTION");
+
+            if (i % 5 == 0)
+            {
+                // Deeper liveness probe without any foreground/input side
+                // effect. The pig toggles its background every 500ms, so two
+                // captures at a fixed offset can land on the same phase and
+                // diff ~0 (false FAIL). Capture three frames 400ms apart and
+                // require ANY adjacent pair to differ: over any 800ms span the
+                // pig toggles at least once, and the 400ms gap is shorter than
+                // the 500ms toggle period, so at most one toggle falls between
+                // adjacent frames — at least one adjacent pair must straddle a
+                // toggle. Live pixels must also be red-dominant (the container
+                // background is neutral gray, not red).
+                int[]? f0 = Pixels.CaptureHostScreenArea(host);
+                Thread.Sleep(400);
+                int[]? f1 = Pixels.CaptureHostScreenArea(host);
+                Thread.Sleep(400);
+                int[]? f2 = Pixels.CaptureHostScreenArea(host);
+                double d01 = f0 != null && f1 != null ? Pixels.ComputeAvgFrameDiff(f0, f1) : 0;
+                double d12 = f1 != null && f2 != null ? Pixels.ComputeAvgFrameDiff(f1, f2) : 0;
+                ctx.Check(f0 != null && f1 != null && f2 != null && (d01 > 0.005 || d12 > 0.005),
+                    $"cycle {i}: guest content is LIVE (pulse variance on screen)");
+                ctx.Check(f2 != null && f2.Length > 0 && Pixels.DominantChannel(f2) == 'r',
+                    $"cycle {i}: RED guest pixels on screen (not the container background)");
+            }
+        }
+
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines across all cycles");
+        ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "guest process alive across all cycles");
+    }
+
+    /// <summary>PID of the top-level window owning the topmost window at (x, y), or 0.</summary>
+    private static uint TopWindowPidAt(int x, int y)
+    {
+        IntPtr top = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = x, y = y });
+        if (top == IntPtr.Zero)
+            return 0;
+        IntPtr root = NativeMethods.GetAncestor(top, NativeMethods.GA_ROOT);
+        NativeMethods.GetWindowThreadProcessId(root, out uint pid);
+        return pid;
+    }
+
+    /// <summary>
+    /// Positions the container once at a work-area inset if it does not fit
+    /// with >= 120px margin on every side (the drag trajectories drift and
+    /// must never exit the work area mid-gesture).
+    /// </summary>
+    private static void EnsureContainerInWorkArea(Ctx ctx, IntPtr container)
+    {
+        NativeMethods.GetWindowRect(container, out NativeMethods.RECT rc);
+        var mi = new NativeMethods.MONITORINFO { cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MONITORINFO>() };
+        NativeMethods.GetMonitorInfo(
+            NativeMethods.MonitorFromWindow(container, NativeMethods.MONITOR_DEFAULTTONEAREST), ref mi);
+        bool fits = rc.left >= mi.rcWork.left + 120 && rc.right <= mi.rcWork.right - 120
+            && rc.top >= mi.rcWork.top + 120 && rc.bottom <= mi.rcWork.bottom - 120;
+        if (fits)
+            return;
+        NativeMethods.SetWindowPos(container, IntPtr.Zero, mi.rcWork.left + 80, mi.rcWork.top + 80, 0, 0,
+            NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
+        Thread.Sleep(500);
+        // Vacuity guard: the drag trajectory (max excursion +160/+100px) and
+        // the pane-center probes must stay inside the work area. On a monitor
+        // narrower than the container this fails with a clear message and is
+        // classified as an environmental limitation, not a product defect.
+        NativeMethods.GetWindowRect(container, out NativeMethods.RECT rc2);
+        ctx.Check(rc2.right <= mi.rcWork.right - 40 && rc2.bottom <= mi.rcWork.bottom - 40,
+            "container fits the monitor work area for the drag trajectory (monitor too small otherwise)");
+    }
+
+    /// <summary>
+    /// Six waypoints (absolute screen positions) for one caption drag: right,
+    /// down, left, up, diagonal, return. Odd cycles mirror the offsets on
+    /// BOTH axes so consecutive cycles oscillate around a stable origin
+    /// (net displacement zero per pair) instead of drifting off screen;
+    /// every waypoint is clamped into the monitor work area.
+    /// </summary>
+    private static (int[] Xs, int[] Ys) BuildDragTrajectory(IntPtr container, int sx, int sy, bool mirrored)
+    {
+        int m = mirrored ? -1 : 1;
+        var mi = new NativeMethods.MONITORINFO { cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MONITORINFO>() };
+        NativeMethods.GetMonitorInfo(
+            NativeMethods.MonitorFromWindow(container, NativeMethods.MONITOR_DEFAULTTONEAREST), ref mi);
+        int xMin = mi.rcWork.left + 40, xMax = mi.rcWork.right - 40;
+        int yMin = mi.rcWork.top + 40, yMax = mi.rcWork.bottom - 40;
+
+        int[] offsetsX = { 160, 160, 40, 40, 130, 30 };
+        int[] offsetsY = { 0, 100, 100, 30, 70, 10 };
+        var xs = new int[6];
+        var ys = new int[6];
+        for (int i = 0; i < 6; i++)
+        {
+            xs[i] = Math.Clamp(sx + m * offsetsX[i], xMin, xMax);
+            ys[i] = Math.Clamp(sy + m * offsetsY[i], yMin, yMax);
+        }
+        return (xs, ys);
+    }
+
+
 }

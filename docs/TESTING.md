@@ -72,11 +72,105 @@ chrome-click-render-stability, tab-closebutton-popout,
 tab-middleclick-popout, group-create-inline
 ```
 
+UI/UX-stabilization scenarios (pig-only, hermetic, join `all`; bodies in
+`Scenarios.Split.cs` — the composite split tab, group menu, and Add Window
+toggle coverage from the UI/UX pass):
+
+```
+group-dropdown-stability, add-window-toggle, group-rename-menu,
+group-delete-populated, split-composite,
+split-three-tab-partner-popout, split-focus-bidirectional,
+split-partner-permutation, split-maximize-restore-no-overlap
+```
+
+Hardening-round scenarios (2026-08-11, `tabdock-ui-ux-hardening` change):
+
+- `split-three-tab-partner-popout` — the survivor-promotion regression: focus
+  the partner of a 3-tab split, pop it out, and assert the survivor takes full
+  width, stays visible, and the third tab stays hidden.
+- `split-focus-bidirectional` — alternating LEFT/RIGHT half clicks ×N cycles;
+  every cycle asserts the member-scoped `SPLIT[focus]` (member parsed from the
+  log), the real foreground window, pane geometry, and no split exit.
+- `split-partner-permutation` — both construction orders (A→B and B→A) behave
+  identically; the partner half is clicked first in each case because the
+  initiator is already focused right after entering (the changed-guard emits no
+  `SPLIT[focus]` for it).
+- `split-maximize-restore-no-overlap` — all four window-state transitions
+  (Normal↔Maximized, Normal→Minimized→Normal, Maximized→Minimized→Maximized)
+  ×N cycles with an exact partition assertion (no overlap, no gap, both
+  visible, split still active).
+
+Split-persistence / drag-end stabilization scenarios (2026-08-11 Round 4,
+`tabdock-ui-ux-hardening` change):
+
+- `split-third-tab-hover-persists` — with A+B split and a third tab C present,
+  hover C's tab ×N cycles (pointer verifiably moved onto the tab rect, then
+  away); every cycle asserts pair identity, both panes glued and visible, C
+  hidden, no `SPLIT[exit]`/`SPLIT[member-gone]`, no `SHEPHERD[hide]`, no
+  release, no switch away from the pair, and both pane centers resolve to their
+  guests (`WindowFromPoint` — a covered-but-correctly-sized pane fails).
+- `split-third-tab-click-persists` — per cycle: click C, click LEFT half, click
+  C, click RIGHT half, click C, right-click C + dismiss, Ctrl+Tab; the pair
+  stays A+B the whole time, C never becomes the active single guest (asserted
+  via the SETTLED `Switched group … to tab N` final index — the funnel
+  transiently logs C's index before reverting, so the assertion is on the final
+  index, never on "no switch lines"), no `SPLIT[exit]`, no release.
+- `split-click-third` (rewritten for the persistence contract) — a single
+  click on C leaves the pair untouched; previously it asserted the old
+  exit-on-click contract.
+- `drag-release-render-stability` — ONE captured guest; drag the CONTAINER
+  caption through a multi-segment trajectory (right/down/left/up/diagonal/
+  return via `Input.DragPolyline`, many intermediate `WM_WINDOWPOSCHANGED`
+  events) ×N cycles; IMMEDIATELY after release (no tab interaction — tab
+  switching itself repairs the defect and would make the test invalid) assert:
+  container moved, ≥2 `SHEPHERD[position]` lines (real re-glue churn), guest
+  visible, glued, TOP window at the content center, one tab, no EXCEPTION;
+  every 5th cycle a 3-frame pulse liveness probe (phase-robust: 400ms gaps,
+  any adjacent pair must differ).
+- `split-drag-release-render-stability` — same trajectory with A+B split;
+  alternate the focused member per cycle; immediately after release assert the
+  exact partition (no overlap, no gap), both pane centers resolve to their
+  guests, split still active, no EXCEPTION.
+
+Notes on the composite split tab in the harness:
+
+- During split the strip renders the pair as ONE tab item `[ A | B ]`, so the
+  tab ListBox holds one fewer ListItem than the group has tabs; `TabCount`
+  assertions during split must expect the composite count: a 2-tab group in
+  split renders exactly ONE ListItem (`TabCount == 1`); a 3-tab group renders
+  composite + C (`TabCount == 2`).
+- `ClickTabCloseButton` is composite-aware: the per-half `×` buttons carry
+  AutomationIds (`SplitCloseLeft`/`SplitCloseRight`, goal §33) and are resolved
+  by ID first, falling back to the horizontal-nearest heuristic — so the
+  correct member pops out regardless of strip stretch or title width.
+- `SPLIT[focus]` assertions are member-scoped: `WaitForSplitFocus` parses the
+  `guest=0x…` from the log line and requires the expected member's HWND
+  (`ContainerWindow.FocusSplitMember` emits it only when the focused member
+  actually changes).
+- `split-reorder` reorders in NORMAL mode and then enters split: the composite
+  is deliberately not draggable while split is active (documented in the goal
+  waypoint), so the scenario asserts the pair-identity guarantee on the
+  reorder-then-split path instead.
+
 Pane membership is asserted from the content-host rect halves (LEFT =
 `{host.left, host.top, host.left + host.Width/2, host.bottom}`, RIGHT = the
 remainder) within the existing tolerance — never `GetParent`. The scenarios
 assert the `SPLIT[enter]`/`[exit]`/`[member-gone]` log lines, which are emitted
 by committed application source.
+
+**Deterministic geometry check (no input, any machine):**
+`TabDock.exe --selftest-geometry` runs the partition matrix + seeded fuzz
+(`SplitGeometry.RunSelfTest`, seed 20260810; widths 1..4096 × heights ×
+origins incl. negative, odd widths 799..1921, 100 k fuzz rects) and exits 0
+only when every invariant holds; the result is logged as
+`SELFTEST[geometry] … result=PASS|FAIL`. It runs before the single-instance
+mutex/UI and is safe unattended — use it for cross-machine pane-math
+verification and as a fast smoke after any split-geometry change.
+
+**Run-budget note:** `AllOrder` now has 65 scenarios; the 90-spawn hard cap and
+10-minute `GuardedProc.Cts` budget mean a single `--yes all` cannot complete —
+run logical batches instead (see `docs/TESTING.md` §A batch plan in the goal
+waypoint, or the split/group/movement groupings in `Scenarios.cs`).
 
 Run `all` to execute the core scenarios in order, fresh TabDock per scenario:
 

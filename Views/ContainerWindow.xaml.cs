@@ -75,6 +75,19 @@ public partial class ContainerWindow : Window
     private readonly HashSet<ContextMenu> _trackedTabContextMenus = new();
     private bool _chromePopupActive;
 
+    // Coalesces the several per-frame reposition triggers (native
+    // WM_WINDOWPOSCHANGED, LocationChanged, SizeChanged, LayoutUpdated) into a
+    // single guest re-glue per WPF frame. Without this, a container drag fires
+    // multiple RelayoutGuests in one frame, each issuing native SetWindowPos calls
+    // and producing the redundant reposition/redraw artifacts that made movement
+    // look glitchy.
+    private bool _relayoutPending;
+
+    // True while Windows is running a native modal move/resize loop on this
+    // container (WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE). The 120ms WM_ACTIVATE
+    // reassert must not fire SetForegroundWindow mid-gesture.
+    private bool _inNativeMoveLoop;
+
     // Drag state (tab-strip reorder / explicit tab-strip pop-out)
     private TabViewModel? _draggedTab;
     private Point _dragStart;
@@ -161,6 +174,7 @@ public partial class ContainerWindow : Window
         // (finding L11). IsAppShuttingDown is irrelevant here — this always runs
         // on the interactive pop-out path, never during app teardown.
         _viewModel.EmptiedByPopOut += ViewModel_EmptiedByPopOut;
+        _viewModel.DeleteGroupRequested += ViewModel_DeleteGroupRequested;
         ColorContextMenu.Closed += ColorContextMenu_Closed;
     }
 
@@ -173,6 +187,52 @@ public partial class ContainerWindow : Window
             _closePending = true;
             return;
         }
+        Close();
+    }
+
+    private void ViewModel_DeleteGroupRequested(object? sender, EventArgs e)
+    {
+        if (_closePromptOpen)
+            return;
+
+        // Guard the modal the same way the close-confirm prompt does: while it
+        // pumps its nested dispatcher loop, WinEvents keep firing and App's
+        // picker-deferral guard (IsClosePromptOpen) must see this prompt so a
+        // hotkey-triggered capture picker cannot stack on top of it.
+        MessageBoxResult result = MessageBoxResult.Cancel;
+        _closePromptOpen = true;
+        try
+        {
+            result = MessageBox.Show(
+                this,
+                "Release all captured windows back to standalone and delete this group?\n\nThe windows will keep running.",
+                "Delete group",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Question);
+        }
+        finally
+        {
+            _closePromptOpen = false;
+        }
+        if (result != MessageBoxResult.OK)
+            return;
+
+        // Remove the group from the model and persist immediately so it does not
+        // survive a restart, then pop every member back to a standalone window
+        // (kept running — deleting a group never closes the user's apps). The
+        // final release empties the tab strip and the container closes itself via
+        // the existing EmptiedByPopOut path. The explicit Close() covers the
+        // EMPTY-group delete, where the release loop never runs and
+        // EmptiedByPopOut never fires — without it an orphan container stays
+        // open bound to a Group instance GroupManager has already detached
+        // (adversarial review finding D1: captures into the orphan bypass the
+        // captured-window index and become un-rescuable). It is a no-op when
+        // EmptiedByPopOut already closed the window.
+        _manager.RemoveGroup(Group);
+        _manager.SaveState();
+
+        while (_viewModel.Tabs.Count > 0)
+            _viewModel.ReleaseTab(_viewModel.Tabs[0]);
         Close();
     }
 
@@ -248,14 +308,19 @@ public partial class ContainerWindow : Window
                 {
                     _activateReassertTimer!.Stop();
                     if (_shepherdActiveWindow == activeWindow && NativeMethods.IsWindowVisible(activeWindow.Hwnd)
-                        && !IsContainerChromeInteractionActive())
+                        && !_inNativeMoveLoop && !_isDragging && !IsContainerChromeInteractionActive())
                     {
-                        if (IsSplitActive)
+                        if (IsSplitActive && IsSplitMember(activeWindow))
                         {
                             // Re-assert both panes and foreground the active
                             // member without disturbing the pair's z-order.
-                            _splitForeground = activeWindow;
-                            LayoutSplitPanes();
+                            // Guarded by IsSplitMember so a 120ms-stale timer
+                            // (the user clicked a different tab within that
+                            // window) cannot overwrite a newer _splitForeground
+                            // or re-glue a guest that has already left the pair.
+                            var activeTab = _viewModel.Tabs.FirstOrDefault(t => t.Model == activeWindow);
+                            if (activeTab != null)
+                                FocusSplitMember(activeTab);
                             _shepherd.SetForeground(activeWindow);
                         }
                         else
@@ -266,6 +331,41 @@ public partial class ContainerWindow : Window
                 };
                 _activateReassertTimer.Start();
             }
+        }
+        else if ((uint)msg == NativeMethods.WM_ENTERSIZEMOVE)
+        {
+            // A native modal move/resize loop is running (caption drag, edge
+            // resize). The 120ms WM_ACTIVATE reassert must not fire
+            // SetForegroundWindow mid-gesture (it would steal foreground from
+            // the gesture and add visual churn).
+            _inNativeMoveLoop = true;
+        }
+        else if ((uint)msg == NativeMethods.WM_EXITSIZEMOVE)
+        {
+            _inNativeMoveLoop = false;
+            // The native move/size loop has fully unwound and the container's
+            // final position is authoritative. Windows keeps a dragged window
+            // at the top of the z-order for the whole modal loop, and its
+            // final z-order finalization can land AFTER the last per-frame
+            // re-glue — leaving the container above its guest while the
+            // guest's rect still exactly matches the content area (the
+            // redundant-glue guard in LayoutShepherdActiveWindow would then
+            // skip every later repair, blanking the content area until a tab
+            // switch re-glues it). Schedule ONE coalesced post-layout
+            // reconciliation through the existing mechanism (Render priority
+            // runs after layout), which re-validates both geometry and the
+            // local z-order pairing.
+            RequestRelayout();
+        }
+        else if ((uint)msg == NativeMethods.WM_WINDOWPOSCHANGED)
+        {
+            // The container's native move/resize is processed in the same message
+            // loop as this handler, so re-glue the shepherded guest(s) here — in
+            // the same compositor frame as the container — instead of waiting for
+            // the later WPF LocationChanged/LayoutUpdated notifications. This is
+            // the most immediate native movement signal and removes the
+            // one-frame guest lag that made dragging feel glitchy.
+            RequestRelayout();
         }
         else if ((uint)msg == NativeMethods.WM_GETMINMAXINFO)
         {
@@ -302,6 +402,30 @@ public partial class ContainerWindow : Window
             _manager.RegisterContainerHwnd(_contentHostHwnd);
         }
 
+        // Per-container environment fingerprint (goal §16): active monitor,
+        // DPI, container rect, host rect, window state — once at open, so a
+        // pasted customer log is self-describing without per-frame noise.
+        try
+        {
+            NativeMethods.GetWindowRect(hwnd, out NativeMethods.RECT winRect);
+            string hostDesc = "none";
+            if (_contentHostHwnd != IntPtr.Zero)
+            {
+                NativeMethods.GetWindowRect(_contentHostHwnd, out NativeMethods.RECT hostRect);
+                hostDesc = $"{hostRect.left},{hostRect.top},{hostRect.Width}x{hostRect.Height}";
+            }
+            string guestDesc = "none";
+            var activeGuest = _viewModel.ActiveTab?.Model;
+            if (activeGuest != null)
+                guestDesc = $"{activeGuest.ExePath} {NativeMethods.DescribeWindow(activeGuest.Hwnd)}";
+            _log.Log($"ENV[container] hwnd=0x{hwnd.ToInt64():X} state={WindowState} container={winRect.left},{winRect.top},{winRect.Width}x{winRect.Height} host={hostDesc} guest=({guestDesc}) " +
+                     $"{EnvironmentFingerprint.DescribeWindowMonitor(hwnd)}");
+        }
+        catch (Exception ex)
+        {
+            _log.LogException("ENV[container]", ex);
+        }
+
         TabsListBox.PreviewMouseLeftButtonDown += TabsListBox_PreviewMouseLeftButtonDown;
         TabsListBox.PreviewMouseDown += TabsListBox_PreviewMouseDown;
         TabsListBox.MouseMove += TabsListBox_MouseMove;
@@ -316,8 +440,8 @@ public partial class ContainerWindow : Window
         // Split-aware: in split mode this re-glues BOTH panes, never the active
         // guest to full width (LayoutShepherdActiveWindow alone would overwrite
         // a split member's half-pane position).
-        LocationChanged += (_, _) => RelayoutGuests();
-        SizeChanged += (_, _) => RelayoutGuests();
+        LocationChanged += (_, _) => RequestRelayout();
+        SizeChanged += (_, _) => RequestRelayout();
         // The content marker's native HWND is resized inside NativeHwndHost's
         // ArrangeOverride during WPF's layout pass, which runs asynchronously
         // AFTER this window's SizeChanged/StateChanged (the native resize
@@ -329,7 +453,7 @@ public partial class ContainerWindow : Window
         // layout-driven resize, and there is no pending WPF layout yet when the
         // synchronous handlers run). Re-glue instead at DispatcherPriority after
         // layout, by which time the marker's HWND really has its new size.
-        LayoutUpdated += (_, _) => RelayoutGuests();
+        LayoutUpdated += (_, _) => RequestRelayout();
     }
 
     /// <summary>
@@ -344,8 +468,35 @@ public partial class ContainerWindow : Window
             LayoutShepherdActiveWindow();
     }
 
+    /// <summary>
+    /// Schedules a single <see cref="RelayoutGuests"/> per WPF frame. All native
+    /// movement signals (WM_WINDOWPOSCHANGED, LocationChanged, SizeChanged) and the
+    /// post-layout LayoutUpdated event call this; the flag ensures only the first
+    /// in a frame schedules the work, and the Render-priority callback runs after
+    /// WPF has arranged the content marker to its new geometry — so the guest is
+    /// re-glued to the final rect exactly once instead of several times per frame
+    /// (the redundant reposition/redraw was the main drag-flicker source).
+    /// </summary>
+    private void RequestRelayout()
+    {
+        if (_relayoutPending || _containerHwnd == IntPtr.Zero)
+            return;
+        _relayoutPending = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
+        {
+            _relayoutPending = false;
+            RelayoutGuests();
+        }));
+    }
+
     private void ContainerWindow_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Escape && IsCapturePanelOpen && !_viewModel.IsRenaming)
+        {
+            CloseCapturePanel();
+            e.Handled = true;
+            return;
+        }
         if ((Keyboard.Modifiers & ModifierKeys.Control) != ModifierKeys.Control)
             return;
         if (e.Key != Key.Tab)
@@ -354,6 +505,23 @@ public partial class ContainerWindow : Window
         int count = _viewModel.Tabs.Count;
         if (count <= 1)
             return;
+
+        if (IsSplitActive)
+        {
+            // The split pair is the selected tab-strip unit: Ctrl+Tab cycles
+            // between the two members only. A non-member tab is never reached
+            // through ordinary tab switching while the pair is active (the
+            // SyncShepherdActiveWindow revert would no-op it anyway; this keeps
+            // the shortcut useful instead of dead).
+            TabViewModel? currentMember = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, _splitForeground));
+            TabViewModel? other = ReferenceEquals(currentMember?.Model, _splitLeft)
+                ? _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, _splitRight))
+                : _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, _splitLeft));
+            if (other != null)
+                FocusSplitMember(other);
+            e.Handled = true;
+            return;
+        }
 
         bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
         int current = _viewModel.ActiveTab != null
@@ -367,7 +535,11 @@ public partial class ContainerWindow : Window
             : (current + 1) % count;
 
         _viewModel.SetActiveTab(_viewModel.Tabs[next]);
-        TabsListBox.SelectedIndex = next;
+        // The strip is bound to DisplayTabs, which during split mode contains a
+        // composite item that does not correspond one-to-one with Tabs indices —
+        // only sync the ListBox selection when both collections line up.
+        if (!IsSplitActive)
+            TabsListBox.SelectedIndex = next;
         e.Handled = true;
     }
 
@@ -487,15 +659,9 @@ public partial class ContainerWindow : Window
         {
             // A minimized container has no visible content area to overlay;
             // hide the docked guest(s) along with it. Restoring re-positions and
-            // re-shows them (LayoutShepherdActiveWindow / LayoutSplitPanes use
+            // re-shows them (LayoutSplitPanes / LayoutShepherdActiveWindow use
             // SWP_SHOWWINDOW). In split mode BOTH guests must disappear and both
             // must return on restore.
-            //
-            // The immediate call is only a best-effort first pass: StateChanged
-            // can fire before WPF has re-arranged the content marker to the new
-            // native size, so the marker's rect may be stale here. The
-            // LayoutUpdated hook (wired in the Loaded handler) re-glues the guest
-            // after the layout pass actually resizes the marker's native HWND.
             if (WindowState == WindowState.Minimized)
             {
                 if (IsSplitActive)
@@ -508,13 +674,34 @@ public partial class ContainerWindow : Window
                     _shepherd.Hide(_shepherdActiveWindow);
                 }
             }
-            else if (IsSplitActive)
-            {
-                LayoutSplitPanes();
-            }
             else
             {
-                LayoutShepherdActiveWindow();
+                // Re-glue through the coalescer, NOT synchronously: StateChanged
+                // fires before WPF has re-arranged the content marker to the new
+                // native size, so the marker's rect is still the pre-transition
+                // one here. A synchronous LayoutSplitPanes/LayoutShepherdActiveWindow
+                // would read that stale rect and glue both guests to the old
+                // pane rectangles for the whole DWM transition (on slower
+                // machines the two panes visibly overlap the new content area —
+                // the "split panes overlap after maximize/restore" defect).
+                // RequestRelayout coalesces the transition into a single
+                // post-layout pass (the Render-priority callback runs after the
+                // layout pass that resized the marker), re-glueing both panes
+                // atomically against the final authoritative rect. On
+                // restore-without-resize (e.g. Normal->Minimized->Normal) no
+                // layout pass runs; the Render callback itself is the final
+                // glue there — either way the pass reads the CURRENT marker
+                // rect, never a cached one.
+                RequestRelayout();
+                // One bounded diagnostic per transition: record the rect read at
+                // this (provably stale) moment so a friend-machine episode is
+                // diagnosable from the log. Not per-frame; skip in the minimize
+                // branch (no geometry to read).
+                if (_containerHwnd != IntPtr.Zero)
+                {
+                    NativeMethods.RECT hostRect = GetContentAreaScreenRect();
+                    _log.Log($"STATE[transition] winState={WindowState} hostRect={hostRect.left},{hostRect.top},{hostRect.Width}x{hostRect.Height} (pre-layout read; the coalesced pass applies the final rect)");
+                }
             }
         }
 
@@ -557,6 +744,7 @@ public partial class ContainerWindow : Window
             if (active != null)
             {
                 guestDesc = NativeMethods.DescribeWindow(active.Hwnd);
+                guestDesc += $" exe={active.ExePath}";
                 if (NativeMethods.IsWindow(active.Hwnd))
                 {
                     NativeMethods.GetWindowRect(active.Hwnd, out NativeMethods.RECT guestRect);
@@ -567,7 +755,7 @@ public partial class ContainerWindow : Window
                 }
             }
 
-            _log.Log($"STATE[{phase}] winState={WindowState} container={winRect.left},{winRect.top},{winRect.Width}x{winRect.Height} dpi={dpi} " +
+            _log.Log($"STATE[{phase}] {EnvironmentFingerprint.Platform} winState={WindowState} container={winRect.left},{winRect.top},{winRect.Width}x{winRect.Height} dpi={dpi} " +
                      $"monitor={mi.rcMonitor.left},{mi.rcMonitor.top},{mi.rcMonitor.Width}x{mi.rcMonitor.Height} work={mi.rcWork.left},{mi.rcWork.top},{mi.rcWork.Width}x{mi.rcWork.Height} " +
                      $"host=({hostDesc}) guest={guestDesc}");
         }
@@ -577,8 +765,21 @@ public partial class ContainerWindow : Window
         }
     }
 
+    // Re-entrancy guard for TabsListBox_SelectionChanged. The selection funnel
+    // (SetActiveTab -> ActiveTab -> tab IsActive -> the ListBoxItem's TwoWay
+    // IsSelected binding -> a NEW SelectionChanged) can echo a selection change
+    // back into this handler while the outer call is still on the stack. The
+    // IsActive<->IsSelected TwoWay binding then ping-pongs the non-member's
+    // selection forever (re-entrant SetActiveTab -> IsActive flip -> IsSelected
+    // flip -> SelectionChanged -> ...) and overflows the stack. Every such echo
+    // is redundant — the outer call already updated ActiveTab/ActiveIndex — so
+    // dropping it changes nothing except terminating the cycle.
+    private bool _inSelectionSync;
+
     private void TabsListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_inSelectionSync)
+            return;
         if (TabsListBox.SelectedItem is TabViewModel tab)
         {
             // SelectedItem is bound OneWay to ActiveTab (ContainerWindow.xaml),
@@ -591,7 +792,15 @@ public partial class ContainerWindow : Window
             // switch proceeds exactly as before.
             if (Group.ActiveIndex == _viewModel.Tabs.IndexOf(tab))
                 return;
-            _viewModel.SetActiveTab(tab);
+            _inSelectionSync = true;
+            try
+            {
+                _viewModel.SetActiveTab(tab);
+            }
+            finally
+            {
+                _inSelectionSync = false;
+            }
         }
     }
 
@@ -609,38 +818,79 @@ public partial class ContainerWindow : Window
     /// </summary>
     private void TabsListBox_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.OriginalSource is DependencyObject src
-            && ItemsControl.ContainerFromElement(TabsListBox, src) is ListBoxItem item
-            && FindTabContextMenuOwner(item) is FrameworkElement owner
-            && owner.ContextMenu is ContextMenu menu)
+        if (e.OriginalSource is not DependencyObject src)
+            return;
+        if (ItemsControl.ContainerFromElement(TabsListBox, src) is not ListBoxItem item)
+            return;
+
+        ContextMenu menu;
+        FrameworkElement? placementTarget;
+        TabViewModel? initiatingTab;
+
+        if (item.DataContext is SplitCompositeViewModel composite)
         {
-            e.Handled = true;
+            // Right-click on the split composite: resolve WHICH half was clicked
+            // and target that specific member (its Pop out / Close window), so
+            // the menu is never ambiguous about which window an action affects.
+            TabViewModel? member = null;
+            FrameworkElement? half = null;
+            for (DependencyObject? cur = src; cur != null; cur = VisualTreeHelper.GetParent(cur))
+            {
+                if (cur is Border { Tag: string tag } b && (tag == "LEFT" || tag == "RIGHT"))
+                {
+                    member = tag == "LEFT" ? composite.Left : composite.Right;
+                    half = b;
+                    break;
+                }
+            }
+            if (member == null || half == null)
+                return;
+            initiatingTab = member;
+            placementTarget = half;
+            menu = new ContextMenu();
+            var popOut = new MenuItem { Header = "Pop out", Command = member.PopOutCommand };
+            System.Windows.Automation.AutomationProperties.SetAutomationId(popOut, "PopOut");
+            var closeWindow = new MenuItem { Header = "Close window", Command = member.CloseWindowCommand };
+            System.Windows.Automation.AutomationProperties.SetAutomationId(closeWindow, "CloseWindow");
+            menu.Items.Add(popOut);
+            menu.Items.Add(closeWindow);
+            _trackedTabContextMenus.Add(menu);
+            menu.Closed += TabContextMenu_Closed;
+        }
+        else
+        {
+            if (FindTabContextMenuOwner(item) is not FrameworkElement owner || owner.ContextMenu is not ContextMenu existing)
+                return;
+            menu = existing;
+            placementTarget = owner;
             // The right-clicked tab is the split initiator (becomes the LEFT
             // pane). The menu's DataContext is this tab's TabViewModel.
-            TabViewModel? initiatingTab = (owner as FrameworkElement)?.DataContext as TabViewModel;
-            ConfigureSplitMenuItems(menu, initiatingTab);
-            // Open on a dispatcher callback rather than inline: a context menu
-            // opened synchronously inside a mouse-down handler (while the right
-            // button is still held) can fail to display or close immediately —
-            // deferring past the current input event is the reliable pattern.
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input,
-                new Action(() =>
-                {
-                    menu.PlacementTarget = owner;
-                    menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
-                    // Track the open menu so the WM_ACTIVATE reassert guard can
-                    // see it before the 120ms timer fires (a context menu opened
-                    // by right-clicking a tab must not be closed by a reassert
-                    // that steals foreground to the guest).
-                    _openTabContextMenu = menu;
-                    if (_trackedTabContextMenus.Add(menu))
-                        menu.Closed += TabContextMenu_Closed;
-                    _log.Log("CHROME[tab-menu-open-request]");
-                    BeginChromePopup();
-                    menu.IsOpen = true;
-                    _log.Log($"CHROME[tab-menu-opened] isOpen={menu.IsOpen}");
-                }));
+            initiatingTab = (owner as FrameworkElement)?.DataContext as TabViewModel;
         }
+
+        e.Handled = true;
+        ConfigureSplitMenuItems(menu, initiatingTab);
+        // Open on a dispatcher callback rather than inline: a context menu
+        // opened synchronously inside a mouse-down handler (while the right
+        // button is still held) can fail to display or close immediately —
+        // deferring past the current input event is the reliable pattern.
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input,
+            new Action(() =>
+            {
+                menu.PlacementTarget = placementTarget;
+                menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+                // Track the open menu so the WM_ACTIVATE reassert guard can
+                // see it before the 120ms timer fires (a context menu opened
+                // by right-clicking a tab must not be closed by a reassert
+                // that steals foreground to the guest).
+                _openTabContextMenu = menu;
+                if (_trackedTabContextMenus.Add(menu))
+                    menu.Closed += TabContextMenu_Closed;
+                _log.Log("CHROME[tab-menu-open-request]");
+                BeginChromePopup();
+                menu.IsOpen = true;
+                _log.Log($"CHROME[tab-menu-opened] isOpen={menu.IsOpen}");
+            }));
     }
 
     private void TabContextMenu_Closed(object? sender, RoutedEventArgs e)
@@ -673,6 +923,7 @@ public partial class ContainerWindow : Window
             // so the user can see the feature exists but understands a second
             // tab is required (spec §5 — no silent failure after clicking).
             var disabled = new MenuItem { Header = "Split screen", Tag = "SPLIT-ACTION", IsEnabled = false };
+            System.Windows.Automation.AutomationProperties.SetAutomationId(disabled, "SplitScreen");
             menu.Items.Insert(insertIndex++, disabled);
             return;
         }
@@ -681,6 +932,7 @@ public partial class ContainerWindow : Window
         {
             // Exactly two tabs: direct action (auto-selects the sole other tab).
             var action = new MenuItem { Header = "Split screen", Tag = "SPLIT-ACTION", DataContext = initiatingTab };
+            System.Windows.Automation.AutomationProperties.SetAutomationId(action, "SplitScreen");
             action.Click += SplitScreenMenuItem_Click;
             menu.Items.Insert(insertIndex++, action);
         }
@@ -689,6 +941,7 @@ public partial class ContainerWindow : Window
             // Three or more tabs: submenu of candidate partners (excluding the
             // initiating tab). Selecting one puts initiating -> LEFT, candidate -> RIGHT.
             var submenu = new MenuItem { Header = "Split screen", Tag = "SPLIT-SUBMENU", DataContext = initiatingTab };
+            System.Windows.Automation.AutomationProperties.SetAutomationId(submenu, "SplitScreen");
             foreach (var candidate in _viewModel.Tabs.Where(t => !ReferenceEquals(t, initiatingTab)))
             {
                 var child = new MenuItem
@@ -698,6 +951,7 @@ public partial class ContainerWindow : Window
                     Tag = "SPLIT-CANDIDATE",
                     DataContext = candidate,
                 };
+                System.Windows.Automation.AutomationProperties.SetAutomationId(child, "SplitCandidate");
                 child.Click += SplitCandidateMenuItem_Click;
                 submenu.Items.Add(child);
             }
@@ -708,6 +962,7 @@ public partial class ContainerWindow : Window
         if (IsSplitActive)
         {
             var exitItem = new MenuItem { Header = "Exit split screen", Tag = "SPLIT-EXIT" };
+            System.Windows.Automation.AutomationProperties.SetAutomationId(exitItem, "ExitSplitScreen");
             exitItem.Click += ExitSplitMenuItem_Click;
             menu.Items.Add(exitItem);
         }
@@ -743,7 +998,15 @@ public partial class ContainerWindow : Window
     {
         if (_openTabContextMenu is { IsOpen: true }) return true;
         if (ColorContextMenu.IsOpen) return true;
+        if (GroupContextMenu.IsOpen) return true;
+        if (IsCapturePanelOpen) return true;
         if (_viewModel.IsRenaming) return true;
+        // The close-group/delete-group confirm dialog is an owned modal over the
+        // container: the 120ms WM_ACTIVATE reassert would otherwise raise the
+        // docked guest ABOVE it and cover its buttons (observed live: clicking
+        // the container's × opens the prompt, the reassert fires 120ms later,
+        // WindowFromPoint at the Yes button resolves to the guest).
+        if (_closePromptOpen) return true;
         return false;
     }
 
@@ -889,12 +1152,29 @@ public partial class ContainerWindow : Window
             GroupContextMenu.Items.Add(new Separator());
 
         var newGroup = new MenuItem { Header = "+ New group", Tag = "NEW-GROUP" };
+        System.Windows.Automation.AutomationProperties.SetAutomationId(newGroup, "NewGroup");
         newGroup.Click += NewGroupMenuItem_Click;
         GroupContextMenu.Items.Add(newGroup);
+
+        var renameGroup = new MenuItem { Header = "Rename group", Tag = "RENAME-GROUP" };
+        System.Windows.Automation.AutomationProperties.SetAutomationId(renameGroup, "RenameGroup");
+        renameGroup.Click += RenameGroupMenuItem_Click;
+        GroupContextMenu.Items.Add(renameGroup);
+
+        var deleteGroup = new MenuItem { Header = "Delete group", Tag = "DELETE-GROUP" };
+        System.Windows.Automation.AutomationProperties.SetAutomationId(deleteGroup, "DeleteGroup");
+        deleteGroup.Click += DeleteGroupMenuItem_Click;
+        GroupContextMenu.Items.Add(deleteGroup);
+
         BeginChromePopup();
         GroupContextMenu.PlacementTarget = (UIElement)sender;
         GroupContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
-        GroupContextMenu.IsOpen = true;
+        // Open on a dispatcher callback (matching the tab context-menu pattern)
+        // so the popup HWND is created after the current input event settles;
+        // together with the GroupContextMenu.IsOpen check in
+        // IsContainerChromeInteractionActive this keeps the 120ms WM_ACTIVATE
+        // reassert from stealing foreground from the guest while the menu is open.
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => GroupContextMenu.IsOpen = true));
     }
 
     private void GroupMenuItem_Click(object sender, RoutedEventArgs e)
@@ -905,6 +1185,11 @@ public partial class ContainerWindow : Window
 
     private void NewGroupMenuItem_Click(object sender, RoutedEventArgs e) =>
         NewGroupRequested?.Invoke(this, EventArgs.Empty);
+
+    private void RenameGroupMenuItem_Click(object sender, RoutedEventArgs e) => BeginRename();
+
+    private void DeleteGroupMenuItem_Click(object sender, RoutedEventArgs e) =>
+        _viewModel.DeleteGroupCommand.Execute(null);
 
     private void GroupContextMenu_Closed(object? sender, RoutedEventArgs e) => EndChromePopup();
 
@@ -936,7 +1221,7 @@ public partial class ContainerWindow : Window
         // guest stack. This is one explicit transition, not a repair timer.
         Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
         {
-            if (_chromePopupActive || _containerHwnd == IntPtr.Zero)
+            if (_chromePopupActive || IsCapturePanelOpen || _containerHwnd == IntPtr.Zero)
                 return;
             if (IsSplitActive)
                 LayoutSplitPanes();
@@ -956,11 +1241,15 @@ public partial class ContainerWindow : Window
 
     private void AddWindow_Click(object sender, RoutedEventArgs e)
     {
-        // Defer the "+" button while the close-confirm prompt is open so the
-        // picker cannot stack on top of the modal dialog.
+        // Toggle the inline capture surface: a second click on the same button
+        // closes it, matching the behaviour of the other chrome popups. The
+        // close-confirm prompt still takes precedence.
         if (_closePromptOpen)
             return;
-        _viewModel.RequestAddWindows();
+        if (IsCapturePanelOpen)
+            CloseCapturePanel();
+        else
+            _viewModel.RequestAddWindows();
     }
 
     private void TabClose_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -975,6 +1264,70 @@ public partial class ContainerWindow : Window
     }
 
     /// <summary>
+    /// LEFT/RIGHT half click on the composite split tab: focus/activate that
+    /// member while keeping split mode and BOTH panes visible. The partner must
+    /// never be hidden by a half click (the pre-composite tab-selection path
+    /// could misinterpret one split member as needing to hide the other).
+    /// </summary>
+    private void SplitHalf_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Border half || half.Tag is not string side || (side != "LEFT" && side != "RIGHT"))
+            return;
+        // The half's own × button handles its click; ignore clicks that land on
+        // it (PreviewMouseLeftButtonDown tunnels root-first, so this half
+        // handler runs before the button's own handler).
+        for (DependencyObject? cur = e.OriginalSource as DependencyObject; cur != null; cur = VisualTreeHelper.GetParent(cur))
+        {
+            if (cur is Button)
+                return;
+        }
+        if (half.DataContext is not SplitCompositeViewModel composite)
+            return;
+        TabViewModel target = side == "LEFT" ? composite.Left : composite.Right;
+        // Route through the canonical member-focus operation so a half-click on
+        // the ALREADY-active member still re-asserts it as the z-top focused
+        // member (a direct pane click may have left _splitForeground on the
+        // other member; SetActiveTab alone would no-op and never re-glue).
+        FocusSplitMember(target);
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Middle-click on a composite half pops that specific member out (browser
+    /// tab semantics per half).
+    /// </summary>
+    private void SplitHalf_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Middle)
+            return;
+        if (sender is not Border half || half.Tag is not string side || (side != "LEFT" && side != "RIGHT"))
+            return;
+        if (half.DataContext is not SplitCompositeViewModel composite)
+            return;
+        e.Handled = true;
+        EndDrag();
+        _viewModel.ReleaseTab(side == "LEFT" ? composite.Left : composite.Right);
+    }
+
+    /// <summary>
+    /// × on a composite half pops that specific member out; the split ends and
+    /// the survivor is promoted to the single full-width guest via the existing
+    /// HandleSplitMemberRemoved path.
+    /// </summary>
+    private void SplitHalfClose_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Button button || button.Tag is not string side || (side != "LEFT" && side != "RIGHT"))
+            return;
+        if (button.DataContext is not SplitCompositeViewModel composite)
+            return;
+        TabViewModel target = side == "LEFT" ? composite.Left : composite.Right;
+        _log.Log($"TAB[popout-button] guest=0x{target.Model.Hwnd.ToInt64():X} (split half)");
+        EndDrag();
+        _viewModel.ReleaseTab(target);
+        e.Handled = true;
+    }
+
+    /// <summary>
     /// Opens capture inside the existing container chrome. The guest rect is
     /// derived from the marker below this panel, so no popup HWND can cover the
     /// panel and no temporary TabDock modal is required for routine capture.
@@ -984,6 +1337,10 @@ public partial class ContainerWindow : Window
         if (_capturePicker != null)
             return;
 
+        // Raise the container above its guests while the inline capture surface
+        // is open so the panel (sited between the tab strip and the content
+        // area) is never partially occluded by a guest whose z-order drifted.
+        BeginChromePopup();
         _capturePicker = new CapturePickerViewModel(_manager, _icons);
         _capturePicker.SelectedGroupOption = _capturePicker.Groups
             .FirstOrDefault(g => g.Id == Group.Id) ?? _capturePicker.Groups.FirstOrDefault();
@@ -1018,6 +1375,11 @@ public partial class ContainerWindow : Window
     {
         if (_capturePicker == null)
             return;
+
+        // Reconcile the guest stack now that the panel is gone (the container
+        // was raised above its guests while the panel was open so it could not
+        // be occluded; this restores the normal guest-over-container pairing).
+        EndChromePopup();
         _capturePicker.GroupingRequested -= InlineCapture_GroupingRequested;
         _capturePicker.Canceled -= InlineCapture_Canceled;
         _capturePicker = null;
@@ -1100,16 +1462,46 @@ public partial class ContainerWindow : Window
                 // Clicking one of the two split members keeps split active: that
                 // member becomes the active/focused one and its partner stays
                 // visible. Re-glue both panes with the new member on top.
-                _shepherdActiveWindow = newWindow;
-                _splitForeground = newWindow;
-                LayoutSplitPanes();
+                var newTab = _viewModel.Tabs.FirstOrDefault(t => t.Model == newWindow);
+                if (newTab != null)
+                {
+                    FocusSplitMember(newTab);
+                    return;
+                }
             }
-            else
+
+            if (newWindow == null)
             {
-                // Clicking a tab that is NOT part of the current split exits the
-                // split and makes that tab the single visible guest (spec §12).
-                ExitSplit(keepActive: newWindow);
+                // Teardown (e.g. CloseGroup cleared the tab list while the
+                // split fields were still set): fall through to the guarded
+                // exit — its member hides are Tabs-guarded and its survivor
+                // lookup no-ops on an empty list.
+                ExitSplit();
+                return;
             }
+
+            // A NON-member tab was activated while the split pair is the
+            // selected tab-strip unit (click/Ctrl+Tab on a third tab, or a
+            // freshly captured window). The pair PERSISTS: no SPLIT[exit], no
+            // ordinary tab-visibility transition, no member hidden, no
+            // release. Revert the logical active tab to the focused member
+            // through the canonical FocusSplitMember — it re-syncs
+            // Group.ActiveIndex and the half highlight, re-asserts the pair's
+            // glue, and never touches membership.
+            //
+            // A newly captured window was never hidden by tab switching (it is
+            // not an inactive tab), so hide it journal-safely to keep the
+            // visible set exactly { LEFT, RIGHT }; an ordinary third tab is
+            // already hidden, making this a no-op for it.
+            if (NativeMethods.IsWindow(newWindow.Hwnd) && NativeMethods.IsWindowVisible(newWindow.Hwnd))
+            {
+                _shepherd.Hide(newWindow);
+                _log.Log($"SPLIT[persist] non-member=0x{newWindow.Hwnd.ToInt64():X} was newly visible; hidden (split pair remains the visible set)");
+            }
+            var focusedTab = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, _splitForeground))
+                ?? _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, _splitLeft));
+            if (focusedTab != null)
+                FocusSplitMember(focusedTab);
             return;
         }
 
@@ -1124,6 +1516,47 @@ public partial class ContainerWindow : Window
         {
             _shepherd.Hide(oldWindow);
         }
+    }
+
+    /// <summary>
+    /// The ONE canonical "focus a split member" operation (goal §6/§49): every
+    /// entry point that focuses a member of the active pair — composite half
+    /// click, direct guest click (WinEvent foreground/reorder), WM_ACTIVATE
+    /// reassert, Ctrl+Tab, tab-strip activation echo — routes through here so
+    /// LEFT and RIGHT are peers after split creation and no path can treat the
+    /// partner via the ordinary single-tab visibility transition.
+    ///
+    /// It updates the focused-member metadata (<see cref="_splitForeground"/>),
+    /// the logical active member (<see cref="_shepherdActiveWindow"/> + the
+    /// view-model active tab, which drives the half highlight and
+    /// Group.ActiveIndex), emits the bounded SPLIT[focus] diagnostic (only when
+    /// the focused member actually changes), and re-glues both panes with the
+    /// new member on top. It must NOT change split membership, hide the
+    /// partner, or leave the composite selection.
+    /// </summary>
+    private void FocusSplitMember(TabViewModel member)
+    {
+        if (member == null || !IsSplitActive || !IsSplitMember(member.Model))
+            return;
+
+        bool changed = !ReferenceEquals(_splitForeground, member.Model)
+            || !ReferenceEquals(_shepherdActiveWindow, member.Model);
+
+        _splitForeground = member.Model;
+        _shepherdActiveWindow = member.Model;
+        // No-op when the member is already the logical active tab; still
+        // re-syncs Group.ActiveIndex through the view model.
+        _viewModel.SetActiveTab(member);
+        if (changed)
+            _log.Log($"SPLIT[focus] guest=0x{member.Model.Hwnd.ToInt64():X}");
+        LayoutSplitPanes();
+        // Give the clicked member REAL foreground after the panes are laid out
+        // (strip clicks never raise a guest natively, so without this the
+        // focused member stays behind the container's chrome and keystrokes
+        // keep going to TabDock). SetForeground early-returns when the member
+        // is already the foreground window, so direct pane clicks and repeat
+        // clicks are no-ops and the reassert path is unaffected.
+        _shepherd.SetForeground(member.Model);
     }
 
     /// <summary>
@@ -1171,8 +1604,37 @@ public partial class ContainerWindow : Window
                 Math.Abs(guest.top - rect.top) <= epsilon &&
                 Math.Abs(guest.right - rect.right) <= epsilon &&
                 Math.Abs(guest.bottom - rect.bottom) <= epsilon)
-                if (!forceZOrder)
+            {
+                if (forceZOrder)
+                {
+                    _shepherd.PositionAndShow(_shepherdActiveWindow, containerHwnd, rect);
                     return;
+                }
+                // Geometry alone cannot prove the guest is correctly
+                // presented: a guest can cover its rect exactly while sitting
+                // BELOW the container (the container's z-order raise at the
+                // end of a native drag can land after the last per-frame glue;
+                // the WM_EXITSIZEMOVE reconciliation and every later
+                // rest-time relayout land here). While chrome is intentionally
+                // raised above the guests (context menu, group/color menu,
+                // capture panel, rename box) the container being above the
+                // guest is BY DESIGN and the popup-close path reconciles the
+                // stack — skip the repair for the whole chrome-active window.
+                if (_chromePopupActive || IsContainerChromeInteractionActive())
+                    return;
+                // Verify the local pairing invariant before declaring the
+                // guest glued: the container must sit BELOW the guest (the
+                // shepherd's upward walk skipping invisible helper windows —
+                // a strict adjacency probe would false-fail forever on
+                // topmost guests in a separate z-order band and on hidden IME
+                // helpers, and would reorder unrelated TabDock containers).
+                // When the container is above the guest, pin it behind the
+                // guest — one write, no geometry churn, idempotent once
+                // healthy.
+                if (!_shepherd.IsContainerBelowGuest(containerHwnd, _shepherdActiveWindow.Hwnd))
+                    _shepherd.PairZOrderBehind(containerHwnd, _shepherdActiveWindow.Hwnd);
+                return;
+            }
         }
         _shepherd.PositionAndShow(_shepherdActiveWindow, containerHwnd, rect);
     }
@@ -1217,18 +1679,21 @@ public partial class ContainerWindow : Window
         {
             // A split member became the system foreground (e.g. the user clicked
             // it directly). Keep the container paired below BOTH guests: pin it
-            // behind the OTHER member so the clicked one stays on top. This is a
-            // single SetWindowPos — no repositioning, no two conflicting loops.
+            // behind the OTHER member so the clicked one stays on top — and
+            // record the clicked member as the focused one through the canonical
+            // FocusSplitMember so the tab highlight and the 120ms reassert both
+            // follow the direct click instead of reverting to the tab-active
+            // member (which made initiator and partner behave asymmetrically).
+            // FocusSplitMember re-glues both panes when not already glued and
+            // otherwise only re-pins the container below the partner — the same
+            // single SetWindowPos this branch used to issue.
             CapturedWindow? fg = _splitLeft != null && _splitLeft.Hwnd == foregroundHwnd ? _splitLeft
                 : _splitRight != null && _splitRight.Hwnd == foregroundHwnd ? _splitRight : null;
             if (fg == null)
                 return;
-            _splitForeground = fg;
-            CapturedWindow other = ReferenceEquals(fg, _splitLeft) ? _splitRight! : _splitLeft!;
-            IntPtr splitContainerHwnd = new WindowInteropHelper(this).Handle;
-            if (splitContainerHwnd == IntPtr.Zero)
-                return;
-            _shepherd.PairZOrderBehind(splitContainerHwnd, other.Hwnd);
+            var fgTab = _viewModel.Tabs.FirstOrDefault(t => t.Model == fg);
+            if (fgTab != null)
+                FocusSplitMember(fgTab);
             return;
         }
 
@@ -1269,24 +1734,7 @@ public partial class ContainerWindow : Window
     /// caller's rect is already in device pixels.
     /// </summary>
     private static (NativeMethods.RECT Left, NativeMethods.RECT Right) SplitRect(NativeMethods.RECT content)
-    {
-        int leftW = content.Width / 2;
-        var left = new NativeMethods.RECT
-        {
-            left = content.left,
-            top = content.top,
-            right = content.left + leftW,
-            bottom = content.bottom,
-        };
-        var right = new NativeMethods.RECT
-        {
-            left = content.left + leftW,
-            top = content.top,
-            right = content.right,
-            bottom = content.bottom,
-        };
-        return (left, right);
-    }
+        => SplitGeometry.Partition(content);
 
     private NativeMethods.RECT SplitPaneRect(CapturedWindow member)
     {
@@ -1364,6 +1812,22 @@ public partial class ContainerWindow : Window
             // pane would then hit the container's content area instead of the
             // guest. Pushing the container to the bottom of the z-order restores
             // the invariant cheaply.
+            //
+            // The cheap pin alone is NOT enough when the focused member changed
+            // since the last glue (composite half-click, Ctrl+Tab, tab-strip
+            // echo — none of which raise a guest natively): the local stack was
+            // [oldTop, partner, container], and pinning the container below the
+            // NEW bottom (the old top) wedges the container BETWEEN the panes,
+            // leaving the newly focused member BELOW the container's opaque
+            // content area — the "one pane fails to render after clicking the
+            // partner" defect. Verify the pair's internal order first
+            // (GetWindow(GW_HWNDNEXT) = the window below the top pane); only
+            // when [top, bottom, container] already holds is the pin sufficient.
+            if (NativeMethods.GetWindow(top.Hwnd, NativeMethods.GW_HWNDNEXT) != bottom.Hwnd)
+            {
+                _shepherd.PositionGuestsDeferred(top, topRect, bottom, bottomRect, containerHwnd);
+                return;
+            }
             _shepherd.PairZOrderBehind(containerHwnd, bottom.Hwnd);
             return;
         }
@@ -1373,9 +1837,7 @@ public partial class ContainerWindow : Window
         // the foreground member is raised first, the partner is inserted below
         // it, and the container is then inserted below the partner. Keeping the
         // policy local avoids pushing TabDock below unrelated desktop windows.
-        _shepherd.PositionGuest(top, topRect, NativeMethods.HWND_TOP);
-        _shepherd.PositionGuest(bottom, bottomRect, top.Hwnd);
-        _shepherd.PairZOrderBehind(containerHwnd, bottom.Hwnd);
+        _shepherd.PositionGuestsDeferred(top, topRect, bottom, bottomRect, containerHwnd);
     }
 
     /// <summary>
@@ -1419,6 +1881,12 @@ public partial class ContainerWindow : Window
             _viewModel.SetActiveTab(leftTab);
         }
 
+        // Present the pair as one composite tab-strip item ([ A | B ]); the
+        // RIGHT member's ordinary tab is suppressed while the pair exists.
+        var rightTab = _viewModel.Tabs.FirstOrDefault(t => t.Model == right);
+        if (leftTab != null && rightTab != null)
+            _viewModel.SetSplitComposite(leftTab, rightTab);
+
         // Hide the guest that was visible before the split if it is not one of
         // the new pair (e.g. a third tab the user was viewing). Without this it
         // would remain visible alongside the two panes -> three visible guests.
@@ -1457,6 +1925,9 @@ public partial class ContainerWindow : Window
         _splitRight = null;
         _splitForeground = null;
 
+        // Restore the ordinary one-tab-per-member strip.
+        _viewModel.ClearSplitComposite();
+
         foreach (var m in new[] { oldLeft, oldRight })
         {
             if (m != null && m != survivor && _viewModel.Tabs.Any(t => t.Model == m))
@@ -1485,6 +1956,16 @@ public partial class ContainerWindow : Window
     {
         if (leftTab == null)
             return;
+        // Re-validate against the CURRENT tab set: the context menu snapshots
+        // the initiating tab at menu-open time, and the guest may have died or
+        // been popped out in the ~200ms before the user clicks the split item.
+        // A stale initiator would otherwise enter split with a released window
+        // as LEFT: no composite gets installed and the released guest keeps
+        // being glued into the left pane (adversarial review R1-F3).
+        if (!_viewModel.Tabs.Contains(leftTab))
+            return;
+        if (chosenRight != null && !_viewModel.Tabs.Contains(chosenRight))
+            return;
         CapturedWindow left = leftTab.Model;
         TabViewModel? rightTab = chosenRight
             ?? _viewModel.Tabs.FirstOrDefault(t => !ReferenceEquals(t, leftTab));
@@ -1508,6 +1989,9 @@ public partial class ContainerWindow : Window
         _splitLeft = null;
         _splitRight = null;
         _splitForeground = null;
+
+        // Restore the ordinary one-tab-per-member strip.
+        _viewModel.ClearSplitComposite();
 
         if (survivor != null && _viewModel.Tabs.Any(t => t.Model == survivor))
         {
@@ -1690,6 +2174,35 @@ public partial class ContainerWindow : Window
         _draggedItem = FindListBoxItem(e.OriginalSource);
         if (_draggedItem == null)
             return;
+        // During split the strip holds a composite item that does not map
+        // one-to-one to Tabs indices, so disable strip dragging (reorder /
+        // drag-out) for the duration of the split to avoid index mismatches
+        // (documented in the goal: the composite is not draggable as a unit in
+        // this pass). The composite halves handle their own clicks/middle-clicks,
+        // and clicking a non-member tab still selects it normally.
+        if (IsSplitActive)
+        {
+            // A NON-member tab's ordinary left-click must NOT select it while
+            // the split pair is the selected tab-strip unit: selection would
+            // activate the non-member, and the revert (which re-activates the
+            // focused member) would then fight the ListBox's IsSelected<->IsActive
+            // TwoWay binding — a re-entrant SelectionChanged<->SetActiveTab
+            // ping-pong that overflows the stack. Swallow the click entirely
+            // (the pair and the visible set stay untouched). The tab's own ×
+            // button is excluded: popping the member out is a structural
+            // operation and must keep working.
+            if (_draggedItem.DataContext is TabViewModel)
+            {
+                for (DependencyObject? cur = e.OriginalSource as DependencyObject; cur != null; cur = VisualTreeHelper.GetParent(cur))
+                {
+                    if (cur is Button)
+                        return;
+                }
+                e.Handled = true;
+            }
+            _draggedItem = null;
+            return;
+        }
 
         _draggedTab = _draggedItem.DataContext as TabViewModel;
         _dragStart = e.GetPosition(TabsListBox);

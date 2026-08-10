@@ -50,9 +50,14 @@ WPF relies on COM activation, reflection emit, and other runtime features that a
    Once a group is open, use its Group ▾ menu to switch between open groups or
    create another group without returning to the launcher.
 4. The container window shows a tab for each captured window. Click tabs to switch, drag tabs to reorder, or drag a tab out of the strip to release it back to a standalone window.
-5. Double-click the group name in the title bar to rename it.
+5. Double-click the group name in the title bar — or use the Group ▾ menu's
+   **Rename group** — to rename it (Enter commits, Escape cancels, blank names
+   are rejected).
 6. Click the colored chip in the title bar to change the group's accent color.
-7. Closing a container asks whether to close the grouped applications or release them back to standalone windows.
+7. Use the Group ▾ menu's **Delete group** to remove a group: captured windows
+   are released back to standalone (applications keep running) and the group is
+   not restored after a restart.
+8. Closing a container asks whether to close the grouped applications or release them back to standalone windows.
 
 ## Architecture overview
 
@@ -88,7 +93,13 @@ Use this checklist to verify a build before considering it ready.
 ### Group identity
 
 7. Double-click the group name and rename it to "Acme Corp - Invoice".
-8. Click the colored chip and choose a different accent color; verify the title bar/tab highlight updates.
+8. Open the Group ▾ menu and choose **Rename group**; rename it again and verify
+   the title bar/group selector update immediately, that a blank name is
+   rejected, and that the new name survives a restart.
+9. Click the colored chip and choose a different accent color; verify the title bar/tab highlight updates.
+10. Open the Group ▾ menu and choose **Delete group**; confirm the prompt.
+    Verify the captured windows return to standalone AND keep running, the
+    container closes, and the group does not come back after restarting TabDock.
 
 ### Ungroup
 
@@ -126,6 +137,20 @@ Use this checklist to verify a build before considering it ready.
 
 23. Maximize the container with a window docked; verify the docked window resizes to fill the whole content area.
 24. Restore the container; verify the docked window shrinks back to match.
+25. Repeat maximize/restore a few times with a **split screen** active; verify both panes stay exactly side-by-side (no overlap, no gap) after every transition.
+
+### Split screen
+
+26. With two captured windows, right-click a tab and choose **Split screen**; verify both windows appear side by side as one `[ A | B ]` tab item.
+27. Click the LEFT half, then the RIGHT half, alternating several times; verify BOTH panes stay rendered and the clicked side receives input every time (switching focus must never hide the partner or leave a blank pane).
+28. Pop one half out via its `×` (or middle-click); verify the other half takes the full width immediately and stays visible.
+29. Maximize and restore the container while split; verify the panes stay cleanly partitioned.
+30. **Split persistence:** with three captured windows A/B/C and A+B split, hover C's tab, then click it, then right-click it and dismiss the menu, then click the LEFT half, then the RIGHT half, then click C again — the A+B pair must stay split and rendered the whole time (C never becomes the single visible guest; split ends only via **Exit split screen**, a new Split Screen selection, or popping/closing a member).
+
+### DPI change
+
+21. Move the container between monitors with different scaling (e.g., 100% and 150%).
+22. Verify the content area re-lays out and the active window fills the host.
 
 ## Known limitations
 
@@ -133,9 +158,23 @@ Use this checklist to verify a build before considering it ready.
 
 - **Elevated windows:** A non-elevated TabDock cannot capture a window owned by an elevated process due to UIPI (it can't position/foreground it either, not just reparent it). TabDock ships as a standard-user app and asks the user to run elevated if they need to group elevated windows.
 
+- **DPI-unaware windows at non-100% scaling:** Windows whose process is not DPI-aware run in a system-virtualized coordinate space, which cannot be docked reliably with physical-pixel geometry; TabDock refuses to capture them when the system scale is not 100% (with a clear message). Per-monitor-aware and system-aware windows (all modern apps, including every mainstream browser and terminal) are unaffected. On a single-DPI system at any scale, system-aware windows dock correctly; mixed-DPI multi-monitor setups with system-aware guests are the one documented gap.
+
 - **Persistence across reboots:** HWNDs are not stable across reboots, so TabDock cannot reliably re-attach the exact same live windows after a restart. It persists group names, accent colors, custom labels, tab order, and executable paths as layout intent. On startup it restores the group definitions but leaves them empty for the user to re-populate. It never persists application content.
 
 - **Task Manager kill:** captured windows are never reparented, so force-killing TabDock (`taskkill /F`) no longer destroys them — a strict improvement over earlier versions. A window that was on an inactive (hidden) tab at the moment of the kill has no way to reappear on its own; TabDock journals hides to `%APPDATA%\TabDock\hidden-windows.json` and restores any still-valid entry the next time it starts.
+
+## Diagnostics
+
+- **Deterministic geometry self-test:** `TabDock.exe --selftest-geometry` runs
+  the split-partition matrix + seeded fuzz (14.7M checks) with no UI and no
+  input; exit code 0 = all pass. Safe to run on any machine, including a
+  customer's, to validate the pane math without touching the desktop.
+- **Environment fingerprint:** every startup writes `ENV[startup]` (OS, .NET,
+  bitness, monitor layout) and `ENV[launcher]` (system DPI); every container
+  logs `ENV[container]` (rects, monitor, DPI, guest). Paste
+  `%APPDATA%\TabDock\logs\TabDock.log` when reporting a geometry issue — it is
+  self-describing.
 
 ## Logging
 

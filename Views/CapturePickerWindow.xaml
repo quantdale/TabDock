@@ -9,6 +9,8 @@
         Width="560"
         MinWidth="400"
         MinHeight="300"
+        MaxWidth="{x:Static SystemParameters.MaximizedPrimaryScreenWidth}"
+        MaxHeight="{x:Static SystemParameters.MaximizedPrimaryScreenHeight}"
         WindowStartupLocation="CenterOwner"
         Background="White">
 

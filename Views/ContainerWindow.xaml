@@ -4,12 +4,15 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:infra="clr-namespace:TabDock.Infrastructure"
+        xmlns:vm="clr-namespace:TabDock.ViewModels"
         mc:Ignorable="d"
         Title="{Binding Name}"
         Height="600"
         Width="900"
         MinWidth="320"
         MinHeight="240"
+        MaxWidth="{x:Static SystemParameters.MaximizedPrimaryScreenWidth}"
+        MaxHeight="{x:Static SystemParameters.MaximizedPrimaryScreenHeight}"
         WindowStyle="None"
         ResizeMode="CanResize"
         Background="{Binding AccentBrush}"
@@ -22,7 +25,7 @@
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Width" Value="46" />
             <Setter Property="Height" Value="32" />
-            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe UI Symbol" />
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets, Segoe UI Symbol" />
             <Setter Property="FontSize" Value="10" />
             <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True" />
         </Style>
@@ -121,6 +124,7 @@
                     HorizontalAlignment="Left" Margin="8,0,0,0"
                     Background="Transparent" Foreground="White" BorderThickness="0"
                     WindowChrome.IsHitTestVisibleInChrome="True"
+                    AutomationProperties.AutomationId="GroupSelector"
                     Click="GroupButton_Click" ToolTip="Switch group or create a group">
                 <Button.ContextMenu>
                     <ContextMenu x:Name="GroupContextMenu" Closed="GroupContextMenu_Closed" />
@@ -129,7 +133,8 @@
 
             <!-- Add window to group -->
             <Button Grid.Column="3" Style="{StaticResource CaptionButtonStyle}"
-                    Content="&#xE710;" Click="AddWindow_Click" ToolTip="Add window to group" />
+                    Content="&#xE710;" Click="AddWindow_Click" ToolTip="Add window to group"
+                    AutomationProperties.AutomationId="AddWindowButton" />
 
             <Button Grid.Column="4" Style="{StaticResource CaptionButtonStyle}"
                     Content="&#xE949;" Click="Minimize_Click" ToolTip="Minimize" />
@@ -142,7 +147,7 @@
         <!-- Tab strip -->
         <Border Grid.Row="1" Background="#22000000" Height="32">
             <ListBox x:Name="TabsListBox"
-                     ItemsSource="{Binding Tabs}"
+                     ItemsSource="{Binding DisplayTabs}"
                      SelectedItem="{Binding ActiveTab, Mode=OneWay}"
                      SelectionChanged="TabsListBox_SelectionChanged"
                      PreviewMouseRightButtonDown="TabsListBox_PreviewMouseRightButtonDown"
@@ -165,8 +170,9 @@
                         <Setter Property="IsSelected" Value="{Binding IsActive, Mode=TwoWay}" />
                     </Style>
                 </ListBox.ItemContainerStyle>
-                <ListBox.ItemTemplate>
-                    <DataTemplate>
+                <ListBox.Resources>
+                    <!-- Ordinary single tab. -->
+                    <DataTemplate DataType="{x:Type vm:TabViewModel}">
                         <Border Padding="8,4" CornerRadius="4">
                             <Border.Style>
                                 <Style TargetType="Border">
@@ -184,6 +190,7 @@
                                 <Button Content="×" Width="20" Height="20" Margin="6,-1,0,0"
                                         Padding="0" Background="Transparent" Foreground="#CCFFFFFF"
                                         BorderThickness="0" FontSize="14" ToolTip="Pop out"
+                                        AutomationProperties.AutomationId="TabClose"
                                         PreviewMouseLeftButtonDown="TabClose_PreviewMouseLeftButtonDown"
                                         WindowChrome.IsHitTestVisibleInChrome="True" />
                             </StackPanel>
@@ -195,7 +202,86 @@
                             </Border.ContextMenu>
                         </Border>
                     </DataTemplate>
-                </ListBox.ItemTemplate>
+
+                    <!-- Split pair: ONE visual tab item [ A | B ] with a subtle
+                         central separator, so the strip communicates "LEFT pane +
+                         RIGHT pane" instead of two unrelated tabs. Each half is
+                         independently interactive (click focuses that member
+                         without hiding the partner; × / middle-click / right-click
+                         target that specific member). Right-click menus are built
+                         in code (TabsListBox_PreviewMouseRightButtonDown) so they
+                         carry the split-aware items, so no ContextMenu is declared
+                         on the halves here. -->
+                    <DataTemplate DataType="{x:Type vm:SplitCompositeViewModel}">
+                        <Border Padding="6,4" CornerRadius="4"
+                                AutomationProperties.AutomationId="SplitCompositeItem">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <!-- LEFT half -->
+                                <Border Grid.Column="0" Tag="LEFT" Margin="0,0,3,0"
+                                        AutomationProperties.AutomationId="SplitHalfLeft"
+                                        PreviewMouseLeftButtonDown="SplitHalf_PreviewMouseLeftButtonDown"
+                                        PreviewMouseDown="SplitHalf_PreviewMouseDown">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="Transparent" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Left.IsActive}" Value="True">
+                                                    <Setter Property="Background" Value="#44FFFFFF" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Image Source="{Binding Left.Icon}" Width="16" Height="16" Margin="0,0,6,0" />
+                                        <TextBlock Text="{Binding Left.Title}" Foreground="White" VerticalAlignment="Center" MaxWidth="120" TextTrimming="CharacterEllipsis" />
+                                        <Button Content="×" Tag="LEFT" Width="18" Height="18" Margin="6,-1,0,0"
+                                                Padding="0" Background="Transparent" Foreground="#CCFFFFFF"
+                                                BorderThickness="0" FontSize="14" ToolTip="Pop out left window"
+                                                AutomationProperties.AutomationId="SplitCloseLeft"
+                                                PreviewMouseLeftButtonDown="SplitHalfClose_PreviewMouseLeftButtonDown"
+                                                WindowChrome.IsHitTestVisibleInChrome="True" />
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Central separator -->
+                                <Border Grid.Column="1" Width="1" Background="#66FFFFFF" Margin="0,3" />
+
+                                <!-- RIGHT half -->
+                                <Border Grid.Column="2" Tag="RIGHT" Margin="3,0,0,0"
+                                        AutomationProperties.AutomationId="SplitHalfRight"
+                                        PreviewMouseLeftButtonDown="SplitHalf_PreviewMouseLeftButtonDown"
+                                        PreviewMouseDown="SplitHalf_PreviewMouseDown">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="Transparent" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Right.IsActive}" Value="True">
+                                                    <Setter Property="Background" Value="#44FFFFFF" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Image Source="{Binding Right.Icon}" Width="16" Height="16" Margin="0,0,6,0" />
+                                        <TextBlock Text="{Binding Right.Title}" Foreground="White" VerticalAlignment="Center" MaxWidth="120" TextTrimming="CharacterEllipsis" />
+                                        <Button Content="×" Tag="RIGHT" Width="18" Height="18" Margin="6,-1,0,0"
+                                                Padding="0" Background="Transparent" Foreground="#CCFFFFFF"
+                                                BorderThickness="0" FontSize="14" ToolTip="Pop out right window"
+                                                AutomationProperties.AutomationId="SplitCloseRight"
+                                                PreviewMouseLeftButtonDown="SplitHalfClose_PreviewMouseLeftButtonDown"
+                                                WindowChrome.IsHitTestVisibleInChrome="True" />
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ListBox.Resources>
             </ListBox>
         </Border>
 
@@ -214,6 +300,7 @@
                 <DockPanel Grid.Row="0" Margin="0,0,0,8">
                     <TextBlock Text="Add application" Foreground="White" FontWeight="SemiBold" />
                     <Button DockPanel.Dock="Right" Content="Refresh" Width="72" Height="24"
+                            AutomationProperties.AutomationId="CaptureRefresh"
                             Command="{Binding RefreshCommand}" />
                 </DockPanel>
                 <ListBox Grid.Row="1" ItemsSource="{Binding Windows}" MaxHeight="190"
@@ -232,8 +319,11 @@
                 </ListBox>
                 <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
                     <Button Content="Add selected" Width="96" Height="28" Margin="0,0,8,0"
+                            AutomationProperties.AutomationId="CaptureAddSelected"
                             Command="{Binding GroupSelectedCommand}" />
-                    <Button Content="Cancel" Width="72" Height="28" Command="{Binding CancelCommand}" />
+                    <Button Content="Cancel" Width="72" Height="28"
+                            AutomationProperties.AutomationId="CaptureCancel"
+                            Command="{Binding CancelCommand}" />
                 </StackPanel>
             </Grid>
         </Border>

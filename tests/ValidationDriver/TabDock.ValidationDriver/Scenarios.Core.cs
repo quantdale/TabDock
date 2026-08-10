@@ -545,14 +545,25 @@ internal static partial class Scenarios
                 if (!EnsureClickable(container, ax, ay))
                     throw new InvalidOperationException("Could not bring the container to the foreground and its '+' button is obscured — refusing to click blind.");
                 Input.ClickAt(ax, ay);
-                IntPtr picker2 = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 6000);
-                ctx.Check(picker2 != IntPtr.Zero, "picker appeared from container '+' with launcher closed");
-                if (picker2 != IntPtr.Zero)
+                // The container's "+" opens the INLINE capture surface (the
+                // standalone "Capture windows" picker is the launcher/hotkey
+                // fallback only), which must still work with the launcher
+                // closed; dismiss it with the documented second-click toggle.
+                AutomationElement? panelRoot = Uia.FromHwnd(container);
+                bool panelOpened = panelRoot != null && Util.WaitUntil(() =>
+                    Uia.FindDescendantByName(panelRoot, ControlType.Button, "Add selected", null, out _) != null, 6000);
+                ctx.Check(panelOpened, "inline capture surface appeared from container '+' with launcher closed");
+                if (panelOpened)
                 {
                     Thread.Sleep(300);
-                    Input.ForceForeground(picker2);
-                    Input.SendKey(Input.VK_ESCAPE);
-                    Util.WaitUntil(() => !NativeMethods.IsWindow(picker2), 3000);
+                    ClickAddWindowButton(container);
+                    Util.WaitUntil(() =>
+                    {
+                        AutomationElement? r = Uia.FromHwnd(container);
+                        if (r == null)
+                            return false;
+                        return Uia.FindDescendantByName(r, ControlType.Button, "Add selected", null, out _) == null;
+                    }, 3000);
                 }
             }
         }
@@ -621,8 +632,15 @@ internal static partial class Scenarios
             });
             ctx.TabDock = td2;
             ctx.TabDockPid = (uint)td2.Id;
-            ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
-            ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched (MainWindow up)");
+            // The restored group's container opens during startup and HIDES the
+            // launcher within ~50ms, so a visible "TabDock"-titled window may
+            // never exist at poll time — wait for ANY visible top-level window
+            // of the process instead (liveness), then check the restored
+            // container by its renamed title below.
+            ctx.MainHwnd = IntPtr.Zero;
+            bool relaunched = Util.WaitUntil(() =>
+                Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true).Count > 0, 20000);
+            ctx.Check(relaunched, "TabDock relaunched (visible window up)");
             IntPtr restored = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TDVAL-PKGRP", 10000);
             ctx.Check(restored != IntPtr.Zero, "restored container 'TDVAL-PKGRP' opened after relaunch");
             if (restored != IntPtr.Zero)
@@ -631,9 +649,8 @@ internal static partial class Scenarios
             // 5) A clean-exit save with the group still empty must NOT wipe the
             //    persisted tab metadata (layout intent).
             Thread.Sleep(1000);
-            foreach (IntPtr h in Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true))
-                NativeMethods.PostMessage(h, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
-            ctx.Check(Util.WaitUntil(() => ctx.TabDock.HasExited, 8000), "relaunched TabDock exited cleanly");
+            ctx.Check(CloseAllWindowsUntilExit(ctx.TabDockPid, ctx.TabDock, 8000),
+                "relaunched TabDock exited cleanly (close waves include the reappearing launcher)");
             ctx.Check(StateJsonContains("TDVAL-PKGRP"), "group name survived the clean-exit save");
             ctx.Check(StateJsonContains(pig.Title),
                 "persisted tab metadata survived a save with the group empty (not wiped)");
@@ -704,20 +721,79 @@ internal static partial class Scenarios
     }
 
     // -------------------------------------------------------------------------
-    // 19b. exitpopulated (M6): clicking the launcher's "Exit" button (bound to
-    //     ExitCommand -> App.OnExitRequested -> Application.Shutdown) with a
-    //     populated group still open must shut the whole app down cleanly. The
-    //     documented bug this guards: ContainerWindow_Closing's Yes/No/Cancel
-    //     modal previously fired for every populated container during this
-    //     exact path with nobody left to answer it, stalling Shutdown into a
-    //     zombie process (investigation_findings.md M6). Deliberately does NOT
-    //     use HandleCloseGroupMessageBox — if the prompt regresses, this must
-    //     time out and FAIL rather than have cleanup silently dismiss it.
+    // -------------------------------------------------------------------------
+    // 19b. exitpopulated (M6): the launcher's "Exit" button (bound to
+    //     ExitCommand -> App.OnExitRequested -> Application.Shutdown) must shut
+    //     the whole app down cleanly. The launcher is HIDDEN while a container
+    //     is open (documented design — docs/ARCHITECTURE.md: "The launcher is
+    //     hidden while a container is open and remains only as the no-group/
+    //     global-hotkey fallback"), so the reachable exit flow is: close the
+    //     populated container via its × -> "Close group" prompt -> Yes -> the
+    //     launcher reappears -> Exit. The original M6 stall (ContainerWindow_
+    //     Closing's Yes/No/Cancel modal firing during Shutdown with nobody left
+    //     to answer, stalling into a zombie) is guarded by IsAppShuttingDown in
+    //     both App.OnExitRequested and Application_SessionEnding; this scenario
+    //     verifies the end-to-end exit path and asserts no stranded MessageBox.
     // -------------------------------------------------------------------------
     private static void ExitPopulated(Ctx ctx, Options opt)
     {
         GuestInfo pig = SpawnPig(ctx, "EXP", "--color", "red");
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+
+        // Design contract: the launcher hides while a container is open (the
+        // old scenario premise — launcher Exit with a populated group open —
+        // is unreachable by design since the launcher-hide landed).
+        ctx.Check(!NativeMethods.IsWindowVisible(ctx.MainHwnd),
+            "launcher hidden while the populated container is open (documented design)");
+
+        // Close the populated container with a REAL CLICK on its caption
+        // close button (CaptionButtonStyle index 0 = Close). A posted WM_CLOSE
+        // raises the prompt without any input-grant: the modal cannot take the
+        // foreground under Windows' foreground lock, and the docked guest
+        // (paired above the container) then covers the dialog's buttons
+        // (observed live: WindowFromPoint at the Yes button resolves to the
+        // guest). A real click grants the app foreground rights first, so the
+        // dialog appears on top, exactly as for a human user.
+        (int closeX, int closeY) = CaptionButtonCenterFromRight(container, 0);
+        if (!EnsureClickable(container, closeX, closeY))
+            throw new InvalidOperationException("Could not bring the container to the foreground and its close button is obscured — refusing to click blind.");
+        long off = TabDockLog.RecordLogLength();
+        Input.ClickAt(closeX, closeY);
+        IntPtr dlg = IntPtr.Zero;
+        Util.WaitUntil(() => (dlg = Discover.FindMessageBox(ctx.TabDockPid, "Close group")) != IntPtr.Zero, 5000);
+        ctx.Check(dlg != IntPtr.Zero, "Close-group prompt appeared on caption close with tabs present");
+        if (dlg == IntPtr.Zero)
+            return;
+        // The first click on a just-shown modal can be consumed by the
+        // activation itself (observed live), so retry the Yes click until the
+        // dialog actually closes (bounded, no infinite loop).
+        IntPtr yesBtn = Discover.FindChildWindowByText(dlg, new[] { "&Yes", "Yes" });
+        ctx.Check(yesBtn != IntPtr.Zero, "prompt has a Yes button");
+        bool yesAccepted = false;
+        for (int attempt = 0; attempt < 3 && !yesAccepted; attempt++)
+        {
+            IntPtr curDlg = Discover.FindMessageBox(ctx.TabDockPid, "Close group");
+            if (curDlg == IntPtr.Zero)
+                break;
+            IntPtr curYes = Discover.FindChildWindowByText(curDlg, new[] { "&Yes", "Yes" });
+            if (curYes == IntPtr.Zero || !Input.ForceForeground(curDlg))
+            {
+                Thread.Sleep(300);
+                continue;
+            }
+            NativeMethods.GetWindowRect(curYes, out NativeMethods.RECT rc);
+            Input.ClickAt(rc.left + rc.Width / 2, rc.top + rc.Height / 2);
+            yesAccepted = Util.WaitUntil(() => !NativeMethods.IsWindow(curDlg), 2000);
+        }
+        ctx.Check(yesAccepted, "Yes click dismissed the Close-group prompt");
+        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(container), 5000), "Yes: container closed");
+        ctx.Check(Util.WaitUntil(() => pig.Proc!.HasExited, 5000), "Yes: pig actually exited (not just released)");
+        ctx.Check(TabDockLog.CountNewLines(off, "EXCEPTION") == 0, "no EXCEPTION lines across the prompt sequence");
+
+        // The launcher reappears once the last container is gone, and its Exit
+        // button now shuts the app down with no container left to prompt over.
+        ctx.Check(Util.WaitUntil(() => NativeMethods.IsWindowVisible(ctx.MainHwnd), 5000),
+            "launcher reappears after the last container closes");
 
         if (!Input.ForceForeground(ctx.MainHwnd))
             throw new InvalidOperationException("Could not bring the launcher to the foreground — refusing to click blind.");
@@ -730,24 +806,32 @@ internal static partial class Scenarios
         if (exitBtn == null)
             return;
 
+        // The launcher just reappeared; its first click can be consumed by the
+        // window's own activation (observed in batch runs), so retry the Exit
+        // click until the process exits (bounded).
         (int ex, int ey) = Uia.Center(exitBtn);
-        Input.ClickAt(ex, ey);
-
-        bool exited = Util.WaitUntil(() => ctx.TabDock.HasExited, 5000);
-        IntPtr strandedDialog = exited ? IntPtr.Zero : Discover.FindMessageBox(ctx.TabDockPid, null);
-        ctx.Check(exited, "TabDock process exited within 5s of clicking Exit with a populated group open (no blocking modal)");
-        ctx.Check(strandedDialog == IntPtr.Zero, "no stranded MessageBox left open blocking shutdown");
-
-        if (exited)
+        bool exited = false;
+        for (int attempt = 0; attempt < 3 && !exited; attempt++)
         {
-            ctx.Check(Util.WaitUntil(() => NativeMethods.IsWindow(pig.Hwnd) && NativeMethods.IsWindowVisible(pig.Hwnd), 3000),
-                "pig released back to a visible standalone window as part of clean exit");
-            ctx.Check(IsReleasedAndShown(pig.Hwnd, host), "pig released and shown at its own placement (not left docked over host)");
-            ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "pig process itself still alive (only its window was released)");
+            if (attempt > 0)
+            {
+                if (!Input.ForceForeground(ctx.MainHwnd))
+                    break;
+                AutomationElement? mainEl2 = Uia.FromHwnd(ctx.MainHwnd);
+                AutomationElement? exitBtn2 = mainEl2 == null
+                    ? null
+                    : Uia.FindDescendantByName(mainEl2, ControlType.Button, "Exit", null, out _);
+                if (exitBtn2 == null)
+                    break;
+                (ex, ey) = Uia.Center(exitBtn2);
+            }
+            Input.ClickAt(ex, ey);
+            exited = Util.WaitUntil(() => ctx.TabDock.HasExited, 5000);
         }
+        IntPtr strandedDialog = exited ? IntPtr.Zero : Discover.FindMessageBox(ctx.TabDockPid, null);
+        ctx.Check(exited, "TabDock process exited within 15s of clicking Exit (no blocking modal)");
+        ctx.Check(strandedDialog == IntPtr.Zero, "no stranded MessageBox left open blocking shutdown");
     }
-
-    // -------------------------------------------------------------------------
     // H6 regression: minimizing a populated container via its OWN minimize button
     // must retain every tab; on restore the active guest is re-docked. The H6 bug
     // misclassified the active guest's minimize-hide as a tray-close and released
@@ -966,17 +1050,23 @@ internal static partial class Scenarios
         });
         ctx.TabDock = td2;
         ctx.TabDockPid = (uint)td2.Id;
-        ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
-        ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched (MainWindow up)");
+        // The restored group's container opens during startup and HIDES the
+        // launcher within ~50ms, so a visible "TabDock"-titled window may never
+        // exist at poll time (observed live as an intermittent flake) — wait
+        // for ANY visible top-level window of the process instead (liveness),
+        // then check the restored container by its renamed title below.
+        ctx.MainHwnd = IntPtr.Zero;
+        bool relaunched = Util.WaitUntil(() =>
+            Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true).Count > 0, 20000);
+        ctx.Check(relaunched, "TabDock relaunched (visible window up)");
         IntPtr restored = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TDVAL-ATIIDX", 10000);
         ctx.Check(restored != IntPtr.Zero, "restored container 'TDVAL-ATIIDX' opened after relaunch");
         if (restored != IntPtr.Zero)
             ctx.Containers.Add(restored);
 
         Thread.Sleep(1000); // let the restored empty shell settle
-        foreach (IntPtr h in Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true))
-            NativeMethods.PostMessage(h, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
-        ctx.Check(Util.WaitUntil(() => ctx.TabDock.HasExited, 8000), "relaunched TabDock exited cleanly");
+        ctx.Check(CloseAllWindowsUntilExit(ctx.TabDockPid, ctx.TabDock, 8000),
+            "relaunched TabDock exited cleanly (close waves include the reappearing launcher)");
         ctx.Check(StateJsonContains("TDVAL-ATIIDX"), "group name survived the clean-exit save");
         ctx.Check(StateJsonContains("\"ActiveIndex\": 2"),
             "active-tab index 2 survived the first post-restore save (not reset to 0)");
@@ -1030,8 +1120,15 @@ internal static partial class Scenarios
         Thread.Sleep(1000);
         ctx.TabDock = Relaunch();
         ctx.TabDockPid = (uint)ctx.TabDock.Id;
-        ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
-        ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched (MainWindow up)");
+        // The restored group's container opens during startup and HIDES the
+        // launcher within ~50ms, so a visible "TabDock"-titled window may never
+        // exist at poll time (observed live as an intermittent flake) — wait
+        // for ANY visible top-level window of the process instead (liveness),
+        // then check the restored container by its renamed title below.
+        ctx.MainHwnd = IntPtr.Zero;
+        bool relaunched = Util.WaitUntil(() =>
+            Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true).Count > 0, 20000);
+        ctx.Check(relaunched, "TabDock relaunched (visible window up)");
         IntPtr restored = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TDVAL-RSMR", 10000);
         ctx.Check(restored != IntPtr.Zero, "restored container 'TDVAL-RSMR' opened after relaunch");
         if (restored != IntPtr.Zero)
