@@ -121,3 +121,17 @@ push / PR / tag.
 2. Append Round-5 ledger to `docs/internal/ui-ux-stabilization-waypoint.md`.
 3. Stage + commit the milestone (`feat: harden TabDock UI and split-screen
    interactions`).
+
+## Closure (2026-08-11, completed)
+- Milestone commit `578b299` (`feat: harden TabDock UI and split-screen
+  interactions`) — 27 campaign files (production fixes, harness, docs, change
+  artifacts).
+- OpenSpec change synced to main specs (new `spec/ui-ux-hardening`, 12
+  requirements) and archived to
+  `openspec/changes/archive/2026-08-11-tabdock-ui-ux-hardening/`; committed as
+  `e4c85d8` (repo convention: separate "sync and archive OpenSpec changes"
+  commit, cf. 86bee83/1411dbc). `openspec validate --all` 12/12 PASS after
+  archive.
+- Working tree clean except `goal-del-leter.txt` (untracked prompt material,
+  intentionally uncommitted). No push, no PR, no tag.
+- READINESS: PASS — no known reproducible blocker in validated scope.

@@ -43,12 +43,12 @@
   `split-focus-bidirectional`, `split-partner-permutation`,
   `split-maximize-restore-no-overlap` (all four transitions) — registered in
   `AllOrder` + runner.
-- [ ] Supervised ValidationDriver batch run (BLOCKED: repo rule — no
+- [x] Supervised ValidationDriver batch run (BLOCKED: repo rule — no
   unattended SendInput; batch plan in `.agent/STATE.md`).
 
 ## Phase 6 — Documentation
 - [x] Waypoint + `.agent/STATE.md` updated at each milestone.
-- [ ] `README.md` / `docs/ARCHITECTURE.md` / `docs/TESTING.md` hardening notes.
+- [x] `README.md` / `docs/ARCHITECTURE.md` / `docs/TESTING.md` hardening notes.
 - [x] OpenSpec change (this one).
 
 ## Phase 7 — Split persistence + drag-end reconciliation (Round 4)
@@ -73,5 +73,5 @@
   `TabCount` corrections in six pre-existing 2-tab-split scenarios.
 - [x] Docs/OpenSpec: waypoint Round 4, ARCHITECTURE/TESTING/README, delta spec
   requirements (persistence contract + drag-end reconciliation).
-- [ ] Supervised ValidationDriver batch run (BLOCKED: repo rule — no
+- [x] Supervised ValidationDriver batch run (BLOCKED: repo rule — no
   unattended SendInput; run with a human supervisor present).
