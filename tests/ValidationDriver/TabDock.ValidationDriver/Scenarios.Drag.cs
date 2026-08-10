@@ -209,10 +209,10 @@ internal static partial class Scenarios
     //     client-drawn tab strip (Chrome hit-tests this as HTCAPTION, so the
     //     guest itself enters the same interactive move loop as a native
     //     title-bar drag — see dragout-by-titlebar). Verifies both halves of
-    //     NoteGuestMoveSize's threshold against a real app with a custom-drawn
-    //     "fake" title bar, not just a plain WinForms one: a small drag (under
-    //     DragOutThresholdPx) snaps back to the host rect; a large drag pops
-    //     the tab out. (Formerly an H4/H5 PR gate against the deleted Reparent
+    //     NoteGuestMoveSize re-glue behavior against a real app with a custom-drawn
+    //     "fake" title bar, not just a plain WinForms one: both small and large
+    //     native movements snap back to the host rect and keep the tab captured.
+    //     (Formerly an H4/H5 PR gate against the deleted Reparent
     //     backend's fill-clamp/host-background-smear bugs, both of which are
     //     structurally impossible under Shepherd — a guest is either exactly
     //     docked over the marker or fully popped out, never mid-reparented
@@ -236,7 +236,7 @@ internal static partial class Scenarios
         int startX = hostRect.left + (int)(150 * scale);
         int startY = hostRect.top + (int)(18 * scale);
 
-        // --- Small jitter (under DragOutThresholdPx=40): must snap back.
+        // --- Small jitter: must snap back.
         //     Chrome's own tab strip has its own click-vs-drag threshold
         //     before it hands off to native window dragging; too small a
         //     movement (e.g. the ~12px used against a plain WinForms title
@@ -246,32 +246,30 @@ internal static partial class Scenarios
         ctx.Check(Util.WaitUntil(() => IsDocked(chrome.Hwnd, host), 3000),
             "small jitter drag on Chrome's own tab strip snaps back to docked");
 
-        // --- Real pop-out (well past the threshold), from a different start
-        //     point on the same tab strip to avoid a same-pixel double-click. ---
+        // --- Large movement is still re-glued, from a different start point on
+        //     the same tab strip to avoid a same-pixel double-click. ---
         Thread.Sleep(700);
         int startX2 = startX + (int)(40 * scale);
         long dragOff = TabDockLog.RecordLogLength();
         Input.DragFromTo(startX2, startY, startX2 + (int)(130 * scale), startY + (int)(92 * scale), 16);
 
-        ctx.Check(Util.WaitUntil(() => IsReleasedAndShown(chrome.Hwnd, host), 5000),
-            "drag past the threshold on Chrome's own tab strip releases the tab (shown standalone, not docked)");
-        ctx.Check(TabDockLog.WaitForLogLine(dragOff, "SHEPHERD[dragout]", 3000),
-            "TabDock log recorded the drag-out release (SHEPHERD[dragout])");
+        ctx.Check(Util.WaitUntil(() => IsDocked(chrome.Hwnd, host), 5000),
+            "large movement on Chrome's own tab strip is re-glued to the host");
+        ctx.Check(TabCount(container) == 1, "Chrome remains captured after native movement");
+        ctx.Check(TabDockLog.WaitForLogLine(dragOff, "SHEPHERD[re-glue]", 3000),
+            "TabDock logged the native movement re-glue");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
         ctx.Check(chrome.Proc != null && !chrome.Proc.HasExited, "chrome guest process alive after drag");
     }
 
     // -------------------------------------------------------------------------
-    // 27. dragout-by-titlebar: verifies ContainerWindow.NoteGuestMoveSize's
-    //     drag-out-by-real-titlebar hardening (DragOutThresholdPx = 40) — a
-    //     real mouse drag on the shepherded guest's OWN native title bar
-    //     (Shepherd never strips WS_CAPTION) must snap back on small jitter
-    //     and release the tab as a pop-out once it clears the threshold.
+    // 27. dragout-by-titlebar: native title-bar movement is always re-glued.
+    //     Explicit Pop out is the only release gesture; a captured guest remains
+    //     a tab even when its untouched native frame is dragged a long distance.
     // -------------------------------------------------------------------------
     private static void DragOutByTitlebar(Ctx ctx, Options opt)
     {
         GuestInfo pig = SpawnPig(ctx, "DOT", "--color", "red");
-        NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT rectBeforeCapture);
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
         ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "pig docked over host right after capture");
 
@@ -283,9 +281,9 @@ internal static partial class Scenarios
         if (!Input.ForceForeground(pig.Hwnd))
             throw new InvalidOperationException("Could not bring the docked pig to the foreground — refusing to drag blind.");
 
-        // --- Small jitter (under DragOutThresholdPx=40): must snap back. ---
+        // --- Small movement: must snap back. ---
         Input.DragFromTo(titleX, titleY, titleX + 12, titleY + 8, 10);
-        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "small jitter drag (~14px) snaps back to docked");
+        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "small native title movement snaps back to docked");
 
         // A second mouse-down at the exact same screen point shortly after the
         // first click-drag-release risks Windows treating the pair as a
@@ -297,28 +295,19 @@ internal static partial class Scenarios
         Thread.Sleep(700);
         int titleX2 = titleX + 40;
 
-        // --- Real pop-out (well past the threshold). ---
+        // --- Large movement: it is still not a pop-out. ---
         long off = TabDockLog.RecordLogLength();
         const int dx = 180, dy = 150;
         Input.DragFromTo(titleX2, titleY, titleX2 + dx, titleY + dy, 14);
 
-        ctx.Check(Util.WaitUntil(() => IsReleasedAndShown(pig.Hwnd, host), 5000),
-            "drag-out past the 40px threshold releases the tab (shown standalone, not docked)");
-        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(container) || TabCount(container) == 0, 5000),
-            "tab removed from the strip (it was the only tab, so the container closes/empties)");
-        ctx.Check(TabDockLog.ContainsNewLine(off, "SHEPHERD[dragout]"),
-            "TabDock log recorded the drag-out release (SHEPHERD[dragout])");
-
-        // NoteGuestMoveSize's drag-out release goes through the same release
-        // path as every other release (Pop out via the tab strip, Close group,
-        // etc.): it restores the placement snapshotted at capture time, not
-        // wherever the drag happened to drop it — the drag-past-threshold is
-        // only the SIGNAL that this was an intentional pop-out, not a
-        // "leave it where dropped" gesture.
-        NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT rcAfterDrag);
-        ctx.Check(Util.RectNear(rectBeforeCapture, rcAfterDrag, 4),
-            $"pig restored to its original pre-capture placement (before {Util.FormatRect(rectBeforeCapture)}, after {Util.FormatRect(rcAfterDrag)})");
-        ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "pig process still alive after drag-out (released standalone, not killed)");
+        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 5000),
+            "large native title movement is re-glued to the content rect");
+        ctx.Check(TabCount(container) == 1, "tab remains captured after native title movement");
+        ctx.Check(TabDockLog.WaitForLogLine(off, "SHEPHERD[re-glue]", 3000),
+            "TabDock logged the native move/size re-glue");
+        ctx.Check(TabDockLog.CountNewLines(off, "SHEPHERD[dragout]") == 0,
+            "native title movement does not log a pop-out dragout");
+        ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "pig process still alive after native movement");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
     }
 

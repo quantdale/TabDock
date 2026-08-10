@@ -17,6 +17,7 @@ public sealed class WinEventMonitor : IDisposable
     private SynchronizationContext? _uiContext;
     private IntPtr _hookDestroy;
     private IntPtr _hookForeground;
+    private IntPtr _hookReorder;
     private IntPtr _hookNameChange;
     private IntPtr _hookMinimize;
     private IntPtr _hookHide;
@@ -26,6 +27,7 @@ public sealed class WinEventMonitor : IDisposable
 
     public event EventHandler<WindowEventArgs>? WindowDestroyed;
     public event EventHandler<WindowEventArgs>? WindowForegroundChanged;
+    public event EventHandler<WindowEventArgs>? WindowZOrderChanged;
     public event EventHandler<WindowEventArgs>? WindowNameChanged;
     public event EventHandler<WindowEventArgs>? WindowMinimized;
 
@@ -87,6 +89,7 @@ public sealed class WinEventMonitor : IDisposable
         uint flags = NativeMethods.WINEVENT_OUTOFCONTEXT | NativeMethods.WINEVENT_SKIPOWNPROCESS;
         _hookDestroy = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_DESTROY, NativeMethods.EVENT_OBJECT_DESTROY, IntPtr.Zero, _callback, 0, 0, flags);
         _hookForeground = NativeMethods.SetWinEventHook(NativeMethods.EVENT_SYSTEM_FOREGROUND, NativeMethods.EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, _callback, 0, 0, flags);
+        _hookReorder = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_REORDER, NativeMethods.EVENT_OBJECT_REORDER, IntPtr.Zero, _callback, 0, 0, flags);
         _hookNameChange = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_NAMECHANGE, NativeMethods.EVENT_OBJECT_NAMECHANGE, IntPtr.Zero, _callback, 0, 0, flags);
         _hookMinimize = NativeMethods.SetWinEventHook(NativeMethods.EVENT_SYSTEM_MINIMIZESTART, NativeMethods.EVENT_SYSTEM_MINIMIZESTART, IntPtr.Zero, _callback, 0, 0, flags);
         _hookHide = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_HIDE, NativeMethods.EVENT_OBJECT_HIDE, IntPtr.Zero, _callback, 0, 0, flags);
@@ -95,18 +98,18 @@ public sealed class WinEventMonitor : IDisposable
         // unlike EVENT_OBJECT_LOCATIONCHANGE, which is deliberately not hooked.
         _hookMoveSize = NativeMethods.SetWinEventHook(NativeMethods.EVENT_SYSTEM_MOVESIZESTART, NativeMethods.EVENT_SYSTEM_MOVESIZEEND, IntPtr.Zero, _callback, 0, 0, flags);
 
-        if (_hookDestroy == IntPtr.Zero || _hookForeground == IntPtr.Zero || _hookNameChange == IntPtr.Zero
+        if (_hookDestroy == IntPtr.Zero || _hookForeground == IntPtr.Zero || _hookReorder == IntPtr.Zero || _hookNameChange == IntPtr.Zero
             || _hookMinimize == IntPtr.Zero || _hookHide == IntPtr.Zero || _hookMoveSize == IntPtr.Zero)
         {
             // A partial hook set silently drops whole event classes (e.g. no
             // destroy hook means dead tabs never tear down). Unwind whatever
             // did install and report failure rather than limping along.
-            _log.Log($"WinEventMonitor.Start: incomplete hook installation (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X}); unwinding.");
+            _log.Log($"WinEventMonitor.Start: incomplete hook installation (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookReorder.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X}); unwinding.");
             Stop();
             return;
         }
 
-        _log.Log($"WinEventMonitor started (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X})");
+        _log.Log($"WinEventMonitor started (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookReorder.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X})");
     }
 
     /// <summary>
@@ -127,6 +130,7 @@ public sealed class WinEventMonitor : IDisposable
 
         Unhook(ref _hookDestroy, "destroy");
         Unhook(ref _hookForeground, "foreground");
+        Unhook(ref _hookReorder, "reorder");
         Unhook(ref _hookNameChange, "namechange");
         Unhook(ref _hookMinimize, "minimize");
         Unhook(ref _hookHide, "hide");
@@ -151,9 +155,29 @@ public sealed class WinEventMonitor : IDisposable
 
     private void OnWinEvent(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
     {
-        if (idObject != 0 || idChild != 0)
-            return;
         if (hwnd == IntPtr.Zero)
+            return;
+
+        // EVENT_SYSTEM_FOREGROUND identifies the foreground top-level window.
+        // EVENT_OBJECT_REORDER is different: for a top-level z-order change,
+        // Windows reports the desktop's client object (OBJID_CLIENT), not the
+        // guest HWND. This is the bounded signal needed when direct activation
+        // raises a guest but the foreground notification is coalesced or late.
+        bool desktopReorder = eventType == NativeMethods.EVENT_OBJECT_REORDER
+            && hwnd == NativeMethods.GetDesktopWindow()
+            && idObject == NativeMethods.OBJID_CLIENT
+            && idChild == NativeMethods.CHILDID_SELF;
+        if (desktopReorder)
+        {
+            // The desktop is the event source, not the reordered top-level
+            // window. Capture the foreground at callback time so the posted
+            // UI handler cannot accidentally pair a different window if a
+            // later activation is queued before this event is dispatched.
+            Post(new WindowEventArgs(hwnd, eventType, NativeMethods.GetForegroundWindow()));
+            return;
+        }
+
+        if (idObject != 0 || idChild != 0)
             return;
 
         // Every consumer of these events reacts only to captured member windows,
@@ -166,7 +190,11 @@ public sealed class WinEventMonitor : IDisposable
         if (!_isCapturedWindow(hwnd))
             return;
 
-        var args = new WindowEventArgs(hwnd, eventType);
+        Post(new WindowEventArgs(hwnd, eventType));
+    }
+
+    private void Post(WindowEventArgs args)
+    {
         if (_uiContext != null)
         {
             // The Post hop is load-bearing beyond thread affinity: the hide
@@ -189,7 +217,12 @@ public sealed class WinEventMonitor : IDisposable
         // hop — Windows aggressively recycles HWND values, so re-verify the
         // HWND still names a captured window instead of acting on a stale
         // snapshot of desktop state.
-        if (!_running || !_isCapturedWindow(args.Hwnd))
+        if (!_running)
+            return;
+
+        bool desktopReorder = args.EventType == NativeMethods.EVENT_OBJECT_REORDER
+            && args.Hwnd == NativeMethods.GetDesktopWindow();
+        if (!desktopReorder && !_isCapturedWindow(args.Hwnd))
             return;
 
         switch (args.EventType)
@@ -199,6 +232,9 @@ public sealed class WinEventMonitor : IDisposable
                 break;
             case NativeMethods.EVENT_SYSTEM_FOREGROUND:
                 WindowForegroundChanged?.Invoke(this, args);
+                break;
+            case NativeMethods.EVENT_OBJECT_REORDER:
+                WindowZOrderChanged?.Invoke(this, args);
                 break;
             case NativeMethods.EVENT_OBJECT_NAMECHANGE:
                 WindowNameChanged?.Invoke(this, args);
@@ -232,10 +268,12 @@ public sealed class WindowEventArgs : EventArgs
 {
     public IntPtr Hwnd { get; }
     public uint EventType { get; }
+    public IntPtr RelatedHwnd { get; }
 
-    public WindowEventArgs(IntPtr hwnd, uint eventType)
+    public WindowEventArgs(IntPtr hwnd, uint eventType, IntPtr relatedHwnd = default)
     {
         Hwnd = hwnd;
         EventType = eventType;
+        RelatedHwnd = relatedHwnd;
     }
 }

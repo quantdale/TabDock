@@ -97,7 +97,7 @@ public partial class App : Application
             _hotkey = new HotkeyService(_log);
 
             // All WinEvent-driven guest lifecycle policy (destroy/hide teardown,
-            // minimize restore, move/size drag-out, foreground pairing, title
+            // minimize restore, move/size re-glue, foreground pairing, title
             // refresh) lives behind GuestLifecycleService.Attach; App only wires
             // the module in and gates the hooks.
             _guestLifecycle = new GuestLifecycleService(_groups, _containers, _log);
@@ -377,10 +377,21 @@ public partial class App : Application
 
     private void OnNewGroupRequested(object? sender, EventArgs e)
     {
+        CreateAndOpenGroup(sender as Window);
+    }
+
+    private void OnContainerNewGroupRequested(object? sender, EventArgs e)
+    {
+        CreateAndOpenGroup(sender as Window);
+    }
+
+    private void CreateAndOpenGroup(Window? owner)
+    {
         var group = _groups.CreateGroup();
         try
         {
-            OpenContainer(group);
+            ContainerWindow window = OpenContainer(group);
+            window.Activate();
         }
         catch (Exception ex)
         {
@@ -389,7 +400,25 @@ public partial class App : Application
             // into a crash on every subsequent launch.
             _groups.RemoveGroup(group);
             _log.LogException("OpenContainer for new group", ex);
-            MessageBox.Show(_mainWindow, "Could not open the container for the new group.", "TabDock", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(owner ?? _mainWindow, "Could not open the container for the new group.", "TabDock", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OnContainerGroupSelectedRequested(object? sender, ContainerWindow.GroupSelectionEventArgs e)
+    {
+        if (_containers.TryGetValue(e.Group.Id, out ContainerWindow? window))
+        {
+            window.Activate();
+            return;
+        }
+
+        try
+        {
+            OpenContainer(e.Group).Activate();
+        }
+        catch (Exception ex)
+        {
+            _log.LogException($"OpenContainer for selected group {e.Group.Id}", ex);
         }
     }
 
@@ -556,13 +585,16 @@ public partial class App : Application
         var vm = new GroupViewModel(group, _groups, _icons, _log);
         // The container's "+" button funnels through this event; without the
         // subscription it is a dead control.
-        vm.AddWindowsRequested += (_, _) => ShowCapturePicker(group);
         ContainerWindow window;
         try
         {
-            window = new ContainerWindow(vm, _groups, _shepherd, _log);
+            window = new ContainerWindow(vm, _groups, _shepherd, _log, _icons);
+            vm.AddWindowsRequested += (_, _) => window.OpenCapturePanel();
+            window.GroupSelectedRequested += OnContainerGroupSelectedRequested;
+            window.NewGroupRequested += OnContainerNewGroupRequested;
             window.Closed += (_, _) => OnContainerClosed(group.Id);
             window.Show();
+            _mainWindow?.Hide();
         }
         catch (Exception ex)
         {
@@ -578,7 +610,12 @@ public partial class App : Application
 
     private void OnContainerClosed(Guid groupId)
     {
-        _containers.Remove(groupId);
+        if (_containers.TryGetValue(groupId, out ContainerWindow? closed))
+        {
+            closed.GroupSelectedRequested -= OnContainerGroupSelectedRequested;
+            closed.NewGroupRequested -= OnContainerNewGroupRequested;
+            _containers.Remove(groupId);
+        }
         _log.Log($"Container closed for group {groupId}.");
 
         // A closed container that never represented any real layout intent must
@@ -605,6 +642,9 @@ public partial class App : Application
         {
             _groups.RemoveGroup(group);
         }
+
+        if (_containers.Count == 0 && _mainWindow != null)
+            _mainWindow.Show();
     }
 
     /// <summary>

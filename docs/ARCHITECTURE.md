@@ -94,6 +94,58 @@ skip redundant re-glues when the guest already covers it within 1 px, then `Posi
 `HWND_TOP` + `SWP_SHOWWINDOW`, `PairZOrderBehind(container, guest)`
 (`WindowShepherdService.cs:225-235`), `JournalClear`, `SHEPHERD[position]`.
 
+### Vertical split screen (two guests)
+
+From a captured tab's context menu, TabDock can display exactly two guests
+simultaneously in a LEFT/RIGHT vertical split (the Shepherd model is unchanged —
+both stay independent top-level HWNDs, never reparented/restyled). The split is
+owned by `ContainerWindow`:
+
+The container caption's Group menu switches to an already-open group or creates
+one in the existing shell. The launcher is hidden while a container is open and
+remains only as the no-group/global-hotkey fallback. Routine Add App capture is
+an in-window panel; the standalone picker remains for the fallback path.
+
+- **State** — `_splitLeft`/`_splitRight` hold `CapturedWindow` references
+  (identity, not index, so the pair survives tab reordering); `_splitForeground`
+  tracks which member is z-order-top. Split is runtime-only (not persisted).
+- **Enter/exit** — `EnterSplit(left, right)` / `ExitSplit(keepActive)` route
+  through the context menu (`ConfigureSplitMenuItems`: disabled below two tabs,
+  direct action at exactly two, submenu at three+, `Exit split screen` when
+  active). Clicking a split member keeps the split; clicking a non-paired tab
+  exits it. Departing members are hidden via `_shepherd.Hide` (journal-before-hide
+  preserved); neither member is ever released by a split transition.
+- **Layout** — `LayoutSplitPanes` derives LEFT/RIGHT halves from the content
+  rect (`leftW = Width/2`, right gets the remainder; no DPI conversion) and
+  establishes the local order `foreground guest → partner guest → container`.
+  The 1px redundant-glue guard is per-pane; the container is paired below the
+  partner without being pushed behind unrelated desktop windows.
+- **Lifecycle** — split-aware `SyncShepherdActiveWindow`, `StateChanged`,
+  `NoteGuestMoveSize` (drag-out measured against the member's own pane),
+  `RestoreMinimizedWindow`, `PairZOrderBehindGuest`, and the WM_ACTIVATE
+  reassert. `GuestLifecycleService.OnWindowHidden` treats a hide of either split
+  member as guest-initiated teardown (both are visible in split). A split member
+  leaving the group (pop-out, drag-out, self-close, self-hide) ends the split and
+  promotes the survivor to the single visible guest.
+- **Primitives** — `WindowShepherdService.PositionGuest` (position one guest at a
+  z-order slot), `SetForeground` (foreground without repositioning),
+  `RaiseContainerForChrome` (temporary TabDock UI), and `PairZOrderBehind` (the
+  single local container/guest ordering primitive).
+
+### TabDock z-order policy
+
+TabDock-owned temporary UI has an explicit lifecycle. On opening a context menu,
+color menu, or owned capture surface, the container is raised without hiding or
+removing any guest. When that surface closes, the container reconciles the guest
+stack once: normal mode restores `guest → container`; split mode restores
+`foreground guest → partner guest → container`. Logical visibility does not
+change during popup interaction. Guests remain independent top-level windows and
+ordinary unrelated desktop windows are not displaced by a global `HWND_BOTTOM`
+operation.
+
+Log vocabulary: `SPLIT[enter]`, `SPLIT[exit]`, `SPLIT[replace]`,
+`SPLIT[member-gone]`.
+
 ### Release
 
 `GroupManager.ReleaseTab` (`GroupManager.cs:330-353`) removes the member from `Group.Members`
@@ -125,9 +177,9 @@ container `Close` (`ContainerWindow.xaml.cs:136-146`, `GroupViewModel.cs:204-208
 ### Pop-out paths
 
 - Tab-strip drag leaving the container bounds (`ContainerWindow.xaml.cs:1014-1026`).
-- Dragging the guest by its own real title bar > `DragOutThresholdPx` (40) from docked →
-  `SHEPHERD[dragout]` + release; ≤ threshold → snap back (`NoteGuestMoveSize`,
-  `ContainerWindow.xaml.cs:928-952`; events from `OnGuestMoveSize`, `GuestLifecycleService.cs:141-158`).
+- Dragging or resizing the guest by its own real title bar/edge is always
+  re-glued to its assigned pane (`NoteGuestMoveSize`; events from
+  `OnGuestMoveSize`). Native movement never releases a tab.
 - Tab context-menu **Pop out** (`GroupViewModel.cs:243`).
 
 ---
@@ -135,7 +187,7 @@ container `Close` (`ContainerWindow.xaml.cs:136-146`, `GroupViewModel.cs:204-208
 ## 3. WinEvent pipeline: event → handler → effect
 
 Hooks installed in `WinEventMonitor.Start` (`WinEventMonitor.cs:88-96`): `EVENT_OBJECT_DESTROY`,
-`EVENT_SYSTEM_FOREGROUND`, `EVENT_OBJECT_NAMECHANGE`, `EVENT_SYSTEM_MINIMIZESTART`,
+`EVENT_SYSTEM_FOREGROUND`, `EVENT_OBJECT_REORDER`, `EVENT_OBJECT_NAMECHANGE`, `EVENT_SYSTEM_MINIMIZESTART`,
 `EVENT_OBJECT_HIDE`, and one ranged `EVENT_SYSTEM_MOVESIZESTART..END` hook. A partial install
 unwinds and reports failure (`WinEventMonitor.cs:98-107`).
 
@@ -146,14 +198,20 @@ dispatched via **`SynchronizationContext.Post` — never `Send`** (handlers must
 state *after* the causing operation; `WinEventMonitor.cs:170-177`). `Raise` re-verifies
 `_running && IsCapturedWindow` against HWND recycling, then switches on event type
 (`WinEventMonitor.cs:185-218`).
+The desktop `EVENT_OBJECT_REORDER` path is the one deliberate exception to
+direct guest-HWND filtering: Windows reports the desktop client object
+(`GetDesktopWindow`, `OBJID_CLIENT`, `CHILDID_SELF`) for top-level z-order
+changes, so the callback snapshots `GetForegroundWindow()` and the UI handler
+revalidates that snapshot before pairing a captured guest.
 
 | WinEvent | Handler (`GuestLifecycleService.Attach`, `GuestLifecycleService.cs:51-60`) | Effect |
 |---|---|---|
 | `EVENT_OBJECT_DESTROY` | `OnWindowDestroyed` (`GuestLifecycleService.cs:62-69`) | Log `destroyed; removing its tab` → `RemoveDeadMember(show: true)` |
 | `EVENT_OBJECT_HIDE` | `OnWindowHidden` (`GuestLifecycleService.cs:71-108`) | Guest-initiated-hide classification: rejected unless the hider is the **active** tab (tab-switch hides are excluded because the active tab already moved), HWND still alive, not visible again, and container not minimized (minimize-hide guard). Passes → log `hid itself` → `RemoveDeadMember(show: false)` |
 | `EVENT_SYSTEM_MINIMIZESTART` | `OnWindowMinimized` (`GuestLifecycleService.cs:110-120`) | Log → `container.RestoreMinimizedWindow` — 200 ms deferred, re-checks iconic + visible + still active before `SW_RESTORE` (`ContainerWindow.xaml.cs:875-914`) |
-| `EVENT_SYSTEM_MOVESIZESTART/END` | `OnGuestMoveSize` (`GuestLifecycleService.cs:141-158`) | `container.NoteGuestMoveSize` — end only; > 40 px off docked → pop-out release; else snap back (`ContainerWindow.xaml.cs:928-952`) |
+| `EVENT_SYSTEM_MOVESIZESTART/END` | `OnGuestMoveSize` (`GuestLifecycleService.cs:141-158`) | `container.NoteGuestMoveSize` — end only; native movement/resize is re-glued to the assigned pane and never releases a tab (`ContainerWindow.xaml.cs`) |
 | `EVENT_SYSTEM_FOREGROUND` | `OnForegroundChanged` (`GuestLifecycleService.cs:129-135`) | `container.PairZOrderBehindGuest` → `shepherd.PairZOrderBehind` re-pins the container behind the guest (`ContainerWindow.xaml.cs:854-864`, `WindowShepherdService.cs:225-235`) |
+| `EVENT_OBJECT_REORDER` (desktop client) | `OnZOrderChanged` (`GuestLifecycleService.cs`) | Callback-time foreground HWND is revalidated on the UI thread; if it is a captured guest, routes through the same `PairZOrderBehindGuest` policy to repair direct-click adjacency |
 | `EVENT_OBJECT_NAMECHANGE` | `DebounceNameChanged` (`GuestLifecycleService.cs:166-184`) | Per-HWND 250 ms coalescing timer → `HandleNameChanged` (`GuestLifecycleService.cs:186-215`): custom label wins, empty titles ignored, unchanged titles skipped, else update `OriginalTitle` + `RefreshTabTitle` |
 
 **Invariants** (see `docs/internal/perf-2026-07-25.md`):
@@ -212,7 +270,7 @@ tests and agents may rely on:
 | `Shepherd-released 0x…` | `WindowShepherdService.cs:353` / `:384` / `:418` | Release: guest-initiated-hidden / bounds-fallback / normal |
 | `SHEPHERD[hide] guest=0x…` | `WindowShepherdService.cs:259` | Inactive tab hidden |
 | `SHEPHERD[bring-to-front]` | `WindowShepherdService.cs:299` | Foreground re-assert after container activation |
-| `SHEPHERD[dragout]` | `ContainerWindow.xaml.cs:945` | Title-bar drag past threshold → pop-out |
+| `SHEPHERD[re-glue]` | `ContainerWindow.xaml.cs` | Native move/size ended outside the assigned pane |
 | `SHEPHERD[rescue]` | `WindowShepherdService.cs:661` / `:667` | Journal replay at startup |
 | `SHEPHERD[position-fail]` | `WindowShepherdService.cs:61` | First positioning failure per HWND (UIPI/dead HWND) |
 | `Switched group {id} to tab {i}` | `GroupManager.cs:309` | Active-tab change |

@@ -58,6 +58,26 @@ double-capture-refused, persist-active-tab-index, restored-group-survives-member
 selfminimize-timer-vs-teardown, launcher-empty-state-hint
 ```
 
+Split-screen scenarios (pig-only, hermetic, join `all`):
+
+```
+split-single-disabled, split-two-auto, split-select-partner, split-exit,
+split-resize, split-move, split-minrestore, split-reorder,
+split-popout-left, split-popout-right, split-selfclose,
+split-native-move-reassert, split-native-resize-reassert,
+split-contextmenu-render-stability, split-closebutton-left,
+split-closebutton-right, split-click-third, split-directclick,
+split-repeat-cycles, contextmenu-render-stability,
+chrome-click-render-stability, tab-closebutton-popout,
+tab-middleclick-popout, group-create-inline
+```
+
+Pane membership is asserted from the content-host rect halves (LEFT =
+`{host.left, host.top, host.left + host.Width/2, host.bottom}`, RIGHT = the
+remainder) within the existing tolerance — never `GetParent`. The scenarios
+assert the `SPLIT[enter]`/`[exit]`/`[member-gone]` log lines, which are emitted
+by committed application source.
+
 Run `all` to execute the core scenarios in order, fresh TabDock per scenario:
 
 ```powershell
@@ -221,10 +241,31 @@ Any warnings should be understood before merging; the project expects zero warni
 - **Capture:** open several unrelated apps, press `Ctrl+Alt+G`, select them, and group them.
 - **Tab switching:** click each tab; verify the correct guest is shown and the others are hidden.
 - **Drag reorder:** drag a tab left/right; verify order updates and no oscillation occurs.
-- **Pop out:** right-click a tab and choose **Pop out**; verify the guest returns to standalone at its original size/position/style.
-- **Drag out:** drag a tab out of the strip or title-bar area; verify the same.
+- **Pop out:** right-click a tab and choose **Pop out**, click its `×`, or
+  middle-click it; verify the guest returns to standalone at its original
+  size/position/style and the external process remains alive.
+- **Native guest movement:** drag a captured guest by its own title bar or edge;
+  verify it is re-glued to its assigned content rect and remains a tab. Native
+  title movement is not a pop-out gesture.
 - **Close from guest UI:** close a captured app from its own chrome; verify the tab disappears and the container closes if it was the last tab.
 - **Group identity:** rename a group and change its accent color; verify the UI updates.
+- **Context/chrome stability:** repeatedly right-click and dismiss tabs, click
+  tab/chrome controls, and verify GPU-rendered content never becomes black or
+  remains covered by the container marker.
+
+Historical closure note (2026-08-10): an earlier bounded run reproduced a
+normal-mode z-order defect in `directclick-foreground-pairing`. The defect was
+closed by correlating the desktop-level `EVENT_OBJECT_REORDER` callback with a
+callback-time foreground HWND and revalidating that HWND on the UI thread. The
+final closure run passed direct-click pairing 10/10, including foreground,
+adjacency, text input, bounded repair latency, process-liveness, and
+no-exception checks. Production readiness for this milestone is **PASS**.
+
+The final high-risk smoke set also passed fresh supervised runs of
+`contextmenu-render-stability`, `split-contextmenu-render-stability`,
+`chrome-click-render-stability`, `split-directclick`,
+`split-native-move-reassert`, `split-native-resize-reassert`,
+`tab-closebutton-popout`, and `tab-middleclick-popout`.
 
 ### 3. Guest-type-specific checks
 

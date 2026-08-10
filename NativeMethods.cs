@@ -163,6 +163,11 @@ public static partial class NativeMethods
     [DllImport("user32.dll")]
     public static extern void PostQuitMessage(int nExitCode);
 
+    // The desktop is the parent window whose client object reports top-level
+    // z-order changes through EVENT_OBJECT_REORDER.
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetDesktopWindow();
+
     [DllImport("user32.dll")]
     public static extern bool TranslateMessage(ref MSG lpMsg);
 
@@ -386,7 +391,6 @@ public static partial class NativeMethods
     public const uint SWP_NOSENDCHANGING = 0x0400;
 
     public static readonly IntPtr HWND_TOP = new IntPtr(0);
-    public static readonly IntPtr HWND_BOTTOM = new IntPtr(1);
     public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
     public static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
 
@@ -453,6 +457,8 @@ public static partial class NativeMethods
     public const uint MOUSEEVENTF_LEFTUP = 0x0004;
     public const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
     public const uint MOUSEEVENTF_RIGHTUP = 0x0010;
+    public const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
+    public const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
     public const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
     public const uint MOUSEEVENTF_VIRTUALDESK = 0x4000;
     public const uint KEYEVENTF_KEYUP = 0x0002;
@@ -486,6 +492,9 @@ public static partial class NativeMethods
     public const uint EVENT_OBJECT_LOCATIONCHANGE = 0x800B;
     public const uint EVENT_OBJECT_NAMECHANGE = 0x800C;
 
+    public const int OBJID_CLIENT = -4;
+    public const int CHILDID_SELF = 0;
+
     public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
     public const uint WINEVENT_SKIPOWNTHREAD = 0x0001;
     public const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
@@ -515,6 +524,8 @@ public static partial class NativeMethods
 
     public const int SM_CXSCREEN = 0;
     public const int SM_CYSCREEN = 1;
+    public const int SM_XVIRTUALSCREEN = 76;
+    public const int SM_YVIRTUALSCREEN = 77;
     public const int SM_CXVIRTUALSCREEN = 78;
     public const int SM_CYVIRTUALSCREEN = 79;
 

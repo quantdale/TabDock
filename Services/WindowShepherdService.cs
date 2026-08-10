@@ -219,6 +219,64 @@ public sealed class WindowShepherdService
     }
 
     /// <summary>
+    /// Positions a guest to exactly cover <paramref name="screenRect"/> and
+    /// inserts it into the z-order immediately BELOW
+    /// <paramref name="insertAfter"/> (SetWindowPos places the window below its
+    /// hWndInsertAfter). Split-screen building block: two guests are visible at
+    /// once, so the caller establishes their relative order via
+    /// <paramref name="insertAfter"/>; pass <see cref="NativeMethods.HWND_TOP"/>
+    /// to raise a guest to the top. Restores the guest first if iconic or
+    /// zoomed, since either state would fight the exact-fit resize. Clears the
+    /// crash-recovery journal entry: an actively-shown window needs no rescue.
+    /// </summary>
+    public void PositionGuest(CapturedWindow window, NativeMethods.RECT screenRect, IntPtr insertAfter)
+    {
+        if (!NativeMethods.IsWindow(window.Hwnd))
+            return;
+
+        if (NativeMethods.IsIconic(window.Hwnd) || NativeMethods.IsZoomed(window.Hwnd))
+        {
+            if (!NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_RESTORE))
+                LogPositioningFailureOnce(window.Hwnd, "ShowWindow(SW_RESTORE)");
+        }
+
+        if (!NativeMethods.SetWindowPos(
+            window.Hwnd,
+            insertAfter,
+            screenRect.left,
+            screenRect.top,
+            screenRect.Width,
+            screenRect.Height,
+            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW))
+        {
+            LogPositioningFailureOnce(window.Hwnd, "SetWindowPos(guest-split)");
+        }
+
+        JournalClear(window.Hwnd);
+        // Deliberately NOT DescribeWindow here (same hot-path reason as
+        // PositionAndShow): split layout runs on every move/resize tick.
+        _log.Log($"SHEPHERD[position] guest=0x{window.Hwnd.ToInt64():X} rect={screenRect.left},{screenRect.top},{screenRect.Width}x{screenRect.Height}");
+    }
+
+    /// <summary>
+    /// Raises a TabDock container for a short-lived piece of TabDock-owned UI
+    /// (for example a context menu or an owned capture dialog). Guests remain
+    /// visible; this only changes which surface is on top while the UI is open.
+    /// The caller must reconcile the guest stack when that UI closes.
+    /// </summary>
+    public void RaiseContainerForChrome(IntPtr containerHwnd)
+    {
+        if (!NativeMethods.SetWindowPos(
+            containerHwnd,
+            NativeMethods.HWND_TOP,
+            0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE))
+        {
+            LogPositioningFailureOnce(containerHwnd, "SetWindowPos(container-chrome)");
+        }
+    }
+
+    /// <summary>
     /// Pins <paramref name="containerHwnd"/> immediately behind the guest in
     /// z-order so nothing else can slot between them. This is the single
     /// implementation of the z-order pin — <see cref="PositionAndShow"/> uses it
@@ -228,14 +286,35 @@ public sealed class WindowShepherdService
     /// </summary>
     public void PairZOrderBehind(IntPtr containerHwnd, IntPtr guestHwnd)
     {
-        if (!NativeMethods.SetWindowPos(
+        // Both the foreground and desktop-reorder WinEvent paths converge here.
+        // A repair itself can generate another reorder event, so avoid issuing
+        // a second native mutation once the next visible window is already the
+        // requested insert-after target. This keeps the event-driven repair
+        // bounded without weakening the local guest/container invariant.
+        if (NextVisibleWindow(guestHwnd) == containerHwnd)
+            return;
+
+        bool ok = NativeMethods.SetWindowPos(
             containerHwnd,
             guestHwnd,
             0, 0, 0, 0,
-            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE))
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        if (!ok)
         {
             LogPositioningFailureOnce(containerHwnd, "SetWindowPos(container)");
         }
+    }
+
+    private static IntPtr NextVisibleWindow(IntPtr hwnd)
+    {
+        IntPtr next = NativeMethods.GetWindow(hwnd, NativeMethods.GW_HWNDNEXT);
+        while (next != IntPtr.Zero)
+        {
+            if (NativeMethods.IsWindowVisible(next))
+                return next;
+            next = NativeMethods.GetWindow(next, NativeMethods.GW_HWNDNEXT);
+        }
+        return IntPtr.Zero;
     }
 
     /// <summary>
@@ -301,6 +380,29 @@ public sealed class WindowShepherdService
             fg = NativeMethods.SetForegroundWindow(window.Hwnd);
         }
         _log.Log($"SHEPHERD[bring-to-front] guest=0x{window.Hwnd.ToInt64():X} fg={fg}");
+    }
+
+    /// <summary>
+    /// Gives a guest real foreground activation WITHOUT repositioning it or
+    /// re-pinning the container. Used by split mode after the container has
+    /// already laid out both panes and pinned itself below both: only one
+    /// member should be foreground, and re-running PositionAndShow here (as
+    /// BringToFront does) would disturb the pair's established z-order. Mirrors
+    /// BringToFront's SetForegroundWindow + benign-key-nudge retry.
+    /// </summary>
+    public void SetForeground(CapturedWindow window)
+    {
+        if (!NativeMethods.IsWindow(window.Hwnd))
+            return;
+        if (NativeMethods.GetForegroundWindow() == window.Hwnd)
+            return;
+        bool fg = NativeMethods.SetForegroundWindow(window.Hwnd);
+        if (!fg && NativeMethods.GetForegroundWindow() != window.Hwnd)
+        {
+            SendBenignKeyNudge();
+            fg = NativeMethods.SetForegroundWindow(window.Hwnd);
+        }
+        _log.Log($"SHEPHERD[split-foreground] guest=0x{window.Hwnd.ToInt64():X} fg={fg}");
     }
 
     private static void SendBenignKeyNudge()

@@ -1,0 +1,7 @@
+[mcp_servers.repowise]
+command = "repowise"
+args = ["mcp", "--tools", "lean"]
+startup_timeout_sec = 20
+
+[features]
+hooks = true

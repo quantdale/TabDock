@@ -56,6 +56,7 @@ public sealed class GuestLifecycleService
         monitor.WindowMoveSizeStarted += (_, args) => OnGuestMoveSize(args.Hwnd, started: true);
         monitor.WindowMoveSizeEnded += (_, args) => OnGuestMoveSize(args.Hwnd, started: false);
         monitor.WindowForegroundChanged += OnForegroundChanged;
+        monitor.WindowZOrderChanged += OnZOrderChanged;
         monitor.WindowNameChanged += (_, args) => DebounceNameChanged(args.Hwnd);
     }
 
@@ -81,9 +82,27 @@ public sealed class GuestLifecycleService
         // never reach this handler at all: the member leaves
         // Group.Members before Release() runs, so the monitor's
         // captured-window filter drops the event.
-        if (group.ActiveIndex < 0 || group.ActiveIndex >= group.Members.Count
-            || group.Members[group.ActiveIndex] != match)
-            return;
+        //
+        // In SPLIT mode both members are visible, so a hide of EITHER split
+        // member is guest-initiated (a self-hide), not a tab-switch hide —
+        // neither is ever hidden by TabDock's own tab logic. TabDock's own
+        // split-exit/replace hides are evaluated after the split state has
+        // already cleared (the member leaves the pair before the queued event
+        // is dispatched), so IsInSplit correctly returns false for them and
+        // they stay rejected by the active-tab check below.
+        bool inSplit = false;
+        ContainerWindow? container = null;
+        if (_containers.TryGetValue(group.Id, out var c))
+        {
+            container = c;
+            inSplit = container.IsInSplit(match);
+        }
+        if (!inSplit)
+        {
+            if (group.ActiveIndex < 0 || group.ActiveIndex >= group.Members.Count
+                || group.Members[group.ActiveIndex] != match)
+                return;
+        }
         if (!NativeMethods.IsWindow(hwnd))
             return; // EVENT_OBJECT_DESTROY owns this case.
         if (NativeMethods.IsWindowVisible(hwnd))
@@ -99,8 +118,9 @@ public sealed class GuestLifecycleService
         // is minimized (the guest is re-shown on restore). Without this
         // guard, minimizing a group would release its active tab as a
         // hidden, orphaned window (and close a single-tab group outright).
-        if (_containers.TryGetValue(group.Id, out var container)
-            && container.WindowState == WindowState.Minimized)
+        // This also covers split mode: minimizing the container hides both
+        // split members, and neither may be torn down as a self-hide.
+        if (container?.WindowState == WindowState.Minimized)
             return;
 
         _log.Log($"WinEvent: captured window 0x{hwnd.ToInt64():X} hid itself (tray-style close); releasing its tab hidden.");
@@ -134,20 +154,34 @@ public sealed class GuestLifecycleService
             container.PairZOrderBehindGuest(args.Hwnd);
     }
 
+    // A top-level guest activation also reorders the desktop's window list.
+    // That reorder event is the earliest reliable proof that the guest was
+    // raised above the unrelated window; EVENT_SYSTEM_FOREGROUND can be
+    // coalesced or delivered later for a direct click. The monitor snapshots
+    // the foreground at native callback time; validate that snapshot when the
+    // UI dispatch runs before feeding the same authoritative pairing policy.
+    // No new z-order subsystem is created.
+    private void OnZOrderChanged(object? sender, WindowEventArgs args)
+    {
+        IntPtr foregroundHwnd = args.RelatedHwnd;
+        if (foregroundHwnd == IntPtr.Zero || NativeMethods.GetForegroundWindow() != foregroundHwnd)
+            return;
+        if (!_groups.TryGetCapturedMember(foregroundHwnd, out Group? group, out _))
+            return;
+        if (_containers.TryGetValue(group.Id, out var container))
+            container.PairZOrderBehindGuest(foregroundHwnd);
+    }
+
     // A guest entered/left its interactive move/size modal loop (e.g. the
     // user dragged it by its own real title bar — a shepherded guest keeps
-    // one). The container decides on MOVESIZEEND whether that was jitter
-    // (snap back) or an intentional drag-out (release the tab).
+    // one). The container re-glues it on MOVESIZEEND; explicit tab Pop out is
+    // the only release gesture.
     private void OnGuestMoveSize(IntPtr hwnd, bool started)
     {
-        // A drag-out (MOVESIZEEND past the pop-out threshold) of the LAST tab
-        // releases it, which empties the group, closes its container, and
-        // removes the group from _groups.Groups — all synchronously, inside the
-        // NoteGuestMoveSize call below. The old form of this method iterated
-        // _groups.Groups and needed a ToList() snapshot to survive that
-        // ("Collection was modified" otherwise, escalating to the dispatcher
-        // crash handler); resolving the member by index instead means there is
-        // no live enumeration in progress to invalidate.
+        // Resolve the member directly through GroupManager's HWND index. The
+        // move/size callback only re-glues an existing member; it never mutates
+        // the group collection, so there is no release-induced enumeration or
+        // re-entrancy here.
         if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match))
             return;
 

@@ -160,6 +160,16 @@ internal static class Input
         Thread.Sleep(60);
     }
 
+    public static void MiddleClickAt(int x, int y)
+    {
+        MoveTo(x, y);
+        Thread.Sleep(40);
+        SendMouse(NativeMethods.MOUSEEVENTF_MIDDLEDOWN);
+        Thread.Sleep(40);
+        SendMouse(NativeMethods.MOUSEEVENTF_MIDDLEUP);
+        Thread.Sleep(60);
+    }
+
     /// <summary>Press at (x1,y1), interpolate at least 8 move steps (15 ms apart), release at (x2,y2).</summary>
     public static void DragFromTo(int x1, int y1, int x2, int y2, int steps = 10)
     {

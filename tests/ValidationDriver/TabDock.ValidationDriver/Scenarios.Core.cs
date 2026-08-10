@@ -1272,9 +1272,9 @@ internal static partial class Scenarios
             GuestInfo externalNotepad = SpawnNotepad(ctx);
             externalHwnd = externalNotepad.Hwnd;
         }
-        Input.ForceForegroundRoot(externalHwnd);
-        Thread.Sleep(500);
-        ctx.Check(NativeMethods.GetForegroundWindow() != pig.Hwnd, "foreground stolen away from the pig before the direct click");
+        ctx.Check(Input.ForceForegroundRoot(externalHwnd), "external window accepted foreground steal");
+        ctx.Check(Util.WaitUntil(() => NativeMethods.GetForegroundWindow() == externalHwnd, 1500),
+            "the intended external HWND is foreground before the direct click");
 
         // The real assertion under test: click the pig's own docked content
         // area DIRECTLY — deliberately NOT via Input.ForceForeground/
@@ -1285,10 +1285,39 @@ internal static partial class Scenarios
         NativeMethods.RECT dockedRect = Discover.GetClientScreenRect(host);
         int cx = dockedRect.left + dockedRect.Width / 2;
         int cy = dockedRect.top + dockedRect.Height / 2;
+        // A foreground steal must not also obscure the guest's click point;
+        // otherwise the raw click correctly activates the unrelated window and
+        // the scenario never reaches the product transition under test. Move
+        // the external window without changing its z-order or activation.
+        NativeMethods.GetWindowRect(externalHwnd, out NativeMethods.RECT externalRect);
+        int virtualLeft = NativeMethods.GetSystemMetrics(NativeMethods.SM_XVIRTUALSCREEN);
+        int virtualTop = NativeMethods.GetSystemMetrics(NativeMethods.SM_YVIRTUALSCREEN);
+        int virtualRight = virtualLeft + NativeMethods.GetSystemMetrics(NativeMethods.SM_CXVIRTUALSCREEN);
+        int virtualBottom = virtualTop + NativeMethods.GetSystemMetrics(NativeMethods.SM_CYVIRTUALSCREEN);
+        int externalX = dockedRect.right + 20;
+        int externalY = dockedRect.top;
+        if (externalX + externalRect.Width > virtualRight)
+            externalX = dockedRect.left - externalRect.Width - 20;
+        if (externalX < virtualLeft)
+            externalX = virtualLeft;
+        if (externalY + externalRect.Height > virtualBottom)
+            externalY = Math.Max(virtualTop, dockedRect.top - externalRect.Height - 20);
+        NativeMethods.SetWindowPos(externalHwnd, IntPtr.Zero, externalX, externalY,
+            0, 0, NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        // Preserve the real external-foreground state while making the
+        // observed guest -> external -> container gap deterministic. This is
+        // the exact bad state captured in the original failure evidence.
+        NativeMethods.SetWindowPos(externalHwnd, pig.Hwnd, 0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        ctx.Check(NextVisibleWindow(pig.Hwnd) == externalHwnd,
+            "external foreground steal leaves the unrelated HWND between guest and container");
+        if (FindObstructingWindow(pig.Hwnd, cx, cy) != IntPtr.Zero)
+            throw new InvalidOperationException("The direct-click point is obstructed; refusing to test the wrong HWND.");
         GuardedProc.Log($"  DirectClickForegroundPairing: clicking pig content directly at ({cx},{cy}) — no ForceForeground helper used.");
+        var clickClock = Stopwatch.StartNew();
         Input.ClickAt(cx, cy);
 
-        ctx.Check(Util.WaitUntil(() => NativeMethods.GetForegroundWindow() == pig.Hwnd, 3000),
+        ctx.Check(Util.WaitUntil(() => NativeMethods.GetForegroundWindow() == pig.Hwnd, 1500),
             "pig became the real foreground window from the direct click alone");
         // Windows inserts invisible per-thread IME helper windows (MSCTFIME UI,
         // Default IME) into the z-order next to whatever window a thread just
@@ -1296,8 +1325,10 @@ internal static partial class Scenarios
         // sit between the pig and the container in a raw GW_HWNDNEXT walk.
         // Skip invisible windows so this checks the next REAL window, not the
         // literal next HWND.
-        ctx.Check(Util.WaitUntil(() => NextVisibleWindow(pig.Hwnd) == container, 3000),
+        ctx.Check(Util.WaitUntil(() => NextVisibleWindow(pig.Hwnd) == container, 1500),
             "container re-paired immediately behind the guest in z-order (PairZOrderBehindGuest)");
+        ctx.Check(clickClock.ElapsedMilliseconds <= 1500,
+            $"guest/container repair completed within the bounded direct-click window ({clickClock.ElapsedMilliseconds} ms)");
 
         const string typed = "DCFPTEST";
         Input.TypeText(typed);

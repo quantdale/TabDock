@@ -39,6 +39,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -116,6 +117,16 @@
                 </TextBox.Style>
             </TextBox>
 
+            <Button Grid.Column="2" Content="Group ▾" Width="82" Height="24"
+                    HorizontalAlignment="Left" Margin="8,0,0,0"
+                    Background="Transparent" Foreground="White" BorderThickness="0"
+                    WindowChrome.IsHitTestVisibleInChrome="True"
+                    Click="GroupButton_Click" ToolTip="Switch group or create a group">
+                <Button.ContextMenu>
+                    <ContextMenu x:Name="GroupContextMenu" Closed="GroupContextMenu_Closed" />
+                </Button.ContextMenu>
+            </Button>
+
             <!-- Add window to group -->
             <Button Grid.Column="3" Style="{StaticResource CaptionButtonStyle}"
                     Content="&#xE710;" Click="AddWindow_Click" ToolTip="Add window to group" />
@@ -170,6 +181,11 @@
                             <StackPanel Orientation="Horizontal">
                                 <Image Source="{Binding Icon}" Width="16" Height="16" Margin="0,0,6,0" />
                                 <TextBlock Text="{Binding Title}" Foreground="White" VerticalAlignment="Center" MaxWidth="160" TextTrimming="CharacterEllipsis" />
+                                <Button Content="×" Width="20" Height="20" Margin="6,-1,0,0"
+                                        Padding="0" Background="Transparent" Foreground="#CCFFFFFF"
+                                        BorderThickness="0" FontSize="14" ToolTip="Pop out"
+                                        PreviewMouseLeftButtonDown="TabClose_PreviewMouseLeftButtonDown"
+                                        WindowChrome.IsHitTestVisibleInChrome="True" />
                             </StackPanel>
                             <Border.ContextMenu>
                                 <ContextMenu>
@@ -183,13 +199,52 @@
             </ListBox>
         </Border>
 
+        <!-- Inline capture surface. It is part of the container visual tree,
+             rather than another Popup/Window, so routine capture does not add a
+             competing top-level TabDock HWND. -->
+        <Border Grid.Row="2" x:Name="CapturePanel" Visibility="Collapsed"
+                Background="#F2181818" BorderBrush="#55FFFFFF" BorderThickness="0,1,0,1"
+                Padding="12">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <DockPanel Grid.Row="0" Margin="0,0,0,8">
+                    <TextBlock Text="Add application" Foreground="White" FontWeight="SemiBold" />
+                    <Button DockPanel.Dock="Right" Content="Refresh" Width="72" Height="24"
+                            Command="{Binding RefreshCommand}" />
+                </DockPanel>
+                <ListBox Grid.Row="1" ItemsSource="{Binding Windows}" MaxHeight="190"
+                         Background="#22FFFFFF" BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" Foreground="White" Padding="4">
+                                <StackPanel Orientation="Horizontal">
+                                    <Image Source="{Binding Icon}" Width="16" Height="16" Margin="0,0,8,0" />
+                                    <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" MaxWidth="420" />
+                                </StackPanel>
+                            </CheckBox>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                    <Button Content="Add selected" Width="96" Height="28" Margin="0,0,8,0"
+                            Command="{Binding GroupSelectedCommand}" />
+                    <Button Content="Cancel" Width="72" Height="28" Command="{Binding CancelCommand}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
         <!-- Content area marker: a plain native HWND sized to exactly this
              region so both production code and the test harness can find
              "where is the docked position" the same way. Nothing is ever
              reparented into it — the active guest is a sibling top-level
              window positioned/shown/hidden to match (see
              ContainerWindow.xaml.cs's Shepherd active-tab sync). -->
-        <Border Grid.Row="2" Background="#FF1E1E1E" x:Name="ContentBorder">
+        <Border Grid.Row="3" Background="#FF1E1E1E" x:Name="ContentBorder">
             <infra:NativeHwndHost x:Name="ContentHost" />
         </Border>
     </Grid>

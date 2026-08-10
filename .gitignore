@@ -183,3 +183,11 @@ node_modules/
 # repo must ignore them for everyone.
 .claude/settings.local.json
 **/settings.local.json
+
+# ------------------------------------------------------------------------------
+# Repowise local index
+# ------------------------------------------------------------------------------
+# The index contains machine-local SQLite/vector stores and derived code
+# metadata. Portable MCP registration is kept in the repository root; generated
+# indexes and caches remain local.
+.repowise/

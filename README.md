@@ -43,8 +43,12 @@ WPF relies on COM activation, reflection emit, and other runtime features that a
 ## How to use
 
 1. Launch `TabDock.exe`. The main launcher window appears.
-2. Click **New group** or press **Ctrl+Alt+G** to open the capture picker.
+2. Click **New group**. From an open group, use **Add App** to open the inline
+   capture surface; press **Ctrl+Alt+G** when no group is selected to use the
+   standalone capture picker.
 3. In the picker, select the windows you want to group and choose whether to add them to a new group or an existing one.
+   Once a group is open, use its Group ▾ menu to switch between open groups or
+   create another group without returning to the launcher.
 4. The container window shows a tab for each captured window. Click tabs to switch, drag tabs to reorder, or drag a tab out of the strip to release it back to a standalone window.
 5. Double-click the group name in the title bar to rename it.
 6. Click the colored chip in the title bar to change the group's accent color.
@@ -60,7 +64,8 @@ WPF relies on COM activation, reflection emit, and other runtime features that a
 - `Services/LoggingService.cs` — rotating log in `%APPDATA%\TabDock\logs\`.
 - `Infrastructure/NativeHwndHost.cs` — a plain `HwndHost` marker sized to match the WPF-rendered content area; captured windows are positioned over it, never reparented into it.
 - `Views/ContainerWindow.xaml` — custom chrome, tab strip, content host.
-- `Views/CapturePickerWindow.xaml` — window picker for creating groups.
+- `Views/CapturePickerWindow.xaml` — fallback window picker used from the global
+  hotkey/launcher when no selected container can host the inline capture surface.
 
 ## Manual test checklist
 
@@ -76,6 +81,8 @@ Use this checklist to verify a build before considering it ready.
 ### Tab switching and reordering
 
 5. Click each tab; verify the correct window is shown and the others are hidden.
+   Click a tab's `×` or middle-click it to pop it out without closing the external
+   application.
 6. Drag a tab left/right in the strip; verify the order updates.
 
 ### Group identity

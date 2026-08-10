@@ -237,6 +237,27 @@ internal static class Uia
     }
 
     /// <summary>
+    /// Reports whether a menu item named <paramref name="name"/> (found by the same
+    /// desktop-popup search as <see cref="FindMenuItemOnDesktop"/>) is enabled. Returns
+    /// <c>null</c> when the item is not found within the timeout — callers must treat that
+    /// as "not found", not as "disabled". Read-only: never toggles or invokes the item.
+    /// </summary>
+    public static bool? IsMenuItemEnabled(uint pid, string name)
+    {
+        AutomationElement? mi = FindMenuItemOnDesktop(pid, name, 5000);
+        if (mi == null)
+            return null;
+        try
+        {
+            return mi.Current.IsEnabled;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Finds the first editable text control (Edit or Document) under <paramref name="root"/>.
     /// Returns the match and the total number of editable descendants found.
     /// </summary>
