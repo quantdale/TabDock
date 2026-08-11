@@ -662,3 +662,65 @@ The final autonomous gates were rerun after this safeguard: all four builds
 were clean, `scripts/validate.ps1` passed, the geometry self-test reported
 14,718,730 checks with zero failures, OpenSpec validation passed 12/12, and
 `ValidationDriver --list` passed without starting real-input scenarios.
+
+## Computer Use QA — post-closure drag finding (2026-08-11)
+
+### Visual defect
+
+- **Reproduction:** With Chrome, File Explorer, and PredatorSense captured in
+  one normal group, focus PredatorSense and drag the TabDock caption through a
+  multi-segment move. Release and inspect immediately, without switching tabs.
+  Repeat after switching tabs once to repair the view; the second caption drag
+  reproduces the same result.
+- **Expected:** The active guest remains fully rendered, aligned to the final
+  content rect, and above the container immediately after release.
+- **Observed:** Two supervised Computer Use repetitions showed a large blank or
+  covered region over the guest immediately after release. A fresh screenshot
+  shortly afterward settled, and switching tabs repaired it immediately.
+- **Frequency:** 2/2 bounded repetitions in this session; timing-sensitive.
+- **Apps involved:** TabDock + PredatorSense active guest; Chrome and File
+  Explorer remained captured inactive guests.
+- **Container state:** normal mode, one active guest, three ordinary tabs, no
+  popup open, no split active.
+- **Visual evidence:** Computer Use screenshots showed the TabDock chrome and
+  the lower PredatorSense content visible while the upper guest region was
+  covered/blank immediately after the drag; subsequent screenshots showed the
+  full live PredatorSense surface.
+- **Relevant logs:** final drag positions were logged as
+  `SHEPHERD[position] guest=0x2051C rect=283,308,1125x670` without a distinct
+  post-exit reconciliation marker. The source path is
+  `ContainerWindow.WndProc(WM_EXITSIZEMOVE)` → `RequestRelayout()`.
+- **Root-cause hypothesis:** the exit request can be coalesced away when a
+  render-priority relayout is already pending from the last
+  `WM_WINDOWPOSCHANGED`; that earlier pass can run before Windows completes
+  final z-order normalization, leaving the container above the guest until a
+  later relayout (such as a tab switch).
+- **Next action:** make an exit-triggered final reconciliation survive an
+  already-pending coalesced pass, then rebuild and repeat this exact visual
+  sequence before certifying the result.
+
+### Final implementation and retest
+
+- `WM_EXITSIZEMOVE` now preserves one explicit follow-up Render-priority
+  reconciliation when a coalesced pass is already pending. This keeps the
+  final geometry/z-order repair from being lost during caption drags.
+- The close-group modal received a separate z-order fix. While the prompt is
+  open, chrome re-pairing/layout is suppressed; the container is temporarily
+  raised, and a one-shot 50 ms dispatcher tick raises the native `Close group`
+  dialog itself into the topmost band. Teardown removes that temporary band
+  and queues the normal guest reconciliation. No guest is reparented or has
+  its styles changed.
+- Final supervised Computer Use retest with Chrome, File Explorer, and
+  PredatorSense captured: the close prompt was visibly above the guest with
+  Yes/No/Cancel exposed; Escape dismissed it and restored the guest. A final
+  bounded caption drag after the modal fix settled with the full PredatorSense
+  surface visible and no covered/blank region.
+- Automated closure after the retest: four project builds, `scripts/validate.ps1`,
+  geometry self-test, OpenSpec validation (12/12), `git diff --check`, and the
+  native-invariant audit all passed. No full supervised ValidationDriver
+  real-input batch was started in this turn.
+- Remaining qualification: this evidence is a single supervised desktop/DPI
+  environment and does not establish a cross-machine monitor matrix or a
+  universal absence of timing-sensitive compositor issues. Treat the result as
+  a validated fix in the exercised scope, not a claim that the product is
+  bug-free.

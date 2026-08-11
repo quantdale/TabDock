@@ -58,6 +58,9 @@ public static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
+
         // Atomic multi-window positioning (used to move both split panes plus
         // the container in a single compositor transaction, eliminating the
         // visible pane separation that separate SetWindowPos calls produce).

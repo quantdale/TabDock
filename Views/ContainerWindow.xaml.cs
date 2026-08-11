@@ -82,6 +82,11 @@ public partial class ContainerWindow : Window
     // and producing the redundant reposition/redraw artifacts that made movement
     // look glitchy.
     private bool _relayoutPending;
+    // WM_EXITSIZEMOVE must not be lost when a render-priority pass from the
+    // final WM_WINDOWPOSCHANGED is already queued. That pass can run before
+    // Windows finishes its final z-order normalization, so retain one explicit
+    // post-pass request for the move/size completion path.
+    private bool _relayoutAfterPending;
 
     // True while Windows is running a native modal move/resize loop on this
     // container (WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE). The 120ms WM_ACTIVATE
@@ -117,6 +122,7 @@ public partial class ContainerWindow : Window
     // EmptiedByPopOut and re-enter Close() on a window already inside Closing.
     private bool _closePromptOpen;
     private bool _closePending;
+    private DispatcherTimer? _closePromptRaiseTimer;
 
     /// <summary>
     /// Set by App before any exit/crash path calls Application.Shutdown so every
@@ -355,7 +361,7 @@ public partial class ContainerWindow : Window
             // reconciliation through the existing mechanism (Render priority
             // runs after layout), which re-validates both geometry and the
             // local z-order pairing.
-            RequestRelayout();
+            RequestRelayout(ensureFinalPass: true);
         }
         else if ((uint)msg == NativeMethods.WM_WINDOWPOSCHANGED)
         {
@@ -477,15 +483,24 @@ public partial class ContainerWindow : Window
     /// re-glued to the final rect exactly once instead of several times per frame
     /// (the redundant reposition/redraw was the main drag-flicker source).
     /// </summary>
-    private void RequestRelayout()
+    private void RequestRelayout(bool ensureFinalPass = false)
     {
-        if (_relayoutPending || _containerHwnd == IntPtr.Zero)
+        if (_containerHwnd == IntPtr.Zero)
+            return;
+        if (ensureFinalPass)
+            _relayoutAfterPending = true;
+        if (_relayoutPending)
             return;
         _relayoutPending = true;
         Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
         {
             _relayoutPending = false;
             RelayoutGuests();
+            if (_relayoutAfterPending)
+            {
+                _relayoutAfterPending = false;
+                RequestRelayout();
+            }
         }));
     }
 
@@ -552,6 +567,10 @@ public partial class ContainerWindow : Window
 
         MessageBoxResult result = MessageBoxResult.Cancel;
         _closePromptOpen = true;
+        IntPtr containerHwnd = new WindowInteropHelper(this).Handle;
+        if (containerHwnd != IntPtr.Zero)
+            _shepherd.RaiseContainerForChrome(containerHwnd, useTopmostBand: true);
+        ArmClosePromptRaise();
         try
         {
             result = MessageBox.Show(
@@ -564,6 +583,24 @@ public partial class ContainerWindow : Window
         finally
         {
             _closePromptOpen = false;
+            _closePromptRaiseTimer?.Stop();
+            _closePromptRaiseTimer = null;
+            // MessageBox is an owned popup, but the guests are independent
+            // top-level windows and can already sit above the owner. Reconcile
+            // after the modal closes so Cancel leaves the guest stack healthy;
+            // Yes/No clear the tabs before this queued pass runs.
+            Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+            {
+                if (_containerHwnd == IntPtr.Zero)
+                    return;
+                _shepherd.RestoreContainerFromChrome(_containerHwnd);
+                if (_viewModel.Tabs.Count == 0)
+                    return;
+                if (IsSplitActive)
+                    LayoutSplitPanes();
+                else
+                    LayoutShepherdActiveWindow(forceZOrder: true);
+            }));
             if (_closePending)
             {
                 _closePending = false;
@@ -615,6 +652,32 @@ public partial class ContainerWindow : Window
                 e.Cancel = true;
                 break;
         }
+    }
+
+    /// <summary>
+    /// The native MessageBox is created inside <see cref="MessageBox.Show"/>'s
+    /// nested modal loop, after the Closing handler has raised the owner. A
+    /// single dispatcher tick (not a polling loop) finds that HWND once it
+    /// exists and places the dialog itself in the topmost band, above any
+    /// independent top-level guest window. The HWND is destroyed with the
+    /// dialog; no guest style or parent is changed.
+    /// </summary>
+    private void ArmClosePromptRaise()
+    {
+        _closePromptRaiseTimer?.Stop();
+        _closePromptRaiseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+        _closePromptRaiseTimer.Tick += (_, _) =>
+        {
+            _closePromptRaiseTimer!.Stop();
+            _closePromptRaiseTimer = null;
+            if (!_closePromptOpen)
+                return;
+
+            IntPtr dialogHwnd = NativeMethods.FindWindow(null, "Close group");
+            if (dialogHwnd != IntPtr.Zero)
+                _shepherd.RaiseContainerForChrome(dialogHwnd, useTopmostBand: true);
+        };
+        _closePromptRaiseTimer.Start();
     }
 
     private void ContainerWindow_Closed(object? sender, EventArgs e)
@@ -1675,6 +1738,13 @@ public partial class ContainerWindow : Window
     /// </summary>
     public void PairZOrderBehindGuest(IntPtr foregroundHwnd)
     {
+        // Foreground/reorder WinEvents can arrive while an owned chrome dialog
+        // (notably the close-group confirmation) is open. Re-pairing here would
+        // raise a docked guest above that dialog and cover its buttons; the
+        // popup-close path performs the authoritative reconciliation instead.
+        if (IsContainerChromeInteractionActive())
+            return;
+
         if (IsSplitActive)
         {
             // A split member became the system foreground (e.g. the user clicked
@@ -1780,6 +1850,11 @@ public partial class ContainerWindow : Window
         if (!IsSplitActive)
             return;
         if (WindowState == WindowState.Minimized)
+            return;
+        // While container chrome is raised, including the owned close-group
+        // confirmation dialog, leave the intentional popup z-order untouched.
+        // EndChromePopup/close-prompt teardown schedules the normal glue pass.
+        if (IsContainerChromeInteractionActive())
             return;
 
         IntPtr containerHwnd = new WindowInteropHelper(this).Handle;

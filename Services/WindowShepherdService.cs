@@ -359,15 +359,33 @@ public sealed class WindowShepherdService
     /// visible; this only changes which surface is on top while the UI is open.
     /// The caller must reconcile the guest stack when that UI closes.
     /// </summary>
-    public void RaiseContainerForChrome(IntPtr containerHwnd)
+    public void RaiseContainerForChrome(IntPtr containerHwnd, bool useTopmostBand = false)
     {
+        IntPtr insertAfter = useTopmostBand ? NativeMethods.HWND_TOPMOST : NativeMethods.HWND_TOP;
         if (!NativeMethods.SetWindowPos(
             containerHwnd,
-            NativeMethods.HWND_TOP,
+            insertAfter,
             0, 0, 0, 0,
             NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE))
         {
             LogPositioningFailureOnce(containerHwnd, "SetWindowPos(container-chrome)");
+        }
+    }
+
+    /// <summary>
+    /// Returns a container raised into the topmost band for an owned modal to
+    /// the normal z-order band. The caller then performs the ordinary guest
+    /// positioning pass, which puts the guest above the container again.
+    /// </summary>
+    public void RestoreContainerFromChrome(IntPtr containerHwnd)
+    {
+        if (!NativeMethods.SetWindowPos(
+            containerHwnd,
+            NativeMethods.HWND_NOTOPMOST,
+            0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE))
+        {
+            LogPositioningFailureOnce(containerHwnd, "SetWindowPos(container-not-topmost)");
         }
     }
 
