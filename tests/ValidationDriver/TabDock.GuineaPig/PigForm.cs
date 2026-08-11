@@ -2,9 +2,101 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace TabDock.GuineaPig;
+
+/// <summary>Native MINMAXINFO lParam layout for WM_GETMINMAXINFO (self-contained — the pig has no reference to TabDock.NativeMethods).</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct MinMaxInfo
+{
+    public PointNative ptReserved;
+    public PointNative ptMaxSize;
+    public PointNative ptMaxPosition;
+    public PointNative ptMinTrackSize;
+    public PointNative ptMaxTrackSize;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct PointNative
+{
+    public int x;
+    public int y;
+}
+
+/// <summary>Deliberate DPI-awareness modes the pig can launch under, so the
+/// harness can exercise TabDock against guests in every awareness class
+/// (see the DPI-acceptance goal). "Default" keeps the pig's natural
+/// (WinForms/no-manifest) awareness — typically DPI_UNAWARE.</summary>
+public enum DpiMenuMode
+{
+    Default,
+    Unaware,
+    SystemAware,
+    PerMonitorAware,
+    PerMonitorAwareV2,
+}
+
+/// <summary>Self-contained DPI P/Invokes + awareness-context handles. These match
+/// the well-known values: unaw/node DPI context = -1, system = -2, per-monitor =
+/// -3, per-monitor-v2 = -4. No references to TabDock's own P/Invoke surface.</summary>
+internal static class PigDpi
+{
+    [DllImport("user32.dll")]
+    internal static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetWindowDpiAwarenessContext(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    internal static extern int GetAwarenessFromDpiAwarenessContext(IntPtr value);
+
+    [DllImport("user32.dll")]
+    internal static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    internal static readonly IntPtr ContextUnaware = new IntPtr(-1);
+    internal static readonly IntPtr ContextSystemAware = new IntPtr(-2);
+    internal static readonly IntPtr ContextPerMonitorAware = new IntPtr(-3);
+    internal static readonly IntPtr ContextPerMonitorAwareV2 = new IntPtr(-4);
+
+    /// <summary>
+    /// Applies the requested thread DPI awareness context for form creation and
+    /// returns the previous context (to restore), or IntPtr.Zero when no change
+    /// was requested. The window inherits the thread context that is current
+    /// when it is created (mixed-mode DPI scaling), which is exactly how the
+    /// harness forces a guest into a given awareness class.
+    /// </summary>
+    internal static IntPtr ApplyThreadDpi(DpiMenuMode mode)
+    {
+        IntPtr context = mode switch
+        {
+            DpiMenuMode.Unaware => ContextUnaware,
+            DpiMenuMode.SystemAware => ContextSystemAware,
+            DpiMenuMode.PerMonitorAware => ContextPerMonitorAware,
+            DpiMenuMode.PerMonitorAwareV2 => ContextPerMonitorAwareV2,
+            _ => IntPtr.Zero,
+        };
+        if (context == IntPtr.Zero)
+            return IntPtr.Zero;
+        return SetThreadDpiAwarenessContext(context);
+    }
+
+    internal static IntPtr RestoreThreadDpi(IntPtr previous)
+    {
+        if (previous == IntPtr.Zero)
+            return previous;
+        return SetThreadDpiAwarenessContext(previous);
+    }
+
+    internal static string DescribeDpi(IntPtr hwnd)
+    {
+        uint dpi = GetDpiForWindow(hwnd);
+        IntPtr ctx = GetWindowDpiAwarenessContext(hwnd);
+        string awareness = ctx == IntPtr.Zero ? "unknown" : GetAwarenessFromDpiAwarenessContext(ctx).ToString();
+        return $"dpi={dpi} awareness={awareness}";
+    }
+}
 
 /// <summary>Parsed command-line options for the guinea-pig window.</summary>
 public sealed class PigOptions
@@ -19,6 +111,14 @@ public sealed class PigOptions
     public bool CloseButton;
     public bool ClickCounterButton;
     public bool TextBox;
+    // Native minimum track size (physical pixels) enforced via WM_GETMINMAXINFO,
+    // so the harness can reproduce the browser/explorer "refuses to shrink"
+    // containment defect deterministically.
+    public int MinWidth;
+    public int MinHeight;
+    // Deliberate DPI-awareness mode this pig should launch under (see
+    // DpiMenuMode). Default = the pig's natural WinForms/no-manifest awareness.
+    public DpiMenuMode DpiMode = DpiMenuMode.Default;
 }
 
 /// <summary>
@@ -40,6 +140,7 @@ public sealed class PigForm : Form
     private const int MsgSetFocus = 0x0007;
     private const int MsgKillFocus = 0x0008;
     private const int MsgMouseActivate = 0x0021;
+    private const int MsgGetMinMaxInfo = 0x0024;
 
     private readonly PigOptions _opts;
     private readonly string? _logPath;
@@ -161,13 +262,14 @@ public sealed class PigForm : Form
             ActiveControl = _textBox;
         }
 
-        Shown += (s, e) => Log("LIFECYCLE Shown");
+        Shown += (s, e) => Log($"LIFECYCLE Shown {PigDpi.DescribeDpi(Handle)}");
         FormClosing += OnPigFormClosing;
         FormClosed += (s, e) => Log("LIFECYCLE FormClosed");
 
         Log($"LIFECYCLE Created title='{opts.Title}' pid={Environment.ProcessId} color={_baseColor} " +
             $"pulse={opts.Pulse} hideOnClose={opts.HideOnClose} minThenHide={opts.MinimizeThenHideOnClose} " +
-            $"selfClose={opts.SelfCloseAfterSeconds} selfMin={opts.SelfMinimizeAfterSeconds} closeButton={opts.CloseButton} textBox={opts.TextBox}");
+            $"selfClose={opts.SelfCloseAfterSeconds} selfMin={opts.SelfMinimizeAfterSeconds} closeButton={opts.CloseButton} textBox={opts.TextBox} " +
+            $"dpiMode={opts.DpiMode} minTrack={_opts.MinWidth}x{_opts.MinHeight}");
     }
 
     private void OnPigFormClosing(object? sender, FormClosingEventArgs e)
@@ -213,6 +315,18 @@ public sealed class PigForm : Form
             };
             if (name != null)
                 Log($"{name} wParam=0x{(long)m.WParam:X} lParam=0x{(long)m.LParam:X}");
+
+            // Enforce a native minimum track size, reproducing the browser/Explorer
+            // "refuses to shrink below its minimum" behavior that the containment
+            // fix targets. WM_GETMINMAXINFO's lParam points to a MINMAXINFO whose
+            // ptMinTrackSize we raise to the configured minimum.
+            if (m.Msg == MsgGetMinMaxInfo && (_opts.MinWidth > 0 || _opts.MinHeight > 0))
+            {
+                var mmi = (MinMaxInfo)System.Runtime.InteropServices.Marshal.PtrToStructure(m.LParam, typeof(MinMaxInfo))!;
+                if (_opts.MinWidth > mmi.ptMinTrackSize.x) mmi.ptMinTrackSize.x = _opts.MinWidth;
+                if (_opts.MinHeight > mmi.ptMinTrackSize.y) mmi.ptMinTrackSize.y = _opts.MinHeight;
+                System.Runtime.InteropServices.Marshal.StructureToPtr(mmi, m.LParam, true);
+            }
         }
         catch (Exception ex)
         {

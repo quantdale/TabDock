@@ -2010,4 +2010,130 @@ internal static partial class Scenarios
             return overlap <= tolerance && gap <= tolerance;
         }, 5000), $"{phase}: panes exactly partition the content rect (no overlap, no gap, both visible)");
     }
+// -------------------------------------------------------------------------
+// Post-audit containment scenarios (split-guest native-minimum defect).
+// These reproduce the "guest escapes its pane because it enforces a native
+// minimum larger than the pane" defect deterministically with a pig that
+// enforces WM_GETMINMAXINFO, and verify the size-constraint policy:
+//  1. the container's min-track reflects the visible guests' native minima,
+//  2. narrowing below the constraint trips the bounded refusal guard (logged
+//     SHEPHERD[size-constraint]) instead of a per-frame resize war,
+//  3. no EXCEPTION, guests stay alive.
+// They are pig-only/hermetic and join `all`.
+// -------------------------------------------------------------------------
+
+/// <summary>Queries a window's effective WM_GETMINMAXINFO ptMinTrackSize (read-only, bounded).</summary>
+private static NativeMethods.POINT QueryMinTrack(IntPtr hwnd)
+{
+    var mmi = new NativeMethods.MINMAXINFO();
+    IntPtr lParam = System.Runtime.InteropServices.Marshal.AllocHGlobal(System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MINMAXINFO>());
+    try
+    {
+        System.Runtime.InteropServices.Marshal.StructureToPtr(mmi, lParam, false);
+        NativeMethods.SendMessageTimeout(hwnd, NativeMethods.WM_GETMINMAXINFO, IntPtr.Zero, lParam,
+            NativeMethods.SMTO_ABORTIFHUNG | NativeMethods.SMTO_NORMAL, 800, out _);
+        mmi = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeMethods.MINMAXINFO>(lParam);
+    }
+    finally
+    {
+        System.Runtime.InteropServices.Marshal.FreeHGlobal(lParam);
+    }
+    return new NativeMethods.POINT { x = Math.Max(0, mmi.ptMinTrackSize.x), y = Math.Max(0, mmi.ptMinTrackSize.y) };
+}
+
+/// <summary>Resizes the container window to the given outer width/height (programmatic, bypasses min-track intentionally).</summary>
+private static void ResizeContainerTo(IntPtr container, uint tabdockPid, int width, int height)
+{
+    if (!Discover.TryCaptureIdentity(container, out WindowIdentity containerIdentity))
+        throw new InvalidOperationException("Container identity could not be captured for resize.");
+    VerifiedWindowOps.SetWindowPos(containerIdentity, IntPtr.Zero,
+        NativeMethods.GetSystemMetrics(NativeMethods.SM_XVIRTUALSCREEN) + 40,
+        NativeMethods.GetSystemMetrics(NativeMethods.SM_YVIRTUALSCREEN) + 40,
+        width, height, NativeMethods.SWP_NOACTIVATE);
+    Thread.Sleep(600);
+}
+
+// split-guest-does-not-overflow-pane (goal §27): with a RIGHT guest that
+// enforces a 500px native minimum, the container's min-track must be wide
+// enough that the exact partition still fits it (>= 2*rightMin - 1), and at a
+// legal width both guests must be contained in their panes (no overflow).
+private static void SplitGuestDoesNotOverflowPane(Ctx ctx, Options opt)
+{
+    // LEFT has a small/zero min; RIGHT enforces a 500px native minimum width.
+    GuestInfo pigA = SpawnPig(ctx, "SGO-A", "--color", "red");
+    GuestInfo pigB = SpawnPig(ctx, "SGO-B", "--color", "blue", "--min-width", "500", "--min-height", "200");
+    (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
+
+    EnterSplitTwo(ctx, container, pigA);
+    AssertSplitPanes(ctx, host, pigA, pigB, "containment enter");
+
+    // The container's min-track must reflect the pair's native minima: RIGHT
+    // pane (ceil(W/2)) must reach 500, so ptMinTrackSize.x >= 2*500-1 = 999.
+    NativeMethods.POINT mt = QueryMinTrack(container);
+    GuardedProc.Log($"  container minTrack after split = {mt.x}x{mt.y}");
+    ctx.Check(mt.x >= 999, $"container min-track width {mt.x} >= 999 (2*500-1) after split with a 500px-min RIGHT guest");
+
+    // At a legal width, both guests must be contained in their exact panes —
+    // the contract the min-track guarantees (the pane is never narrower than
+    // the guest's own native minimum).
+    ResizeContainerTo(container, ctx.TabDockPid, 1400, 500);
+    ctx.Check(Util.WaitUntil(() => IsInPane(pigA.Hwnd, host, true) && IsInPane(pigB.Hwnd, host, false), 4000),
+        "both guests contained in their panes at a legal container width");
+    ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines");
+}
+
+// split-narrow-container-constraints (goal §28/§22): the container's min-track
+// tracks the narrowest each pair can support, and pair replacement recomputes it
+// (no stale minimum from a departed member).
+private static void SplitNarrowContainerConstraints(Ctx ctx, Options opt)
+{
+    // Both guests enforce a 400px native minimum width.
+    GuestInfo pigA = SpawnPig(ctx, "SNC-A", "--color", "red", "--min-width", "400");
+    GuestInfo pigB = SpawnPig(ctx, "SNC-B", "--color", "blue", "--min-width", "400");
+    (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
+
+    EnterSplitTwo(ctx, container, pigA);
+    AssertSplitPanes(ctx, host, pigA, pigB, "narrow-constraint enter");
+
+    // Both 400px-min panes: content min = 2*400 = 800 (outer + chrome).
+    int minTrackW = QueryMinTrack(container).x;
+    GuardedProc.Log($"  container minTrack width (both 400px min) = {minTrackW}");
+    ctx.Check(minTrackW >= 799, $"container min-track width {minTrackW} >= 799 with two 400px-min guests");
+
+    // Pair replacement: pop the RIGHT member out. The split ends, the survivor
+    // is promoted to full width, and the container's min-track must drop to the
+    // survivor's OWN ~400px minimum — no stale pair-level 800px constraint.
+    ClickTabCloseButton(ctx, container, pigB.Title);
+    ctx.Check(Util.WaitUntil(() => IsDocked(pigA.Hwnd, host), 3000),
+        "survivor promoted to full width after popping the RIGHT member");
+    int survivorMinTrack = QueryMinTrack(container).x;
+    GuardedProc.Log($"  container minTrack width after pop-out (single 400px-min survivor) = {survivorMinTrack}");
+    ctx.Check(survivorMinTrack < 799, $"container min-track dropped to {survivorMinTrack} (< 799) after pair replacement (no stale pair minimum)");
+
+    ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines");
+}
+
+// single-guest-does-not-overflow-content (goal §29): a single guest with a
+// native minimum constrains the container's min-track in normal mode too.
+private static void SingleGuestDoesNotOverflowContent(Ctx ctx, Options opt)
+{
+    GuestInfo pig = SpawnPig(ctx, "SGC", "--color", "red", "--min-width", "500", "--min-height", "300");
+    (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+    ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "pig docked full-width at capture");
+
+    // Normal mode: the single guest spans the full content width, so the
+    // container's min-track must be >= 500 + chrome.
+    NativeMethods.POINT mt = QueryMinTrack(container);
+    GuardedProc.Log($"  container minTrack (single 500px-min guest) = {mt.x}x{mt.y}");
+    ctx.Check(mt.x >= 500, $"container min-track width {mt.x} >= 500 for a single 500px-min guest");
+    ctx.Check(mt.y >= 300, $"container min-track height {mt.y} >= 300 for a single 300px-min guest");
+
+    // At a legal width the single guest must fill the content area (contained).
+    ResizeContainerTo(container, ctx.TabDockPid, 1000, 500);
+    ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 4000),
+        "single guest contained at a legal container width");
+
+    ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines");
+}
+
 }

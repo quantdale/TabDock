@@ -173,6 +173,15 @@ public static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
+    // PROD: used by the size-constraint probe (WindowShepherdService) to query a
+    // captured guest's effective native minimum track size via WM_GETMINMAXINFO.
+    // SendMessageTimeout (never SendMessage) so a hung guest can never block the
+    // UI thread; SMTO_ABORTIFHUNG bounds the wait. UIPI blocks this message only
+    // across an integrity boundary, which TabDock already refuses to capture
+    // (elevation guard), so non-elevated guests respond normally.
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+
     [DllImport("user32.dll")]
     public static extern void PostQuitMessage(int nExitCode);
 
@@ -219,6 +228,20 @@ public static partial class NativeMethods
 
     /// <summary>DPI_AWARENESS_CONTEXT_UNAWARE — the -1 sentinel (legacy, DWM-virtualized coordinate space).</summary>
     public static readonly IntPtr DpiAwarenessContextUnaware = new IntPtr(-1);
+
+    /// <summary>USER_DEFAULT_SCREEN_DPI — the base 96-DPI space a DPI-unaware
+    /// window inhabits. The physical scale factor applied to an unaware guest's
+    /// content and its logical coordinate space is (monitorEffectiveDpi / 96).</summary>
+    public const uint USER_DEFAULT_SCREEN_DPI = 96;
+
+    /// <summary>MDT_EFFECTIVE_DPI — GetDpiForMonitor's effective-DPI type. This is
+    /// the correct per-monitor scale source for a PerMonitorV2 caller:
+    /// GetDpiForWindow(monitor handle) returns 0, and GetDpiForWindow(hwnd) on an
+    /// unaware window returns 96 by definition, so neither is usable here.</summary>
+    public const int MDT_EFFECTIVE_DPI = 0;
+
+    [DllImport("shcore.dll")]
+    public static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
@@ -466,6 +489,9 @@ public static partial class NativeMethods
     public const uint WM_NCHITTEST = 0x0084;
     public const uint WM_NCACTIVATE = 0x0086;
     public const uint WM_GETMINMAXINFO = 0x0024;
+    // SendMessageTimeout flags (WM_GETMINMAXINFO size-constraint probe).
+    public const uint SMTO_NORMAL = 0x0000;
+    public const uint SMTO_ABORTIFHUNG = 0x0002;
     public const uint WM_NCCALCSIZE = 0x0083;
     public const uint WM_MOUSEACTIVATE = 0x0021;
     public const uint WM_HOTKEY = 0x0312;

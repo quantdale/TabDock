@@ -187,6 +187,9 @@ internal static partial class Scenarios
         // pane partitioning.
         "split-three-tab-partner-popout", "split-focus-bidirectional",
         "split-partner-permutation", "split-maximize-restore-no-overlap",
+        // Post-audit containment (guest native-minimum) scenarios.
+        "split-guest-does-not-overflow-pane", "split-narrow-container-constraints",
+        "single-guest-does-not-overflow-content",
     };
 
     /// <summary>
@@ -241,6 +244,8 @@ internal static partial class Scenarios
         "rename-edge-cases", "multi-group-independent-interaction", "dragreorder-then-immediate-popout",
         "keyboard-only-tab-navigation", "crashkill-during-active-drag", "dwm-transitions-disabled-on-capture",
         "dragprobe",
+"capture-dpi-unaware-guest",
+"capture-dpi-system-guest",
     };
 
     // -------------------------------------------------------------------------
@@ -316,6 +321,11 @@ internal static partial class Scenarios
             "split-focus-bidirectional" => SplitFocusBidirectional,
             "split-partner-permutation" => SplitPartnerPermutation,
             "split-maximize-restore-no-overlap" => SplitMaximizeRestoreNoOverlap,
+            "split-guest-does-not-overflow-pane" => SplitGuestDoesNotOverflowPane,
+            "split-narrow-container-constraints" => SplitNarrowContainerConstraints,
+            "single-guest-does-not-overflow-content" => SingleGuestDoesNotOverflowContent,
+"capture-dpi-unaware-guest" => CaptureDpiUnawareGuest,
+"capture-dpi-system-guest" => CaptureDpiSystemGuest,
             "three-app-torture" => ThreeAppTorture,
             "browser-lifecycle" => BrowserLifecycle,
             "browser-tabswitch-hidesafety" => BrowserTabSwitchHideSafety,

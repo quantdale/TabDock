@@ -367,3 +367,143 @@ diff classification once more, then hand off as **READY WITH DEFERRED DEBT**;
 do not commit or push. A supervised operator should next run the documented
 ValidationDriver batch, the cross-monitor/DPI matrix, and (if the environment
 supports it) the native fault-injection cases listed above.
+
+## POST-AUDIT HIGH FINDING — external guest size-constraint / observed-geometry containment
+
+The prior "READY WITH DEFERRED DEBT" assessment is REOPENED and superseded for
+this issue: the user manually reproduced a split-mode containment defect where a
+RIGHT-pane guest (Edge/Explorer) visibly extended beyond the shell's content
+region, worse at narrower widths.
+
+### Root cause (proven)
+
+TabDock's Shepherd positioned a guest with `SetWindowPos` and never verified the
+observed `GetWindowRect`. Real applications enforce native minimum track sizes via
+`WM_GETMINMAXINFO` (probed against the live desktop: Edge minW=643, Chrome
+minW=516-643, Explorer minW=161-201; all `sendOk=True`). When a split pane
+(`content/2`) or the normal-mode content area is narrower than the guest's native
+minimum, the guest clamps back up to its minimum and overflows the pane. A
+deterministic probe (controlled window with `WM_GETMINMAXINFO` minW=500) proved
+overflow 0/0/0/20/50/100/200/300 px as the pane went 800/600/500/480/450/400/300/200 —
+exactly the reported symptom. The shell had no minimum-size constraint, so the
+impossible region was reachable, and the redundant-glue guard re-issued the
+failing write per frame (resize war).
+
+### Chosen policy (Option A — dynamic TabDock minimum size)
+
+1. `WindowShepherdService.GetEffectiveMinTrackSize` probes a guest's native
+   minimum via `SendMessageTimeout(WM_GETMINMAXINFO, SMTO_ABORTIFHUNG)`, fail-closed,
+   cached, never hardcoded per app.
+2. `SplitGeometry.MinContentWidth/MinContentHeight` yield the exact-partition
+   content minimum (split: `max(2·L, 2·R−1)`; normal: active guest's min).
+3. `ContainerWindow` enforces the container's native `ptMinTrackSize` in
+   `WM_GETMINMAXINFO` from the cached minima (+ chrome delta), so the shell cannot
+   be drag-resized below what the visible guests can fit.
+4. Bounded requested-vs-observed reconciliation marks a guest non-compliant for a
+   refused rect and stops re-fighting it per frame (no resize war), with a bounded
+   `SHEPHERD[size-constraint]` diagnostic. Constraint state recomputed on split
+   enter/exit/replace, survivor promotion, active-tab change, `WM_EXITSIZEMOVE`,
+   and a 5 s periodic re-probe (no stale minima from departed members).
+
+### Files
+
+- `Services/WindowShepherdService.cs` (`GetEffectiveMinTrackSize`)
+- `Services/SplitGeometry.cs` (`MinContentWidth/MinContentHeight` + self-test)
+- `Views/ContainerWindow.xaml.cs` (constraint state, `WM_GETMINMAXINFO` min-track,
+  refusal guard, refresh triggers)
+- `NativeMethods.cs` (`SendMessageTimeout`, `SMTO_*`)
+- `tests/ValidationDriver/TabDock.GuineaPig` (`--min-width/--min-height`)
+- `tests/ValidationDriver/.../Scenarios.Split.cs`
+  (`split-guest-does-not-overflow-pane`, `split-narrow-container-constraints`,
+  `single-guest-does-not-overflow-content`)
+
+### Tests
+
+- Deterministic: `--selftest-geometry` now covers the constraint math
+  (14,719,023 checks, 0 failures).
+- Supervised (not run unattended): the three new containment scenarios.
+
+### Validation
+
+- Main, solution, ValidationDriver, GuineaPig, Spike builds: PASS, 0 warnings.
+- `scripts\validate.ps1`: PASS. `openspec validate --all --no-interactive`: PASS, 13/13.
+- `git diff --check`: PASS (expected LF/CRLF conversion notes only).
+
+### Remaining manual/supervised check
+
+- Supervised ValidationDriver run of the three containment scenarios.
+- Live visual confirmation: Explorer+Edge and Chrome+Terminal never visibly
+  escape TabDock across narrow/medium/wide, maximize/restore, continuous
+  narrow/widen, on real monitors/DPI.
+
+## POST-AUDIT DPI COMPATIBILITY FINDING — DPI-unaware capture was over-refused
+
+The prior "DPI-aware capture refusal at non-100% scaling" hardening (WCA-16) is
+REOPENED. A user manually attempting to capture a DPI-unaware window at non-100%
+scaling was blocked with:
+
+> This window is not DPI-aware and can only be captured reliably at 100% display
+> scaling.
+
+### Root cause (proven)
+
+The refusal rested on the premise that an unaware guest "would be stretched and
+misplaced no matter what rect we hand it." That premise is FALSE for OUTER-rect
+positioning: DPI virtualization of geometry APIs is keyed to the CALLING thread's
+awareness, so a PerMonitorV2 caller's `SetWindowPos`/`GetWindowRect` operate in
+physical pixels against ANY target HWND. A native experiment on this machine proved
+it: `SetWindowPos(200,150,1440,900)` on a DPI-unaware top-level window from a PMv2
+thread returned `GetWindowRect (200,150,1440x900)` exactly; an unaware caller of the
+same window saw `(160,120,1152x720)` = physical ÷ 1.25 (virtualized). The unaware
+guest's content is DWM-bitmap-stretched (blurry) exactly as it looks standing alone
+— not a TabDock geometry defect.
+
+Two secondary defects were fixed with the same change:
+- The gate used `GetDpiForSystem()` (PRIMARY monitor), misclassifying targets on
+  differently-scaled secondary monitors.
+- A DPI-unaware guest's `WM_GETMINMAXINFO` min-track (answered in its logical 96-DPI
+  space) was treated as physical, which would under-constrain the container
+  containment and re-open the pane-overflow defect at non-100% scaling.
+
+### Chosen policy
+
+1. Known DPI-unaware guest → captured normally (physical-exact outer geometry;
+   content DWM-blurred as standalone). Refusal reserved for a probe that FAILS or
+   returns an UNKNOWN context (fail-closed preserved), with a precise message.
+2. Scale source = target monitor's effective DPI
+   (`GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI)` via shcore), not the primary.
+3. `SplitGeometry.ScaleUnawareLogicalToPhysical` is the single authoritative
+   logical→physical min-track boundary (ceil, never under-estimates), used by
+   `WindowShepherdService.ToPhysicalScaleForGuest` for unaware guests; aware
+   guests and 100% scaling are strict no-ops.
+
+### Files
+
+- `Services/WindowShepherdService.cs` (capture gate, `GetMonitorEffectiveDpi`,
+  `ToPhysicalScaleForGuest`)
+- `Services/SplitGeometry.cs` (`ScaleUnawareLogicalToPhysical` + self-test)
+- `NativeMethods.cs` (`GetDpiForMonitor`, `MDT_EFFECTIVE_DPI`,
+  `USER_DEFAULT_SCREEN_DPI`)
+- `tests/ValidationDriver/TabDock.GuineaPig` (`--dpi` launcher modes)
+- `tests/ValidationDriver/.../Scenarios.Dpi.cs` (gated supervised scenarios)
+
+### Tests
+
+- Deterministic: `--selftest-geometry` covers the scaling math (14,719,158 checks,
+  0 failures).
+- CLI-safe native harness (no SendInput) exercised `WindowShepherdService.Capture`
+  against DPI-unaware, system-aware, and per-monitor-v2 pigs on a mixed-DPI host:
+  all ACCEPTED.
+- Supervised (not run unattended): `capture-dpi-unaware-guest`,
+  `capture-dpi-system-guest` (self-skip at 100% with explicit reason).
+
+### Validation
+
+- Main, solution, ValidationDriver, GuineaPig, Spike builds: PASS, 0 warnings.
+- `scripts\validate.ps1`: PASS. `openspec validate --all --no-interactive`: PASS, 14/14.
+- `git diff --check`: PASS (expected LF/CRLF conversion notes only).
+
+### Remaining manual/supervised check
+
+- Supervised ValidationDriver run of the two DPI scenarios and a live visual
+  acceptance of a DPI-unaware guest docked at 125%/150% on real hardware.

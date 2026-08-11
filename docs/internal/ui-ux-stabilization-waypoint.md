@@ -403,6 +403,17 @@ Five adversarial reviewers examined the Round-2 fixes. Accepted and fixed:
   misplace them; refusal mirrors the elevation guard, probe failures fail open.
   New P/Invokes: GetWindowDpiAwarenessContext, AreDpiAwarenessContextsEqual,
   GetDpiForSystem.
+  **SUPERSEDED (POST-AUDIT DPI COMPATIBILITY FINDING):** native evidence
+  proved the 'stretch/misplace' premise false for OUTER-rect positioning - a
+  PerMonitorV2 caller's physical SetWindowPos glues an unaware top-level
+  window's outer rect exactly (GetWindowRect round-trips; the unaware caller
+  sees it virtualized /1.25 at 125%). Known DPI-unaware guests are now captured
+  normally; refusal is reserved for a probe that FAILS or returns UNKNOWN. Scale
+  is classified from the target monitor's effective DPI (GetDpiForMonitor/"
+  MDT_EFFECTIVE_DPI),
+  not GetDpiForSystem(). A DPI-unaware guest's WM_GETMINMAXINFO min-track is
+  converted logical->physical centrally (SplitGeometry.ScaleUnawareLogicalToPhysical)
+  so size-constraint containment stays correct. See STATE.md and the audit waypoint.
 - **F-B2:** caption FontFamily fallback now includes "Segoe MDL2 Assets"
   (Win10 glyphs render; Fluent Icons is Win11-only).
 - **F-B3:** CapturePickerWindow + ContainerWindow clamp initial size to the
@@ -724,3 +735,35 @@ were clean, `scripts/validate.ps1` passed, the geometry self-test reported
   universal absence of timing-sensitive compositor issues. Treat the result as
   a validated fix in the exercised scope, not a claim that the product is
   bug-free.
+
+---
+
+## Post-stabilization containment hardening (guest size-constraint)
+
+A subsequent user-reported defect reopened the "READY" assessment: a split
+RIGHT-pane guest (Edge/Explorer) visibly overflowed the shell's content region,
+worse at narrower widths. Root cause (proven with native `GetWindowRect`
+evidence): the guest enforces a native minimum track size via `WM_GETMINMAXINFO`
+(live-probed: Edge minW=643, Chrome minW=516-643, Explorer minW=161-201), and
+TabDock requested a pane narrower than that minimum and never verified the
+observed rect. The overflow grows as the pane narrows (deterministic probe: 0→300
+px as pane 800→200 for a 500 px minimum).
+
+Fix (Option A — dynamic TabDock minimum size, Shepherd-compatible):
+- `WM_GETMINMAXINFO` min-track on the container from the visible guests' native
+  minima (`SplitGeometry.MinContentWidth/MinContentHeight` + chrome delta), so the
+  shell cannot be drag-resized below what the guests can fit.
+- Bounded requested-vs-observed reconciliation: a guest that refuses its pane is
+  marked non-compliant for that rect and not re-fought per frame (no resize war),
+  with a bounded `SHEPHERD[size-constraint]` diagnostic.
+- Constraint state recomputed on split enter/exit/replace, survivor promotion,
+  active-tab change, `WM_EXITSIZEMOVE`, and a 5 s periodic re-probe.
+
+Regression scenarios added (supervised, real input): `split-guest-does-not-overflow-pane`,
+`split-narrow-container-constraints`, `single-guest-does-not-overflow-content`,
+plus `--min-width/--min-height` GuineaPig support. Deterministic `--selftest-geometry`
+now covers the constraint math (14,719,023 checks, 0 failures). All builds,
+`scripts/validate.ps1`, and OpenSpec validation (13/13) pass. See
+`docs/internal/whole-codebase-audit-waypoint.md` §"POST-AUDIT HIGH FINDING" and
+`openspec/changes/guest-size-constraint-containment/` for full detail.
+Supervised visual confirmation on real Edge/Explorer/Chrome remains outstanding.

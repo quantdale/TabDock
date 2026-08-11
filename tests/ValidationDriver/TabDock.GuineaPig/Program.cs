@@ -33,7 +33,21 @@ internal static class Program
 
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        Application.Run(new PigForm(opts));
+
+        // Apply the deliberate DPI-awareness thread context BEFORE the form is
+        // created so the resulting window belongs to the requested awareness
+        // class (mixed-mode DPI scaling: a top-level window inherits the thread
+        // context current at CreateWindow). Restore the previous context in a
+        // finally so a pig that requested a mode never leaks that context.
+        IntPtr previousDpi = PigDpi.ApplyThreadDpi(opts.DpiMode);
+        try
+        {
+            Application.Run(new PigForm(opts));
+        }
+        finally
+        {
+            PigDpi.RestoreThreadDpi(previousDpi);
+        }
         return 0;
     }
 
@@ -74,6 +88,15 @@ internal static class Program
                 case "--text-box":
                     opts.TextBox = true;
                     break;
+                case "--min-width":
+                    opts.MinWidth = int.Parse(Require(args, ref i));
+                    break;
+                case "--min-height":
+                    opts.MinHeight = int.Parse(Require(args, ref i));
+                    break;
+                case "--dpi":
+                    opts.DpiMode = ParseDpiMode(Require(args, ref i));
+                    break;
                 default:
                     throw new ArgumentException($"Unknown argument '{args[i]}'.");
             }
@@ -86,6 +109,18 @@ internal static class Program
         if (i + 1 >= args.Length)
             throw new ArgumentException($"'{args[i]}' requires a value.");
         return args[++i];
+    }
+
+    private static DpiMenuMode ParseDpiMode(string value)
+    {
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "unaware": return DpiMenuMode.Unaware;
+            case "system": return DpiMenuMode.SystemAware;
+            case "per-monitor": return DpiMenuMode.PerMonitorAware;
+            case "per-monitor-v2": return DpiMenuMode.PerMonitorAwareV2;
+            default: throw new ArgumentException($"Unknown --dpi mode '{value}' (expected unaware|system|per-monitor|per-monitor-v2).");
+        }
     }
 
     /// <summary>Writes startup errors to the shared validation log directory (no console on WinExe).</summary>

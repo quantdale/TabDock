@@ -153,48 +153,82 @@ public sealed class WindowShepherdService
             }
         }
 
-        // DPI-unaware guests run in a DWM-virtualized 96-DPI coordinate space
-        // (their coordinates are scaled by the system DPI). TabDock glues
-        // guests with PHYSICAL-pixel rects, so at any non-100% system scale an
-        // unaware guest would be stretched and misplaced no matter what rect we
-        // hand it. Refuse capture (mirroring the elevation refusal) instead of
-        // silently producing broken geometry — the same error channel tells the
-        // picker why. Per-monitor-aware and system-aware guests are fine
-        // (system-aware matches on single-DPI systems; per-monitor-aware tracks
-        // the container on every monitor).
+        // DPI-unaware guests run in a DWM-virtualized 96-DPI coordinate space:
+        // their CONTENT is bitmap-stretched by DWM to the monitor's physical
+        // size, so they appear blurry (exactly as they look standing alone on
+        // that monitor — not a TabDock geometry defect, and not something
+        // capture worsens). Crucially, placement is decided by the CALLER, not
+        // the target: TabDock is PerMonitorV2, so its SetWindowPos/GetWindowRect
+        // calls are never DPI-virtualized and operate in PHYSICAL screen pixels
+        // against ANY target HWND's OUTER rect. A PMv2 SetWindowPos with a
+        // physical pane rectangle therefore pins an unaware guest's outer frame
+        // to that exact physical rect, and GetWindowRect reads it back exactly —
+        // no mis-placement, no drift. Per-monitor-aware and system-aware guests
+        // are unaffected (system-aware matches on single-DPI systems;
+        // per-monitor-aware tracks the container on every monitor).
+        //
+        // Refusal is therefore reserved for a probe that genuinely FAILS or
+        // returns an UNKNOWN context: admitting a guest we could not classify
+        // could silently admit an unverifiable coordinate space. A KNOWN
+        // DPI_UNAWARE guest is captured normally. The one place the guest's own
+        // logical 96-DPI space leaks into TabDock's physical contract is the
+        // native minimum-track size; GetEffectiveMinTrackSize converts it
+        // centrally at the sole authoritative coordinate boundary.
         try
         {
             IntPtr guestContext = NativeMethods.GetWindowDpiAwarenessContext(hwnd);
             if (guestContext == IntPtr.Zero)
             {
-                error = "Could not determine the window's DPI awareness.";
-                _log.Log($"Shepherd capture blocked: DPI-awareness context could not be read for 0x{hwnd.ToInt64():X}");
+                // PROBE FAILED / UNKNOWN — not a known awareness class.
+                error = "Could not verify the window's DPI awareness. TabDock could not confirm the window can be positioned reliably; try another window or run TabDock as administrator. (DPI probe failed)";
+                _log.Log($"Shepherd capture blocked: DPI-awareness context could not be read for 0x{hwnd.ToInt64():X} (dpi::probe-failed)");
                 return null;
             }
 
             bool dpiUnaware = NativeMethods.AreDpiAwarenessContextsEqual(
                 guestContext, NativeMethods.DpiAwarenessContextUnaware);
-            uint systemDpi = NativeMethods.GetDpiForSystem();
-            if (systemDpi == 0)
+
+            // Scale classification must use the monitor that actually carries
+            // the TARGET, not GetDpiForSystem (which is the PRIMARY monitor and
+            // misclassifies targets on differently-scaled secondary monitors).
+            // GetDpiForMonitor(MDT_EFFECTIVE_DPI) from this PerMonitorV2 thread
+            // returns the monitor's effective physical DPI. GetDpiForWindow(hwnd)
+            // on an unaware guest returns 96 by definition, and GetDpiForWindow on
+            // a monitor handle returns 0 — both unusable — so GetDpiForMonitor is
+            // the correct probe. Read it even for aware guests so the capture
+            // diagnostic can report the real scale context.
+            IntPtr targetMonitor = NativeMethods.MonitorFromWindow(hwnd, NativeMethods.MONITOR_DEFAULTTONEAREST);
+            if (targetMonitor == IntPtr.Zero)
             {
-                error = "Could not determine the system display scaling.";
-                _log.Log($"Shepherd capture blocked: system DPI could not be read for 0x{hwnd.ToInt64():X}");
+                error = "Could not determine the target monitor for capture; try another window.";
+                _log.Log($"Shepherd capture blocked: MonitorFromWindow returned null for 0x{hwnd.ToInt64():X} (dpi::probe-failed)");
+                return null;
+            }
+            uint targetDpi = GetMonitorEffectiveDpi(targetMonitor);
+            if (targetDpi == 0)
+            {
+                error = "Could not determine the display scaling on the target monitor; try another window.";
+                _log.Log($"Shepherd capture blocked: monitor DPI could not be read for 0x{hwnd.ToInt64():X} (dpi::probe-failed)");
                 return null;
             }
 
-            if (dpiUnaware && systemDpi != 96)
+            if (dpiUnaware)
             {
-                error = "This window is not DPI-aware and can only be captured reliably at 100% display scaling.";
-                _log.Log($"Shepherd capture blocked: DPI-unaware target 0x{hwnd.ToInt64():X} at system DPI {systemDpi}");
-                return null;
+                // KNOWN DPI_UNAWARE: capture normally. Outer-rect shepherding is
+                // physical-pixel exact regardless of the guest's awareness; the
+                // guest is DWM-stretched (blurry) exactly as it is standalone.
+                // GetEffectiveMinTrackSize keeps the size-constraint hardening
+                // correct for the guest's logical 96-DPI min-track space.
+                _log.Log($"Shepherd capture: DPI-unaware target 0x{hwnd.ToInt64():X} accepted at target monitor DPI {targetDpi} (dpi::unaware-accepted; content DWM-scaled, geometry physical-exact)");
             }
         }
         catch (Exception ex)
         {
-            // Geometry is only reliable when the awareness probe succeeds. A
-            // failed probe must not silently admit a virtualized guest.
-            error = "Could not verify the window's DPI awareness.";
-            _log.LogException("Shepherd capture: DPI-awareness probe failed", ex);
+            // PROBE FAILED / UNKNOWN (thrown). A failed probe must not silently
+            // admit a virtualized guest — geometry is only reliable when the
+            // awareness probe succeeds.
+            error = "Could not verify the window's DPI awareness. TabDock could not confirm the window can be positioned reliably; try another window or run TabDock as administrator. (DPI probe failed)";
+            _log.LogException("Shepherd capture: DPI-awareness probe failed (dpi::probe-failed)", ex);
             return null;
         }
 
@@ -407,6 +441,87 @@ public sealed class WindowShepherdService
         // Deliberately NOT DescribeWindow here (same hot-path reason as
         // PositionAndShow): split layout runs on every move/resize tick.
         _log.Log($"SHEPHERD[position] guest=0x{window.Hwnd.ToInt64():X} rect={screenRect.left},{screenRect.top},{screenRect.Width}x{screenRect.Height}");
+    }
+
+    /// <summary>Queries a captured guest's effective native minimum track size (the size it refuses to shrink below) via a cross-process WM_GETMINMAXINFO probe. Returns the min width/height in physical pixels, plus whether the probe was available. Callers cache the result and refresh on discrete transitions; the probe is never in the per-frame hot path.</summary>
+    public (int MinWidth, int MinHeight, bool Available) GetEffectiveMinTrackSize(CapturedWindow window)
+    {
+        if (!NativeMethods.IsWindow(window.Hwnd) || !IsCurrentCapturedWindow(window, "min-track", verifyExecutable: false))
+            return (0, 0, false);
+        var mmi = new NativeMethods.MINMAXINFO();
+        IntPtr lParam = System.Runtime.InteropServices.Marshal.AllocHGlobal(System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MINMAXINFO>());
+        try
+        {
+            IntPtr result = IntPtr.Zero;
+            IntPtr handle = NativeMethods.SendMessageTimeout(window.Hwnd, NativeMethods.WM_GETMINMAXINFO, IntPtr.Zero, lParam, NativeMethods.SMTO_ABORTIFHUNG | NativeMethods.SMTO_NORMAL, 500, out result);
+            if (handle == IntPtr.Zero)
+                return (0, 0, false); // send failed / timed out / UIPI-blocked
+            mmi = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeMethods.MINMAXINFO>(lParam);
+            int minW = Math.Max(0, mmi.ptMinTrackSize.x);
+            int minH = Math.Max(0, mmi.ptMinTrackSize.y);
+            minW = ToPhysicalScaleForGuest(window.Hwnd, minW);
+            minH = ToPhysicalScaleForGuest(window.Hwnd, minH);
+            return (minW, minH, true);
+        }
+        catch (Exception ex)
+        {
+            _log.LogException("SHEPHERD[sizemin] probe failed", ex);
+            return (0, 0, false);
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.FreeHGlobal(lParam);
+        }
+    }
+
+    /// <summary>
+    /// Returns the effective physical DPI of a monitor handle, or 0 when the probe
+    /// fails. Used by both the capture gate and the min-track conversion so the
+    /// scale source is a single authoritative helper. GetDpiForMonitor returns
+    /// HRESULT (S_OK = 0) and, from this PerMonitorV2 thread, yields the monitor's
+    /// true effective DPI across mixed-DPI setups.
+    /// </summary>
+    private static uint GetMonitorEffectiveDpi(IntPtr monitor)
+    {
+        if (monitor == IntPtr.Zero)
+            return 0;
+        int hr = NativeMethods.GetDpiForMonitor(monitor, NativeMethods.MDT_EFFECTIVE_DPI, out uint dpiX, out _);
+        return hr == 0 ? dpiX : 0;
+    }
+
+    /// <summary>
+    /// Converts a single native minimum-track dimension a guest reported via
+    /// WM_GETMINMAXINFO into the PHYSICAL-pixel space TabDock's size-constraint
+    /// contract lives in. WM_GETMINMAXINFO is answered by the TARGET's own
+    /// window proc, so a DPI-unaware guest fills <c>ptMinTrackSize</c> in ITS
+    /// logical 96-DPI space; Windows DWM-scales that logical size by the
+    /// monitor's effective DPI to get the real physical minimum the guest
+    /// enforces. This is the single authoritative logical→physical boundary for
+    /// guest min-track geometry — no multiplicative scaling is scattered across
+    /// the codebase. Awareness-aware guests report in a space already consistent
+    /// with the physical contract, and at 100% (any guest) the factor is 1, so
+    /// this is a strict no-op except for an unaware guest on a scaled monitor.
+    /// </summary>
+    private static int ToPhysicalScaleForGuest(IntPtr guestHwnd, int value)
+    {
+        if (value <= 0)
+            return value;
+        try
+        {
+            IntPtr ctx = NativeMethods.GetWindowDpiAwarenessContext(guestHwnd);
+            if (ctx == IntPtr.Zero || !NativeMethods.AreDpiAwarenessContextsEqual(ctx, NativeMethods.DpiAwarenessContextUnaware))
+                return value; // aware guest: value already in the physical contract.
+            IntPtr monitor = NativeMethods.MonitorFromWindow(guestHwnd, NativeMethods.MONITOR_DEFAULTTONEAREST);
+            uint dpi = GetMonitorEffectiveDpi(monitor);
+            // SplitGeometry owns the (pure, deterministic) logical->physical math;
+            // here we only decide whether the guest is unaware and feed it the
+            // target monitor's effective DPI.
+            return SplitGeometry.ScaleUnawareLogicalToPhysical(value, dpi);
+        }
+        catch (Exception)
+        {
+            return value;
+        }
     }
 
     /// <summary>

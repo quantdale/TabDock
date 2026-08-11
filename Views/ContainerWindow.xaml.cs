@@ -56,6 +56,28 @@ public partial class ContainerWindow : Window
     // guest directly (which foregrounds it without a tab-strip selection).
     private CapturedWindow? _splitForeground;
 
+    // Size-constraint state (post-audit containment finding). The container
+    // refuses to shrink below what the currently visible guest(s) can physically
+    // fit, so a guest is never asked to occupy a pane narrower than its own
+    // native minimum track width. The per-guest minimum is measured once via
+    // WindowShepherdService.GetEffectiveMinTrackSize and cached; _constraintDirty
+    // is set whenever the visible set or window state changes so the next
+    // relayout recomputes the container's minimum. See RefreshSizeConstraint.
+    private int _constraintMinLeftW;
+    private int _constraintMinRightW;
+    private int _constraintMinLeftH;
+    private int _constraintMinRightH;
+    private bool _constraintDirty = true;
+    // Bounded non-compliance guard: a guest that refuses its assigned pane (its
+    // native minimum grew larger than the pane — e.g. a browser sidebar opened)
+    // must never be re-fought every frame (resize war). Records the pane rect
+    // each guest last refused; the layout skips re-positioning that exact rect.
+    private readonly Dictionary<long, NativeMethods.RECT> _refusedPaneByHwnd = new();
+    // Debounced refresh of the guest minima while a guest is visible, so a
+    // dynamic native minimum (browser UI state, sidebar, toolbar) is respected
+    // without probing on every frame.
+    private System.Windows.Threading.DispatcherTimer? _constraintRefreshTimer;
+
     // Coalesced timers for WM_ACTIVATE's guest re-assert, StateChanged's
     // settled-snapshot diagnostic, and the self-minimize restore check. Each
     // holds at most one pending instance — stopped and replaced, never left to
@@ -360,6 +382,11 @@ public partial class ContainerWindow : Window
         else if ((uint)msg == NativeMethods.WM_EXITSIZEMOVE)
         {
             _inNativeMoveLoop = false;
+            // The container's resize just ended: re-probe the visible guest(s)'
+            // native minima (a size change can accompany a UI-state shift) and
+            // schedule the coalesced post-layout reconciliation.
+            _constraintDirty = true;
+            _refusedPaneByHwnd.Clear();
             // The native move/size loop has fully unwound and the container's
             // final position is authoritative. Windows keeps a dragged window
             // at the top of the z-order for the whole modal loop, and its
@@ -399,6 +426,19 @@ public partial class ContainerWindow : Window
                     mmi.ptMaxPosition.y = mi.rcWork.top - mi.rcMonitor.top;
                     mmi.ptMaxSize.x = mi.rcWork.Width;
                     mmi.ptMaxSize.y = mi.rcWork.Height;
+                    // Size-constraint policy: the container refuses to shrink
+                    // below what the currently visible guest(s) can physically
+                    // fit (see RefreshSizeConstraint). This clamps the native
+                    // drag-resize so a guest is never asked to occupy a pane
+                    // narrower than its own native minimum — the containment
+                    // defect. The min track is expressed as the OUTER window
+                    // size: content min + the chrome delta (outer minus content).
+                    if (ComputeContainerMinTrack(out int minTrackW, out int minTrackH)
+                        && minTrackW > 0 && minTrackH > 0)
+                    {
+                        if (minTrackW > mmi.ptMinTrackSize.x) mmi.ptMinTrackSize.x = minTrackW;
+                        if (minTrackH > mmi.ptMinTrackSize.y) mmi.ptMinTrackSize.y = minTrackH;
+                    }
                     System.Runtime.InteropServices.Marshal.StructureToPtr(mmi, lParam, true);
                     handled = true;
                 }
@@ -471,6 +511,35 @@ public partial class ContainerWindow : Window
         // synchronous handlers run). Re-glue instead at DispatcherPriority after
         // layout, by which time the marker's HWND really has its new size.
         LayoutUpdated += (_, _) => RequestRelayout();
+
+        // Debounced periodic re-probe of the visible guest(s)' native minima, so
+        // a dynamic minimum (browser sidebar, toolbar, UI-state change) is picked
+        // up without probing on every frame or a resize war. Bounded: one probe
+        // batch every few seconds, and only re-measures when a guest is visible.
+        _constraintRefreshTimer?.Stop();
+        var refreshTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        refreshTimer.Tick += (_, _) =>
+        {
+            if (!ReferenceEquals(_constraintRefreshTimer, refreshTimer))
+            {
+                refreshTimer.Stop();
+                return;
+            }
+            bool hasVisible = IsSplitActive
+                || (_shepherdActiveWindow != null && NativeMethods.IsWindowVisible(_shepherdActiveWindow.Hwnd));
+            if (hasVisible)
+            {
+                _constraintDirty = true;
+                // A guest may have gained or lost the ability to fit its pane
+                // (e.g. a browser sidebar toggled). Clear refusals so the next
+                // relayout re-evaluates every visible guest against its current
+                // native minimum — a bounded retry (once per interval), never a
+                // per-frame resize war.
+                _refusedPaneByHwnd.Clear();
+            }
+        };
+        _constraintRefreshTimer = refreshTimer;
+        refreshTimer.Start();
     }
 
     /// <summary>
@@ -506,6 +575,10 @@ public partial class ContainerWindow : Window
         Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
         {
             _relayoutPending = false;
+            // Recompute the container's minimum size from the currently visible
+            // guest(s) before laying them out, so the min-track clamp (WM_GETMINMAXINFO)
+            // and the pane rects agree on the same constraint.
+            RefreshSizeConstraint();
             RelayoutGuests();
             if (_relayoutAfterPending)
             {
@@ -726,6 +799,9 @@ public partial class ContainerWindow : Window
     private void ContainerWindow_Closed(object? sender, EventArgs e)
     {
         CloseCapturePanel();
+        _constraintRefreshTimer?.Stop();
+        _constraintRefreshTimer = null;
+        _refusedPaneByHwnd.Clear();
         _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
         _viewModel.EmptiedByPopOut -= ViewModel_EmptiedByPopOut;
         _viewModel.Tabs.CollectionChanged -= Tabs_CollectionChanged;
@@ -1713,6 +1789,10 @@ public partial class ContainerWindow : Window
         }
 
         _shepherdActiveWindow = newWindow;
+        // The single visible guest changed: its native minimum may differ, so
+        // recompute the container's minimum size and clear refusals.
+        _constraintDirty = true;
+        _refusedPaneByHwnd.Clear();
 
         if (newWindow != null && NativeMethods.IsWindow(newWindow.Hwnd))
         {
@@ -1767,10 +1847,135 @@ public partial class ContainerWindow : Window
     }
 
     /// <summary>
+    /// Re-measures the currently visible guest(s)' effective native minimum
+    /// track sizes (cached; never per-frame) and recomputes the container's
+    /// minimum content size. Called before every relayout pass; re-measures only
+    /// when the visible set / geometry changed (_constraintDirty) or a debounced
+    /// periodic re-probe fired, so a dynamic native minimum (browser sidebar,
+    /// toolbar) is respected without a resize war or per-frame probing.
+    /// </summary>
+    private void RefreshSizeConstraint()
+    {
+        if (WindowState == WindowState.Minimized)
+            return;
+        if (!_constraintDirty)
+            return;
+
+        // Determine the visible guest set and which minima map to LEFT/RIGHT.
+        CapturedWindow? left = null, right = null;
+        if (IsSplitActive)
+        {
+            left = _splitLeft;
+            right = _splitRight;
+        }
+        else if (_shepherdActiveWindow != null && NativeMethods.IsWindow(_shepherdActiveWindow.Hwnd))
+        {
+            left = _shepherdActiveWindow;
+            right = null;
+        }
+
+        int lw = 0, lh = 0, rw = 0, rh = 0;
+        if (left != null)
+        {
+            var (mw, mh, ok) = _shepherd.GetEffectiveMinTrackSize(left);
+            if (ok) { lw = mw; lh = mh; }
+        }
+        if (right != null)
+        {
+            var (mw, mh, ok) = _shepherd.GetEffectiveMinTrackSize(right);
+            if (ok) { rw = mw; rh = mh; }
+        }
+
+        _constraintMinLeftW = lw;
+        _constraintMinLeftH = lh;
+        _constraintMinRightW = rw;
+        _constraintMinRightH = rh;
+        _constraintDirty = false;
+    }
+
+    /// <summary>
+    /// Computes the container's minimum OUTER track size (physical pixels) from
+    /// the cached guest minima. Content min comes from SplitGeometry's
+    /// MinContentWidth/MinContentHeight (normal = the active guest's min; split =
+    /// the exact partition's width/height); the outer size adds the chrome delta
+    /// (current outer width/height minus the content rect). Returns false when it
+    /// cannot be computed (no content rect, no guests) so the caller leaves the
+    /// min track untouched.
+    /// </summary>
+    private bool ComputeContainerMinTrack(out int minTrackW, out int minTrackH)
+    {
+        minTrackW = 0;
+        minTrackH = 0;
+        if (!TryGetContentAreaScreenRect(out NativeMethods.RECT content))
+            return false;
+        if (content.Width <= 0 || content.Height <= 0)
+            return false;
+
+        bool split = IsSplitActive;
+        int contentMinW = SplitGeometry.MinContentWidth(split, _constraintMinLeftW, _constraintMinRightW);
+        int contentMinH = SplitGeometry.MinContentHeight(split, _constraintMinLeftH, _constraintMinRightH);
+        if (contentMinW <= 0 && contentMinH <= 0)
+            return false;
+
+        NativeMethods.RECT outer = new NativeMethods.RECT();
+        if (_containerHwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(_containerHwnd, out outer))
+            return false;
+        int chromeW = Math.Max(0, outer.Width - content.Width);
+        int chromeH = Math.Max(0, outer.Height - content.Height);
+        minTrackW = contentMinW + chromeW;
+        minTrackH = contentMinH + chromeH;
+        return true;
+    }
+
+    /// <summary>True when <paramref name="guest"/> is currently marked as refusing <paramref name="rect"/> (a prior re-glue to that exact rect did not take).</summary>
+    private bool IsRefusingPane(CapturedWindow guest, NativeMethods.RECT rect)
+    {
+        if (!_refusedPaneByHwnd.TryGetValue(guest.Hwnd.ToInt64(), out NativeMethods.RECT refused))
+            return false;
+        const int epsilon = 1;
+        return Math.Abs(refused.left - rect.left) <= epsilon
+            && Math.Abs(refused.top - rect.top) <= epsilon
+            && Math.Abs(refused.right - rect.right) <= epsilon
+            && Math.Abs(refused.bottom - rect.bottom) <= epsilon;
+    }
+
+    /// <summary>Records that <paramref name="guest"/> refused <paramref name="rect"/> (bounded, one diagnostic per refusal).</summary>
+    private void MarkRefusingPane(CapturedWindow guest, NativeMethods.RECT rect)
+    {
+        if (_refusedPaneByHwnd.TryGetValue(guest.Hwnd.ToInt64(), out NativeMethods.RECT prior)
+            && prior.left == rect.left && prior.top == rect.top && prior.right == rect.right && prior.bottom == rect.bottom)
+            return; // already recorded this exact refusal
+        _refusedPaneByHwnd[guest.Hwnd.ToInt64()] = rect;
+        _log.Log($"SHEPHERD[size-constraint] guest=0x{guest.Hwnd.ToInt64():X} refused pane {rect.left},{rect.top},{rect.Width}x{rect.Height}; guest cannot fit the assigned pane (native minimum).");
+    }
+
+    /// <summary>Clears the refusal record for <paramref name="guest"/> (re-glue succeeded or rect changed).</summary>
+    private void ClearRefusingPane(CapturedWindow guest)
+        => _refusedPaneByHwnd.Remove(guest.Hwnd.ToInt64());
+
+    /// <summary>
+    /// True when <paramref name="guest"/>'s observed rect matches <paramref name="rect"/>
+    /// within the 1px glue epsilon — used to confirm a re-glue actually took, which is
+    /// the requested-vs-observed distinction this containment fix is built on.
+    /// </summary>
+    private static bool ObservedMatches(IntPtr hwnd, NativeMethods.RECT rect)
+    {
+        if (!NativeMethods.IsWindow(hwnd) || !NativeMethods.IsWindowVisible(hwnd))
+            return false;
+        NativeMethods.GetWindowRect(hwnd, out NativeMethods.RECT guest);
+        const int epsilon = 1;
+        return Math.Abs(guest.left - rect.left) <= epsilon
+            && Math.Abs(guest.top - rect.top) <= epsilon
+            && Math.Abs(guest.right - rect.right) <= epsilon
+            && Math.Abs(guest.bottom - rect.bottom) <= epsilon;
+    }
+
+    /// <summary>
     /// Positions and shows the active guest to exactly cover the content area,
     /// layered directly above this container. Called on tab switch, container
     /// move/resize/restore, and drag-out-threshold snap-back.
     /// </summary>
+
     private void LayoutShepherdActiveWindow(bool forceZOrder = false)
     {
         if (_shepherdActiveWindow == null)
@@ -1843,7 +2048,26 @@ public partial class ContainerWindow : Window
                 return;
             }
         }
+        // Bounded non-compliance guard: if this guest already refused this exact
+        // pane rect (its native minimum exceeds the pane), do NOT re-fight it
+        // every frame (that is a resize war). Keep the guest pinned above the
+        // container so the docked look holds, and skip the geometry write. The
+        // refusal clears when the rect changes (container grows) or the guest
+        // becomes compliant, so a wider pane is re-glued normally.
+        if (IsRefusingPane(_shepherdActiveWindow, rect))
+        {
+            _shepherd.PairZOrderBehind(containerHwnd, _shepherdActiveWindow);
+            return;
+        }
         _shepherd.PositionAndShow(_shepherdActiveWindow, containerHwnd, rect);
+        // Requested-vs-observed confirmation: PositionAndShow issues SetWindowPos
+        // with the desired rect, but the guest may refuse it (native minimum). If
+        // the observed rect still differs, mark the guest refusing so the next
+        // pass does not repeat the write.
+        if (!ObservedMatches(_shepherdActiveWindow.Hwnd, rect))
+            MarkRefusingPane(_shepherdActiveWindow, rect);
+        else
+            ClearRefusingPane(_shepherdActiveWindow);
     }
 
     /// <summary>
@@ -2071,7 +2295,30 @@ public partial class ContainerWindow : Window
         // the foreground member is raised first, the partner is inserted below
         // it, and the container is then inserted below the partner. Keeping the
         // policy local avoids pushing TabDock below unrelated desktop windows.
+        //
+        // Bounded non-compliance guard: if a member already refused its current
+        // pane rect (its native minimum exceeds the pane), do NOT re-fight it
+        // every frame (resize war). Pin the container below the panes so the
+        // docked look holds, and skip the geometry write. Refusals clear when
+        // the rect changes or the guest becomes compliant, so a wider pane is
+        // re-glued normally.
+        if (IsRefusingPane(top, topRect) || IsRefusingPane(bottom, bottomRect))
+        {
+            _shepherd.PairZOrderBehind(containerHwnd, bottom);
+            return;
+        }
         _shepherd.PositionGuestsDeferred(top, topRect, bottom, bottomRect, containerHwnd);
+        // Requested-vs-observed confirmation: PositionGuestsDeferred issues the
+        // desired pane rects, but a guest may refuse (native minimum). Mark any
+        // member whose observed rect still differs so the next pass skips it.
+        if (!ObservedMatches(top.Hwnd, topRect))
+            MarkRefusingPane(top, topRect);
+        else
+            ClearRefusingPane(top);
+        if (!ObservedMatches(bottom.Hwnd, bottomRect))
+            MarkRefusingPane(bottom, bottomRect);
+        else
+            ClearRefusingPane(bottom);
     }
 
     /// <summary>
@@ -2107,6 +2354,10 @@ public partial class ContainerWindow : Window
         _splitLeft = left;
         _splitRight = right;
         _splitForeground = left;
+        // The visible set changed: recompute the container's minimum size from
+        // the new pair's native minima, and clear refusals (fresh panes).
+        _constraintDirty = true;
+        _refusedPaneByHwnd.Clear();
 
         var leftTab = _viewModel.Tabs.FirstOrDefault(t => t.Model == left);
         if (leftTab != null)
@@ -2158,6 +2409,9 @@ public partial class ContainerWindow : Window
         _splitLeft = null;
         _splitRight = null;
         _splitForeground = null;
+        // Back to single-guest mode: refresh the constraint and clear refusals.
+        _constraintDirty = true;
+        _refusedPaneByHwnd.Clear();
 
         // Restore the ordinary one-tab-per-member strip.
         _viewModel.ClearSplitComposite();
@@ -2223,6 +2477,9 @@ public partial class ContainerWindow : Window
         _splitLeft = null;
         _splitRight = null;
         _splitForeground = null;
+        // Back to single-guest mode: refresh the constraint and clear refusals.
+        _constraintDirty = true;
+        _refusedPaneByHwnd.Clear();
 
         // Restore the ordinary one-tab-per-member strip.
         _viewModel.ClearSplitComposite();
