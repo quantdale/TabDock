@@ -631,3 +631,34 @@ EXITSIZEMOVE/WINDOWPOSCHANGED` + one coalesced post-drag reconciliation;
 `WindowShepherdService` remains the sole positioning/z-order authority;
 bounded diagnostics retained (WindowFromPoint probes), all temporary probes
 removed.
+
+## Round-5 ledger correction (2026-08-11 07:43)
+
+Row 6 ("group ALL PASS") predated the green re-run of the two reattach
+scenarios. Actual record: batch6g (06:54–06:55) FAILED
+`reattach-thenclick-othertab` and `reattach-repeated-cycles` — the container's
+'+' opened the standalone picker after a reattach, and the post-reattach
+rename failed. Both scenarios were rewritten at 06:58 for the inline capture
+panel design (row toggle + "Add selected" + toggle-close, rename retried) but
+the rewrite was never re-run before the ledger was closed. Re-run supervised
+2026-08-11 07:43: BOTH PASS — 3 reattach cycles, no second container, pair
+restored, inline surface opens/dismisses, minimize works, no exceptions, both
+pigs alive. Row 6 is now accurate.
+
+## Post-closure harness safety (2026-08-11)
+
+During supervised validation, the driver had a memory-only `state.json`
+snapshot. A run that did not reach cleanup left the user's persisted state
+file deleted; this was classified as a **HARNESS BUG**, not an application
+failure. The driver now writes `state.json.driver-snapshot` through a
+same-directory temporary file and atomic move before deleting `state.json`.
+At the start of a later run, any leftover snapshot is restored through a
+temporary file before the scenario starts. Cleanup restores the snapshot first
+and deletes it only after the complete restore, so an interrupted run retains
+a recoverable copy. The repeated reattach scenario also accepts `--cycles`
+(minimum 3); the supervised 20-cycle rerun passed.
+
+The final autonomous gates were rerun after this safeguard: all four builds
+were clean, `scripts/validate.ps1` passed, the geometry self-test reported
+14,718,730 checks with zero failures, OpenSpec validation passed 12/12, and
+`ValidationDriver --list` passed without starting real-input scenarios.

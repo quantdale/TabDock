@@ -43,8 +43,11 @@ dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.Val
 Options:
 
 - `--yes` — skip the interactive confirmation (still requires a supervised run).
-- `--cycles N` — cycle count for `maximize-repro` (default 3) and `repeat-cycles` (default 5).
-- `--guest KIND` — guest app for scenarios that need one (default `pig`). The full set of kinds is `pig`, `wt`, `chrome-nogpu`, `chrome-gpu` (`maximize-repro`), `chrome-normal`, `edge-normal`, `firefox-normal` (`browser-*` scenarios), and `codex`, `chatgptclassic` (`realapp` — attaches to your own already-running app). Dispatched in `Scenarios.cs:573-636`.
+- `--cycles N` — cycle count for `maximize-repro` (default 3), `repeat-cycles`
+  (default 5), and `reattach-repeated-cycles` (minimum 3).
+- `--guest KIND` — guest app for scenarios that need one (default `pig`). The full set of kinds is `pig`, `wt`, `chrome-nogpu`, `chrome-gpu` (`maximize-repro`), `chrome-normal`, `edge-normal`, `firefox-normal` (`browser-*` scenarios), and `codex`, `chatgptclassic` (`realapp` — attaches to your own already-running app). Dispatch is defined in `Program.cs` and `Scenarios.cs`.
+- `--list` — print every dispatchable scenario and registration group, then exit
+  without starting TabDock or sending input.
 
 Core scenarios (from `Program.cs` / `Scenarios.cs`):
 
@@ -294,9 +297,13 @@ registration. To add one:
    does not accept is unreachable from the CLI (historically, mislabeling
    exactly this made `all` fail its own argument validation; see the comment
    at `Scenarios.cs:181-188`).
-4. **State isolation is automatic.** `StartScenario` (`Scenarios.cs:335-362`)
-   resets the per-scenario spawn budget, snapshots and deletes the user's
-   `state.json` (restored by `Cleanup`, `Scenarios.cs:506-509`), refuses to
+4. **State isolation is automatic.** `StartScenario` and `Cleanup`
+   (`Scenarios.cs:407-647`)
+   resets the per-scenario spawn budget, makes an atomic write-ahead disk copy
+   at `state.json.driver-snapshot` before deleting the user's `state.json`,
+   and `Cleanup` restores the disk copy before removing it. If a driver run
+   crashes, the next scenario recovers the leftover snapshot first; the
+   snapshot is never deleted before a complete restore. The method refuses to
    start while an unspawned TabDock is running, and spawns a fresh TabDock
    instance. Any process you start must go through
    `GuardedProc.SpawnGuarded`/`Track` (`GuardedProc.cs:47-81`), or `Cleanup`

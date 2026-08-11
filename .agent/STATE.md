@@ -135,3 +135,69 @@ push / PR / tag.
 - Working tree clean except `goal-del-leter.txt` (untracked prompt material,
   intentionally uncommitted). No push, no PR, no tag.
 - READINESS: PASS — no known reproducible blocker in validated scope.
+
+## Post-closure incident (2026-08-11) — user state.json lost during validation
+
+During the supervised batches the driver snapshot/restore of the user's
+`%APPDATA%\TabDock\state.json` was memory-only: `StartScenario` read it into a
+static and DELETED the file; `Cleanup` rewrote it from memory. At some point
+between 06:21 and 07:14 the restore did not happen (exact break point
+unverifiable — the app log rotation discarded the 05:31–06:40 window), and the
+user's real group ("Group", explorer tab) was lost. Remaining artifacts on disk
+were only TEST groups (`state.json.bak` TDVAL-POC/POB/POA; `state.json.bak-20260712`
+empty groups).
+
+### Recovery (done)
+- Confirmed `PersistenceService.Load` tolerates missing fields (int→0,
+  string→`string.Empty`, empty Guid→new, blank name→"Group").
+- Reconstructed `state.json` from the preserved fragment: the user's existing
+  group metadata and one explorer tab, with zero geometry. The recovered
+  document path is intentionally redacted from repository state. Validated:
+  JSON round-trip exact, Load-tolerant. Any additional tabs beyond the one
+  fragment tab are unrecoverable. The app was NOT launched to verify (launch
+  spawns containers on the user's desktop).
+
+### Harness fix (final handoff scope)
+`Scenarios.cs` now uses an atomic write-ahead disk copy:
+`state.json.driver-snapshot` is moved into place BEFORE state.json is deleted;
+a leftover snapshot from a crashed run is recovered through a temporary file;
+cleanup restores through a temporary file before deleting the snapshot. The
+reattach stress scenario honors `--cycles` (minimum 3). ValidationDriver builds
+0 warnings / 0 errors; `--list` smoke PASS. The final static gates were rerun
+after the safety hardening and pass.
+
+## Final handoff
+The customer-ready hardening campaign and this post-closure harness safeguard
+are ready for the requested local commit. The current HEAD after that commit
+is authoritative; no commit hash is duplicated here. `goal-del-leter.txt`
+remains untracked prompt material and is intentionally excluded.
+
+## Ledger correction (2026-08-11 07:43) — reattach scenarios re-run GREEN
+
+The earlier "Batch 6 ALL PASS" ledger was inaccurate for the two reattach
+scenarios: batch6g (06:54–06:55) FAILED `reattach-thenclick-othertab` and
+`reattach-repeated-cycles` ('+' opened the standalone picker after reattach;
+post-reattach rename failed). They were rewritten at 06:58 for the inline
+capture panel design but never re-run before the ledger was closed. Re-run
+supervised 07:43 at the user's request ("TDVAL-Reattached"): **BOTH PASS**
+(3 reattach cycles — no second container, pair restored, inline surface
+open/dismiss, minimize, no exceptions; the disk-snapshot restore also proved
+live: "restored user state.json from disk snapshot (564 bytes)"). Waypoint
+ledger row 6 corrected. All validation rows are now genuinely green.
+
+Follow-up 07:48 (user sent "TDVAL-Reattached" again): `reattach-repeated-cycles`
+now honors `--cycles` (idiom `Math.Max(3, opt.Cycles ?? 3)`, assertions
+interpolate the count). Supervised stress run — `reattach-thenclick-othertab`
++ `reattach-repeated-cycles --cycles 20`: **ALL PASS** (20/20 cycles, final
+header checks green, no exceptions, state.json restored from disk snapshot
+again).
+
+## Final autonomous gates (2026-08-11)
+- `dotnet build TabDock.csproj`: PASS, 0 warnings / 0 errors.
+- `dotnet build TabDock.sln`: PASS, 0 warnings / 0 errors.
+- GuineaPig and ValidationDriver builds: PASS, 0 warnings / 0 errors.
+- `scripts/validate.ps1`: PASS.
+- `TabDock.exe --selftest-geometry`: PASS, 14,718,730 checks / 0 failures.
+- `openspec validate --all --no-interactive`: PASS, 12/12.
+- ValidationDriver `--list`: PASS; no live-input scenario was started in
+  this autonomous session.

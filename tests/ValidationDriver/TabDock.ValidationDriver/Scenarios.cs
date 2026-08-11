@@ -389,21 +389,64 @@ internal static partial class Scenarios
     private static string StateJsonPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TabDock", "state.json");
 
-    /// <summary>Per-scenario snapshot of the user's state.json (null = file absent).</summary>
+    /// <summary>Disk mirror of the state.json snapshot (write-ahead backup; see StartScenario).</summary>
+    private static string SnapshotJsonPath => StateJsonPath + ".driver-snapshot";
+
+    /// <summary>Same-directory staging paths used to keep snapshot moves atomic.</summary>
+    private static string SnapshotTempJsonPath => StateJsonPath + ".driver-snapshot.tmp";
+    private static string RestoreTempJsonPath => StateJsonPath + ".driver-restore.tmp";
+
+    /// <summary>
+    /// Per-scenario snapshot of the user's state.json (null = file absent), mirrored to
+    /// disk at SnapshotJsonPath as a write-ahead backup so a driver crash mid-scenario
+    /// can never lose the user's persisted state.
+    /// </summary>
     private static string? s_savedStateJson;
+    private static bool s_snapshotReady;
 
     private static Ctx StartScenario(string name)
     {
         GuardedProc.ResetScenarioBudget();
+        s_snapshotReady = false;
 
-        // Hermetic persisted state: snapshot the user's state.json and start this
-        // scenario's TabDock with a clean slate. Restored empty containers from
-        // groups accumulated by earlier sessions/runs otherwise cover the picker
-        // and tab strip, so real-input clicks land on the wrong window. Cleanup
-        // restores the snapshot after the scenario's TabDock has exited.
+        // Hermetic persisted state: snapshot the user's state.json to BOTH a
+        // disk copy (SnapshotJsonPath) and memory before clearing it for this
+        // scenario. Restored empty containers from groups accumulated by earlier
+        // sessions/runs otherwise cover the picker and tab strip, so real-input
+        // clicks land on the wrong window. Cleanup restores the snapshot after
+        // the scenario's TabDock has exited.
         try
         {
+            // Remove only staging files left by an interrupted copy. The
+            // completed disk snapshot remains authoritative until cleanup has
+            // restored state.json and removed it.
+            if (File.Exists(SnapshotTempJsonPath))
+                File.Delete(SnapshotTempJsonPath);
+            if (File.Exists(RestoreTempJsonPath))
+                File.Delete(RestoreTempJsonPath);
+
+            // A previous run may have crashed before Cleanup could restore. In
+            // that case the disk snapshot is the authoritative copy of the
+            // user's state, even if TabDock managed to write a partial state
+            // file before the driver died. Restore through a same-directory
+            // temporary file so the destination is never torn.
+            if (File.Exists(SnapshotJsonPath))
+            {
+                File.Copy(SnapshotJsonPath, RestoreTempJsonPath, overwrite: true);
+                File.Move(RestoreTempJsonPath, StateJsonPath, overwrite: true);
+                GuardedProc.Log($"  RECOVERED user state.json from leftover disk snapshot {SnapshotJsonPath}.");
+            }
+
             s_savedStateJson = File.Exists(StateJsonPath) ? File.ReadAllText(StateJsonPath) : null;
+            if (s_savedStateJson != null)
+            {
+                // Keep the original state file intact until the complete
+                // write-ahead copy has been atomically moved into place.
+                File.Copy(StateJsonPath, SnapshotTempJsonPath, overwrite: true);
+                File.Move(SnapshotTempJsonPath, SnapshotJsonPath, overwrite: true);
+                s_snapshotReady = true;
+                GuardedProc.Log($"  state.json snapshot -> {SnapshotJsonPath}.");
+            }
             if (s_savedStateJson != null)
                 File.Delete(StateJsonPath);
         }
@@ -411,6 +454,7 @@ internal static partial class Scenarios
         {
             GuardedProc.Log($"  WARNING: could not snapshot/clear state.json: {ex.Message}");
             s_savedStateJson = null;
+            s_snapshotReady = false;
         }
 
         Process[] strays = Process.GetProcessesByName("TabDock");
@@ -559,12 +603,36 @@ internal static partial class Scenarios
         {
             GuardedProc.CleanupTrackedProcesses();
 
-            // Put the user's state.json back exactly as it was before the scenario
-            // (after TabDock has exited, so its exit-save cannot overwrite it again).
+            // Put the user's state.json back exactly as it was before the
+            // scenario (after TabDock has exited, so its exit-save cannot
+            // overwrite it again). The disk snapshot is authoritative: it is
+            // also what survives a driver crash that bypassed this finally block.
             try
             {
-                if (s_savedStateJson != null)
-                    File.WriteAllText(StateJsonPath, s_savedStateJson);
+                string? saved = null;
+                bool restoredFromDisk = false;
+                if (s_snapshotReady && File.Exists(SnapshotJsonPath))
+                {
+                    // Restore before deleting the backup. If the driver dies
+                    // during cleanup, the complete snapshot remains available
+                    // for the next scenario run.
+                    File.Copy(SnapshotJsonPath, RestoreTempJsonPath, overwrite: true);
+                    File.Move(RestoreTempJsonPath, StateJsonPath, overwrite: true);
+                    restoredFromDisk = true;
+                    File.Delete(SnapshotJsonPath);
+                    GuardedProc.Log($"  restored user state.json from disk snapshot {SnapshotJsonPath}.");
+                }
+                saved = s_savedStateJson;
+
+                if (restoredFromDisk)
+                {
+                    GuardedProc.Log($"  user state.json restored ({new FileInfo(StateJsonPath).Length} bytes).");
+                }
+                else if (saved != null)
+                {
+                    File.WriteAllText(StateJsonPath, saved);
+                    GuardedProc.Log($"  user state.json restored ({new FileInfo(StateJsonPath).Length} bytes).");
+                }
                 else if (File.Exists(StateJsonPath))
                     File.Delete(StateJsonPath);
             }
@@ -572,6 +640,7 @@ internal static partial class Scenarios
             {
                 GuardedProc.Log($"  WARNING: could not restore state.json: {ex.Message}");
             }
+            s_snapshotReady = false;
 
             GuardedProc.Log("  Cleanup: done.");
         }

@@ -103,10 +103,11 @@ internal static partial class Scenarios
 
     // -------------------------------------------------------------------------
     // 32. reattach-repeated-cycles: same regression target as
-    //     reattach-thenclick-othertab, but the pop-out/recapture cycle runs 3x
-    //     on the SAME guest before the final header-control verification —
-    //     targets stale drag/click state that might only accumulate across
-    //     MULTIPLE cycles rather than surface on the very first one.
+    //     reattach-thenclick-othertab, but the pop-out/recapture cycle runs
+    //     --cycles times (default 3) on the SAME guest before the final
+    //     header-control verification — targets stale drag/click state that
+    //     might only accumulate across MULTIPLE cycles rather than surface on
+    //     the very first one.
     // -------------------------------------------------------------------------
     private static void ReattachRepeatedCycles(Ctx ctx, Options opt)
     {
@@ -115,7 +116,7 @@ internal static partial class Scenarios
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
         ctx.Check(TabCount(container) == 2, "2 tabs after capture");
 
-        const int cycles = 3;
+        int cycles = Math.Max(3, opt.Cycles ?? 3);
         for (int cycle = 1; cycle <= cycles; cycle++)
         {
             ClickTabMenuItem(ctx, container, pigB.Title, "Pop out");
@@ -137,15 +138,16 @@ internal static partial class Scenarios
             throw new InvalidOperationException("Could not bring the container to the foreground and tab A is obscured — refusing to click blind.");
         Input.ClickAt(tax, tay);
         ctx.Check(Util.WaitUntil(() => IsDocked(pigA.Hwnd, host), 3000),
-            "clicking the OTHER tab after 3 reattach cycles worked (no accumulated stale Mouse.Capture)");
+            $"clicking the OTHER tab after {cycles} reattach cycles worked (no accumulated stale Mouse.Capture)");
 
-        // Inline capture surface must still open (and toggle-close) after 3
-        // reattach cycles; the standalone picker is the launcher fallback only.
+        // Inline capture surface must still open (and toggle-close) after the
+        // requested reattach cycles; the standalone picker is the launcher
+        // fallback only.
         ClickAddWindowButton(container);
         AutomationElement? panelRoot = Uia.FromHwnd(container);
         bool panelOpened = panelRoot != null && Util.WaitUntil(() =>
             Uia.FindDescendantByName(panelRoot, ControlType.Button, "Add selected", null, out _) != null, 5000);
-        ctx.Check(panelOpened, "'+' add-window button still opens the inline capture surface after 3 reattach cycles");
+        ctx.Check(panelOpened, $"'+' add-window button still opens the inline capture surface after {cycles} reattach cycles");
         Thread.Sleep(300);
         ClickAddWindowButton(container);
         ctx.Check(Util.WaitUntil(() =>
@@ -154,14 +156,14 @@ internal static partial class Scenarios
             if (r == null)
                 return false;
             return Uia.FindDescendantByName(r, ControlType.Button, "Add selected", null, out _) == null;
-        }, 3000), "inline capture surface dismissed with the second '+' click after 3 cycles");
+        }, 3000), $"inline capture surface dismissed with the second '+' click after {cycles} cycles");
 
         ClickMinimizeButton(container);
-        ctx.Check(Util.WaitUntil(() => NativeMethods.IsIconic(container), 3000), "minimize still works after 3 reattach cycles");
+        ctx.Check(Util.WaitUntil(() => NativeMethods.IsIconic(container), 3000), $"minimize still works after {cycles} reattach cycles");
         NativeMethods.ShowWindow(container, NativeMethods.SW_RESTORE);
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsIconic(container), 3000), "container restored");
 
-        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines across all 3 reattach cycles");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, $"no EXCEPTION lines across all {cycles} reattach cycles");
         ctx.Check(pigA.Proc != null && !pigA.Proc.HasExited && pigB.Proc != null && !pigB.Proc.HasExited, "both pigs alive throughout");
     }
 }
