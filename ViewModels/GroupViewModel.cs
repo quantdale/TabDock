@@ -266,13 +266,48 @@ public sealed class GroupViewModel : ViewModelBase
 
     public void AddCapturedWindow(CapturedWindow window)
     {
-        _group.Members.Add(window);
-        var tvm = new TabViewModel(window);
-        tvm.PopOutRequested += OnPopOutRequested;
-        tvm.CloseWindowRequested += OnCloseWindowRequested;
-        tvm.Icon = _icons.GetFileIcon(window.ExePath);
-        Tabs.Add(tvm);
-        SetActiveTab(tvm);
+        TabViewModel? previousActive = ActiveTab;
+        TabViewModel? tvm = null;
+        bool memberAdded = false;
+        bool tabAdded = false;
+        try
+        {
+            // Finish all managed-object construction before mutating either
+            // authoritative collection. If icon/view-model setup fails, no
+            // captured member is exposed to lifecycle monitoring halfway
+            // through the insertion.
+            tvm = new TabViewModel(window);
+            tvm.PopOutRequested += OnPopOutRequested;
+            tvm.CloseWindowRequested += OnCloseWindowRequested;
+            tvm.Icon = _icons.GetFileIcon(window.ExePath);
+
+            _group.Members.Add(window);
+            memberAdded = true;
+            Tabs.Add(tvm);
+            tabAdded = true;
+            SetActiveTab(tvm);
+        }
+        catch
+        {
+            if (tabAdded && tvm != null)
+                Tabs.Remove(tvm);
+
+            if (tvm != null)
+            {
+                tvm.PopOutRequested -= OnPopOutRequested;
+                tvm.CloseWindowRequested -= OnCloseWindowRequested;
+            }
+
+            if (memberAdded)
+                _group.Members.Remove(window);
+
+            if (previousActive != null && Tabs.Contains(previousActive))
+                ActiveTab = previousActive;
+            else if (Tabs.Count == 0)
+                ActiveTab = null;
+
+            throw;
+        }
     }
 
     /// <summary>
@@ -351,6 +386,24 @@ public sealed class GroupViewModel : ViewModelBase
         CloseRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>
+    /// Clears only the presentation-side tabs after an emergency release has
+    /// already returned the native windows to standalone. This is used by the
+    /// session-ending path so a cancelled logoff cannot leave stale captured
+    /// tabs visible in an otherwise normalized group.
+    /// </summary>
+    public void ClearReleasedTabsAfterSessionEnding()
+    {
+        _splitComposite = null;
+        foreach (TabViewModel tab in Tabs)
+        {
+            tab.PopOutRequested -= OnPopOutRequested;
+            tab.CloseWindowRequested -= OnCloseWindowRequested;
+        }
+        Tabs.Clear();
+        ActiveTab = null;
+    }
+
     // Pop-out is an ordinary visible release; it was a second, drifted copy of
     // ReleaseTab's body (which is where the "keep the active tab active" rule
     // lives), so it delegates instead of duplicating it.
@@ -359,7 +412,7 @@ public sealed class GroupViewModel : ViewModelBase
     private void OnCloseWindowRequested(object? sender, TabViewModel tab)
     {
         IntPtr hwnd = tab.Model.Hwnd;
-        if (hwnd == IntPtr.Zero || !NativeMethods.IsWindow(hwnd))
+        if (hwnd == IntPtr.Zero || !_manager.IsCurrentCapturedWindow(tab.Model))
         {
             // Window already gone; just clean up the dead tab.
             ReleaseTab(tab);
@@ -373,19 +426,9 @@ public sealed class GroupViewModel : ViewModelBase
         // instead, the guest-initiated-hide path does; and if it shows a save
         // prompt or ignores WM_CLOSE, the tab correctly stays alive.
         //
-        // HWND-recycle guard immediately before posting: IsWindow above only
-        // proves the HWND value is currently a window, not that it is still
-        // OUR guest — the guest may have closed and Windows may already have
-        // reused the value for an unrelated window, which would then receive
-        // an arbitrary WM_CLOSE. Verify the owning PID matches the one stored
-        // at capture time.
-        NativeMethods.GetWindowThreadProcessId(hwnd, out uint currentPid);
-        if (currentPid != tab.Model.ProcessId)
-        {
-            _log.Log($"Close-window: skipping 0x{hwnd.ToInt64():X} — HWND recycled (expected PID {tab.Model.ProcessId}, now {currentPid}).");
-            ReleaseTab(tab);
-            return;
-        }
+        // The shepherd gate above checks the owning PID, stable class, and
+        // executable immediately before posting. Titles are intentionally
+        // excluded because guests can change them while captured.
         if (!NativeMethods.PostMessage(hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero))
             _log.Log($"Close-window: PostMessage(WM_CLOSE) to 0x{hwnd.ToInt64():X} failed: {NativeMethods.FormatLastError()}");
     }

@@ -26,6 +26,7 @@ internal sealed class GuestInfo
     public uint Pid;
     public IntPtr Hwnd;
     public string Title = string.Empty;
+    public WindowIdentity? Identity;
     public bool IsPig;
 
     /// <summary>
@@ -62,9 +63,12 @@ internal sealed class Ctx
     public Process TabDock = null!;
     public uint TabDockPid;
     public IntPtr MainHwnd;
+    public string MainClassName = string.Empty;
+    public WindowIdentity? MainIdentity;
     public long LogOffset;
     public readonly List<GuestInfo> Guests = new List<GuestInfo>();
     public readonly List<IntPtr> Containers = new List<IntPtr>();
+    public readonly List<WindowIdentity> ContainerIdentities = new List<WindowIdentity>();
     public bool Pass = true;
 
     public void Check(bool condition, string what)
@@ -377,7 +381,21 @@ internal static partial class Scenarios
         finally
         {
             if (ctx != null)
+            {
                 Cleanup(ctx);
+                ctx.Check(NoSpawnedGuestWindowsRemain(ctx), "cleanup left no spawned guest top-level windows");
+            }
+            else
+            {
+                // StartScenario can fail after isolating state.json but before
+                // it returns a context (for example, a spawned TabDock never
+                // creates its MainWindow). Clean tracked processes first so a
+                // partial app cannot write over the restored user state, then
+                // apply the snapshot directly.
+                GuardedProc.CleanupTrackedProcesses();
+                RestoreStateSnapshot();
+                GuardedProc.Log("  Cleanup: setup failed before context creation; state snapshot restored.");
+            }
             GuardedProc.Log($"SCENARIO {name}: {(ctx != null && ctx.Pass ? "PASS" : "FAIL")}");
         }
         return ctx != null && ctx.Pass;
@@ -407,6 +425,7 @@ internal static partial class Scenarios
     private static Ctx StartScenario(string name)
     {
         GuardedProc.ResetScenarioBudget();
+        Input.ResetIdentityScope();
         s_snapshotReady = false;
 
         // Hermetic persisted state: snapshot the user's state.json to BOTH a
@@ -452,9 +471,14 @@ internal static partial class Scenarios
         }
         catch (Exception ex)
         {
-            GuardedProc.Log($"  WARNING: could not snapshot/clear state.json: {ex.Message}");
+            // Running against the user's live state after a partial snapshot is
+            // not a safe fallback: TabDock could overwrite that state before
+            // cleanup gets a chance to restore it. Abort setup and let the
+            // unconditional failure path recover any write-ahead snapshot.
+            GuardedProc.Log($"  ERROR: could not establish isolated state.json snapshot: {ex.Message}");
             s_savedStateJson = null;
             s_snapshotReady = false;
+            throw new InvalidOperationException("ValidationDriver could not establish an isolated state snapshot; refusing to start TabDock.", ex);
         }
 
         Process[] strays = Process.GetProcessesByName("TabDock");
@@ -476,6 +500,10 @@ internal static partial class Scenarios
         ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
         if (ctx.MainHwnd == IntPtr.Zero)
             throw new InvalidOperationException("TabDock MainWindow did not appear within 20s.");
+        RememberMainWindow(ctx);
+
+        if (!Input.ForceForeground(ctx.MainHwnd))
+            throw new InvalidOperationException("ValidationDriver could not establish a verified TabDock foreground target.");
 
         Thread.Sleep(1000); // settle
         ctx.LogOffset = TabDockLog.RecordLogLength();
@@ -547,7 +575,19 @@ internal static partial class Scenarios
                 Thread.Sleep(500);
 
                 // 2) Graceful close: containers, then the main window.
-                var toClose = new HashSet<IntPtr>(ctx.Containers.Where(NativeMethods.IsWindow));
+                var toClose = new HashSet<IntPtr>();
+                for (int i = 0; i < ctx.ContainerIdentities.Count; i++)
+                {
+                    WindowIdentity identity = ctx.ContainerIdentities[i];
+                    if (TryRefreshStableIdentity(identity, out WindowIdentity current))
+                    {
+                        ctx.ContainerIdentities[i] = current;
+                        Input.RegisterIdentity(current);
+                        toClose.Add(current.Hwnd);
+                    }
+                    else
+                        GuardedProc.Log($"  Cleanup: refusing stale/unverified container HWND 0x{identity.Hwnd.ToInt64():X}.");
+                }
                 foreach (IntPtr h in Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true))
                 {
                     string t = NativeMethods.GetWindowTextString(h) ?? string.Empty;
@@ -560,16 +600,17 @@ internal static partial class Scenarios
                 foreach (IntPtr h in toClose)
                 {
                     GuardedProc.Log($"  Cleanup: WM_CLOSE -> container 0x{h.ToInt64():X}.");
-                    NativeMethods.PostMessage(h, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+                    VerifiedWindowOps.PostMessage(h, ctx.TabDockPid, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
                 }
 
                 Thread.Sleep(300);
                 HandleCloseGroupMessageBox(ctx, 3000);
 
-                if (NativeMethods.IsWindow(ctx.MainHwnd))
+                if (IsCurrentMainWindow(ctx))
                 {
                     GuardedProc.Log("  Cleanup: WM_CLOSE -> MainWindow.");
-                    NativeMethods.PostMessage(ctx.MainHwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+                    if (Discover.TryCaptureIdentity(ctx.MainHwnd, out WindowIdentity mainIdentity))
+                        VerifiedWindowOps.PostMessage(mainIdentity, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
                 }
                 HandleCloseGroupMessageBox(ctx, 2000);
 
@@ -588,10 +629,13 @@ internal static partial class Scenarios
             foreach (GuestInfo g in ctx.Guests)
             {
                 if (g.Proc != null && !g.Proc.HasExited && GuardedProc.IsAncestorOfCurrentProcess(g.Proc.Id)
-                    && NativeMethods.IsWindow(g.Hwnd))
+                    && g.Identity is WindowIdentity identity
+                    && TryRefreshStableIdentity(identity, out WindowIdentity currentGuestIdentity))
                 {
                     GuardedProc.Log($"  Cleanup: WM_CLOSE -> guest window 0x{g.Hwnd.ToInt64():X} ('{g.Title}') (shared-host process left untouched).");
-                    NativeMethods.PostMessage(g.Hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+                    g.Identity = currentGuestIdentity;
+                    Input.RegisterIdentity(currentGuestIdentity);
+                    VerifiedWindowOps.PostMessage(currentGuestIdentity, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
                 }
             }
         }
@@ -602,47 +646,60 @@ internal static partial class Scenarios
         finally
         {
             GuardedProc.CleanupTrackedProcesses();
-
-            // Put the user's state.json back exactly as it was before the
-            // scenario (after TabDock has exited, so its exit-save cannot
-            // overwrite it again). The disk snapshot is authoritative: it is
-            // also what survives a driver crash that bypassed this finally block.
-            try
-            {
-                string? saved = null;
-                bool restoredFromDisk = false;
-                if (s_snapshotReady && File.Exists(SnapshotJsonPath))
-                {
-                    // Restore before deleting the backup. If the driver dies
-                    // during cleanup, the complete snapshot remains available
-                    // for the next scenario run.
-                    File.Copy(SnapshotJsonPath, RestoreTempJsonPath, overwrite: true);
-                    File.Move(RestoreTempJsonPath, StateJsonPath, overwrite: true);
-                    restoredFromDisk = true;
-                    File.Delete(SnapshotJsonPath);
-                    GuardedProc.Log($"  restored user state.json from disk snapshot {SnapshotJsonPath}.");
-                }
-                saved = s_savedStateJson;
-
-                if (restoredFromDisk)
-                {
-                    GuardedProc.Log($"  user state.json restored ({new FileInfo(StateJsonPath).Length} bytes).");
-                }
-                else if (saved != null)
-                {
-                    File.WriteAllText(StateJsonPath, saved);
-                    GuardedProc.Log($"  user state.json restored ({new FileInfo(StateJsonPath).Length} bytes).");
-                }
-                else if (File.Exists(StateJsonPath))
-                    File.Delete(StateJsonPath);
-            }
-            catch (Exception ex)
-            {
-                GuardedProc.Log($"  WARNING: could not restore state.json: {ex.Message}");
-            }
-            s_snapshotReady = false;
-
+            RestoreStateSnapshot();
             GuardedProc.Log("  Cleanup: done.");
+        }
+    }
+
+    /// <summary>
+    /// Restores the user's state.json from the write-ahead disk snapshot, with
+    /// the in-memory copy as a fallback. Idempotent so setup failures can call
+    /// it even when no TabDock context was returned.
+    /// </summary>
+    private static void RestoreStateSnapshot()
+    {
+        if (!s_snapshotReady && s_savedStateJson == null && !File.Exists(SnapshotJsonPath))
+            return;
+
+        try
+        {
+            bool restoredFromDisk = false;
+            if (File.Exists(SnapshotJsonPath))
+            {
+                // Restore before deleting the backup. If the driver dies
+                // during cleanup, the complete snapshot remains available
+                // for the next scenario run.
+                File.Copy(SnapshotJsonPath, RestoreTempJsonPath, overwrite: true);
+                File.Move(RestoreTempJsonPath, StateJsonPath, overwrite: true);
+                restoredFromDisk = true;
+                File.Delete(SnapshotJsonPath);
+                GuardedProc.Log($"  restored user state.json from disk snapshot {SnapshotJsonPath}.");
+            }
+
+            if (restoredFromDisk)
+            {
+                GuardedProc.Log($"  user state.json restored ({new FileInfo(StateJsonPath).Length} bytes).");
+            }
+            else if (s_savedStateJson != null)
+            {
+                File.WriteAllText(StateJsonPath, s_savedStateJson);
+                GuardedProc.Log($"  user state.json restored ({new FileInfo(StateJsonPath).Length} bytes).");
+            }
+            else if (File.Exists(StateJsonPath))
+            {
+                // The original state was absent; remove only the file created
+                // by the isolated scenario.
+                File.Delete(StateJsonPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            GuardedProc.Log($"  WARNING: could not restore state.json: {ex.Message}");
+        }
+        finally
+        {
+            s_snapshotReady = false;
+            s_savedStateJson = null;
         }
     }
 
@@ -669,14 +726,15 @@ internal static partial class Scenarios
             IntPtr noBtn = Discover.FindChildWindowByText(dlg, new[] { "&No", "No" });
             if (noBtn != IntPtr.Zero)
             {
-                Input.ForceForeground(dlg);
+                if (!Input.ForceForeground(dlg))
+                    throw new InvalidOperationException("Could not bring the cleanup prompt to the foreground; refusing to click.");
                 NativeMethods.GetWindowRect(noBtn, out NativeMethods.RECT rc);
                 Input.ClickAt(rc.left + rc.Width / 2, rc.top + rc.Height / 2);
             }
             else
             {
                 GuardedProc.Log("  Cleanup: 'No' button not found; sending WM_CLOSE to the dialog.");
-                NativeMethods.PostMessage(dlg, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+                VerifiedWindowOps.PostMessage(dlg, ctx.TabDockPid, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
             }
             Thread.Sleep(500);
         }
@@ -694,6 +752,7 @@ internal static partial class Scenarios
         g.Hwnd = Discover.WaitForTopLevelWindow(g.Pid, t => t == title, 15000);
         if (g.Hwnd == IntPtr.Zero)
             throw new InvalidOperationException($"Pig window '{title}' did not appear within 15s.");
+        RememberGuestWindow(g);
         ctx.Guests.Add(g);
         GuardedProc.Log($"  Pig '{title}' PID {g.Pid} HWND 0x{g.Hwnd.ToInt64():X}.");
         return g;
@@ -799,10 +858,15 @@ internal static partial class Scenarios
         (IntPtr hwnd, uint pid) = candidates[0];
         GuardedProc.Log($"  Attaching to existing real app '{processName}' PID {pid} HWND 0x{hwnd.ToInt64():X} (never spawned, never killed by this driver).");
 
+        if (!Discover.TryCaptureIdentity(hwnd, out WindowIdentity attachedIdentity)
+            || attachedIdentity.ProcessId != pid)
+            throw new InvalidOperationException("Attached real-app window failed immediate identity verification; refusing to touch it.");
+
         if (!NativeMethods.IsWindowVisible(hwnd))
         {
             GuardedProc.Log($"  '{exactTitle}' window is currently hidden (tray state); revealing with ShowWindow(SW_SHOW).");
-            NativeMethods.ShowWindow(hwnd, NativeMethods.SW_SHOW);
+            if (!VerifiedWindowOps.ShowWindow(attachedIdentity, NativeMethods.SW_SHOW))
+                throw new InvalidOperationException("Attached real-app window changed while being revealed; refusing to continue.");
             Thread.Sleep(500);
         }
 
@@ -815,6 +879,7 @@ internal static partial class Scenarios
             IsPig = false,
             DoNotKill = true,
         };
+        RememberGuestWindow(g);
         ctx.Guests.Add(g);
         return g;
     }
@@ -871,6 +936,7 @@ internal static partial class Scenarios
         };
         if (string.IsNullOrEmpty(g.Title))
             throw new InvalidOperationException("Guest window has no title; cannot match a picker row safely.");
+        RememberGuestWindow(g);
         ctx.Guests.Add(g);
         GuardedProc.Log($"  Guest '{g.Title}' PID {g.Pid} HWND 0x{g.Hwnd.ToInt64():X}.");
         return g;
@@ -956,6 +1022,7 @@ internal static partial class Scenarios
             VerifyToken = fileName,
             VerifyFilePath = tempFile,
         };
+        RememberGuestWindow(g);
         ctx.Guests.Add(g);
         GuardedProc.Log($"  Notepad guest '{g.Title}' PID {g.Pid} HWND 0x{g.Hwnd.ToInt64():X} file='{fileName}' isOurProcess={isOurProcess}.");
         return g;
@@ -972,7 +1039,8 @@ internal static partial class Scenarios
         var before = new HashSet<IntPtr>(Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true));
 
         // Foreground handling is arranging (not validating); the hotkey is real input.
-        Input.ForceForeground(ctx.MainHwnd);
+        if (!Input.ForceForeground(ctx.MainHwnd))
+            throw new InvalidOperationException("Could not bring TabDock to the foreground; refusing to send the capture hotkey.");
         Thread.Sleep(400);
         Input.SendHotkeyCtrlAltG();
 
@@ -1055,6 +1123,13 @@ internal static partial class Scenarios
             bool toggledOn = false;
             for (int attempt = 0; attempt < 3 && !toggledOn; attempt++)
             {
+                // A retry is a fresh UIA discovery. Do not reuse an element or
+                // rectangle obtained before the failed click; virtualization
+                // can recycle the row peer while the picker is settling.
+                row = FindPickerRow(picker, g.Title);
+                textEl = Uia.FindDescendantByName(picker, ControlType.Text, null, g.Title, out textCount);
+                if (textEl == null || textCount != 1)
+                    throw new InvalidOperationException($"Picker text label for '{g.Title}' was not uniquely rediscovered before retry (count={textCount}).");
                 // Vary the click point: start on the text label, then try the
                 // CheckBox glyph area (left edge), then the CheckBox center.
                 Rect r = Uia.GetElementRect(row);
@@ -1072,28 +1147,7 @@ internal static partial class Scenarios
                 toggledOn = ts == System.Windows.Automation.ToggleState.On;
             }
             if (!toggledOn)
-            {
-                // Fallback: programmatically toggle via UIA. Real-mouse clicks can
-                // miss on high-DPI or differently-templated rows, but the toggle
-                // pattern targets the element exactly and lets the scenario proceed.
-                try
-                {
-                    if (row.TryGetCurrentPattern(TogglePattern.Pattern, out object pattern))
-                    {
-                        ((TogglePattern)pattern).Toggle();
-                        Thread.Sleep(200);
-                        var ts = Uia.GetToggleState(row);
-                        GuardedProc.Log($"  CaptureIntoGroup: toggle pattern fallback state = {ts?.ToString() ?? "<null>"}.");
-                        toggledOn = ts == System.Windows.Automation.ToggleState.On;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    GuardedProc.Log($"  CaptureIntoGroup: toggle pattern fallback threw: {ex.Message}");
-                }
-            }
-            if (!toggledOn)
-                throw new InvalidOperationException($"Picker row for '{g.Title}' did not toggle on after real clicks or toggle pattern fallback.");
+                throw new InvalidOperationException($"Picker row for '{g.Title}' did not toggle on after real clicks.");
             Thread.Sleep(200);
         }
 
@@ -1142,9 +1196,81 @@ internal static partial class Scenarios
         }
 
         Thread.Sleep(800); // settle
-        ctx.Containers.Add(container);
+        RememberContainer(ctx, container);
         GuardedProc.Log($"  Captured {guests.Length} guest(s) into container 0x{container.ToInt64():X} (host 0x{host.ToInt64():X}).");
         return (container, host);
+    }
+
+    private static void RememberMainWindow(Ctx ctx)
+    {
+        if (!Discover.TryCaptureIdentity(ctx.MainHwnd, out WindowIdentity identity)
+            || identity.ProcessId != ctx.TabDockPid
+            || !string.Equals(identity.Title, "TabDock", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("TabDock MainWindow failed process/class/title identity verification.");
+        }
+        ctx.MainClassName = identity.ClassName;
+        ctx.MainIdentity = identity;
+        Input.RegisterIdentity(identity);
+    }
+
+    private static bool IsCurrentMainWindow(Ctx ctx)
+    {
+        return Discover.TryCaptureIdentity(ctx.MainHwnd, out WindowIdentity identity)
+            && identity.ProcessId == ctx.TabDockPid
+            && string.Equals(identity.ClassName, ctx.MainClassName, StringComparison.Ordinal)
+            && string.Equals(identity.Title, "TabDock", StringComparison.Ordinal);
+    }
+
+    private static void RememberGuestWindow(GuestInfo guest)
+    {
+        if (!Discover.TryCaptureIdentity(guest.Hwnd, out WindowIdentity identity)
+            || identity.ProcessId != guest.Pid
+            || !string.Equals(identity.Title, guest.Title, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Guest HWND 0x{guest.Hwnd.ToInt64():X} failed process/class/title identity verification.");
+        }
+        guest.Identity = identity;
+        Input.RegisterIdentity(identity);
+    }
+
+    private static void RememberContainer(Ctx ctx, IntPtr hwnd)
+    {
+        if (!Discover.TryCaptureIdentity(hwnd, out WindowIdentity identity)
+            || identity.ProcessId != ctx.TabDockPid)
+        {
+            throw new InvalidOperationException($"Container HWND 0x{hwnd.ToInt64():X} failed process/class/title identity verification.");
+        }
+        ctx.Containers.Add(hwnd);
+        ctx.ContainerIdentities.Add(identity);
+        Input.RegisterIdentity(identity);
+    }
+
+    private static WindowIdentity GetRememberedContainerIdentity(Ctx ctx, IntPtr hwnd)
+    {
+        for (int i = 0; i < ctx.ContainerIdentities.Count; i++)
+        {
+            WindowIdentity identity = ctx.ContainerIdentities[i];
+            if (identity.Hwnd == hwnd)
+            {
+                if (!TryRefreshStableIdentity(identity, out WindowIdentity current))
+                    throw new InvalidOperationException($"Container HWND 0x{hwnd.ToInt64():X} changed identity; refusing a native window operation.");
+                ctx.ContainerIdentities[i] = current;
+                Input.RegisterIdentity(current);
+                return current;
+            }
+        }
+
+        throw new InvalidOperationException($"Container HWND 0x{hwnd.ToInt64():X} has no remembered identity; refusing a native window operation.");
+    }
+
+    private static bool TryRefreshStableIdentity(WindowIdentity expected, out WindowIdentity current)
+    {
+        if (!Discover.TryCaptureIdentity(expected.Hwnd, out current))
+            return false;
+        return current.ProcessId == expected.ProcessId
+            && string.Equals(current.ClassName, expected.ClassName, StringComparison.Ordinal)
+            && string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -1414,6 +1540,12 @@ internal static partial class Scenarios
             bool toggledOn = false;
             for (int attempt = 0; attempt < 3 && !toggledOn; attempt++)
             {
+                root = Uia.FromHwnd(existingContainer)
+                    ?? throw new InvalidOperationException("Inline capture root disappeared before a retry.");
+                textEl = Uia.FindDescendantByName(root, ControlType.Text, null, g.Title, out int retryTextCount);
+                if (textEl == null || retryTextCount != 1)
+                    throw new InvalidOperationException($"Inline panel row for '{g.Title}' was not uniquely rediscovered before retry (count={retryTextCount}).");
+                row = Uia.NearestAncestorOfType(textEl, ControlType.CheckBox) ?? textEl;
                 (int cx, int cy) = attempt switch
                 {
                     0 => Uia.Center(textEl),
@@ -1424,23 +1556,7 @@ internal static partial class Scenarios
                 toggledOn = Uia.GetToggleState(row) == System.Windows.Automation.ToggleState.On;
             }
             if (!toggledOn)
-            {
-                try
-                {
-                    if (row.TryGetCurrentPattern(TogglePattern.Pattern, out object pattern))
-                    {
-                        ((TogglePattern)pattern).Toggle();
-                        Thread.Sleep(200);
-                        toggledOn = Uia.GetToggleState(row) == System.Windows.Automation.ToggleState.On;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    GuardedProc.Log($"  CaptureIntoExistingGroupViaAddButton: toggle pattern fallback threw: {ex.Message}");
-                }
-            }
-            if (!toggledOn)
-                throw new InvalidOperationException($"Inline panel row for '{g.Title}' did not toggle on after real clicks or toggle pattern fallback.");
+                throw new InvalidOperationException($"Inline panel row for '{g.Title}' did not toggle on after real clicks.");
             Thread.Sleep(200);
         }
 
@@ -1511,7 +1627,7 @@ internal static partial class Scenarios
             if (proc.HasExited)
                 return true;
             foreach (IntPtr h in Discover.GetTopLevelWindowsByPid(pid, visibleOnly: false))
-                NativeMethods.PostMessage(h, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+                VerifiedWindowOps.PostMessage(h, pid, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
             Thread.Sleep(300);
         }
         return proc.HasExited;
@@ -1572,6 +1688,16 @@ internal static partial class Scenarios
         {
             if (g.Proc == null || g.Proc.HasExited)
                 return false;
+
+            if (g.Identity is not WindowIdentity identity
+                || !TryRefreshStableIdentity(identity, out WindowIdentity currentIdentity)
+                || currentIdentity.ProcessId != g.Pid)
+            {
+                GuardedProc.Log($"  VerifyGuestForKill: refusing PID {g.Proc.Id} — guest HWND identity is no longer stable.");
+                return false;
+            }
+            g.Identity = currentIdentity;
+            Input.RegisterIdentity(currentIdentity);
 
             string processName;
             try { processName = g.Proc.ProcessName; }
@@ -1694,7 +1820,8 @@ internal static partial class Scenarios
                 IntPtr btn = Discover.FindChildWindowByText(dlg, buttonTexts);
                 if (btn != IntPtr.Zero)
                 {
-                    Input.ForceForeground(dlg);
+                    if (!Input.ForceForeground(dlg))
+                        throw new InvalidOperationException("Could not bring the message box to the foreground; refusing to click.");
                     NativeMethods.GetWindowRect(btn, out NativeMethods.RECT rc);
                     Input.ClickAt(rc.left + rc.Width / 2, rc.top + rc.Height / 2);
                     return true;
@@ -1724,6 +1851,30 @@ internal static partial class Scenarios
             ok = false;
             return true;
         }, IntPtr.Zero);
+        return ok;
+    }
+
+    /// <summary>
+    /// Post-cleanup assertion required by e2e-input-safety. Unlike the older
+    /// visible-prefix sweep, this checks every top-level window (including
+    /// hidden tray-style windows) for every disposable guest PID this scenario
+    /// spawned. Explicitly attached real apps are excluded because the driver
+    /// is forbidden to close or kill them.
+    /// </summary>
+    private static bool NoSpawnedGuestWindowsRemain(Ctx ctx)
+    {
+        bool ok = true;
+        foreach (GuestInfo guest in ctx.Guests)
+        {
+            if (guest.DoNotKill)
+                continue;
+
+            foreach (IntPtr hwnd in Discover.GetTopLevelWindowsByPid(guest.Pid, visibleOnly: false))
+            {
+                GuardedProc.Log($"  Cleanup orphan: spawned guest '{guest.Title}' still owns HWND 0x{hwnd.ToInt64():X}.");
+                ok = false;
+            }
+        }
         return ok;
     }
 

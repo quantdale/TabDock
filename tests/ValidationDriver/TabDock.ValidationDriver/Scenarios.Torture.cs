@@ -84,7 +84,7 @@ internal static partial class Scenarios
         ClickMinimizeButton(container);
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindowVisible(chrome.Hwnd) && !NativeMethods.IsWindowVisible(terminal.Hwnd), 3000),
             "both split guests hide with the minimized container");
-        NativeMethods.ShowWindow(container, NativeMethods.SW_RESTORE);
+        VerifiedWindowOps.ShowWindow(container, ctx.TabDockPid, NativeMethods.SW_RESTORE);
         ctx.Check(Util.WaitUntil(() => NativeMethods.IsWindowVisible(chrome.Hwnd) && NativeMethods.IsWindowVisible(terminal.Hwnd), 3000),
             "both split guests restore after minimize");
 
@@ -107,7 +107,8 @@ internal static partial class Scenarios
             "Chrome re-captures into a new group");
 
         RefreshGuestTitle(edge);
-        Input.ForceForeground(container);
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Could not bring the torture container to the foreground.");
         ClickTabCloseButton(ctx, container, edge.EffectiveTabMatchKey);
         ctx.Check(Util.WaitUntil(() => IsReleasedAndShown(edge.Hwnd, host), 5000),
             "Edge X pop-out leaves it visible");
@@ -115,8 +116,8 @@ internal static partial class Scenarios
         ctx.Check(Util.WaitUntil(() => IsDocked(edge.Hwnd, edgeHost), 3000),
             "Edge re-captures after X pop-out");
 
-        Input.ForceForeground(chromeContainer);
-        Input.ForceForeground(edgeContainer);
+        if (!Input.ForceForeground(chromeContainer) || !Input.ForceForeground(edgeContainer))
+            throw new InvalidOperationException("Could not re-verify the final torture containers before foreground switching.");
         ctx.Check(NativeMethods.GetForegroundWindow() == edge.Hwnd || NativeMethods.GetForegroundWindow() == edgeContainer,
             "final group switch leaves the Edge group active");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0,
@@ -142,6 +143,12 @@ internal static partial class Scenarios
             app.Title = current;
             if (app.IsPig)
                 app.TabMatchKey = current;
+            if (Discover.TryCaptureIdentity(app.Hwnd, out WindowIdentity identity)
+                && identity.ProcessId == app.Pid)
+            {
+                app.Identity = identity;
+                Input.RegisterIdentity(identity);
+            }
         }
     }
 
@@ -157,7 +164,10 @@ internal static partial class Scenarios
             throw new InvalidOperationException("The validation console has no safe external HWND for the direct-activation step.");
         if (!Input.ForceForegroundRoot(external) || NativeMethods.GetForegroundWindow() != external)
             throw new InvalidOperationException("Could not establish the external foreground steal.");
-        NativeMethods.ShowWindow(external, NativeMethods.SW_RESTORE);
+        if (!Discover.TryCaptureIdentity(external, out WindowIdentity externalIdentity))
+            throw new InvalidOperationException("External window failed identity verification before restore.");
+        if (!VerifiedWindowOps.ShowWindow(externalIdentity, NativeMethods.SW_RESTORE))
+            throw new InvalidOperationException("External window changed during restore; refusing to continue.");
         NativeMethods.GetWindowRect(external, out NativeMethods.RECT externalRect);
         NativeMethods.RECT hostRect = Discover.GetClientScreenRect(host);
         int virtualLeft = NativeMethods.GetSystemMetrics(NativeMethods.SM_XVIRTUALSCREEN);
@@ -184,10 +194,15 @@ internal static partial class Scenarios
             {
                 int placedX = Math.Clamp(candidateXValue, virtualLeft, virtualRight - externalRect.Width);
                 int placedY = Math.Clamp(candidateYValue, virtualTop, virtualBottom - externalRect.Height);
-                NativeMethods.SetWindowPos(external, IntPtr.Zero, placedX, placedY, 0, 0,
-                    NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
-                NativeMethods.SetWindowPos(external, app.Hwnd, 0, 0, 0, 0,
-                    NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+                if (!Discover.TryCaptureIdentity(external, out externalIdentity)
+                    || !Discover.TryCaptureIdentity(app.Hwnd, out WindowIdentity appIdentity))
+                    throw new InvalidOperationException("A direct-activation target changed identity; refusing to reposition it.");
+                VerifiedWindowOps.SetWindowPos(externalIdentity, IntPtr.Zero, placedX, placedY, 0, 0,
+                    NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE,
+                    externalIdentity);
+                VerifiedWindowOps.SetWindowPos(externalIdentity, app.Hwnd, 0, 0, 0, 0,
+                    NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE,
+                    appIdentity);
                 if (IsPointOnWindow(app.Hwnd, x, y))
                 {
                     pointFree = true;

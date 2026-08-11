@@ -71,7 +71,7 @@ internal static partial class Scenarios
         // Minimize / restore.
         ClickMinimizeButton(container);
         ctx.Check(Util.WaitUntil(() => NativeMethods.IsIconic(container), 3000), "minimize button minimized the container after the reattach");
-        NativeMethods.ShowWindow(container, NativeMethods.SW_RESTORE);
+        VerifiedWindowOps.ShowWindow(container, ctx.TabDockPid, NativeMethods.SW_RESTORE);
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsIconic(container), 3000), "container restored (test cleanup step, not the restore gesture itself)");
 
         // Rename (mirrors the `rename` scenario's exact pattern). Retried: the
@@ -160,7 +160,7 @@ internal static partial class Scenarios
 
         ClickMinimizeButton(container);
         ctx.Check(Util.WaitUntil(() => NativeMethods.IsIconic(container), 3000), $"minimize still works after {cycles} reattach cycles");
-        NativeMethods.ShowWindow(container, NativeMethods.SW_RESTORE);
+        VerifiedWindowOps.ShowWindow(container, ctx.TabDockPid, NativeMethods.SW_RESTORE);
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsIconic(container), 3000), "container restored");
 
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, $"no EXCEPTION lines across all {cycles} reattach cycles");

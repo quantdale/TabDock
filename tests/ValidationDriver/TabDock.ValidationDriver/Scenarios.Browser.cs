@@ -33,9 +33,9 @@ internal static partial class Scenarios
         long churnOff = TabDockLog.RecordLogLength();
         if (!Input.ForceForeground(container))
             throw new InvalidOperationException("Could not bring the browser container to the foreground — refusing to click blind.");
-        NativeMethods.ShowWindow(container, NativeMethods.SW_MINIMIZE);
+        VerifiedWindowOps.ShowWindow(container, ctx.TabDockPid, NativeMethods.SW_MINIMIZE);
         Thread.Sleep(600);
-        NativeMethods.ShowWindow(container, NativeMethods.SW_RESTORE);
+        VerifiedWindowOps.ShowWindow(container, ctx.TabDockPid, NativeMethods.SW_RESTORE);
         Thread.Sleep(800);
 
         (double bAfter, _) = SampleHost(host);

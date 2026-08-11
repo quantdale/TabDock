@@ -114,6 +114,9 @@ internal static class GuardedProc
                     }
                     Log($"Killing tracked process {p.Id} ({SafeName(p)})...");
                     p.Kill(entireProcessTree: true);
+                    // Do not restore the user's state snapshot while a
+                    // partially-started TabDock can still run its exit path.
+                    p.WaitForExit(2000);
                 }
             }
             catch (Exception ex)

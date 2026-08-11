@@ -51,6 +51,8 @@ internal static partial class Scenarios
         ctx.TabDockPid = (uint)td2.Id;
         ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
         ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched (MainWindow up)");
+        if (ctx.MainHwnd != IntPtr.Zero)
+            RememberMainWindow(ctx);
 
         ctx.Check(TabDockLog.WaitForLogLine(relaunchOffset, "SHEPHERD[rescue]", 10000),
             "TabDock log gained a SHEPHERD[rescue] line on the relaunch");
@@ -127,6 +129,8 @@ internal static partial class Scenarios
         ctx.TabDockPid = (uint)td2.Id;
         ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
         ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched (MainWindow up)");
+        if (ctx.MainHwnd != IntPtr.Zero)
+            RememberMainWindow(ctx);
 
         ctx.Check(TabDockLog.WaitForLogLine(relaunchOffset, "SHEPHERD[rescue]", 10000),
             "TabDock log gained a SHEPHERD[rescue] line on the relaunch");
@@ -209,6 +213,8 @@ internal static partial class Scenarios
         ctx.TabDockPid = (uint)td2.Id;
         ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
         ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched (MainWindow up)");
+        if (ctx.MainHwnd != IntPtr.Zero)
+            RememberMainWindow(ctx);
 
         Thread.Sleep(1500); // let RescueOrphanedWindows run (or correctly no-op) and settle
 
@@ -278,6 +284,8 @@ internal static partial class Scenarios
         ctx.TabDockPid = (uint)td2.Id;
         ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
         ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched cleanly (MainWindow up) after a kill mid-drag");
+        if (ctx.MainHwnd != IntPtr.Zero)
+            RememberMainWindow(ctx);
         ctx.Check(Util.WaitUntil(() => !ctx.TabDock.HasExited, 2000), "relaunched TabDock stays up (no immediate crash from any stuck drag/capture state)");
         ctx.Check(TabDockLog.CountNewLines(off, "EXCEPTION") == 0, "no EXCEPTION lines around the kill/relaunch");
     }

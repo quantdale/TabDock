@@ -1,49 +1,74 @@
 # Agent state
 
-## Current checkpoint — supervised UI/UX hardening follow-up (2026-08-11)
+## Current checkpoint — whole-codebase audit complete (2026-08-11)
 
-Objective: investigate the timing-sensitive post-caption-drag blanking found
-with Computer Use, verify the close-group modal against real captured guests,
-preserve the Shepherd/no-reparent architecture, and leave durable evidence.
+Objective: execute the repository-wide audit requested in `goal.txt`, preserve
+the Shepherd/no-reparent architecture, fix confirmed high/medium correctness,
+data-loss, HWND-safety, lifecycle, timer, persistence, and harness findings,
+and leave evidence-backed production-gate state.
 
-Status: implementation and validation complete for the exercised scope.
-Working tree is intentionally uncommitted on `main`; no push or PR was made.
+Status: autonomous audit and remediation complete for the audited scope. The
+worktree is intentionally uncommitted on `main`; no push, PR, reset, clean, or
+revert was performed. Final assessment: **READY WITH DEFERRED DEBT**.
 
 ## Completed
 
-- Read the supplied goal prompt and the repository guidance, including the
-  supervised-only real-input policy.
-- Reproduced the post-drag covered/blank guest state twice with Chrome,
-  File Explorer, and PredatorSense captured in one group. Added an explicit
-  follow-up Render reconciliation for `WM_EXITSIZEMOVE` when a coalesced pass
-  is already pending.
-- Fixed the close-group modal z-order race: chrome layout/pairing is suppressed
-  while the prompt is open; the container is temporarily raised; a one-shot
-  dispatcher tick raises the native dialog; teardown restores normal z-order
-  and reconciles the guest. No `SetParent` or guest style mutation was added.
-- Final Computer Use evidence: `Close group` appeared above PredatorSense with
-  Yes/No/Cancel usable; Escape restored the guest; a final bounded caption drag
-  settled with the full guest visible.
-- Updated the detailed waypoint at
-  `docs/internal/ui-ux-stabilization-waypoint.md` with the implementation,
-  retest, and remaining qualifications.
+- Recovered the repository baseline at `5404349998c49365f04873f0d7d5a2c53814b776`
+  and inspected production source, native interop, models/view models/views,
+  ValidationDriver/GuineaPig, Spike, project files, scripts, CI, docs, history,
+  and all 12 canonical OpenSpec specs.
+- Updated the durable audit waypoint at
+  `docs/internal/whole-codebase-audit-waypoint.md` with architecture, coverage,
+  WCA-01 through WCA-24, deferred debt, and exact validation.
+- Hardened hidden-window journal ordering/failure behavior and retryable rescue;
+  persistence unreadable-state handling and duplicate-ID repair; capture/picker
+  identity checks; transactional capture insertion; WinEvent hook transactions
+  and captured-member dispatch identity; startup/container rollback; session
+  ending normalization; native marker registration; and stale one-shot timers.
+- Strengthened ValidationDriver state-snapshot recovery, window identity gates,
+  verified native window operations, spawned-guest cleanup, UIA read-only
+  behavior, and global mouse/keyboard cleanup.
+- Updated canonical specs for journal retry/fail-closed hide, persistence
+  identity/read-failure behavior, fail-closed DPI probes, and session-ending
+  normalization. Corrected the internal guide's OpenSpec capability count to
+  12 and corrected architecture documentation for fail-closed DPI probes,
+  retryable rescue, and session-ending normalization.
+- Preserved all Shepherd invariants: no production `SetParent`, no guest style or
+  owner mutation, no `HWND_BOTTOM`, no production sleeps/polling workaround, and
+  `EVENT_OBJECT_REORDER` callback-time identity protection.
 
 ## Validation
 
-- `dotnet build TabDock.csproj --no-restore`: PASS, 0 warnings / 0 errors.
-- `dotnet build TabDock.sln --no-restore`: PASS, 0 warnings / 0 errors.
-- GuineaPig and ValidationDriver builds: PASS, 0 warnings / 0 errors.
-- `scripts/validate.ps1`: PASS.
-- `TabDock.exe --selftest-geometry`: PASS.
+- Main, ValidationDriver, GuineaPig, Spike, and solution `dotnet build` commands:
+  PASS, 0 warnings/errors.
+- `scripts\\validate.ps1`: PASS.
+- `scripts\\validate.ps1 -Publish`: PASS, including Release self-contained
+  single-file `win-x64` publish.
 - `openspec validate --all --no-interactive`: PASS, 12/12.
-- `git diff --check`: PASS (only normal LF/CRLF conversion warnings).
-- Native invariant audit found only existing positioning/event infrastructure;
-  no new reparenting, style mutation, bottoming, or production sleep/polling.
+- `TabDock.exe --selftest-geometry`: PASS, exit code 0.
+- `git diff --check`: PASS; only expected LF/CRLF conversion warnings.
+- `repowise update`: PASS/already up to date after final edits.
+- Static safety scans: no UIA action fallbacks; no direct scenario native
+  mutators outside verified helper/input layers; no production reparenting,
+  bottoming, guest style mutation, or production sleep/delay calls.
 
-## Remaining limits / next action
+## Important facts and limits
 
-- No full supervised ValidationDriver real-input batch was started in this
-  follow-up; the result is not a cross-machine monitor/DPI matrix and is not a
-  claim of universal bug-freedom.
-- Review the final diff and hand off the uncommitted changes. Do not commit or
-  push unless the user explicitly requests it.
+- The formal Codex Security Deep Scan did not start: its worker required a
+  managed filesystem permission profile unavailable in this session. Manual
+  source-based security review was completed; no plugin result is claimed.
+- No unattended ValidationDriver real-input run was performed. The repository
+  policy requires supervised desktop interaction. Cross-machine monitor/DPI and
+  native fault-injection cases therefore remain explicitly unverified.
+- Deferred debt is recorded in the waypoint: conservative shutdown flag
+  semantics after externally cancelled logoff; missing fault-injection seams;
+  supervised cross-monitor/DPI matrix; and low-priority native/icon-path checks.
+- Untracked `goal.txt` is user-supplied and must be preserved with the audit
+  changes; do not stage or delete it.
+
+## Next action
+
+Perform one final read-only `git status --short`/diff classification, then hand
+off the uncommitted work. If a supervised operator is available, run the
+documented ValidationDriver batch and the cross-monitor/DPI matrix; otherwise
+the autonomous gate is complete with the stated deferred debt.

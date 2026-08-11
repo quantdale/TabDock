@@ -89,6 +89,10 @@ public sealed class CapturePickerViewModel : ViewModelBase
             if (string.IsNullOrWhiteSpace(title))
                 return true;
 
+            string? className = NativeMethods.GetClassNameString(hwnd);
+            if (string.IsNullOrEmpty(className))
+                return true;
+
             if (_manager.IsOwnWindow(hwnd))
                 return true;
 
@@ -116,8 +120,10 @@ public sealed class CapturePickerViewModel : ViewModelBase
 
             NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
             string? exe = _icons.GetProcessImagePath(pid);
+            if (string.IsNullOrWhiteSpace(exe))
+                return true;
 
-            var info = new WindowInfo(hwnd, title, exe)
+            var info = new WindowInfo(hwnd, pid, className, title, exe)
             {
                 // Resolve the icon from the path already in hand. GetWindowIcon
                 // would re-derive it, paying a second OpenProcess +
@@ -141,6 +147,8 @@ public sealed class CapturePickerViewModel : ViewModelBase
         private ImageSource? _icon;
 
         public IntPtr Hwnd { get; }
+        public uint ProcessId { get; }
+        public string ClassName { get; }
         public string Title { get; }
         public string ExePath { get; }
 
@@ -156,12 +164,17 @@ public sealed class CapturePickerViewModel : ViewModelBase
             set => SetProperty(ref _icon, value);
         }
 
-        public WindowInfo(IntPtr hwnd, string title, string? exePath)
+        public WindowInfo(IntPtr hwnd, uint processId, string className, string title, string? exePath)
         {
             Hwnd = hwnd;
+            ProcessId = processId;
+            ClassName = className;
             Title = title;
             ExePath = exePath ?? string.Empty;
         }
+
+        public WindowCaptureTarget ToCaptureTarget()
+            => new WindowCaptureTarget(Hwnd, ProcessId, ClassName, Title, ExePath);
     }
 
     public sealed class GroupOption

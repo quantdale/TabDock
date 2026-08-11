@@ -27,12 +27,15 @@ public partial class CapturePickerWindow : Window
 
     private void OnGroupingRequested(object? sender, EventArgs e)
     {
-        var selected = _viewModel.Windows.Where(w => w.IsSelected).Select(w => w.Hwnd).ToList();
+        var selected = _viewModel.Windows
+            .Where(w => w.IsSelected)
+            .Select(w => w.ToCaptureTarget())
+            .ToList();
         Guid targetGroupId = _viewModel.SelectedGroupOption?.Id ?? Guid.Empty;
 
         Result = new CapturePickerResult
         {
-            SelectedHwnds = selected,
+            SelectedTargets = selected,
             TargetGroupId = targetGroupId,
         };
 

@@ -53,9 +53,22 @@ public class NativeHwndHost : HwndHost
                 lpszClassName = WindowClass,
             };
 
-            if (NativeMethods.RegisterClassEx(ref wc) == 0 && Marshal.GetLastWin32Error() != 0)
+            ushort classAtom = NativeMethods.RegisterClassEx(ref wc);
+            if (classAtom == 0)
             {
-                throw new InvalidOperationException($"RegisterClassEx failed: {NativeMethods.FormatLastError()}");
+                int error = Marshal.GetLastWin32Error();
+                if (error != NativeMethods.ERROR_CLASS_ALREADY_EXISTS)
+                {
+                    if (wc.hbrBackground != IntPtr.Zero)
+                        NativeMethods.DeleteObject(wc.hbrBackground);
+                    throw new InvalidOperationException($"RegisterClassEx failed: {NativeMethods.FormatLastError()}");
+                }
+
+                // The existing class owns its own background brush. The brush
+                // created for this failed registration was never transferred
+                // to the system and must be released here.
+                if (wc.hbrBackground != IntPtr.Zero)
+                    NativeMethods.DeleteObject(wc.hbrBackground);
             }
             s_classRegistered = true;
         }

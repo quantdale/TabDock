@@ -19,17 +19,38 @@ internal static partial class Scenarios
         // so simulate a held key the way it behaves at the hotkey registration:
         // Ctrl+Alt down, then a rapid series of G down/up taps for ~2 s — each tap
         // would have re-fired WM_HOTKEY without MOD_NOREPEAT.
-        Input.SendKeyDown(Input.VK_CONTROL);
-        Input.SendKeyDown(Input.VK_MENU);
-        var hold = Stopwatch.StartNew();
-        while (hold.ElapsedMilliseconds < 2000)
+        bool ctrlDown = false;
+        bool altDown = false;
+        try
         {
-            Input.SendKeyDown(Input.VK_G);
-            Input.SendKeyUp(Input.VK_G);
-            Thread.Sleep(120);
+            Input.SendKeyDown(Input.VK_CONTROL);
+            ctrlDown = true;
+            Input.SendKeyDown(Input.VK_MENU);
+            altDown = true;
+            var hold = Stopwatch.StartNew();
+            while (hold.ElapsedMilliseconds < 2000)
+            {
+                bool gDown = false;
+                try
+                {
+                    Input.SendKeyDown(Input.VK_G);
+                    gDown = true;
+                }
+                finally
+                {
+                    if (gDown)
+                        Input.SendKeyUp(Input.VK_G);
+                }
+                Thread.Sleep(120);
+            }
         }
-        Input.SendKeyUp(Input.VK_MENU);
-        Input.SendKeyUp(Input.VK_CONTROL);
+        finally
+        {
+            if (altDown)
+                Input.SendKeyUp(Input.VK_MENU);
+            if (ctrlDown)
+                Input.SendKeyUp(Input.VK_CONTROL);
+        }
         Thread.Sleep(800); // settle any queued opens
 
         var pickers = new List<IntPtr>();
@@ -81,7 +102,8 @@ internal static partial class Scenarios
             ctx.Check(owner != container1, "picker owner is NOT container 1");
             ctx.Check(owner != ctx.MainHwnd, "picker owner is NOT the main launcher");
 
-            Input.ForceForeground(picker);
+            if (!Input.ForceForeground(picker))
+                throw new InvalidOperationException("Could not bring picker to the foreground; refusing to send Esc.");
             Input.SendKey(Input.VK_ESCAPE);
             ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(picker), 3000), "picker dismissed with Esc without capturing");
         }
@@ -104,7 +126,9 @@ internal static partial class Scenarios
 
         if (!Input.ForceForeground(ctx.MainHwnd))
             throw new InvalidOperationException("Could not bring the launcher to the foreground — refusing to click blind.");
-        NativeMethods.PostMessage(ctx.MainHwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        if (!Discover.TryCaptureIdentity(ctx.MainHwnd, out WindowIdentity mainIdentity))
+            throw new InvalidOperationException("Launcher identity changed; refusing to close an unverified HWND.");
+        VerifiedWindowOps.PostMessage(mainIdentity, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindowVisible(ctx.MainHwnd), 3000), "launcher closed");
         Thread.Sleep(500);
         ctx.Check(!ctx.TabDock.HasExited, "TabDock still alive (populated container keeps the app running)");
@@ -118,7 +142,8 @@ internal static partial class Scenarios
             IntPtr owner = NativeMethods.GetWindow(picker, NativeMethods.GW_OWNER);
             ctx.Check(owner == container, $"picker owner resolves to the requesting container itself with the launcher gone (got 0x{owner.ToInt64():X})");
 
-            Input.ForceForeground(picker);
+            if (!Input.ForceForeground(picker))
+                throw new InvalidOperationException("Could not bring picker to the foreground; refusing to send Esc.");
             Input.SendKey(Input.VK_ESCAPE);
             ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(picker), 3000), "picker dismissed with Esc");
         }

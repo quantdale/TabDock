@@ -38,6 +38,8 @@ public partial class App : Application
     // True after Application_Exit disposes the WinEvent monitor. Guards the
     // deferred Stop() posted by SyncWinEventMonitor from running after disposal.
     private bool _winEventMonitorDisposed;
+    private System.Windows.Threading.DispatcherTimer? _winEventRetryTimer;
+    private int _winEventRetryAttempts;
 
     // Re-entrancy guard for ShowCapturePicker. ShowDialog runs a nested
     // dispatcher loop, which keeps pumping WM_HOTKEY to the HotkeyService sink
@@ -108,7 +110,7 @@ public partial class App : Application
             _shepherd = new WindowShepherdService(_log);
             _persistence = new PersistenceService(_log);
             _groups = new GroupManager(_shepherd, _persistence, _log);
-            _events = new WinEventMonitor(_groups.IsCapturedWindow, _log);
+            _events = new WinEventMonitor(_groups.IsCapturedWindow, _groups.GetCapturedWindow, _log);
             _hotkey = new HotkeyService(_log);
 
             // All WinEvent-driven guest lifecycle policy (destroy/hide teardown,
@@ -214,6 +216,7 @@ public partial class App : Application
         finally
         {
             FlushJournalGuarded("application exit");
+            StopWinEventMonitorRetry();
             _events?.Dispose();
             _winEventMonitorDisposed = true;
             _hotkey?.Dispose();
@@ -301,31 +304,37 @@ public partial class App : Application
             _log?.LogException("EmergencyReleaseAll during session ending", ex);
         }
 
-        // Leave GroupManager in a coherent post-release state. If the logoff is
-        // cancelled by another application, there must be no captured HWNDs left in
-        // the index and no live hooks repositioning now-unmanaged windows.
+        // Stop dispatch before clearing the captured index. If the logoff is
+        // cancelled by another application, no callback may act on a member
+        // while its native window is already standalone.
         try
         {
-            if (_groups != null)
-            {
-                foreach (var group in _groups.Groups.ToList())
-                {
-                    group.Members.Clear();
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _log?.LogException("Clearing group members during session ending", ex);
-        }
-
-        try
-        {
+            StopWinEventMonitorRetry();
             _events?.Stop();
         }
         catch (Exception ex)
         {
             _log?.LogException("Stopping WinEvent monitor during session ending", ex);
+        }
+
+        // Leave both the model and every open container in a coherent
+        // post-release state. Preserve the just-released members as layout
+        // intent before removing them from the captured index; otherwise a
+        // later save after a cancelled logoff would erase that metadata.
+        try
+        {
+            foreach (ContainerWindow container in _containers.Values.ToList())
+            {
+                try { container.ClearReleasedTabsAfterSessionEnding(); }
+                catch (Exception containerEx) { _log?.LogException("Normalizing container during session ending", containerEx); }
+            }
+
+            _groups?.ClearCapturedMembersAfterSessionEnding();
+            SaveStateGuarded("session-ending post-release normalization");
+        }
+        catch (Exception ex)
+        {
+            _log?.LogException("Clearing group members during session ending", ex);
         }
     }
 
@@ -391,8 +400,18 @@ public partial class App : Application
             // positioned and shown, so the hooks are live before there is
             // anything for them to miss.
             _events.Start();
+            if (_events.IsRunning)
+            {
+                StopWinEventMonitorRetry();
+            }
+            else
+            {
+                ScheduleWinEventMonitorRetry();
+            }
             return;
         }
+
+        StopWinEventMonitorRetry();
 
         // Removing hooks is deferred by one dispatcher turn. The zero-captured
         // transition is usually reached from inside a WinEvent handler (a guest
@@ -409,6 +428,62 @@ public partial class App : Application
         }));
     }
 
+    /// <summary>
+    /// A capture-count edge can occur only once while a partial native hook
+    /// install is failing. Retry a bounded number of times on the UI dispatcher
+    /// so a transient SetWinEventHook failure cannot leave an otherwise healthy
+    /// captured guest permanently unmonitored.
+    /// </summary>
+    private void ScheduleWinEventMonitorRetry()
+    {
+        if (_winEventRetryTimer != null || _winEventMonitorDisposed)
+            return;
+
+        _winEventRetryAttempts = 0;
+        var timer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1),
+        };
+        timer.Tick += (_, _) =>
+        {
+            if (!ReferenceEquals(_winEventRetryTimer, timer))
+            {
+                timer.Stop();
+                return;
+            }
+
+            if (_winEventMonitorDisposed || _events == null || !_groups.IsMonitoringNeeded)
+            {
+                StopWinEventMonitorRetry();
+                return;
+            }
+
+            _events.Start();
+            if (_events.IsRunning)
+            {
+                _log.Log("WinEventMonitor retry succeeded while captured windows remained active.");
+                StopWinEventMonitorRetry();
+                return;
+            }
+
+            _winEventRetryAttempts++;
+            if (_winEventRetryAttempts >= 3)
+            {
+                _log.Log("WinEventMonitor retry budget exhausted; captured windows remain active but native monitoring is unavailable.");
+                StopWinEventMonitorRetry();
+            }
+        };
+        _winEventRetryTimer = timer;
+        timer.Start();
+    }
+
+    private void StopWinEventMonitorRetry()
+    {
+        _winEventRetryTimer?.Stop();
+        _winEventRetryTimer = null;
+        _winEventRetryAttempts = 0;
+    }
+
     private void OnNewGroupRequested(object? sender, EventArgs e)
     {
         CreateAndOpenGroup(sender as Window);
@@ -422,9 +497,10 @@ public partial class App : Application
     private void CreateAndOpenGroup(Window? owner)
     {
         var group = _groups.CreateGroup();
+        ContainerWindow? window = null;
         try
         {
-            ContainerWindow window = OpenContainer(group);
+            window = OpenContainer(group);
             window.Activate();
         }
         catch (Exception ex)
@@ -433,6 +509,24 @@ public partial class App : Application
             // be saved on exit and re-opened at startup, turning a one-time failure
             // into a crash on every subsequent launch.
             _groups.RemoveGroup(group);
+            if (window != null)
+            {
+                try
+                {
+                    window.Close();
+                }
+                catch (Exception closeEx)
+                {
+                    _log.LogException($"CreateAndOpenGroup cleanup failed for group {group.Id}", closeEx);
+                }
+            }
+            if (_containers.TryGetValue(group.Id, out ContainerWindow? registered)
+                && ReferenceEquals(registered, window))
+            {
+                registered.GroupSelectedRequested -= OnContainerGroupSelectedRequested;
+                registered.NewGroupRequested -= OnContainerNewGroupRequested;
+                _containers.Remove(group.Id);
+            }
             _log.LogException("OpenContainer for new group", ex);
             MessageBox.Show(owner ?? _mainWindow, "Could not open the container for the new group.", "TabDock", MessageBoxButton.OK, MessageBoxImage.Error);
         }
@@ -527,7 +621,7 @@ public partial class App : Application
         }
 
         bool? result = picker.ShowDialog();
-        if (result != true || picker.Result == null || picker.Result.SelectedHwnds.Count == 0)
+        if (result != true || picker.Result == null || picker.Result.SelectedTargets.Count == 0)
             return;
 
         Group? group;
@@ -585,12 +679,12 @@ public partial class App : Application
             }
         }
 
-        foreach (var hwnd in picker.Result.SelectedHwnds)
+        foreach (WindowCaptureTarget target in picker.Result.SelectedTargets)
         {
-            string? error = container.CaptureWindow(hwnd);
+            string? error = container.CaptureWindow(target);
             if (error != null)
             {
-                _log.Log($"Capture failed for 0x{hwnd.ToInt64():X}: {error}");
+                _log.Log($"Capture failed for 0x{target.Hwnd.ToInt64():X}: {error}");
                 // Explicit owner: an owner-less MessageBox falls back to WPF's
                 // own default modal-parent resolution, which can disable more
                 // than just this container if it resolves unexpectedly.
@@ -619,35 +713,58 @@ public partial class App : Application
         var vm = new GroupViewModel(group, _groups, _icons, _log);
         // The container's "+" button funnels through this event; without the
         // subscription it is a dead control.
-        ContainerWindow window;
+        ContainerWindow? window = null;
         try
         {
             window = new ContainerWindow(vm, _groups, _shepherd, _log, _icons);
             vm.AddWindowsRequested += (_, _) => window.OpenCapturePanel();
             window.GroupSelectedRequested += OnContainerGroupSelectedRequested;
             window.NewGroupRequested += OnContainerNewGroupRequested;
-            window.Closed += (_, _) => OnContainerClosed(group.Id);
+            window.Closed += (_, _) => OnContainerClosed(group.Id, window);
+            // Register before Show: WPF can synchronously raise lifecycle
+            // events while a window is being shown. A Closed callback must see
+            // the same instance in the registry, or a just-closed window can
+            // be inserted into _containers after its callback has already run.
+            _containers[group.Id] = window;
             window.Show();
             _mainWindow?.Hide();
         }
         catch (Exception ex)
         {
             _log?.LogException($"OpenContainer failed for group {group.Id}", ex);
+            if (window != null)
+            {
+                try
+                {
+                    window.Close();
+                }
+                catch (Exception closeEx)
+                {
+                    _log?.LogException($"OpenContainer cleanup failed for group {group.Id}", closeEx);
+                }
+            }
+            if (_containers.TryGetValue(group.Id, out ContainerWindow? registered)
+                && ReferenceEquals(registered, window))
+            {
+                registered.GroupSelectedRequested -= OnContainerGroupSelectedRequested;
+                registered.NewGroupRequested -= OnContainerNewGroupRequested;
+                _containers.Remove(group.Id);
+            }
             vm.Detach();
             throw;
         }
 
-        _containers[group.Id] = window;
         _log.Log($"Opened container for group {group.Id}.");
-        return window;
+        return window!;
     }
 
-    private void OnContainerClosed(Guid groupId)
+    private void OnContainerClosed(Guid groupId, ContainerWindow closedWindow)
     {
-        if (_containers.TryGetValue(groupId, out ContainerWindow? closed))
+        if (_containers.TryGetValue(groupId, out ContainerWindow? registered)
+            && ReferenceEquals(registered, closedWindow))
         {
-            closed.GroupSelectedRequested -= OnContainerGroupSelectedRequested;
-            closed.NewGroupRequested -= OnContainerNewGroupRequested;
+            registered.GroupSelectedRequested -= OnContainerGroupSelectedRequested;
+            registered.NewGroupRequested -= OnContainerNewGroupRequested;
             _containers.Remove(groupId);
         }
         _log.Log($"Container closed for group {groupId}.");

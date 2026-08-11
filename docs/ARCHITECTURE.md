@@ -43,7 +43,7 @@ failures are still logged (`App.xaml.cs:49-66`). `Application_Startup` (`App.xam
 | `Application_Exit` (`App.xaml.cs:167`) | `EmergencyReleaseAll` → `SaveState` → `FlushJournalGuarded` → dispose events/hotkey/mutex/logger (`App.xaml.cs:170-189`) |
 | `Application_DispatcherUnhandledException` (`App.xaml.cs:192`) | `SaveStateGuarded` → `FlushJournalGuarded` → `EmergencyReleaseAll` → `Shutdown(1)` (`App.xaml.cs:194-207`) |
 | `CurrentDomain_UnhandledException` (`App.xaml.cs:210`) | Terminating: log-only (any thread; runtime is tearing down, `App.xaml.cs:215-221`). Non-terminating: marshals `SaveStateGuarded` + `FlushJournalGuarded` + `EmergencyReleaseAll` to the UI dispatcher with a 1 s deadline (`App.xaml.cs:226-252`) |
-| `Application_SessionEnding` (`App.xaml.cs:254`) | `SaveStateGuarded` + `FlushJournalGuarded` + `EmergencyReleaseAll`, then clears `Members` and stops hooks so a cancelled logoff leaves a coherent state (`App.xaml.cs:257-295`) |
+| `Application_SessionEnding` (`App.xaml.cs:254`) | `SaveStateGuarded` + `FlushJournalGuarded` + `EmergencyReleaseAll`, then stops dispatch, clears container presentation/timers, preserves released metadata as layout intent, clears live `Members`, and saves the normalized state so a cancelled logoff leaves a coherent state (`App.xaml.cs:291-339`) |
 | `Application_Startup` catch (`App.xaml.cs:150`) | Same trio + `Shutdown(1)` (`App.xaml.cs:150-164`) |
 
 `FlushJournalGuarded` call sites: `App.xaml.cs:154`, `:182`, `:197`, `:237`, `:260`.
@@ -288,10 +288,10 @@ container `Close` (`ContainerWindow.xaml.cs:136-146`, `GroupViewModel.cs:204-208
 
 - **DPI-aware guests only at non-100% scale.** Capture refuses a DPI-unaware
   guest when `GetDpiForSystem() != 96` (its DWM-virtualized 96-DPI coordinate
-  space cannot be glued with physical-pixel rects); the awareness probe is
-  fail-open. System-aware guests work on single-DPI systems (mixed-DPI
-  multi-monitor is a documented limitation). The Shepherd physical-pixel
-  convention itself is unchanged.
+  space cannot be glued with physical-pixel rects); an invalid awareness or
+  system-DPI probe fails closed and reports a capture refusal. System-aware
+  guests work on single-DPI systems (mixed-DPI multi-monitor is a documented
+  limitation). The Shepherd physical-pixel convention itself is unchanged.
 - **Environment fingerprint** (`Services/EnvironmentFingerprint.cs`): one
   `ENV[startup]` line (OS version/build, .NET runtime, bitness, full monitor
   table with bounds/work/primary via `EnumDisplayMonitors`), one
@@ -374,8 +374,10 @@ HWND + PID + exe path (`WindowShepherdService.cs:440-445`). Ordering rules:
 - **`FlushJournal`** forces a pending debounced clear; called from every App exit/crash path
   (`App.xaml.cs:154,182,197,237,260`, `WindowShepherdService.cs:551-563`).
 - **`RescueOrphanedWindows`** (startup, `App.xaml.cs:108`) re-shows entries whose PID + exe
-  still match, then deletes the journal unconditionally (`WindowShepherdService.cs:626-673`);
-  empty/corrupt journals are removed, never re-read (`WindowShepherdService.cs:565-585,630-639`).
+  still match, verifies that the window became visible, and removes only entries
+  that were visibly restored or failed identity validation. An identity-valid
+  entry that remains hidden is retained for a later retry; empty/corrupt
+  journals are normalized or quarantined and are not allowed to fail forever.
 
 ---
 

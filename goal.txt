@@ -1,0 +1,2364 @@
+/goal
+
+# TabDock — Whole-Codebase Deep Audit, Defect Discovery, Hardening, Optimization, and Production Engineering Review
+
+You are working inside the existing TabDock repository.
+
+This is a LONG-RUNNING whole-repository engineering audit.
+
+Do not treat this as a normal feature task.
+
+Your objective is to systematically inspect the ENTIRE TabDock codebase, understand how all major subsystems interact, discover real defects and engineering risks, validate each finding with evidence, safely remediate worthwhile findings, expand regression coverage, and leave the repository measurably stronger without destabilizing currently working behavior.
+
+The scope includes, but is not limited to:
+
+- correctness bugs;
+- latent bugs;
+- edge cases;
+- crash paths;
+- race conditions;
+- lifecycle defects;
+- Win32 HWND/z-order mistakes;
+- split-screen state bugs;
+- guest visibility bugs;
+- persistence corruption risks;
+- data-loss risks;
+- security weaknesses;
+- unsafe process/window handling;
+- performance problems;
+- redundant native calls;
+- excessive allocations;
+- unnecessary work in hot paths;
+- memory/resource leaks;
+- event-hook leaks;
+- timer misuse;
+- stale state;
+- concurrency/threading mistakes;
+- exception handling;
+- missing error propagation;
+- logging weaknesses;
+- observability gaps;
+- portability issues;
+- DPI/multi-monitor problems;
+- cross-machine assumptions;
+- UI/UX architectural fragility;
+- test gaps;
+- vacuous/flaky tests;
+- harness safety;
+- build/CI weaknesses;
+- configuration problems;
+- dead/inert code;
+- duplicated logic;
+- architectural erosion;
+- maintainability problems;
+- outdated documentation;
+- stale assumptions;
+- code that works by accident rather than by explicit invariant.
+
+This is NOT permission to rewrite the application.
+
+Find evidence first.
+
+Preserve behavior that is currently known to work.
+
+---
+
+# 0. OPERATING PRINCIPLE
+
+Use this rule throughout the entire campaign:
+
+    evidence
+      ↓
+    finding
+      ↓
+    severity
+      ↓
+    reproduction/proof
+      ↓
+    root cause
+      ↓
+    smallest coherent correction
+      ↓
+    targeted regression
+      ↓
+    adjacent validation
+      ↓
+    final repository audit
+
+Do not:
+
+- invent hypothetical defects and immediately patch them;
+- refactor merely because code looks ugly;
+- replace working architecture with fashionable abstractions;
+- add dependencies casually;
+- weaken tests to make failures disappear;
+- suppress exceptions without understanding them;
+- add sleeps/polling to hide race conditions;
+- introduce large unrelated formatting churn;
+- delete apparently unused Win32 declarations without proving they are truly unnecessary;
+- silently change product semantics.
+
+---
+
+# 1. RECOVER THE CURRENT REPOSITORY STATE FIRST
+
+This is a fresh CLI session.
+
+Do not rely on conversational memory.
+
+Read the repository's durable state.
+
+At minimum inspect:
+
+- `AGENTS.md`
+- `.agent/STATE.md`
+- `README.md`
+- `docs/ARCHITECTURE.md`
+- `docs/TESTING.md`
+- `docs/internal/`
+- `openspec/`
+- active/current specs
+- archived recent changes
+- project files
+- build scripts
+- CI
+- ValidationDriver
+- GuineaPig
+- production source
+
+Then run:
+
+    git status
+    git status --short
+    git branch --show-current
+    git rev-parse HEAD
+    git log --oneline --decorate -30
+    git diff --stat
+    git diff
+
+IMPORTANT:
+
+The latest Computer Use QA work may still be UNCOMMITTED.
+
+Therefore:
+
+DO NOT:
+
+    git reset --hard
+    git clean
+    git checkout .
+    git restore .
+
+Do not discard existing work.
+
+Determine exactly:
+
+- committed baseline;
+- current uncommitted production changes;
+- current test changes;
+- docs/state changes;
+- unrelated untracked files.
+
+Preserve all legitimate existing work.
+
+---
+
+# 2. UNDERSTAND TABDOCK BEFORE AUDITING IT
+
+Reconstruct the actual current architecture from source.
+
+Do not rely solely on old documentation.
+
+TabDock's defining architecture historically uses the **Shepherd model**:
+
+Captured applications remain independent top-level HWNDs.
+
+TabDock creates the visual illusion of containment through:
+
+- geometry;
+- visibility;
+- local z-order;
+- focus;
+- lifecycle monitoring;
+- window-state reconciliation.
+
+Verify whether this is still current.
+
+Document the actual current subsystem map before changing anything.
+
+At minimum identify:
+
+- application composition root;
+- group ownership;
+- captured member model;
+- active/visible member state;
+- split-pair model;
+- split focused-member state;
+- guest positioning;
+- z-order ownership;
+- WinEvent hooks;
+- reorder-event handling;
+- activation reconciliation;
+- move/resize handling;
+- maximize/restore handling;
+- popup/chrome interaction;
+- native HwndHost;
+- persistence;
+- crash journal;
+- logging;
+- capture workflow;
+- group rename/delete;
+- tab X/middle-click/pop-out;
+- ValidationDriver;
+- browser/real-app test support.
+
+Create a dependency/call-flow map.
+
+---
+
+# 3. NON-NEGOTIABLE ARCHITECTURAL INVARIANTS
+
+Unless CURRENT source/spec explicitly supersedes them, preserve:
+
+## Shepherd
+
+- no production `SetParent`;
+- no conversion of guests to child HWNDs;
+- no guest style/exstyle/owner containment mutation;
+- guests remain independent top-level windows.
+
+## Geometry
+
+- guest layout is based on physical screen pixels;
+- do not casually introduce WPF DIP conversion into guest positioning;
+- split panes must exactly partition their authoritative content rectangle.
+
+## Z-order
+
+- `WindowShepherdService` or current equivalent remains the authoritative positioning/z-order policy owner;
+- no global `HWND_BOTTOM` repair;
+- no competing independent z-order subsystems;
+- correct geometry alone is NOT enough — local order must also be correct.
+
+## Visibility
+
+Normal:
+
+    VisibleManagedGuests = {active member}
+
+Split:
+
+    VisibleManagedGuests = {left, right}
+
+Container minimized:
+
+    VisibleManagedGuests = {}
+
+Popup/chrome interaction does NOT logically change the visible set.
+
+## Split
+
+Split remains active until:
+
+- explicit unsplit;
+- explicit pair replacement;
+- structural removal of a pair member.
+
+Unrelated hover/click must not implicitly destroy the pair.
+
+## Crash safety
+
+Journal-before-hide ordering must remain correct.
+
+## HWND lookup
+
+Preserve O(1) captured HWND/member lookup.
+
+## WinEvents
+
+Preserve the current direct-click `EVENT_OBJECT_REORDER` solution unless evidence proves it wrong.
+
+## Movement
+
+Do not regress recently improved live movement/resize smoothness.
+
+---
+
+# 4. CREATE AN AUDIT WORKSPACE / WAYPOINT
+
+Check existing repository conventions first.
+
+Use existing durable agent-state conventions.
+
+Create or update an audit waypoint such as:
+
+    docs/internal/whole-codebase-audit-waypoint.md
+
+if appropriate.
+
+Structure:
+
+# TabDock Whole-Codebase Audit
+
+## Baseline
+- branch
+- starting HEAD
+- dirty files
+- current architecture
+
+## Audit Areas
+
+## Confirmed Findings
+
+For each finding:
+
+### FINDING-ID
+- category:
+- severity:
+- confidence:
+- affected files:
+- evidence:
+- reproduction:
+- root cause:
+- proposed remediation:
+- regression coverage:
+- status:
+
+## Rejected Findings
+
+## Improvements Worth Doing
+
+## Improvements Deferred
+
+## Validation Results
+
+## Current Risks
+
+## Exact Next Action
+
+Update this throughout the run.
+
+This is mandatory for context-compaction recovery.
+
+---
+
+# 5. FINDING SEVERITY MODEL
+
+Classify every credible finding.
+
+Use:
+
+## CRITICAL
+
+Examples:
+
+- application or guest data loss;
+- security boundary bypass;
+- arbitrary destructive action;
+- hidden guest unrecoverable after crash;
+- severe corruption;
+- runaway process spawning;
+- catastrophic lifecycle failure.
+
+## HIGH
+
+Examples:
+
+- reproducible app crash;
+- window permanently lost/hidden;
+- incorrect split/z-order lifecycle;
+- persistence corruption;
+- major race;
+- cross-machine correctness failure.
+
+## MEDIUM
+
+Examples:
+
+- non-destructive correctness defect;
+- meaningful performance issue;
+- resource leak;
+- confusing lifecycle behavior;
+- flaky critical automation;
+- observability gap blocking diagnosis.
+
+## LOW
+
+Examples:
+
+- minor inefficiency;
+- dead code;
+- maintainability problem;
+- documentation drift;
+- low-impact UX inconsistency.
+
+Also record:
+
+    CONFIRMED
+    PROBABLE
+    SPECULATIVE
+
+Do not modify production code for SPECULATIVE findings without obtaining evidence.
+
+---
+
+# 6. PHASE A — WHOLE-REPOSITORY INVENTORY
+
+Inventory the repository.
+
+Determine:
+
+- file count;
+- LOC by category;
+- largest production files;
+- highest-risk files;
+- deepest dependency points;
+- Win32 interop surface;
+- timers;
+- hooks;
+- async operations;
+- event subscriptions;
+- persistence paths;
+- external-process interactions;
+- filesystem interactions;
+- test architecture;
+- CI/build scripts;
+- docs/specs.
+
+Identify hotspots by:
+
+- size;
+- complexity;
+- churn;
+- architectural centrality;
+- unsafe/native code.
+
+Use git history selectively where useful.
+
+Do not review only recently changed files.
+
+---
+
+# 7. PHASE B — STATIC CORRECTNESS AUDIT
+
+Audit every production subsystem for correctness.
+
+Look for:
+
+- impossible states;
+- state represented in multiple places;
+- stale cached state;
+- fields updated in wrong order;
+- partial transitions;
+- forgotten rollback paths;
+- unchecked null;
+- invalid index handling;
+- collection modification during iteration;
+- event ordering assumptions;
+- stale HWND reuse;
+- PID recycling;
+- object lifetime mismatch;
+- group/member ownership mismatch;
+- stale split references;
+- stale active member;
+- stale focused split member;
+- duplicate visible guests;
+- orphan containers;
+- detached group references;
+- close/release paths that skip bookkeeping.
+
+For every state transition ask:
+
+> What if this operation fails halfway through?
+
+---
+
+# 8. SPLIT-SCREEN STATE AUDIT
+
+Attack the split implementation systematically.
+
+Check:
+
+- enter split;
+- replace split;
+- focus LEFT;
+- focus RIGHT;
+- unrelated third tab hover;
+- unrelated third tab click;
+- context menu on third tab;
+- reorder;
+- X LEFT;
+- X RIGHT;
+- middle click;
+- pop-out;
+- self-close;
+- external destruction;
+- group deletion;
+- group switching;
+- move;
+- resize;
+- maximize;
+- restore;
+- minimize;
+- foreground steal;
+- popup open/close;
+- capture new app while split;
+- persistence/restart semantics.
+
+Try to create:
+
+- stale LEFT;
+- stale RIGHT;
+- same member on both sides;
+- member not in group;
+- >2 visible managed guests;
+- split active with one missing member;
+- incorrect focused member;
+- implicit split exit;
+- pair UI inconsistent with logical state.
+
+Add deterministic assertions/invariants if appropriate.
+
+---
+
+# 9. Z-ORDER / HWND AUDIT
+
+This is one of TabDock's highest-risk areas.
+
+Find every production call or wrapper around:
+
+    SetWindowPos
+    SetForegroundWindow
+    ShowWindow
+    GetWindow
+    BeginDeferWindowPos
+    DeferWindowPos
+    EndDeferWindowPos
+    BringWindowToTop
+    SetActiveWindow
+    SetFocus
+
+Map every caller.
+
+Determine:
+
+- who owns local ordering;
+- which paths reposition geometry;
+- which paths only repair z-order;
+- whether any duplicate path competes with another;
+- whether any no-op guard checks geometry but not order;
+- whether foreground and logical visibility are accidentally conflated.
+
+Audit:
+
+- popup open;
+- popup close;
+- context menu;
+- modal dialogs;
+- drag start;
+- drag frame;
+- drag end;
+- maximize;
+- restore;
+- split focus;
+- direct guest click;
+- external foreground steal;
+- EVENT_OBJECT_REORDER.
+
+Try to construct pathological interleavings.
+
+---
+
+# 10. WIN32 INTEROP AUDIT
+
+Review EVERY native declaration actually used by production.
+
+Check:
+
+- correct Unicode/ANSI binding;
+- correct calling convention;
+- `SetLastError`;
+- pointer-width correctness;
+- 32/64-bit types;
+- BOOL marshaling;
+- HANDLE lifetime;
+- HWND lifetime;
+- struct packing;
+- field types;
+- callback delegate lifetime;
+- GC pinning where relevant;
+- enum values;
+- flag combinations;
+- error checking;
+- failure fallback.
+
+Search for declarations that look suspicious.
+
+Do not blindly "modernize" P/Invoke declarations.
+
+Verify against authoritative Windows API documentation where needed.
+
+If external research is available, use primary Microsoft documentation only for Win32 details.
+
+---
+
+# 11. WINEVENT AUDIT
+
+Inspect all hooks:
+
+- installation;
+- partial installation failure;
+- unhooking;
+- restart;
+- dispatcher marshaling;
+- callback lifetime;
+- process/thread filtering;
+- HWND filtering;
+- destroyed HWND behavior;
+- foreground events;
+- reorder events;
+- hide;
+- destroy;
+- name change;
+- minimize;
+- move/size.
+
+Ask:
+
+- Can a callback arrive after shutdown?
+- Can it target a recycled HWND?
+- Can it refer to a member already removed?
+- Can hook installation partially fail?
+- Is partial failure observable?
+- Are duplicate events correctly suppressed?
+- Can event storms overload the dispatcher?
+- Are expensive operations performed inside callbacks?
+
+---
+
+# 12. MOVE / RESIZE AUDIT
+
+Review:
+
+- WM_ENTERSIZEMOVE;
+- WM_EXITSIZEMOVE;
+- WM_WINDOWPOSCHANGING;
+- WM_WINDOWPOSCHANGED;
+- WPF LocationChanged;
+- SizeChanged;
+- LayoutUpdated;
+- relayout coalescing;
+- generation invalidation;
+- post-drag final reconciliation;
+- split deferred positioning;
+- duplicate geometry writes.
+
+Look for:
+
+- stale deferred work;
+- stale cached rect;
+- final layout losing to old callback;
+- excessive `SetWindowPos`;
+- geometry equality suppressing z-order repair;
+- foreground stealing during drag;
+- high CPU during continuous movement.
+
+Measure native write counts if useful.
+
+---
+
+# 13. MAXIMIZE / MINIMIZE / WINDOW-STATE AUDIT
+
+Construct all transitions:
+
+    Normal → Maximized
+    Maximized → Normal
+    Normal → Minimized
+    Minimized → Normal
+    Maximized → Minimized
+    Minimized → Maximized
+
+Audit:
+
+- stale marker rectangles;
+- work-area calculation;
+- multi-monitor behavior;
+- final layout ordering;
+- split partition;
+- focused member preservation;
+- visibility;
+- z-order;
+- repeated cycles.
+
+Look for residual one-frame/final-state defects.
+
+---
+
+# 14. DPI / MONITOR / PORTABILITY AUDIT
+
+Review all assumptions involving:
+
+- 96 DPI;
+- 100% scale;
+- Per-Monitor V2;
+- monitor changes;
+- secondary monitors;
+- negative coordinates;
+- taskbar position;
+- monitor work area;
+- odd dimensions;
+- ultra-wide displays;
+- small displays;
+- >100% scaling;
+- different Windows builds;
+- remote desktop;
+- app-specific DPI awareness.
+
+Verify current refusal/fallback semantics.
+
+Ensure unsupported cases fail clearly rather than silently corrupting layout.
+
+---
+
+# 15. PERSISTENCE AUDIT
+
+Inspect:
+
+- state DTOs;
+- schema version;
+- version reads;
+- migrations;
+- `.tmp`;
+- `.bak`;
+- corrupt-state recovery;
+- interrupted writes;
+- partial writes;
+- rename/replace failure;
+- concurrent saves;
+- debounce;
+- shutdown flush;
+- group delete persistence;
+- group rename persistence;
+- split persistence policy;
+- duplicate group IDs;
+- invalid active index;
+- malformed JSON;
+- future schema compatibility.
+
+Try to construct:
+
+- truncated file;
+- invalid JSON;
+- missing fields;
+- unknown fields;
+- duplicate IDs;
+- impossible active index;
+- invalid geometry;
+- inaccessible APPDATA;
+- disk full/IO exception where testable.
+
+Do not silently discard user data.
+
+---
+
+# 16. CRASH-RECOVERY / HIDDEN-WINDOW JOURNAL AUDIT
+
+This is critical.
+
+Review:
+
+- write-before-hide;
+- atomicity;
+- journal clearing;
+- debounce;
+- startup rescue;
+- HWND validation;
+- PID validation;
+- executable-path validation;
+- PID recycle;
+- HWND recycle;
+- force kill;
+- application crash;
+- Windows shutdown;
+- emergency release;
+- dispatcher exception;
+- multiple emergency-release calls.
+
+Ask:
+
+> Is there ANY credible sequence that leaves another application's window permanently hidden?
+
+Treat that as HIGH/CRITICAL.
+
+---
+
+# 17. GROUP LIFECYCLE AUDIT
+
+Review:
+
+- create;
+- switch;
+- rename;
+- delete empty;
+- delete populated;
+- active group delete;
+- last group delete;
+- container ownership;
+- persistence;
+- restored groups;
+- group with split pair;
+- group deletion during popup/modal;
+- deletion while member closes;
+- orphan container;
+- captured-index ownership.
+
+Try to produce detached groups or containers bound to objects no longer registered.
+
+---
+
+# 18. CAPTURE / RELEASE AUDIT
+
+Review complete lifecycle:
+
+    candidate discovery
+    validation
+    elevation check
+    capture snapshot
+    add member
+    index update
+    monitoring start
+    position
+    show
+    switch
+    hide
+    release
+    restore placement
+    remove
+    monitoring stop
+
+Check failure in EVERY step.
+
+Ask:
+
+- What if `SetWindowPos` fails?
+- What if guest closes during capture?
+- What if PID changes/recycles?
+- What if elevation probe fails?
+- What if journal write fails?
+- What if group disappears during capture UI?
+- What if same HWND captured twice?
+
+---
+
+# 19. SECURITY AUDIT
+
+Even though TabDock is local and offline, audit security.
+
+Check:
+
+- privilege boundaries;
+- elevated process capture refusal;
+- fail-open vs fail-closed behavior;
+- sending messages to arbitrary HWNDs;
+- PID/HWND validation;
+- path trust;
+- command/process execution;
+- shell invocation;
+- temporary files;
+- file permissions;
+- symlink/reparse-point considerations where relevant;
+- logging of sensitive titles/paths;
+- crash files;
+- untrusted persisted state;
+- malformed input;
+- DLL search behavior;
+- process spawning in test tools.
+
+Focus on realistic local attack/failure surfaces.
+
+Do not invent web-security issues for an offline WPF app.
+
+---
+
+# 20. RESOURCE-LIFETIME AUDIT
+
+Look for leaks of:
+
+- WinEvent hooks;
+- HICON;
+- native handles;
+- device contexts;
+- process handles;
+- timers;
+- event subscriptions;
+- DispatcherTimer;
+- CancellationTokenSource;
+- threads;
+- BlockingCollection;
+- FileStream;
+- context menus;
+- WPF windows;
+- native marker HWNDs.
+
+For each native acquisition:
+
+    where is it released?
+
+Check abnormal exit paths too.
+
+---
+
+# 21. MEMORY AUDIT
+
+Look for:
+
+- unbounded dictionaries;
+- per-HWND caches never pruned;
+- icon cache growth;
+- failed-cache permanence;
+- log queues;
+- retained Group/ViewModel references;
+- static event subscriptions;
+- stale HWND keys;
+- persisted-state accumulation;
+- `.corrupt.*` files;
+- screenshots/test artifacts.
+
+Distinguish actual leaks from intentionally bounded lifetime caches.
+
+---
+
+# 22. PERFORMANCE AUDIT
+
+Focus especially on hot paths.
+
+Measure/inspect:
+
+- continuous container movement;
+- resize;
+- LayoutUpdated;
+- split layout;
+- WinEvent callbacks;
+- tab switching;
+- icon extraction;
+- logging;
+- persistence debounce;
+- candidate enumeration.
+
+Look for:
+
+- repeated process queries;
+- repeated executable-path lookups;
+- repeated `DescribeWindow`;
+- desktop-wide enumeration per frame;
+- redundant `SetWindowPos`;
+- repeated identical z-order repairs;
+- synchronous IO in UI hot paths;
+- excessive allocations;
+- LINQ in extremely hot loops where material;
+- avoidable O(n) scans where O(1) index already exists.
+
+Do not micro-optimize cold code without measurement/reason.
+
+---
+
+# 23. UI-THREAD / CONCURRENCY AUDIT
+
+Determine thread ownership for all important objects.
+
+Find:
+
+- UI-thread assumptions;
+- unasserted dispatcher access;
+- background logging;
+- WinEvent callback thread;
+- async callbacks;
+- dispatcher Post/Invoke;
+- shutdown races;
+- task continuations;
+- timers.
+
+Look for:
+
+- cross-thread WPF access;
+- deadlocks;
+- synchronous Send where Post should be used;
+- callback after disposal;
+- missing cancellation;
+- unobserved tasks;
+- async void misuse.
+
+Add assertions where low-risk and genuinely valuable.
+
+---
+
+# 24. EXCEPTION-HANDLING AUDIT
+
+Search:
+
+    catch
+    catch (Exception)
+    async void
+    fire-and-forget Task
+    DispatcherUnhandledException
+    TaskScheduler.UnobservedTaskException
+    AppDomain.UnhandledException
+
+Classify each catch:
+
+- correct recovery;
+- logging only;
+- swallowed bug;
+- impossible to diagnose;
+- overly broad;
+- correct boundary catch.
+
+Ensure failures don't leave guests hidden or state half-mutated.
+
+---
+
+# 25. LOGGING / OBSERVABILITY AUDIT
+
+Review whether serious failures are diagnosable.
+
+Check:
+
+- severity;
+- context;
+- HWND/PID/member identity;
+- state transitions;
+- z-order repair;
+- hook installation;
+- native failure;
+- persistence failure;
+- crash rescue;
+- environment fingerprint.
+
+Avoid noisy logging in movement hot paths.
+
+Look for cases where:
+
+    operation failed
+
+but no useful diagnostic exists.
+
+Add bounded/rate-limited diagnostics where valuable.
+
+---
+
+# 26. TEST SUITE AUDIT
+
+Do not merely run tests.
+
+Audit the tests themselves.
+
+For every high-risk behavior ask:
+
+> Could this test pass while the visible product is still wrong?
+
+Look for:
+
+- geometry-only assertions;
+- stale waits;
+- arbitrary sleeps;
+- exact-text brittleness;
+- fixed coordinates;
+- DPI assumptions;
+- title matching;
+- state contamination;
+- user-state mutation;
+- cleanup failures;
+- input safety;
+- vacuous assertions;
+- scenarios not actually registered;
+- tests that accidentally repair the bug before asserting;
+- tests that only pass in isolation;
+- tests that only pass in one ordering.
+
+Strengthen high-value weak tests.
+
+---
+
+# 27. VALIDATIONDRIVER SAFETY AUDIT
+
+Given its history, inspect carefully:
+
+- real `SendInput`;
+- user supervision rules;
+- mutex;
+- process spawn caps;
+- global timeout;
+- cleanup;
+- state backup/restore;
+- crash-safe snapshots;
+- orphan cleanup;
+- stuck mouse/key prevention;
+- foreground acquisition;
+- browser processes;
+- test failure during cleanup;
+- Ctrl+C/abnormal termination.
+
+Treat any ability to damage user state or send input to unrelated apps as HIGH.
+
+---
+
+# 28. TEST COVERAGE GAP ANALYSIS
+
+Produce a subsystem × scenario matrix.
+
+At minimum:
+
+    subsystem
+    expected behavior
+    existing test
+    observability quality
+    missing edge cases
+    priority
+
+Cover:
+
+- normal tab;
+- split;
+- movement;
+- resize;
+- window state;
+- popup;
+- direct click;
+- group lifecycle;
+- capture;
+- release;
+- persistence;
+- crash journal;
+- elevation;
+- DPI/monitor;
+- startup/shutdown;
+- logging;
+- resource cleanup.
+
+Add tests for confirmed important gaps.
+
+---
+
+# 29. BUILD / PROJECT CONFIGURATION AUDIT
+
+Review:
+
+- `.csproj`;
+- solution;
+- manifest;
+- nullable;
+- warnings;
+- RID;
+- self-contained;
+- single file;
+- ReadyToRun;
+- trimming properties;
+- build output size;
+- Debug/Release consistency;
+- linked source into harness;
+- analyzer configuration;
+- NuGet settings;
+- audit settings.
+
+Identify expensive or contradictory configuration.
+
+Do not change deployment posture without understanding why it exists.
+
+---
+
+# 30. DEPENDENCY / SUPPLY-CHAIN AUDIT
+
+TabDock historically has intentionally had zero third-party packages.
+
+Verify current state.
+
+If still zero-dependency:
+
+treat that as a deliberate architectural/security property.
+
+Do NOT add a NuGet dependency merely to simplify implementation unless there is overwhelming value.
+
+Audit:
+
+- transitive packages;
+- SDK dependencies;
+- GitHub Actions;
+- external scripts;
+- downloaded artifacts.
+
+---
+
+# 31. CI AUDIT
+
+Inspect `.github/workflows`.
+
+Determine:
+
+- what actually runs;
+- whether tests run;
+- Debug/Release mismatch;
+- build path mismatch;
+- artifact handling;
+- cache;
+- security permissions;
+- branch triggers;
+- failure visibility.
+
+Do not blindly build a giant CI pipeline.
+
+Find the smallest improvements that materially increase confidence.
+
+If real-input tests cannot safely run in CI, clearly separate:
+
+    CI-safe deterministic tests
+    supervised desktop tests
+
+---
+
+# 32. DOCUMENTATION / SOURCE DRIFT AUDIT
+
+Compare:
+
+- AGENTS.md;
+- README;
+- ARCHITECTURE;
+- TESTING;
+- OpenSpec;
+- STATE;
+- source.
+
+Find:
+
+- stale line numbers;
+- incorrect ownership claims;
+- obsolete behavior;
+- old test counts;
+- removed features;
+- undocumented new invariants;
+- dead references.
+
+Source is authoritative.
+
+Fix meaningful drift after product behavior is settled.
+
+---
+
+# 33. DEAD / INERT CODE AUDIT
+
+Identify:
+
+- unreachable methods;
+- obsolete fields;
+- dead commands;
+- unused converters;
+- stale compatibility code;
+- old split behavior;
+- old titlebar drag-out logic;
+- no-longer-used popup code;
+- unused P/Invoke declarations.
+
+But:
+
+DO NOT DELETE solely because IDE/reference search says "unused."
+
+For native/test-oriented code, investigate history and intent.
+
+Classify:
+
+    SAFE TO DELETE
+    INTENTIONALLY RETAINED
+    UNKNOWN
+
+Only remove SAFE TO DELETE items.
+
+---
+
+# 34. COMPLEXITY / MAINTAINABILITY AUDIT
+
+Identify files/classes that are too large or mix too many responsibilities.
+
+Especially inspect current `ContainerWindow`.
+
+Ask:
+
+- is UI state mixed with Win32 policy?
+- is split state mixed with drag state?
+- are identical transitions duplicated?
+- are invariants expressible in smaller helpers?
+- can complexity be reduced WITHOUT a broad rewrite?
+
+Only extract abstractions when:
+
+- ownership becomes clearer;
+- testability improves;
+- regression risk decreases.
+
+Avoid architecture astronautics.
+
+---
+
+# 35. PRODUCT SEMANTICS AUDIT
+
+Ensure UI behavior is internally coherent.
+
+Review:
+
+- Pop out vs Close Window;
+- X;
+- middle-click;
+- split persistence;
+- explicit unsplit;
+- group deletion;
+- group rename;
+- capture;
+- unrelated third-tab behavior;
+- composite split tab;
+- active/focused states.
+
+Look for contradictory semantics.
+
+Do not silently change them.
+
+If a behavior is genuinely ambiguous, document the ambiguity before choosing.
+
+---
+
+# 36. ERROR-STATE UX AUDIT
+
+Inspect user-visible failures:
+
+- capture elevated guest;
+- capture invalid/dead HWND;
+- failed group delete;
+- failed persistence;
+- unsupported DPI;
+- native positioning failure;
+- hotkey registration failure;
+- no candidate windows;
+- corrupt state.
+
+Ask:
+
+> Does the user understand what happened?
+
+Improve messaging only where important.
+
+Do not introduce modal-dialog spam.
+
+---
+
+# 37. HOTKEY AUDIT
+
+Review:
+
+- registration;
+- duplicate registration;
+- unregister;
+- process restart;
+- failed registration;
+- message-only HWND;
+- repeated key hold;
+- opening multiple pickers;
+- current inline/fallback capture path.
+
+Look for races and stale handlers.
+
+---
+
+# 38. STARTUP / SHUTDOWN AUDIT
+
+Construct:
+
+## Startup
+
+- clean install;
+- persisted groups;
+- corrupt state;
+- crash journal;
+- no candidates;
+- existing instance;
+- unsupported environment.
+
+## Shutdown
+
+- empty app;
+- populated group;
+- split active;
+- popup active;
+- delete modal;
+- capture UI active;
+- guest self-closing;
+- emergency crash path.
+
+Ensure no guest stays hidden accidentally.
+
+---
+
+# 39. SINGLE-INSTANCE AUDIT
+
+Review mutex/single-instance behavior.
+
+Check:
+
+- global namespace;
+- abandoned mutex;
+- second-process behavior;
+- shutdown;
+- race at startup;
+- exception during startup;
+- stale resources.
+
+Do not invent IPC if product does not need it.
+
+---
+
+# 40. FILESYSTEM AUDIT
+
+Audit all `%APPDATA%\TabDock` interactions.
+
+Check:
+
+- directory creation;
+- invalid paths;
+- permissions;
+- retries;
+- atomic replacement;
+- sharing modes;
+- logs held open;
+- cleanup;
+- temp files;
+- corrupt-file accumulation.
+
+Ensure diagnostics do not create unbounded disk growth.
+
+---
+
+# 41. AUTOMATED STATIC SEARCH CAMPAIGN
+
+Systematically search for suspicious patterns.
+
+Examples:
+
+    TODO
+    FIXME
+    HACK
+    XXX
+
+    catch
+    Task.Delay
+    Thread.Sleep
+    DispatcherTimer
+    System.Timers.Timer
+
+    SetWindowPos
+    ShowWindow
+    SetForegroundWindow
+    GetForegroundWindow
+    GetWindow
+    SendMessage
+    PostMessage
+    SendInput
+
+    Process.Start
+    Process.Kill
+
+    File.
+    Directory.
+
+    async void
+    ConfigureAwait
+
+    lock
+    Monitor
+    Semaphore
+    Mutex
+
+    static Dictionary
+    static List
+    ConcurrentDictionary
+
+    CollectionChanged
+    +=
+    -=
+
+Do not treat search hits as bugs.
+
+Use them as audit entry points.
+
+---
+
+# 42. OPTIONAL COMPILER / ANALYZER HARDENING
+
+Inspect what compiler warnings/analyzers are currently enabled.
+
+If safe and dependency-free, consider whether stronger built-in warnings can expose defects.
+
+Do NOT introduce a massive style-warning campaign.
+
+Only enable checks with a high signal-to-noise ratio and fix resulting real defects.
+
+---
+
+# 43. HISTORICAL BUG REGRESSION AUDIT
+
+Use git/docs/waypoints to understand historical high-risk bugs.
+
+At minimum revisit previously known classes of failure:
+
+- black/blank guest;
+- popup covering;
+- direct-click pairing;
+- post-drag blanking;
+- split asymmetry;
+- maximize overlap;
+- group orphan;
+- crash-hidden guest;
+- foreground races;
+- tab reorder oscillation.
+
+Ask:
+
+> Could a neighboring path still reproduce the same root-cause class?
+
+Look for sibling bugs.
+
+---
+
+# 44. CROSS-MACHINE AUDIT
+
+The project has historically behaved differently across machines.
+
+Review:
+
+- timing;
+- DPI;
+- monitor topology;
+- GPU/compositor behavior;
+- browser/Electron/native differences;
+- Windows builds;
+- foreground restrictions;
+- popup behavior.
+
+Use environment fingerprinting.
+
+Do not claim universal validation from one machine.
+
+But eliminate avoidable assumptions.
+
+---
+
+# 45. PERFORMANCE MEASUREMENT
+
+For suspected hot paths, measure before changing.
+
+Examples:
+
+- SetWindowPos calls per drag second;
+- allocations during movement;
+- tab-switch latency;
+- split focus repair;
+- startup duration;
+- state serialization;
+- log queue pressure.
+
+Prefer rough trustworthy evidence over speculative "optimization."
+
+Only optimize where:
+
+- measurable;
+- understandable;
+- low risk.
+
+---
+
+# 46. DO NOT TURN THIS INTO A REWRITE
+
+This audit should make TabDock stronger.
+
+It should NOT transform it into an unrelated architecture.
+
+Avoid:
+
+- MVVM rewrite;
+- dependency injection framework;
+- reactive framework;
+- massive service decomposition;
+- replacing WPF;
+- introducing third-party window-management libraries;
+- changing Shepherd;
+- rewriting persistence unless necessary;
+- broad styling redesign.
+
+Targeted extraction is allowed.
+
+Replatforming is not.
+
+---
+
+# 47. SWARM / SUBAGENT STRATEGY
+
+If the harness supports subagents/swarm, use them extensively for independent read-only audits and adversarial review.
+
+Do not require the feature if unavailable.
+
+Suggested parallel auditors:
+
+## Agent A — Win32 / HWND / z-order
+
+Audit native calls, focus, hooks, geometry, lifetime.
+
+## Agent B — State / lifecycle
+
+Audit groups, split, active state, capture/release, shutdown.
+
+## Agent C — Persistence / crash safety
+
+Audit state.json, backups, journal, recovery, IO.
+
+## Agent D — Security / resource lifetime
+
+Audit privilege boundaries, process/HWND validation, handles, leaks.
+
+## Agent E — Performance
+
+Audit hot paths and redundant native work.
+
+## Agent F — ValidationDriver
+
+Audit safety, test vacuity, cleanup, portability.
+
+## Agent G — Build / CI / configuration
+
+Audit project files, scripts, workflows.
+
+## Agent H — Documentation / dead code / maintainability
+
+Audit drift and low-risk cleanup.
+
+Require evidence:
+
+- exact file;
+- symbol;
+- reasoning;
+- severity;
+- reproduction/proof;
+- recommended disposition.
+
+Primary agent reconciles all findings.
+
+---
+
+# 48. DO NOT ACCEPT SUBAGENT CLAIMS BLINDLY
+
+For every MEDIUM+ finding:
+
+verify against source yourself.
+
+If agents disagree:
+
+- inspect source;
+- reproduce where possible;
+- resolve based on evidence.
+
+Record rejected findings.
+
+Do not allow "reviewer said so" to become production code.
+
+---
+
+# 49. BUILD A MASTER FINDINGS TABLE
+
+Maintain a concise master list.
+
+Columns:
+
+    ID
+    Severity
+    Category
+    Confidence
+    Evidence
+    User Impact
+    Fix?
+    Test?
+    Status
+
+Prioritize:
+
+1. Critical confirmed
+2. High confirmed
+3. Medium confirmed
+4. Low-risk high-value improvements
+5. low-priority cleanup
+
+Do not spend six hours deleting dead code while a HIGH lifecycle bug is unresolved.
+
+---
+
+# 50. REMEDIATION POLICY
+
+Automatically remediate:
+
+## Must fix
+
+- confirmed Critical;
+- confirmed High;
+- confirmed Medium correctness/security/data-loss issues.
+
+## Usually fix
+
+- meaningful resource leaks;
+- high-value observability gaps;
+- high-risk harness defects;
+- clear performance problems;
+- stale docs directly misleading future development.
+
+## Case-by-case
+
+- low severity cleanup;
+- large refactors;
+- architecture improvements;
+- speculative optimizations.
+
+If risk of remediation exceeds the finding's impact:
+
+document and defer it.
+
+---
+
+# 51. ONE FIX AT A TIME FOR HIGH-RISK AREAS
+
+For changes touching:
+
+- WindowShepherdService;
+- GuestLifecycleService;
+- WinEventMonitor;
+- GroupManager;
+- ContainerWindow;
+- persistence/crash journal;
+
+use:
+
+    one root cause
+    one coherent patch
+    build
+    targeted regression
+    adjacent tests
+    waypoint
+
+Do not stack five unrelated fixes before testing.
+
+---
+
+# 52. TEST EVERY CONFIRMED BUG
+
+Every confirmed production bug fixed during this campaign should gain regression coverage when technically reasonable.
+
+A finding is not fully closed until:
+
+    root cause understood
+    fix implemented
+    regression exists
+    regression fails on old behavior conceptually
+    regression passes now
+
+If automation is impractical, document the exact manual validation.
+
+---
+
+# 53. DETERMINISTIC TESTS FIRST
+
+Prefer cheap deterministic checks where possible.
+
+Examples:
+
+- split geometry;
+- state transitions;
+- persistence parsing;
+- group deletion logic;
+- invariant validation.
+
+Use real-input tests for behavior that genuinely requires Windows interaction.
+
+Do not use GUI automation where pure logic can prove correctness.
+
+---
+
+# 54. REAL-INPUT SAFETY
+
+Respect `docs/TESTING.md`.
+
+Do not run unattended synthesized mouse/keyboard tests if repository policy requires human supervision.
+
+This `/goal` does NOT override safety policy.
+
+If supervised real-input validation is unavailable:
+
+- complete all safe autonomous audit/remediation;
+- build all scenarios;
+- run deterministic tests;
+- leave exact supervised closure instructions.
+
+Do not fabricate PASS.
+
+---
+
+# 55. VALIDATION AFTER EACH AUDIT WAVE
+
+Maintain:
+
+    dotnet build TabDock.csproj
+    dotnet build TabDock.sln
+    dotnet build tests\ValidationDriver\TabDock.GuineaPig\TabDock.GuineaPig.csproj
+    dotnet build tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj
+
+and:
+
+    .\scripts\validate.ps1
+
+    openspec validate --all --no-interactive
+
+    TabDock.exe --selftest-geometry
+
+using actual current repository commands.
+
+---
+
+# 56. RUN A SECOND ADVERSARIAL AUDIT AFTER REMEDIATION
+
+After primary findings are fixed, perform a fresh review as though you did not write the fixes.
+
+Ask reviewers:
+
+## Reviewer 1
+Find correctness regressions introduced by the audit.
+
+## Reviewer 2
+Find remaining HWND/z-order races.
+
+## Reviewer 3
+Find remaining hidden-window/data-loss paths.
+
+## Reviewer 4
+Find performance regressions.
+
+## Reviewer 5
+Find test false positives.
+
+## Reviewer 6
+Find security/resource-lifetime issues.
+
+## Reviewer 7
+Find architectural invariant violations.
+
+## Reviewer 8
+Find documentation/spec drift.
+
+Reconcile all credible findings.
+
+---
+
+# 57. FINAL FULL-REPOSITORY PASS
+
+Before completion, reread the repository at a high level.
+
+Ask:
+
+- Did we inspect every production file?
+- Every service?
+- Every model?
+- Every native declaration actually used?
+- Every project/build file?
+- Every important test group?
+- Every persistence path?
+- Every shutdown path?
+- Every UI lifecycle path?
+- Every OpenSpec capability?
+- Every current high-risk invariant?
+
+Do not call it a whole-codebase audit if large areas were never examined.
+
+Record coverage.
+
+---
+
+# 58. FINAL SECURITY AUDIT
+
+Specifically certify:
+
+- no reparenting;
+- no privilege bypass;
+- elevated guest refusal still safe;
+- no unsafe process spawning introduced;
+- no unvalidated destructive file operations;
+- no sensitive telemetry/network added;
+- no new dependencies without review;
+- no crash path leaves guest hidden.
+
+Do not claim formal security certification.
+
+Report scope accurately.
+
+---
+
+# 59. FINAL PERFORMANCE AUDIT
+
+Report:
+
+- optimizations actually made;
+- measured/observed benefit;
+- hot paths reviewed;
+- intentionally deferred optimizations.
+
+Do not use vague:
+
+    "performance improved"
+
+without evidence.
+
+---
+
+# 60. FINAL TECH-DEBT REGISTER
+
+Not every issue must be fixed.
+
+Create a prioritized remaining register:
+
+## P0
+must fix before shipping
+
+## P1
+high-value next milestone
+
+## P2
+worth doing
+
+## P3
+cleanup
+
+For each:
+
+- evidence;
+- impact;
+- estimated risk;
+- why deferred.
+
+For PASS there must be no known P0 blocker.
+
+---
+
+# 61. DOCUMENTATION / OPEN SPEC
+
+If behavior changes:
+
+update relevant specification using current repository workflow.
+
+Do not edit archived historical changes as if they were active.
+
+Update durable docs only after implementation stabilizes.
+
+Ensure:
+
+- ARCHITECTURE reflects real ownership;
+- TESTING reflects current scenarios/safety;
+- AGENTS contains only durable agent-relevant invariants;
+- STATE reflects final reality.
+
+---
+
+# 62. FINAL DIFF AUDIT
+
+Before any commit:
+
+    git status
+    git diff --stat
+    git diff
+
+Inspect every changed/untracked file.
+
+Classify:
+
+    intended product
+    test
+    docs/spec
+    agent state
+    temporary
+    unrelated
+
+Remove temporary artifacts.
+
+Do not stage unrelated prompt files.
+
+Search relevant architecture-sensitive terms:
+
+    SetParent
+    SetWindowLong
+    GWL_STYLE
+    GWL_EXSTYLE
+    HWND_BOTTOM
+    HWND_TOPMOST
+    Thread.Sleep
+    Task.Delay
+    SetWindowPos
+    ShowWindow
+    SetForegroundWindow
+    SendInput
+    Process.Start
+    Process.Kill
+
+Review NEW changes in context.
+
+---
+
+# 63. PRODUCTION ENGINEERING GATE
+
+Do not complete `/goal` until:
+
+## Audit coverage
+
+- [ ] all production files reviewed
+- [ ] Win32 layer reviewed
+- [ ] state/lifecycle reviewed
+- [ ] split reviewed
+- [ ] movement/z-order reviewed
+- [ ] persistence reviewed
+- [ ] crash journal reviewed
+- [ ] group lifecycle reviewed
+- [ ] capture/release reviewed
+- [ ] security reviewed
+- [ ] resource lifetime reviewed
+- [ ] performance reviewed
+- [ ] concurrency reviewed
+- [ ] logging reviewed
+- [ ] ValidationDriver reviewed
+- [ ] build/CI reviewed
+- [ ] docs/spec drift reviewed
+- [ ] dead code reviewed
+
+## Confirmed findings
+
+- [ ] all Critical findings resolved or proven not applicable
+- [ ] all High findings resolved or explicitly blocked with evidence
+- [ ] all Medium correctness/security findings resolved or justified
+- [ ] no known P0 shipping blocker remains
+
+## Architecture
+
+- [ ] Shepherd preserved
+- [ ] no SetParent
+- [ ] no guest containment style mutation
+- [ ] WindowShepherdService ownership coherent
+- [ ] no global HWND_BOTTOM
+- [ ] no polling/sleep race workaround
+- [ ] journal-before-hide preserved
+- [ ] EVENT_OBJECT_REORDER solution preserved
+- [ ] split persistence semantics preserved
+- [ ] post-drag reconciliation preserved
+
+## Validation
+
+- [ ] all four builds PASS
+- [ ] no new warnings
+- [ ] validate.ps1 PASS
+- [ ] geometry selftest PASS
+- [ ] OpenSpec PASS
+- [ ] every fixed bug has regression coverage where feasible
+- [ ] adjacent regressions PASS
+- [ ] supervised tests run if policy/environment permits
+- [ ] no unexplained intermittent failure remains
+
+## Quality
+
+- [ ] no temporary diagnostics
+- [ ] no accidental dependencies
+- [ ] no unrelated refactor churn
+- [ ] docs reflect final source
+- [ ] remaining debt prioritized
+
+Only then may the audit be called complete.
+
+---
+
+# 64. COMMIT POLICY
+
+Do not commit immediately.
+
+First inspect whether the repository already contains uncommitted work from the recent Computer Use QA campaign.
+
+The whole audit must preserve that work.
+
+Once:
+
+- existing pending QA changes are understood;
+- audit findings are fixed;
+- validation is green;
+- diff is coherent;
+
+then decide whether to create:
+
+A. one combined production-hardening milestone commit,
+
+or
+
+B. logically separated commits if repository history clearly benefits from it.
+
+Prefer coherent commits over dozens of tiny audit commits.
+
+Do NOT rewrite existing history.
+
+Do NOT push.
+
+Do NOT create PRs.
+
+Do NOT tag.
+
+If the user wants remote publication, that is a separate action.
+
+---
+
+# 65. FINAL REPORT FORMAT
+
+When `/goal` completes, produce:
+
+# TabDock Whole-Codebase Audit Result
+
+## Overall Assessment
+
+State:
+
+    READY
+    READY WITH DEFERRED DEBT
+    NOT READY
+
+Do not claim "bug-free."
+
+---
+
+## Repository Coverage
+
+Report:
+
+- production files reviewed;
+- tests reviewed;
+- native API surface reviewed;
+- build/config/docs reviewed;
+- anything not inspected.
+
+---
+
+## Findings Summary
+
+Table:
+
+    Severity | Found | Fixed | Deferred | Rejected
+
+---
+
+## Critical / High Findings
+
+For every one:
+
+### ID
+- category
+- affected code
+- symptom/risk
+- reproduction/evidence
+- root cause
+- fix
+- regression
+- result
+
+---
+
+## Medium Findings
+
+Same but concise.
+
+---
+
+## Performance Findings
+
+- issue
+- measurement/evidence
+- optimization
+- result
+
+---
+
+## Security Review
+
+Explicitly cover:
+
+- privilege boundaries
+- HWND/PID validation
+- process/message interaction
+- filesystem
+- secrets/network
+- dependencies
+- crash-hidden-window safety
+
+---
+
+## Win32 / HWND Review
+
+Report:
+
+- P/Invoke defects found
+- z-order findings
+- hook findings
+- geometry findings
+- resource lifetime
+
+---
+
+## Persistence / Crash Safety
+
+Report all findings and tests.
+
+---
+
+## Split / Lifecycle
+
+Report state-machine findings.
+
+---
+
+## Test Suite Review
+
+Report:
+
+- tests strengthened;
+- vacuous tests fixed;
+- safety issues fixed;
+- remaining gaps.
+
+---
+
+## Cross-Machine / DPI
+
+What was audited and what remains physically unverified.
+
+---
+
+## Build / CI
+
+Findings and changes.
+
+---
+
+## Dead Code / Maintainability
+
+What was safely removed or deliberately retained.
+
+---
+
+## Remaining Technical Debt
+
+P0 / P1 / P2 / P3.
+
+There must be no unresolved P0 for READY.
+
+---
+
+## Validation
+
+Exact commands and results.
+
+---
+
+## Architecture Safety
+
+Explicitly state final status of:
+
+- SetParent
+- guest style/exstyle mutation
+- HWND_BOTTOM
+- polling/sleep workaround
+- WindowShepherdService ownership
+- journal-before-hide
+- EVENT_OBJECT_REORDER
+- split persistence
+- post-drag reconciliation
+
+---
+
+## Files Changed
+
+Meaningful files and why.
+
+---
+
+## Commits
+
+If created:
+
+    hash
+    subject
+    scope
+
+If not:
+
+explain why.
+
+---
+
+## Git Status
+
+Exact final state.
+
+---
+
+## Remote State
+
+Confirm whether anything was pushed.
+
+Default expectation:
+
+    nothing pushed
+
+---
+
+# 66. FINAL PRINCIPLE
+
+This audit exists to discover things we do NOT already know.
+
+Do not spend the entire run merely proving the known feature works.
+
+Attack assumptions.
+
+Read uncomfortable code.
+
+Trace weird lifecycle paths.
+
+Construct adversarial event orderings.
+
+Look for:
+
+    "This is only safe if event X always arrives before Y."
+
+    "This assumes the HWND cannot be recycled."
+
+    "This assumes WPF layout has already completed."
+
+    "This assumes the guest is foreground if visible."
+
+    "This assumes disk writes succeed."
+
+    "This assumes the test cleanup always runs."
+
+    "This assumes only one monitor."
+
+    "This assumes no callback arrives after disposal."
+
+Those assumptions are where the most valuable findings will come from.
+
+But every change still needs evidence.
+
+The ideal end state is not:
+
+> lots of code changed.
+
+It is:
+
+> the entire repository has been interrogated systematically, real defects have been fixed, fragile assumptions have been hardened, tests have become more meaningful, architecture has remained coherent, and the remaining risks are explicitly known.
+
+Begin now with repository recovery and a full-system architecture map, then proceed through the audit phases until the production engineering gate is satisfied.

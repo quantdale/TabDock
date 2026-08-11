@@ -515,23 +515,16 @@ input.addEventListener('input', function() {
             if (item == null)
                 throw new InvalidOperationException($"Tab '{title}' ListBoxItem not found ({lastError}).");
 
-            Uia.Realize(item);
-
-            // Prefer the UIA selection pattern; it avoids coordinate/virtualization
-            // fragility and reliably switches tabs. We still verify IsSelected.
+            // Keep the action on the same real-input path as a user click. UIA is
+            // read-only discovery/assertion infrastructure in this harness.
             bool selected = false;
             for (int attempt = 0; attempt < 3 && !selected; attempt++)
             {
                 if (!Input.ForceForeground(container))
                     throw new InvalidOperationException("Could not bring the container to the foreground — refusing to select blind.");
 
-                if (attempt == 0)
-                    Uia.Select(item);
-                else
-                {
-                    (int tx, int ty) = Uia.Center(item);
-                    Input.ClickAt(tx, ty);
-                }
+                (int tx, int ty) = Uia.Center(item);
+                Input.ClickAt(tx, ty);
                 Thread.Sleep(350);
                 selected = Uia.IsSelected(item) == true;
             }
@@ -792,19 +785,40 @@ input.addEventListener('input', function() {
         IntPtr initiallyDocked = FindDocked();
         ctx.Check(initiallyDocked != IntPtr.Zero, "exactly one guest is docked/active before any keyboard switch");
 
-        Input.SendKeyDown(Input.VK_CONTROL);
-        Input.SendKey(Input.VK_TAB);
-        Input.SendKeyUp(Input.VK_CONTROL);
+        bool ctrlDown = false;
+        try
+        {
+            Input.SendKeyDown(Input.VK_CONTROL);
+            ctrlDown = true;
+            Input.SendKey(Input.VK_TAB);
+        }
+        finally
+        {
+            if (ctrlDown)
+                Input.SendKeyUp(Input.VK_CONTROL);
+        }
         Thread.Sleep(400);
         IntPtr dockedAfterOne = FindDocked();
         ctx.Check(dockedAfterOne != IntPtr.Zero && dockedAfterOne != initiallyDocked,
             "Ctrl+Tab changed the active/docked tab with zero mouse clicks on the tab strip");
 
-        Input.SendKeyDown(Input.VK_CONTROL);
-        Input.SendKeyDown(Input.VK_SHIFT);
-        Input.SendKey(Input.VK_TAB);
-        Input.SendKeyUp(Input.VK_SHIFT);
-        Input.SendKeyUp(Input.VK_CONTROL);
+        ctrlDown = false;
+        bool shiftDown = false;
+        try
+        {
+            Input.SendKeyDown(Input.VK_CONTROL);
+            ctrlDown = true;
+            Input.SendKeyDown(Input.VK_SHIFT);
+            shiftDown = true;
+            Input.SendKey(Input.VK_TAB);
+        }
+        finally
+        {
+            if (shiftDown)
+                Input.SendKeyUp(Input.VK_SHIFT);
+            if (ctrlDown)
+                Input.SendKeyUp(Input.VK_CONTROL);
+        }
         Thread.Sleep(400);
         IntPtr dockedAfterBack = FindDocked();
         ctx.Check(dockedAfterBack == initiallyDocked, "Ctrl+Shift+Tab cycled back to the originally-active tab (reverse direction works)");
@@ -816,13 +830,22 @@ input.addEventListener('input', function() {
             Input.SendKey(Input.VK_TAB);
             Thread.Sleep(100);
         }
-        Input.SendKeyDown(Input.VK_SHIFT);
-        for (int i = 0; i < 4; i++)
+        bool plainShiftDown = false;
+        try
         {
-            Input.SendKey(Input.VK_TAB);
-            Thread.Sleep(100);
+            Input.SendKeyDown(Input.VK_SHIFT);
+            plainShiftDown = true;
+            for (int i = 0; i < 4; i++)
+            {
+                Input.SendKey(Input.VK_TAB);
+                Thread.Sleep(100);
+            }
         }
-        Input.SendKeyUp(Input.VK_SHIFT);
+        finally
+        {
+            if (plainShiftDown)
+                Input.SendKeyUp(Input.VK_SHIFT);
+        }
         ctx.Check(NativeMethods.IsWindow(container) && NativeMethods.IsWindowEnabled(container),
             "container survived plain Tab/Shift+Tab focus traversal (no crash/hang)");
 

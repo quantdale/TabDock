@@ -27,7 +27,7 @@ public sealed class GuestLifecycleService
     private readonly LoggingService _log;
 
     // Debounces EVENT_OBJECT_NAMECHANGE storms (see DebounceNameChanged).
-    private readonly Dictionary<IntPtr, DispatcherTimer> _nameChangeDebounce = new();
+    private readonly Dictionary<IntPtr, (DispatcherTimer Timer, CapturedWindow Member)> _nameChangeDebounce = new();
 
     public GuestLifecycleService(GroupManager groups, Dictionary<Guid, ContainerWindow> containers, LoggingService log)
     {
@@ -199,27 +199,44 @@ public sealed class GuestLifecycleService
     // rather than trusting whichever event happened to trigger the timer.
     private void DebounceNameChanged(IntPtr hwnd)
     {
-        if (_nameChangeDebounce.TryGetValue(hwnd, out var timer))
-        {
-            timer.Stop();
-            timer.Start();
+        if (!_groups.TryGetCapturedMember(hwnd, out _, out CapturedWindow? member))
             return;
+
+        if (_nameChangeDebounce.TryGetValue(hwnd, out var pending))
+        {
+            if (ReferenceEquals(pending.Member, member))
+            {
+                pending.Timer.Stop();
+                pending.Timer.Start();
+                return;
+            }
+
+            // The HWND was released and recycled while the old debounce was
+            // pending. Drop the old timer before scheduling one for the new
+            // captured object.
+            pending.Timer.Stop();
+            _nameChangeDebounce.Remove(hwnd);
         }
 
-        timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         timer.Tick += (_, _) =>
         {
-            timer!.Stop();
-            _nameChangeDebounce.Remove(hwnd);
-            HandleNameChanged(hwnd);
+            timer.Stop();
+            if (_nameChangeDebounce.TryGetValue(hwnd, out var current)
+                && ReferenceEquals(current.Timer, timer))
+            {
+                _nameChangeDebounce.Remove(hwnd);
+            }
+            HandleNameChanged(hwnd, member);
         };
-        _nameChangeDebounce[hwnd] = timer;
+        _nameChangeDebounce[hwnd] = (timer, member);
         timer.Start();
     }
 
-    private void HandleNameChanged(IntPtr hwnd)
+    private void HandleNameChanged(IntPtr hwnd, CapturedWindow expectedMember)
     {
-        if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match))
+        if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match)
+            || !ReferenceEquals(match, expectedMember))
             return;
         if (!string.IsNullOrWhiteSpace(match.CustomLabel))
             return; // User label wins.

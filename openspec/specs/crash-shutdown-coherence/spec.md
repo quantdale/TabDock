@@ -17,11 +17,18 @@ Crash, shutdown, and fatal-error paths in TabDock remain internally consistent a
 - **THEN** the handler logs only — it does not race the UI thread's journal mutation — so `hidden-windows.json` on disk is never left torn by the crash handler itself
 
 ### Requirement: Session-ending release leaves coherent state
-`Application_SessionEnding`'s emergency release SHALL leave `GroupManager` in a coherent post-release state: released members are removed from their groups (and thus from the HWND index) and the WinEvent monitor is stopped, so a cancelled logoff does not leave live hooks and move-sync loops acting on unmanaged standalone windows.
+`Application_SessionEnding`'s emergency release SHALL leave the model and
+presentation in a coherent post-release state: each group's just-released
+member metadata and active index are preserved as persisted layout intent, open
+containers clear released tabs and split references, released members are
+removed from their groups (and thus from the HWND index), and the WinEvent
+monitor is stopped. A cancelled logoff SHALL therefore not leave live hooks,
+timers, or move-sync loops acting on unmanaged standalone windows, nor erase the
+layout intent that a later save should preserve.
 
 #### Scenario: A cancelled logoff leaves nothing half-captured
 - **WHEN** `SessionEnding` releases all guests and the logoff is then cancelled by another application
-- **THEN** no HWND remains in the captured index, the hooks are removed, and container movement no longer repositions the released windows
+- **THEN** no HWND remains in the captured index, the hooks and stale container dispatch are removed, released tabs and split references are cleared from the presentation, and the group's persisted tab metadata and active intent remain available for a later save
 
 ### Requirement: Every fatal shutdown path suppresses the close-confirm prompt
 All shutdown/crash/startup-failure paths SHALL set `ContainerWindow.IsAppShuttingDown` before any container can be closed, so the Yes/No/Cancel close-confirm modal can never appear during a fatal shutdown.

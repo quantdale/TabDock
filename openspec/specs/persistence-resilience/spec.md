@@ -1,7 +1,7 @@
 # persistence-resilience
 
 ## Purpose
-Covers robustness of persisted group metadata in `state.json`, including tolerance for malformed entries, preservation of corrupt files, accent-color validation, and the single-instance guard that protects shared persistence files.
+Covers robustness of persisted group metadata in `state.json`, including tolerance for malformed entries, unique runtime identifiers, preservation of corrupt or unreadable files, accent-color validation, and the single-instance guard that protects shared persistence files.
 
 ## Requirements
 
@@ -12,12 +12,33 @@ Covers robustness of persisted group metadata in `state.json`, including toleran
 - **WHEN** `state.json` contains three groups, one of which is malformed (null entry, null `Tabs`, or otherwise unrestorable)
 - **THEN** the two well-formed groups are restored normally, the malformed one is skipped and logged, and the load does not throw
 
+### Requirement: Restored group identifiers are unique
+`PersistenceService.Load` SHALL retain every otherwise-restorable group while
+replacing an empty or duplicate persisted group ID with a newly generated
+unique ID. The replacement SHALL be logged, and the first occurrence of a
+valid ID SHALL remain unchanged.
+
+#### Scenario: Duplicate group IDs do not collapse restored groups
+- **WHEN** `state.json` contains multiple valid groups with the same ID, or a group with an empty ID
+- **THEN** all valid groups are restored, each has a unique non-empty ID, and the later duplicate or empty ID is replaced and logged
+
 ### Requirement: A corrupt state file is preserved before being replaced
 When `state.json` cannot be deserialized, `PersistenceService` SHALL rename the unreadable file to a collision-safe `state.json.corrupt-<timestamp>` name before returning an empty state, and `Save` SHALL preserve the pre-overwrite file as `state.json.bak`, so a failed load is never silently followed by the evidence being overwritten with empty state.
 
 #### Scenario: A corrupt state file survives the next save
 - **WHEN** `state.json` is truncated or otherwise unparseable, TabDock starts, and any state change triggers a save
 - **THEN** the original corrupt content still exists on disk under the `.corrupt-<timestamp>` (or `.bak`) name after the save completes
+
+### Requirement: An unreadable existing state file is not overwritten by an empty fallback
+When an existing `state.json` cannot be read because of an I/O or access
+failure, `PersistenceService.Load` SHALL return an empty restore result for the
+current run but mark the load as unsafe. Any later `Save` in that process SHALL
+skip replacing the unreadable file with empty state and SHALL log the reason.
+Parseable corruption remains handled by the quarantine requirement above.
+
+#### Scenario: A read failure cannot erase potentially valid state
+- **WHEN** `state.json` exists but a read/access failure prevents `PersistenceService.Load` from inspecting it, and a state change or exit path later requests a save
+- **THEN** the save is skipped, the original unreadable file is not replaced by an empty state, and the failure is logged
 
 ### Requirement: A persisted accent color that fails to parse falls back to the default
 When a restored group's `AccentColor` string cannot be parsed by `ColorConverter.ConvertFromString`, the restore SHALL substitute the default `#2196F3` instead of propagating the invalid value, so a hand-edited or corrupt color can never produce a fully transparent, non-hit-testable container window.

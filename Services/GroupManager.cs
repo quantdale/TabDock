@@ -159,6 +159,21 @@ public sealed class GroupManager
     }
 
     /// <summary>
+    /// Verifies a live member before a caller performs a native operation that
+    /// is not owned by WindowShepherdService itself (for example WM_CLOSE).
+    /// </summary>
+    public bool IsCurrentCapturedWindow(CapturedWindow member)
+        => _shepherd.IsCurrentCapturedWindow(member);
+
+    /// <summary>
+    /// Resolves the live member object for WinEvent correlation. Unlike an
+    /// HWND-only lookup, retaining this reference lets the monitor reject a
+    /// queued event if the handle was released and recycled before dispatch.
+    /// </summary>
+    public CapturedWindow? GetCapturedWindow(IntPtr hwnd)
+        => _capturedIndex.TryGetValue(hwnd, out CapturedMember entry) ? entry.Window : null;
+
+    /// <summary>
     /// Resolves an HWND to its captured member and owning group in one probe.
     /// An HWND can only ever be in one group (enforced by the picker's filter
     /// and by ContainerWindow.CaptureWindow), so this returns the same result
@@ -415,6 +430,41 @@ public sealed class GroupManager
         catch (Exception ex)
         {
             _log.LogException("EmergencyReleaseAll enumeration", ex);
+        }
+    }
+
+    /// <summary>
+    /// Converts the currently live members into persisted layout intent and
+    /// removes them from the captured index. Session-ending can be cancelled
+    /// after the emergency release; leaving the members in the model would
+    /// make the UI claim that released windows were still captured, while
+    /// clearing them without copying their metadata would make a later save
+    /// erase the state that was written just before the release.
+    /// </summary>
+    public void ClearCapturedMembersAfterSessionEnding()
+    {
+        foreach (Group group in Groups.ToList())
+        {
+            if (group.Members.Count == 0)
+                continue;
+
+            group.PersistedTabs.Clear();
+            foreach (CapturedWindow member in group.Members)
+            {
+                group.PersistedTabs.Add(new PersistedTabMetadata
+                {
+                    ExePath = member.ExePath,
+                    OriginalTitle = member.OriginalTitle,
+                    CustomLabel = member.CustomLabel,
+                    Left = member.OriginalBounds.left,
+                    Top = member.OriginalBounds.top,
+                    Right = member.OriginalBounds.right,
+                    Bottom = member.OriginalBounds.bottom,
+                    WasMaximized = member.WasMaximized,
+                });
+            }
+            group.PersistedActiveIndex = group.ActiveIndex;
+            group.Members.Clear();
         }
     }
 }

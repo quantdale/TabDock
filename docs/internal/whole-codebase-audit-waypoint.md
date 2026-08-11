@@ -1,0 +1,369 @@
+# TabDock Whole-Codebase Audit
+
+## Baseline
+
+- Date: 2026-08-11.
+- Branch: `main`.
+- Starting HEAD: `5404349998c49365f04873f0d7d5a2c53814b776`.
+- Starting worktree change: the user-supplied untracked `goal.txt`; existing
+  committed QA work was preserved. The current worktree intentionally contains
+  the audit's production, harness, spec, documentation, and state changes.
+- Repository inventory: 29 production C# files, 22 ValidationDriver/GuineaPig
+  C# files, one experimental Spike C# file, one WPF application project, two
+  validation-driver projects, build/publish scripts, CI, docs, and 12 OpenSpec
+  capability specs.
+- No commit, reset, clean, revert, push, or PR was performed.
+
+## Current architecture
+
+- `App` is the composition root and owns startup, crash/shutdown/session-ending
+  paths, container registration, persistence, hotkey, and WinEvent lifetime.
+- `GroupManager` owns groups, the O(1) captured-HWND/member index, active-tab
+  bookkeeping, capture/release coordination, and debounced state saves.
+- `WindowShepherdService` is the sole production capture backend. Captured
+  applications remain independent top-level windows; geometry, visibility,
+  local z-order, foreground, placement restoration, and the hidden-window
+  journal create the visual containment illusion. No guest is reparented or
+  restyled.
+- `WinEventMonitor` owns desktop-wide out-of-context hook installation and UI
+  dispatch. `GuestLifecycleService` is the policy consumer for destroy, hide,
+  minimize, name, foreground, reorder, and move/size events.
+- `ContainerWindow` owns WPF chrome, split presentation, activation and
+  maximize/minimize/move reconciliation, popup/modal z-order, capture UI, and
+  close/delete flows. `NativeHwndHost` is a marker HWND only.
+- `PersistenceService` stores layout intent in `state.json`; the journal stores
+  same-session hidden guest recovery in `hidden-windows.json`. The
+  ValidationDriver uses real Win32 input for disposable or explicitly selected
+  guests and is governed by the supervised-only policy in `docs/TESTING.md`.
+
+## Audit coverage
+
+| Area | Status | Evidence |
+| --- | --- | --- |
+| Production startup, shutdown, crash, and group lifecycle | Complete | `App`, `GroupManager`, container close/open paths, session-ending normalization |
+| Shepherd capture/release, geometry, visibility, z-order, split, DPI | Complete | all `WindowShepherdService` and `ContainerWindow` callers; geometry self-test |
+| WinEvent installation, cleanup, dispatch, callback races | Complete | `WinEventMonitor`, `GuestLifecycleService`, captured-member reference checks |
+| Persistence and hidden-window journal | Complete | atomic-write and failure-path review; canonical specs; crash-rescue scenarios |
+| Native interop, privilege boundary, and resource lifetime | Complete | all production P/Invoke declarations/call sites; elevation and handle paths |
+| XAML/view models, popup/modal behavior, subscriptions, timers | Complete | views, view models, marker host, timer-instance guards |
+| Performance and dead/inert code | Complete | hot-path call map, static sleep/process/file/timer scan, Repowise risk/context map |
+| ValidationDriver, GuineaPig, Spike, scripts, CI | Complete | all 22 harness C# files, project builds, `scripts/validate.ps1`, CI inspection |
+| OpenSpec and internal documentation drift | Complete | all 12 specs validated; guide capability count corrected |
+| Cross-machine, monitor, DPI, and real-input behavior | Partial by policy | static/source review and deterministic self-test complete; no unattended live run |
+| Formal Codex Security Deep Scan | Not available in this environment | plugin preflight completed, worker start refused because managed filesystem permission profile was unavailable; manual security review completed |
+
+## Confirmed findings and disposition
+
+All findings below were source-verified before editing. The normal crash-rescue,
+split, persistence, and UI scenarios already present in the repository remain
+the primary behavioral regression coverage. Fault-injection-only cases are
+called out as gaps rather than claimed as executed.
+
+### WCA-01 — hide journal commit was fail-open (High, confirmed, fixed)
+
+- `WindowShepherdService.Hide` previously hid after a catching, void
+  `JournalHide`; a force-kill could strand an invisible independent guest with
+  no durable rescue record.
+- `JournalHide` now returns success, `Hide` refuses `SW_HIDE` when the commit
+  fails, and the intentional-hidden release path fails closed if its immediate
+  clear cannot commit.
+- Coverage: hidden-window-journal spec scenarios and supervised-only
+  `crashkill-rescue`/`crashkill-selfhide-not-rescued` harness paths; fault
+  injection of disk failure was not run.
+
+### WCA-02 — rescue consumed entries without verifying visibility (Medium, confirmed, fixed)
+
+- Startup rescue validated PID/executable but deleted the journal without
+  checking whether `ShowWindow` actually produced a visible window.
+- Rescue now verifies visibility, retains identity-valid failed entries for a
+  later retry, and discards invalid/recycled identities. The on-disk shape and
+  atomic temp/replace write remain stable.
+- Coverage: updated hidden-window-journal spec plus existing crash-rescue
+  scenarios; native show-failure injection remains a deferred test gap.
+
+### WCA-03 — duplicate persisted group IDs were accepted (Medium, confirmed, fixed)
+
+- Duplicate IDs could collide in `_containers` and make independently restored
+  groups address the same container key.
+- Load now repairs empty and later duplicate IDs with logged unique GUIDs while
+  retaining the valid groups; persistence-resilience spec coverage was added.
+- Coverage: source-level invariant and OpenSpec scenario; no isolated duplicate-
+  fixture launch was run because the interactive harness is supervised-only.
+
+### WCA-04 — ValidationDriver used UIA action fallbacks (Medium, confirmed, fixed)
+
+- Picker/inline capture and tab-selection helpers could invoke UIA
+  `TogglePattern`/`SelectionItemPattern` actions instead of exercising user
+  input.
+- Action fallbacks were removed; the driver now rediscoveries UIA geometry and
+  uses guarded real clicks, failing loudly when clicks cannot reach a control.
+- Coverage: ValidationDriver build and static zero-match scan for action APIs;
+  live picker/tab scenarios remain supervised.
+
+### WCA-05 — driver setup failure could strand the user's state snapshot (High, confirmed, fixed)
+
+- A failure after moving `state.json` to the driver snapshot but before a
+  `Ctx` existed skipped restoration.
+- Restoration is idempotent, setup fails closed, tracked processes are waited
+  out before state restoration, and the null-context failure path restores the
+  snapshot.
+- Coverage: driver build, source-path review, and guarded cleanup logic; no
+  injected startup-failure run was performed.
+
+### WCA-06 — close-prompt z-order trusted caption-only HWND (Medium, confirmed, fixed)
+
+- `FindWindow(null, "Close group")` could select a same-caption foreign window
+  before applying a z-order mutation.
+- The prompt lookup now requires visible `#32770`, current TabDock PID, and
+  direct/root ownership by the current container.
+- Coverage: source/static ownership checks and existing close-prompt behavior;
+  same-caption foreign-window run remains supervised.
+
+### WCA-07 — partial WinEvent hook cleanup could leak/loss-monitor (Medium, confirmed, fixed)
+
+- Failed unhook fields were preserved, but a later start could overwrite them;
+  a partial install could also leave captured guests unmonitored indefinitely.
+- Start now treats installation as a bounded transaction, refuses residual-handle
+  overwrite, retries only after cleanup, and App schedules a bounded retry.
+  Stop also handles residual hooks after `_running` is false.
+- Coverage: source state-machine review and build; native SetWinEventHook failure
+  injection is deferred.
+
+### WCA-08 — ValidationDriver cleanup used stale raw HWNDs (Medium, confirmed, fixed)
+
+- Cleanup and guest/window operations relied on `IsWindow`/PID in places where
+  the e2e safety spec requires immediate ownership, class, title, and executable
+  identity verification.
+- Added `WindowIdentity`, refresh gates, `VerifiedWindowOps`, process-wide
+  spawned-window cleanup assertions, and guarded main/container/guest records.
+- Coverage: static scan confirms scenario native mutators route through the
+  helper (aside from the explicitly audited input layer); driver build.
+
+### WCA-09 — capture admission had a recycled-HWND race (Medium, confirmed, fixed)
+
+- Picker/capture metadata queries could complete after the candidate HWND had
+  changed owner or identity.
+- Capture now performs final PID/executable/class/title verification immediately
+  before admitting the member and before DWM mutation.
+- Coverage: source-level identity gate, build, and e2e capture safety checks.
+
+### WCA-10 — picker selection was TOCTOU-prone (Medium, confirmed, fixed)
+
+- The picker returned only an HWND, so selection could be replaced before the
+  capture operation.
+- `WindowCaptureTarget` carries PID/class/title/executable identity; picker and
+  container revalidate before and after capture, releasing only the just-captured
+  identity on mismatch.
+- Coverage: picker build/static review; supervised picker run remains deferred.
+
+### WCA-11 — harness direct operations and input cleanup were inconsistent (Medium, confirmed, fixed)
+
+- Scenario direct `PostMessage`/`ShowWindow`/`SetWindowPos` and coordinate input
+  had uneven identity and ownership gates.
+- All scenario native mutations now route through verified helpers; `Input`
+  verifies point/foreground identity, and mouse/keyboard release paths use
+  `finally` cleanup so failed checks cannot strand global input state.
+- Coverage: static zero-match scan for direct scenario mutators, driver build,
+  and source audit of explicit modifier call sites.
+
+### WCA-12 — production stale-HWND destructive mutation risk (High, confirmed, fixed)
+
+- Close/release/foreground/z-order paths could act on a live recycled handle
+  after PID-only or validity-only checks.
+- Shepherd now gates native mutation with stable PID/class and, for destructive
+  paths, executable identity; close-message paths use the same gate and skip
+  stale replacements.
+- Coverage: source call-map review, static native invariant scan, and builds.
+
+### WCA-13 — queued WinEvent/name callbacks could target a recycled member (Medium, confirmed, fixed)
+
+- A callback captured only HWND and resolved membership later; a reused HWND
+  could receive an old destroy/reorder/name action.
+- `WindowEventArgs` carries the captured member reference from callback time;
+  dispatch and name-debounce timers require reference equality with the current
+  index entry.
+- Coverage: source race review and build; injected callback sequencing is not
+  available without a dedicated test seam.
+
+### WCA-14 — unreadable state could be overwritten by empty fallback (High, confirmed, fixed)
+
+- Read/access failures returned empty state and later saves could replace a
+  potentially valid but unreadable file.
+- `PersistenceService` distinguishes read failure from parse corruption,
+  quarantines parseable corruption, and skips later saves after unsafe reads.
+  Atomic `.bak`/`.tmp` persistence remains intact.
+- Coverage: persistence-resilience spec and build; access-denied/disk-full
+  injection was not run.
+
+### WCA-15 — partial capture insertion could orphan the native guest (Medium, confirmed, fixed)
+
+- View-model/icon construction or collection insertion could fail after native
+  capture but before both authoritative collections were coherent.
+- `GroupViewModel.AddCapturedWindow` is transactional; `ContainerWindow` rolls
+  back and releases the just-captured identity on insertion failure.
+- Coverage: source failure-path review and builds.
+
+### WCA-16 — invalid DPI probe failed open (Medium, confirmed, fixed)
+
+- A zero/exception awareness probe allowed capture to continue with unverified
+  physical/virtual coordinate assumptions.
+- Capture now refuses zero DPI context, zero system DPI, and probe exceptions;
+  the canonical UI/DPI spec records fail-closed semantics. Microsoft documents
+  that `GetWindowDpiAwarenessContext` returns NULL for an invalid HWND:
+  https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowdpiawarenesscontext
+- Coverage: geometry self-test, spec validation, build; non-100% live monitor
+  matrix remains supervised/unrun.
+
+### WCA-17 — open-container failure could orphan a just-created window/group (Medium, confirmed, fixed)
+
+- Registration after `Show` and incomplete catch cleanup could leave a closed or
+  partially opened container registered, or persist a group with no usable UI.
+- Containers register before `Show`, closed callbacks are instance-checked,
+  failures close/unregister/detach, and new-group flows remove failed groups.
+- Coverage: source lifecycle review and builds; injected WPF construction failure
+  was not run.
+
+### WCA-18 — real-input failures could strand global mouse/modifier state (Medium, confirmed, fixed)
+
+- Exceptions after `SendInput` button-down or modifier-down could contaminate
+  the user's desktop and later scenarios.
+- Click/drag/type/key/hotkey paths now release in `finally`; intentional held
+  drag paths have explicit release cleanup.
+- Coverage: static call-site review and driver build; supervised execution is
+  required before claiming live desktop behavior.
+
+### WCA-19 — native marker class registration could fail open/leak a brush (Low, confirmed, fixed)
+
+- `RegisterClassEx` accepted zero with `GetLastError()==0` and did not release a
+  brush on class-registration failure/collision.
+- Registration now fails closed except for `ERROR_CLASS_ALREADY_EXISTS` and
+  deletes the created brush on failure/collision.
+- Coverage: source review and build.
+
+### WCA-20 — cleanup identity gate could reject a legitimately renamed guest (Medium, confirmed, fixed)
+
+- Title equality was unsuitable as a stable capture identity because guests can
+  rename themselves while docked.
+- Stable production cleanup uses PID/class/executable; title is retained for
+  admission and picker TOCTOU checks but excluded from ongoing mutation gates.
+- Coverage: source identity review and build.
+
+### WCA-21 — native chrome/z-order helpers lacked invalid-container guards (Low, confirmed, fixed)
+
+- Several helper paths could issue native calls after the container HWND was
+  destroyed.
+- `PositionAndShow`, chrome raise/restore, pairing, and split positioning now
+  require valid container/member handles before native mutation.
+- Coverage: source call-map review and build.
+
+### WCA-22 — desktop reorder dispatch could use a later foreground/recycled member (Medium, confirmed, fixed)
+
+- Desktop reorder events identify the desktop, not the reordered guest; a later
+  foreground transition could make a posted callback pair the wrong member.
+- Callback-time foreground and captured-member reference are carried through the
+  post and revalidated at dispatch.
+- Coverage: source race review, static invariant scan, and build.
+
+### WCA-23 — stale one-shot DispatcherTimer callbacks could overwrite newer state (Medium, confirmed, fixed)
+
+- Stop/restart races let an old activation, settled-log, close-prompt, retry, or
+  minimize-restore callback clear or act through a newer timer generation.
+- Each one-shot callback now captures its timer instance and mutates the field
+  only when it is still current; App retry and guest name debounce use the same
+  identity discipline.
+- Coverage: source timer review, builds, and OpenSpec validation.
+
+### WCA-24 — session-ending cleanup left stale presentation/model state (Medium, confirmed, fixed)
+
+- Emergency release restored native guests but the old path cleared only model
+  members, leaving view tabs/split references stale and risking loss of layout
+  intent if logoff was cancelled and a later save occurred.
+- Session ending now stops dispatch, clears container presentation/timers,
+  copies member metadata and active intent to persisted fields, clears members,
+  and saves normalized state.
+- Coverage: crash-shutdown-coherence spec, source review, and build; actual
+  cancellation by another application was not run.
+
+## Rejected findings
+
+- No evidence supported production reparenting, guest style/owner mutation,
+  `HWND_BOTTOM` repair, production `Thread.Sleep`/`Task.Delay`, unguarded
+  production process spawning, or a new dependency/security telemetry path.
+- `Spike` intentionally demonstrates the historical reparent experiment and is
+  excluded from production invariant claims.
+- Existing synchronous picker icon extraction, self-minimize timing behavior,
+  and low-value ignored native return codes were reviewed and deferred as
+  non-blocking debt rather than patched speculatively.
+
+## Improvements deferred / technical debt
+
+### P0
+
+- None known from the completed source audit.
+
+### P1
+
+- Session-ending cancellation has no reliable post-event signal in the current
+  WPF lifecycle, so `ContainerWindow.IsAppShuttingDown` remains conservative
+  after a logoff/shutdown request that another application cancels. The
+  session-ending path is coherent and hooks/timers are stopped, but future
+  post-cancel close-prompt semantics need a dedicated lifecycle design and
+  supervised validation.
+- Cross-monitor/per-monitor-DPI behavior and the 150% DPI refusal need a
+  supervised matrix on representative machines; source now fails closed when
+  probes are invalid.
+
+### P2
+
+- Add injectable native seams or a small deterministic test harness for journal
+  write failure, rescue `ShowWindow` failure, WinEvent partial hook failure,
+  access-denied persistence, and duplicate-ID fixtures. The current code has
+  source/spec coverage and normal crash/persistence scenarios but no safe fault
+  injection for these OS failure paths.
+- Move capture-picker icon extraction off synchronous UI enumeration if profiling
+  shows it matters; retain the current bounded icon cache and failed-path cache.
+- Consider checking `NativeHwndHost.ArrangeOverride` and hotkey unregister return
+  values; neither currently has evidence of user-visible failure.
+
+### P3
+
+- Keep the experimental Spike and historical audit documents for provenance;
+  do not treat their reparent code as an active backend.
+- Continue reducing line-ending churn only through the repository's normal Git
+  policy; `git diff --check` reports no whitespace errors, only expected
+  LF/CRLF conversion warnings.
+
+## Validation results
+
+Executed against the current worktree:
+
+- `dotnet build TabDock.csproj --no-restore --nologo`: PASS, 0 warnings/errors.
+- `dotnet build tests\\ValidationDriver\\TabDock.ValidationDriver\\TabDock.ValidationDriver.csproj --no-restore --nologo`: PASS, 0/0.
+- `dotnet build tests\\ValidationDriver\\TabDock.GuineaPig\\TabDock.GuineaPig.csproj --no-restore --nologo`: PASS, 0/0.
+- `dotnet build Spike\\TabDock.Spike\\TabDock.Spike.csproj --no-restore --nologo`: PASS, 0/0.
+- `dotnet build TabDock.sln --no-restore --nologo`: PASS, 0/0.
+- `.\\scripts\\validate.ps1`: PASS, all four Debug builds.
+- `.\\scripts\\validate.ps1 -Publish`: PASS, all Debug builds plus Release
+  self-contained single-file `win-x64` publish.
+- `openspec validate --all --no-interactive`: PASS, 12/12.
+- `& .\\bin\\Debug\\net8.0-windows\\win-x64\\TabDock.exe --selftest-geometry`:
+  PASS, exit code 0.
+- `git diff --check`: PASS; only normal LF/CRLF conversion warnings.
+- `repowise update`: PASS/already up to date after the final edits.
+- Static scans: no UIA action APIs in the driver; no direct scenario native
+  mutators outside the verified helper/input layers; no production SetParent,
+  HWND_BOTTOM, or guest style mutation; sleeps/process operations are confined
+  to the supervised validation harness and expected process-control comments.
+
+Not executed by policy: unattended ValidationDriver real-input scenarios,
+cross-machine/DPI matrix, and the formal Codex Security Deep Scan (environment
+could not provide its required managed filesystem permission profile).
+
+## Current checkpoint / exact next action
+
+Implementation and autonomous validation are complete for the audited scope.
+Refresh `.agent/STATE.md` to this checkpoint, inspect final `git status` and
+diff classification once more, then hand off as **READY WITH DEFERRED DEBT**;
+do not commit or push. A supervised operator should next run the documented
+ValidationDriver batch, the cross-monitor/DPI matrix, and (if the environment
+supports it) the native fault-injection cases listed above.

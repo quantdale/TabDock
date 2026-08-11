@@ -575,6 +575,8 @@ public static partial class NativeMethods
     public const uint TOKEN_QUERY = 0x0008;
 
     public const int ERROR_ACCESS_DENIED = 5;
+    public const int ERROR_INSUFFICIENT_BUFFER = 122;
+    public const int ERROR_CLASS_ALREADY_EXISTS = 1410;
     public const int ERROR_INVALID_WINDOW_HANDLE = 1400;
 
     public static readonly IntPtr IDC_ARROW = new IntPtr(32512);
@@ -779,9 +781,23 @@ public static partial class NativeMethods
             return null;
         try
         {
-            var sb = new StringBuilder(1024);
-            uint size = (uint)sb.Capacity;
-            return QueryFullProcessImageName(hProcess, 0, sb, ref size) ? sb.ToString() : null;
+            // Long executable paths are valid on Windows. A fixed 1024-char
+            // buffer turns those paths into a null identity, which prevents a
+            // hidden guest from being journaled/rescued reliably.
+            const int InitialCapacity = 1024;
+            const int MaximumCapacity = 32768;
+            for (int capacity = InitialCapacity; capacity <= MaximumCapacity; capacity *= 2)
+            {
+                var sb = new StringBuilder(capacity);
+                uint size = (uint)sb.Capacity;
+                if (QueryFullProcessImageName(hProcess, 0, sb, ref size))
+                    return sb.ToString();
+
+                int error = Marshal.GetLastWin32Error();
+                if (error != ERROR_INSUFFICIENT_BUFFER || capacity == MaximumCapacity)
+                    return null;
+            }
+            return null;
         }
         finally
         {

@@ -4,9 +4,54 @@ using System.Text;
 
 namespace TabDock.ValidationDriver;
 
+/// <summary>Identity captured for a window before a later operation targets it.</summary>
+internal readonly record struct WindowIdentity(
+    IntPtr Hwnd,
+    uint ProcessId,
+    string ClassName,
+    string Title,
+    string ExePath);
+
 /// <summary>Win32 EnumWindows / EnumChildWindows discovery helpers.</summary>
 internal static class Discover
 {
+    /// <summary>
+    /// Captures the process/class/title tuple used by the driver's safety
+    /// checks. A zero/invalid HWND never becomes an actionable identity.
+    /// </summary>
+    public static bool TryCaptureIdentity(IntPtr hwnd, out WindowIdentity identity)
+    {
+        identity = default;
+        if (!NativeMethods.IsWindow(hwnd))
+            return false;
+
+        NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
+        string? className = NativeMethods.GetClassNameString(hwnd);
+        string? title = NativeMethods.GetWindowTextString(hwnd);
+        string? exePath = pid == 0 ? null : NativeMethods.GetProcessImagePath(pid);
+        if (pid == 0 || string.IsNullOrEmpty(className) || title == null || string.IsNullOrWhiteSpace(exePath))
+            return false;
+
+        identity = new WindowIdentity(hwnd, pid, className, title, exePath);
+        return true;
+    }
+
+    /// <summary>
+    /// Re-reads all identity fields immediately before a window operation.
+    /// HWND validity alone is insufficient because Windows may recycle an HWND
+    /// between discovery and cleanup/input.
+    /// </summary>
+    public static bool MatchesIdentity(WindowIdentity expected)
+    {
+        if (!TryCaptureIdentity(expected.Hwnd, out WindowIdentity current))
+            return false;
+
+        return current.ProcessId == expected.ProcessId
+            && string.Equals(current.ClassName, expected.ClassName, StringComparison.Ordinal)
+            && string.Equals(current.Title, expected.Title, StringComparison.Ordinal)
+            && string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase);
+    }
+
     public static List<IntPtr> GetTopLevelWindowsByPid(uint pid, bool visibleOnly)
     {
         var list = new List<IntPtr>();

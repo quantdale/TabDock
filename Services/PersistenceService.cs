@@ -20,6 +20,11 @@ public sealed class PersistenceService
     // write + atomic-rename round trip entirely (PERF25-07).
     private string? _lastSavedJson;
 
+    // A read/access failure is not evidence that the user's state is empty.
+    // Block later saves in that process so an exit path cannot replace an
+    // unreadable but potentially valid state file with an empty one.
+    private bool _stateLoadFailed;
+
     public PersistenceService(LoggingService log)
     {
         _log = log;
@@ -33,6 +38,12 @@ public sealed class PersistenceService
     {
         try
         {
+            if (_stateLoadFailed)
+            {
+                _log.Log("PersistenceService.Save skipped because the existing state could not be read safely this session.");
+                return;
+            }
+
             var state = new PersistedState();
             foreach (var g in groups)
             {
@@ -130,14 +141,47 @@ public sealed class PersistenceService
                 return result;
             }
 
-            string json = File.ReadAllText(_statePath);
-            PersistedState? state = JsonSerializer.Deserialize(json, TabDockJsonContext.Default.PersistedState);
-            if (state?.Groups == null)
+            string json;
+            try
+            {
+                json = File.ReadAllText(_statePath);
+            }
+            catch (Exception readEx)
+            {
+                _stateLoadFailed = true;
+                _log.LogException("PersistenceService.Load read", readEx);
                 return result;
+            }
+
+            PersistedState? state;
+            try
+            {
+                state = JsonSerializer.Deserialize(json, TabDockJsonContext.Default.PersistedState);
+            }
+            catch (JsonException jsonEx)
+            {
+                _log.LogException("PersistenceService.Load JSON", jsonEx);
+                if (!QuarantineCorruptStateFile())
+                    _stateLoadFailed = true;
+                return result;
+            }
+
+            if (state?.Groups == null)
+            {
+                // A syntactically valid JSON null/root-with-null-Groups is
+                // still not a recoverable application state. Preserve it with
+                // the same evidence path as other corrupt state rather than
+                // allowing the next save to erase it silently.
+                _log.Log("PersistenceService.Load: state has no Groups array; treating it as corrupt.");
+                if (!QuarantineCorruptStateFile())
+                    _stateLoadFailed = true;
+                return result;
+            }
 
             // A single null entry in the persisted array must not prevent the
             // well-formed groups from restoring.
             state.Groups.RemoveAll(g => g == null);
+            var usedGroupIds = new HashSet<Guid>();
 
             foreach (var pg in state.Groups)
             {
@@ -154,9 +198,24 @@ public sealed class PersistenceService
                         accent = "#2196F3";
                     }
 
+                    Guid groupId = pg.Id;
+                    if (groupId == Guid.Empty || !usedGroupIds.Add(groupId))
+                    {
+                        Guid originalId = groupId;
+                        do
+                        {
+                            groupId = Guid.NewGuid();
+                        }
+                        while (!usedGroupIds.Add(groupId));
+
+                        _log.Log(originalId == Guid.Empty
+                            ? $"Persisted group had an empty ID; assigned {groupId}."
+                            : $"Duplicate persisted group ID {originalId}; assigned {groupId} to the later group.");
+                    }
+
                     var group = new Group
                     {
-                        Id = pg.Id == Guid.Empty ? Guid.NewGuid() : pg.Id,
+                        Id = groupId,
                         Name = string.IsNullOrWhiteSpace(pg.Name) ? "Group" : pg.Name,
                         AccentColor = accent,
                     };
@@ -196,7 +255,7 @@ public sealed class PersistenceService
         catch (Exception ex)
         {
             _log.LogException("PersistenceService.Load", ex);
-            QuarantineCorruptStateFile();
+            _stateLoadFailed = true;
         }
         return result;
     }
@@ -215,20 +274,22 @@ public sealed class PersistenceService
         }
     }
 
-    private void QuarantineCorruptStateFile()
+    private bool QuarantineCorruptStateFile()
     {
         try
         {
             if (!File.Exists(_statePath))
-                return;
+                return true;
 
             string corruptPath = GetUniqueCorruptPath();
             File.Move(_statePath, corruptPath);
             _log.Log($"Quarantined corrupt state file to {corruptPath}");
+            return true;
         }
         catch (Exception quarantineEx)
         {
             _log.LogException("PersistenceService.Load quarantine", quarantineEx);
+            return false;
         }
     }
 

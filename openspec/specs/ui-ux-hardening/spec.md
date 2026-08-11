@@ -74,12 +74,18 @@ heights, positive/zero/negative origins, odd widths) and a seeded fuzz sweep
 Capture SHALL refuse a guest whose process is DPI-unaware when the system DPI
 differs from 96 (physical-pixel glue cannot represent the guest's
 DWM-virtualized coordinate space), reporting the reason through the normal
-capture error channel. The awareness probe failure SHALL fail open (log and
-continue) rather than block capture.
+capture error channel. If the awareness context probe, system-DPI probe, or
+supporting identity query fails or returns an invalid zero value, capture SHALL
+fail closed and report the refusal rather than proceeding with unverified
+geometry.
 
 #### Scenario: Legacy DPI-unaware window at 150% scaling
 - **WHEN** the user attempts to capture a DPI-unaware window on a system at 150% scaling
 - **THEN** capture is refused with a clear message and no geometry corruption occurs
+
+#### Scenario: An invalid DPI probe does not admit an unverified guest
+- **WHEN** the guest awareness context or system-DPI probe fails or returns zero during capture
+- **THEN** capture is refused with a clear error and the guest is not admitted with unverified coordinate assumptions
 
 ### Requirement: Environment fingerprint for diagnosability
 The application SHALL log a bounded environment fingerprint: at startup

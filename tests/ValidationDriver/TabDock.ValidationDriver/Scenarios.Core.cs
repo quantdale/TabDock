@@ -36,7 +36,8 @@ internal static partial class Scenarios
         for (int attempt = 0; attempt < 3 && !renamed; attempt++)
         {
             if (attempt > 0)
-                Input.ForceForeground(container);
+                if (!Input.ForceForeground(container))
+                    throw new InvalidOperationException("Could not bring the container to the foreground; refusing to retry rename.");
             AutomationElement? cap = Uia.FindDescendantByName(containerEl, ControlType.Text, "Group", null, out int cnt);
             if (cap == null || cnt != 1)
                 break;
@@ -518,7 +519,8 @@ internal static partial class Scenarios
             if (picker == IntPtr.Zero)
                 break;
             Thread.Sleep(300);
-            Input.ForceForeground(picker);
+            if (!Input.ForceForeground(picker))
+                throw new InvalidOperationException("Could not bring the picker to the foreground; refusing to send Esc.");
             Input.SendKey(Input.VK_ESCAPE); // picker Cancel is IsCancel=True
             ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(picker), 3000),
                 $"cycle {i}: picker dismissed with Esc");
@@ -644,7 +646,7 @@ internal static partial class Scenarios
             IntPtr restored = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TDVAL-PKGRP", 10000);
             ctx.Check(restored != IntPtr.Zero, "restored container 'TDVAL-PKGRP' opened after relaunch");
             if (restored != IntPtr.Zero)
-                ctx.Containers.Add(restored);
+                RememberContainer(ctx, restored);
 
             // 5) A clean-exit save with the group still empty must NOT wipe the
             //    persisted tab metadata (layout intent).
@@ -672,7 +674,7 @@ internal static partial class Scenarios
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
 
         // --- Cancel: container and both tabs must be completely unaffected. ---
-        NativeMethods.PostMessage(container, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        VerifiedWindowOps.PostMessage(container, ctx.TabDockPid, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
         IntPtr dlg1 = Discover.FindMessageBox(ctx.TabDockPid, "Close group");
         Util.WaitUntil(() => (dlg1 = Discover.FindMessageBox(ctx.TabDockPid, "Close group")) != IntPtr.Zero, 5000);
         ctx.Check(dlg1 != IntPtr.Zero, "Close-group prompt appeared on WM_CLOSE with tabs present");
@@ -682,7 +684,8 @@ internal static partial class Scenarios
             ctx.Check(cancelBtn != IntPtr.Zero, "prompt has a Cancel button");
             if (cancelBtn != IntPtr.Zero)
             {
-                Input.ForceForeground(dlg1);
+                if (!Input.ForceForeground(dlg1))
+                    throw new InvalidOperationException("Could not bring the cancel prompt to the foreground; refusing to click.");
                 NativeMethods.GetWindowRect(cancelBtn, out NativeMethods.RECT rc);
                 Input.ClickAt(rc.left + rc.Width / 2, rc.top + rc.Height / 2);
             }
@@ -699,7 +702,7 @@ internal static partial class Scenarios
 
         // --- Yes: must actually close (exit) both captured guests. ---
         long off = TabDockLog.RecordLogLength();
-        NativeMethods.PostMessage(container, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        VerifiedWindowOps.PostMessage(container, ctx.TabDockPid, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
         IntPtr dlg2 = IntPtr.Zero;
         Util.WaitUntil(() => (dlg2 = Discover.FindMessageBox(ctx.TabDockPid, "Close group")) != IntPtr.Zero, 5000);
         ctx.Check(dlg2 != IntPtr.Zero, "Close-group prompt appeared again on second WM_CLOSE");
@@ -709,7 +712,8 @@ internal static partial class Scenarios
             ctx.Check(yesBtn != IntPtr.Zero, "prompt has a Yes button");
             if (yesBtn != IntPtr.Zero)
             {
-                Input.ForceForeground(dlg2);
+                if (!Input.ForceForeground(dlg2))
+                    throw new InvalidOperationException("Could not bring the yes prompt to the foreground; refusing to click.");
                 NativeMethods.GetWindowRect(yesBtn, out NativeMethods.RECT rc);
                 Input.ClickAt(rc.left + rc.Width / 2, rc.top + rc.Height / 2);
             }
@@ -859,7 +863,8 @@ internal static partial class Scenarios
         if (!Util.WaitUntil(() => NativeMethods.IsIconic(container), 1500))
         {
             GuardedProc.Log("  container not minimized after first caption click (foreground reassert race) — re-asserting foreground and clicking again.");
-            Input.ForceForeground(container);
+            if (!Input.ForceForeground(container))
+                throw new InvalidOperationException("Could not re-verify the container before retrying minimize.");
             Thread.Sleep(250);
             ClickMinimizeButton(container);
         }
@@ -869,7 +874,7 @@ internal static partial class Scenarios
 
         // Restoring is not the path that regressed (minimizing was), so a plain
         // ShowWindow(SW_RESTORE) suffices for the restore half.
-        NativeMethods.ShowWindow(container, NativeMethods.SW_RESTORE);
+        VerifiedWindowOps.ShowWindow(container, ctx.TabDockPid, NativeMethods.SW_RESTORE);
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsIconic(container), 3000), "container restored (no longer minimized)");
         Thread.Sleep(800);
 
@@ -1062,7 +1067,7 @@ internal static partial class Scenarios
         IntPtr restored = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TDVAL-ATIIDX", 10000);
         ctx.Check(restored != IntPtr.Zero, "restored container 'TDVAL-ATIIDX' opened after relaunch");
         if (restored != IntPtr.Zero)
-            ctx.Containers.Add(restored);
+            RememberContainer(ctx, restored);
 
         Thread.Sleep(1000); // let the restored empty shell settle
         ctx.Check(CloseAllWindowsUntilExit(ctx.TabDockPid, ctx.TabDock, 8000),
@@ -1132,7 +1137,7 @@ internal static partial class Scenarios
         IntPtr restored = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TDVAL-RSMR", 10000);
         ctx.Check(restored != IntPtr.Zero, "restored container 'TDVAL-RSMR' opened after relaunch");
         if (restored != IntPtr.Zero)
-            ctx.Containers.Add(restored);
+            RememberContainer(ctx, restored);
         IntPtr restoredHost = IntPtr.Zero;
         Util.WaitUntil(() => (restoredHost = Discover.FindChildByClass(restored, ContentHostClass)) != IntPtr.Zero, 5000, 150);
 
@@ -1142,7 +1147,8 @@ internal static partial class Scenarios
             $"pig '{pigB.Title}' re-captured into the restored shell");
         ctx.Check(TabCount(restored) == 1, "restored shell holds 1 live tab");
 
-        NativeMethods.PostMessage(pigB.Hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        if (pigB.Identity is WindowIdentity pigBIdentity)
+            VerifiedWindowOps.PostMessage(pigBIdentity, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
         ctx.Check(Util.WaitUntil(() => pigB.Proc!.HasExited, 5000), "re-captured pig exited after WM_CLOSE");
         ctx.Check(Util.WaitUntil(() => StateJsonContains("TDVAL-RSMR"), 5000),
             "group name survived the re-captured member being destroyed (RemoveDeadMember guard)");
@@ -1156,10 +1162,12 @@ internal static partial class Scenarios
         ctx.TabDock = Relaunch();
         ctx.TabDockPid = (uint)ctx.TabDock.Id;
         ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
+        if (ctx.MainHwnd != IntPtr.Zero)
+            RememberMainWindow(ctx);
         IntPtr restored2 = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TDVAL-RSMR", 10000);
         ctx.Check(restored2 != IntPtr.Zero, "restored container 'TDVAL-RSMR' reopened after second relaunch");
         if (restored2 != IntPtr.Zero)
-            ctx.Containers.Add(restored2);
+            RememberContainer(ctx, restored2);
         IntPtr restoredHost2 = IntPtr.Zero;
         Util.WaitUntil(() => (restoredHost2 = Discover.FindChildByClass(restored2, ContentHostClass)) != IntPtr.Zero, 5000, 150);
 
@@ -1241,7 +1249,7 @@ internal static partial class Scenarios
         // container so no further WM_ACTIVATE reaches it (the reassert loop
         // dies), and a modal dialog does not auto-close on focus loss the way a
         // popup menu does.
-        NativeMethods.PostMessage(container, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        VerifiedWindowOps.PostMessage(container, ctx.TabDockPid, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
         IntPtr dlg = IntPtr.Zero;
         var promptSw = Stopwatch.StartNew();
         bool noClicked = false;
@@ -1261,7 +1269,8 @@ internal static partial class Scenarios
                 Thread.Sleep(200);
                 continue;
             }
-            Input.ForceForeground(dlg);
+            if (!Input.ForceForeground(dlg))
+                throw new InvalidOperationException("Could not bring the close prompt to the foreground; refusing to click.");
             NativeMethods.GetWindowRect(noBtn, out NativeMethods.RECT rc);
             Input.ClickAt(rc.left + rc.Width / 2, rc.top + rc.Height / 2);
             noClicked = true;
@@ -1399,13 +1408,18 @@ internal static partial class Scenarios
             externalX = virtualLeft;
         if (externalY + externalRect.Height > virtualBottom)
             externalY = Math.Max(virtualTop, dockedRect.top - externalRect.Height - 20);
-        NativeMethods.SetWindowPos(externalHwnd, IntPtr.Zero, externalX, externalY,
+        if (!Discover.TryCaptureIdentity(externalHwnd, out WindowIdentity externalIdentity))
+            throw new InvalidOperationException("External foreground window failed identity verification; refusing to reposition it.");
+        VerifiedWindowOps.SetWindowPos(externalIdentity, IntPtr.Zero, externalX, externalY,
             0, 0, NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
         // Preserve the real external-foreground state while making the
         // observed guest -> external -> container gap deterministic. This is
         // the exact bad state captured in the original failure evidence.
-        NativeMethods.SetWindowPos(externalHwnd, pig.Hwnd, 0, 0, 0, 0,
-            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        if (pig.Identity is not WindowIdentity pigIdentity)
+            throw new InvalidOperationException("Pig identity was lost before z-order setup; refusing to manipulate an unverified HWND.");
+        VerifiedWindowOps.SetWindowPos(externalIdentity, pig.Hwnd, 0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE,
+            pigIdentity);
         ctx.Check(NextVisibleWindow(pig.Hwnd) == externalHwnd,
             "external foreground steal leaves the unrelated HWND between guest and container");
         if (FindObstructingWindow(pig.Hwnd, cx, cy) != IntPtr.Zero)
@@ -1520,11 +1534,25 @@ internal static partial class Scenarios
             Thread.Sleep(300);
         }
 
+        void SelectAll()
+        {
+            bool ctrlDown = false;
+            try
+            {
+                Input.SendKeyDown(Input.VK_CONTROL);
+                ctrlDown = true;
+                Input.SendKey(Input.VK_A);
+            }
+            finally
+            {
+                if (ctrlDown)
+                    Input.SendKeyUp(Input.VK_CONTROL);
+            }
+        }
+
         // --- Empty string: Ctrl+A, Delete, Enter must not crash the app. ---
         ClickCaption();
-        Input.SendKeyDown(Input.VK_CONTROL);
-        Input.SendKey(Input.VK_A);
-        Input.SendKeyUp(Input.VK_CONTROL);
+        SelectAll();
         Input.SendKey(Input.VK_DELETE);
         Input.SendKey(Input.VK_RETURN);
         Thread.Sleep(300);
@@ -1538,9 +1566,7 @@ internal static partial class Scenarios
         // A follow-up NORMAL rename must still succeed (the box wasn't left in
         // a broken state by the empty-string edit).
         ClickCaption();
-        Input.SendKeyDown(Input.VK_CONTROL);
-        Input.SendKey(Input.VK_A);
-        Input.SendKeyUp(Input.VK_CONTROL);
+        SelectAll();
         Input.TypeText("TDVAL-AfterEmpty");
         Input.SendKey(Input.VK_RETURN);
         ctx.Check(Util.WaitUntil(() => NativeMethods.GetWindowTextString(container) == "TDVAL-AfterEmpty", 2000),
@@ -1549,9 +1575,7 @@ internal static partial class Scenarios
         // --- Very long string (200+ chars). ---
         string longName = "TDVAL-" + new string('X', 200);
         ClickCaption();
-        Input.SendKeyDown(Input.VK_CONTROL);
-        Input.SendKey(Input.VK_A);
-        Input.SendKeyUp(Input.VK_CONTROL);
+        SelectAll();
         Input.TypeText(longName);
         Input.SendKey(Input.VK_RETURN);
         Thread.Sleep(300);
@@ -1563,9 +1587,7 @@ internal static partial class Scenarios
 
         // --- Escape must preserve the name from BEFORE this edit, not commit it. ---
         ClickCaption();
-        Input.SendKeyDown(Input.VK_CONTROL);
-        Input.SendKey(Input.VK_A);
-        Input.SendKeyUp(Input.VK_CONTROL);
+        SelectAll();
         Input.TypeText("TDVAL-ShouldNotCommit");
         Input.SendKey(Input.VK_ESCAPE);
         Thread.Sleep(300);
@@ -1617,7 +1639,7 @@ internal static partial class Scenarios
         ctx.Check(Util.WaitUntil(() => NativeMethods.IsIconic(container2), 3000), "container 2 minimized");
         ctx.Check(NativeMethods.IsWindowEnabled(container1) && IsDocked(pig1.Hwnd, host1), "container 1 unaffected by container 2's minimize");
         ctx.Check(NativeMethods.IsWindowEnabled(container3) && IsDocked(pig3.Hwnd, host3), "container 3 unaffected by container 2's minimize");
-        NativeMethods.ShowWindow(container2, NativeMethods.SW_RESTORE);
+        VerifiedWindowOps.ShowWindow(container2, ctx.TabDockPid, NativeMethods.SW_RESTORE);
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsIconic(container2), 3000), "container 2 restored");
         ctx.Check(Util.WaitUntil(() => IsDocked(pig2.Hwnd, host2), 3000), "container 2's tab docked again after restore");
 
@@ -1626,14 +1648,14 @@ internal static partial class Scenarios
         ctx.Check(Util.WaitUntil(() => NativeMethods.IsIconic(container1), 3000), "container 1 minimized");
         ctx.Check(NativeMethods.IsWindowEnabled(container2) && IsDocked(pig2.Hwnd, host2), "container 2 unaffected by container 1's minimize");
         ctx.Check(NativeMethods.IsWindowEnabled(container3) && IsDocked(pig3.Hwnd, host3), "container 3 unaffected by container 1's minimize");
-        NativeMethods.ShowWindow(container1, NativeMethods.SW_RESTORE);
+        VerifiedWindowOps.ShowWindow(container1, ctx.TabDockPid, NativeMethods.SW_RESTORE);
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsIconic(container1), 3000), "container 1 restored");
 
         // Minimize container 3; verify 1 and 2 are unaffected.
         ClickMinimizeButton(container3);
         ctx.Check(Util.WaitUntil(() => NativeMethods.IsIconic(container3), 3000), "container 3 minimized");
         ctx.Check(NativeMethods.IsWindowEnabled(container1) && NativeMethods.IsWindowEnabled(container2), "containers 1 and 2 unaffected by container 3's minimize");
-        NativeMethods.ShowWindow(container3, NativeMethods.SW_RESTORE);
+        VerifiedWindowOps.ShowWindow(container3, ctx.TabDockPid, NativeMethods.SW_RESTORE);
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsIconic(container3), 3000), "container 3 restored");
 
         ctx.Check(pig1.Proc != null && !pig1.Proc.HasExited && pig2.Proc != null && !pig2.Proc.HasExited && pig3.Proc != null && !pig3.Proc.HasExited,

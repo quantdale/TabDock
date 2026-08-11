@@ -309,10 +309,17 @@ public partial class ContainerWindow : Window
                 // has settled either way by the time this decides.
                 CapturedWindow activeWindow = _shepherdActiveWindow;
                 _activateReassertTimer?.Stop();
-                _activateReassertTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
-                _activateReassertTimer.Tick += (_, _) =>
+                var activateTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+                activateTimer.Tick += (_, _) =>
                 {
-                    _activateReassertTimer!.Stop();
+                    if (!ReferenceEquals(_activateReassertTimer, activateTimer))
+                    {
+                        activateTimer.Stop();
+                        return;
+                    }
+
+                    activateTimer.Stop();
+                    _activateReassertTimer = null;
                     if (_shepherdActiveWindow == activeWindow && NativeMethods.IsWindowVisible(activeWindow.Hwnd)
                         && !_inNativeMoveLoop && !_isDragging && !IsContainerChromeInteractionActive())
                     {
@@ -331,11 +338,15 @@ public partial class ContainerWindow : Window
                         }
                         else
                         {
-                            _shepherd.BringToFront(activeWindow, hwnd, GetContentAreaScreenRect());
+                            if (TryGetContentAreaScreenRect(out NativeMethods.RECT contentRect))
+                                _shepherd.BringToFront(activeWindow, hwnd, contentRect);
+                            else
+                                _log.Log("LAYOUT[skip] active-guest reassert: content marker bounds were unavailable.");
                         }
                     }
                 };
-                _activateReassertTimer.Start();
+                _activateReassertTimer = activateTimer;
+                activateTimer.Start();
             }
         }
         else if ((uint)msg == NativeMethods.WM_ENTERSIZEMOVE)
@@ -621,26 +632,16 @@ public partial class ContainerWindow : Window
                 // below) before CloseGroup clears the view model, then release
                 // windows back to standalone and ask each one to close normally.
                 var windowsToClose = _viewModel.Tabs
-                    .Select(t => (t.Model.Hwnd, t.Model.ProcessId))
+                    .Select(t => t.Model)
                     .Where(w => w.Hwnd != IntPtr.Zero)
                     .ToList();
                 _viewModel.CloseGroup();
-                foreach (var (hwnd, pid) in windowsToClose)
+                foreach (CapturedWindow window in windowsToClose)
                 {
-                    if (!NativeMethods.IsWindow(hwnd))
+                    if (!_shepherd.IsCurrentCapturedWindow(window))
                         continue;
-                    // HWND-recycle guard: the window may have closed between the
-                    // snapshot and now, with its HWND value already reused by an
-                    // unrelated window. Never WM_CLOSE a window owned by another
-                    // process.
-                    NativeMethods.GetWindowThreadProcessId(hwnd, out uint currentPid);
-                    if (currentPid != pid)
-                    {
-                        _log.Log($"Close-group: skipping 0x{hwnd.ToInt64():X} — HWND recycled (expected PID {pid}, now {currentPid}).");
-                        continue;
-                    }
-                    if (!NativeMethods.PostMessage(hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero))
-                        _log.Log($"Close-group: PostMessage(WM_CLOSE) to 0x{hwnd.ToInt64():X} failed: {NativeMethods.FormatLastError()}");
+                    if (!NativeMethods.PostMessage(window.Hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero))
+                        _log.Log($"Close-group: PostMessage(WM_CLOSE) to 0x{window.Hwnd.ToInt64():X} failed: {NativeMethods.FormatLastError()}");
                 }
                 break;
 
@@ -665,19 +666,61 @@ public partial class ContainerWindow : Window
     private void ArmClosePromptRaise()
     {
         _closePromptRaiseTimer?.Stop();
-        _closePromptRaiseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
-        _closePromptRaiseTimer.Tick += (_, _) =>
+        var promptTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+        promptTimer.Tick += (_, _) =>
         {
-            _closePromptRaiseTimer!.Stop();
+            if (!ReferenceEquals(_closePromptRaiseTimer, promptTimer))
+            {
+                promptTimer.Stop();
+                return;
+            }
+
+            promptTimer.Stop();
             _closePromptRaiseTimer = null;
             if (!_closePromptOpen)
                 return;
 
-            IntPtr dialogHwnd = NativeMethods.FindWindow(null, "Close group");
+            IntPtr dialogHwnd = FindOwnedClosePrompt();
             if (dialogHwnd != IntPtr.Zero)
                 _shepherd.RaiseContainerForChrome(dialogHwnd, useTopmostBand: true);
         };
-        _closePromptRaiseTimer.Start();
+        _closePromptRaiseTimer = promptTimer;
+        promptTimer.Start();
+    }
+
+    /// <summary>
+    /// Finds this container's close confirmation dialog without trusting its
+    /// caption alone. A same-titled foreign window must never receive a z-order
+    /// mutation from the prompt reconciliation path.
+    /// </summary>
+    private IntPtr FindOwnedClosePrompt()
+    {
+        if (_containerHwnd == IntPtr.Zero)
+            return IntPtr.Zero;
+
+        IntPtr found = IntPtr.Zero;
+        NativeMethods.EnumWindows((candidate, _) =>
+        {
+            if (!NativeMethods.IsWindowVisible(candidate)
+                || !string.Equals(NativeMethods.GetClassNameString(candidate), "#32770", StringComparison.Ordinal)
+                || !string.Equals(NativeMethods.GetWindowTextString(candidate), "Close group", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            NativeMethods.GetWindowThreadProcessId(candidate, out uint pid);
+            if (pid != NativeMethods.CurrentProcessId)
+                return true;
+
+            IntPtr directOwner = NativeMethods.GetWindow(candidate, NativeMethods.GW_OWNER);
+            IntPtr rootOwner = NativeMethods.GetAncestor(candidate, NativeMethods.GA_ROOTOWNER);
+            if (directOwner != _containerHwnd && rootOwner != _containerHwnd)
+                return true;
+
+            found = candidate;
+            return false;
+        }, IntPtr.Zero);
+        return found;
     }
 
     private void ContainerWindow_Closed(object? sender, EventArgs e)
@@ -771,13 +814,21 @@ public partial class ContainerWindow : Window
         // Lightweight state snapshot after the transition settles. Retained (low
         // volume: once per maximize/restore) as a field-diagnosis aid.
         _stateSettledTimer?.Stop();
-        _stateSettledTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(750) };
-        _stateSettledTimer.Tick += (_, _) =>
+        var settledTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(750) };
+        settledTimer.Tick += (_, _) =>
         {
-            _stateSettledTimer!.Stop();
+            if (!ReferenceEquals(_stateSettledTimer, settledTimer))
+            {
+                settledTimer.Stop();
+                return;
+            }
+
+            settledTimer.Stop();
+            _stateSettledTimer = null;
             LogStateSnapshot("settled");
         };
-        _stateSettledTimer.Start();
+        _stateSettledTimer = settledTimer;
+        settledTimer.Start();
     }
 
     private void LogStateSnapshot(string phase)
@@ -865,6 +916,25 @@ public partial class ContainerWindow : Window
                 _inSelectionSync = false;
             }
         }
+    }
+
+    /// <summary>
+    /// Drops the presentation-side captured tabs after App has released the
+    /// native guests during session ending. The active/split references are
+    /// cleared first so closing an inline capture surface cannot trigger a
+    /// relayout against already-standalone windows.
+    /// </summary>
+    internal void ClearReleasedTabsAfterSessionEnding()
+    {
+        _shepherdActiveWindow = null;
+        _splitLeft = null;
+        _splitRight = null;
+        _splitForeground = null;
+        _activateReassertTimer?.Stop();
+        _stateSettledTimer?.Stop();
+        _restoreMinimizedTimer?.Stop();
+        CloseCapturePanel();
+        _viewModel.ClearReleasedTabsAfterSessionEnding();
     }
 
     /// <summary>
@@ -1422,7 +1492,7 @@ public partial class ContainerWindow : Window
 
         foreach (var candidate in _capturePicker.Windows.Where(w => w.IsSelected).ToList())
         {
-            string? error = CaptureWindow(candidate.Hwnd);
+            string? error = CaptureWindow(candidate.ToCaptureTarget());
             if (error != null)
             {
                 _log.Log($"Inline capture failed for 0x{candidate.Hwnd.ToInt64():X}: {error}");
@@ -1457,8 +1527,16 @@ public partial class ContainerWindow : Window
     /// Returns an error message if capture fails (e.g. UIPI, elevated window, own
     /// window, or a window that is already docked in a group).
     /// </summary>
-    public string? CaptureWindow(IntPtr hwnd)
+    public string? CaptureWindow(IntPtr hwnd) => CaptureWindow(hwnd, expected: null);
+
+    public string? CaptureWindow(WindowCaptureTarget expected)
+        => CaptureWindow(expected.Hwnd, expected);
+
+    private string? CaptureWindow(IntPtr hwnd, WindowCaptureTarget? expected)
     {
+        if (expected != null && !MatchesCaptureTarget(expected))
+            return "The selected window changed before capture; refresh the picker and try again.";
+
         if (_manager.IsOwnWindow(hwnd))
             return "Cannot capture a TabDock window (no nesting).";
 
@@ -1476,8 +1554,74 @@ public partial class ContainerWindow : Window
         if (cw == null)
             return error ?? "Capture failed.";
 
-        AddCapturedWindow(cw);
-        return null;
+        if (expected != null && !MatchesCaptureTarget(expected))
+        {
+            // Shepherd.Capture rechecks identity within its own admission
+            // window, but the picker target can still be replaced between that
+            // check and this add-to-group boundary. Do not retain a capture
+            // that no longer matches what the user selected.
+            // Release only if the HWND still identifies the just-captured
+            // window; otherwise the raw handle may already belong to an
+            // unrelated replacement window.
+            if (MatchesCapturedWindow(cw))
+                _shepherd.Release(cw);
+            else
+                _log.Log($"Capture cleanup refused for recycled HWND 0x{hwnd.ToInt64():X}; leaving the replacement window untouched.");
+            return "The selected window changed during capture; it was left standalone.";
+        }
+
+        try
+        {
+            AddCapturedWindow(cw);
+            return null;
+        }
+        catch (Exception addEx)
+        {
+            _log.LogException($"CaptureWindow add failed for 0x{hwnd.ToInt64():X}", addEx);
+
+            // A managed insertion failure must not leave the native capture
+            // orphaned. Prefer the group-aware release when the member reached
+            // Group.Members; otherwise release the just-captured object directly.
+            if (_manager.TryGetCapturedMember(cw.Hwnd, out Group? owner, out CapturedWindow? member)
+                && ReferenceEquals(member, cw))
+            {
+                _manager.ReleaseMember(owner, cw, show: true);
+            }
+            else
+            {
+                _shepherd.Release(cw, show: true);
+            }
+
+            return "The window was captured but could not be added to the group; it was restored standalone.";
+        }
+    }
+
+    private static bool MatchesCaptureTarget(WindowCaptureTarget expected)
+    {
+        if (!NativeMethods.IsWindow(expected.Hwnd))
+            return false;
+
+        NativeMethods.GetWindowThreadProcessId(expected.Hwnd, out uint pid);
+        string? className = NativeMethods.GetClassNameString(expected.Hwnd);
+        string title = NativeMethods.GetWindowTextString(expected.Hwnd) ?? string.Empty;
+        string? exePath = NativeMethods.GetProcessImagePath(pid);
+        return pid == expected.ProcessId
+            && string.Equals(className, expected.ClassName, StringComparison.Ordinal)
+            && string.Equals(title, expected.Title, StringComparison.Ordinal)
+            && string.Equals(exePath, expected.ExePath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool MatchesCapturedWindow(CapturedWindow captured)
+    {
+        if (!NativeMethods.IsWindow(captured.Hwnd))
+            return false;
+
+        NativeMethods.GetWindowThreadProcessId(captured.Hwnd, out uint pid);
+        string? className = NativeMethods.GetClassNameString(captured.Hwnd);
+        string? exePath = NativeMethods.GetProcessImagePath(pid);
+        return pid == captured.ProcessId
+            && string.Equals(className, captured.OriginalClassName, StringComparison.Ordinal)
+            && string.Equals(exePath, captured.ExePath, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -1695,7 +1839,7 @@ public partial class ContainerWindow : Window
                 // guest — one write, no geometry churn, idempotent once
                 // healthy.
                 if (!_shepherd.IsContainerBelowGuest(containerHwnd, _shepherdActiveWindow.Hwnd))
-                    _shepherd.PairZOrderBehind(containerHwnd, _shepherdActiveWindow.Hwnd);
+                    _shepherd.PairZOrderBehind(containerHwnd, _shepherdActiveWindow);
                 return;
             }
         }
@@ -1711,19 +1855,34 @@ public partial class ContainerWindow : Window
     /// </summary>
     private NativeMethods.RECT GetContentAreaScreenRect()
     {
+        TryGetContentAreaScreenRect(out NativeMethods.RECT rect);
+        return rect;
+    }
+
+    private bool TryGetContentAreaScreenRect(out NativeMethods.RECT rect)
+    {
+        rect = new NativeMethods.RECT();
         IntPtr hostHwnd = ContentHost.HostWindowHandle;
         if (!NativeMethods.IsWindow(hostHwnd))
-            return new NativeMethods.RECT();
-        NativeMethods.GetClientRect(hostHwnd, out NativeMethods.RECT rc);
+            return false;
+        if (!NativeMethods.GetClientRect(hostHwnd, out NativeMethods.RECT rc)
+            || rc.Width <= 0 || rc.Height <= 0)
+        {
+            return false;
+        }
+
         var topLeft = new NativeMethods.POINT { x = 0, y = 0 };
-        NativeMethods.ClientToScreen(hostHwnd, ref topLeft);
-        return new NativeMethods.RECT
+        if (!NativeMethods.ClientToScreen(hostHwnd, ref topLeft))
+            return false;
+
+        rect = new NativeMethods.RECT
         {
             left = topLeft.x,
             top = topLeft.y,
             right = topLeft.x + rc.Width,
             bottom = topLeft.y + rc.Height,
         };
+        return true;
     }
 
     /// <summary>
@@ -1774,7 +1933,7 @@ public partial class ContainerWindow : Window
         if (containerHwnd == IntPtr.Zero)
             return;
 
-        _shepherd.PairZOrderBehind(containerHwnd, foregroundHwnd);
+        _shepherd.PairZOrderBehind(containerHwnd, _shepherdActiveWindow);
     }
 
     #endregion
@@ -1903,7 +2062,7 @@ public partial class ContainerWindow : Window
                 _shepherd.PositionGuestsDeferred(top, topRect, bottom, bottomRect, containerHwnd);
                 return;
             }
-            _shepherd.PairZOrderBehind(containerHwnd, bottom.Hwnd);
+            _shepherd.PairZOrderBehind(containerHwnd, bottom);
             return;
         }
 
@@ -2130,10 +2289,17 @@ public partial class ContainerWindow : Window
         // decide to restore. Defer briefly so an immediately-following Hide()
         // has a chance to land first; re-check both flags at that point.
         _restoreMinimizedTimer?.Stop();
-        _restoreMinimizedTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
-        _restoreMinimizedTimer.Tick += (_, _) =>
+        var restoreTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        restoreTimer.Tick += (_, _) =>
         {
-            _restoreMinimizedTimer!.Stop();
+            if (!ReferenceEquals(_restoreMinimizedTimer, restoreTimer))
+            {
+                restoreTimer.Stop();
+                return;
+            }
+
+            restoreTimer.Stop();
+            _restoreMinimizedTimer = null;
 
             // The tab can also be released inside this same 200ms window — popped
             // out, tray-closed, or torn down along with the whole container. By
@@ -2152,7 +2318,8 @@ public partial class ContainerWindow : Window
             {
                 return;
             }
-            if (!NativeMethods.IsWindow(window.Hwnd) || !NativeMethods.IsIconic(window.Hwnd)
+            if (!_shepherd.IsCurrentCapturedWindow(window)
+                || !NativeMethods.IsIconic(window.Hwnd)
                 || !NativeMethods.IsWindowVisible(window.Hwnd))
                 return;
 
@@ -2162,7 +2329,8 @@ public partial class ContainerWindow : Window
             else
                 LayoutShepherdActiveWindow();
         };
-        _restoreMinimizedTimer.Start();
+        _restoreMinimizedTimer = restoreTimer;
+        restoreTimer.Start();
     }
 
     /// <summary>

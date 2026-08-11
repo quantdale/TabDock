@@ -94,6 +94,8 @@ internal static partial class Scenarios
 
         bool fg = Input.ForceForeground(container);
         GuardedProc.Log($"  DragProbe: ForceForeground(container)={fg}.");
+        if (!fg)
+            throw new InvalidOperationException("Could not bring the drag-probe container to a verified foreground state.");
 
         (int sx, int sy, Rect leftRect, GuestInfo movedPig, int lx, int ly) = FindDragGeometry(ctx, container, pigA, pigB);
 
@@ -107,8 +109,11 @@ internal static partial class Scenarios
         if (RootAtPoint(sx, sy) != container)
         {
             GuardedProc.Log($"  DragProbe: drag start ({sx},{sy}) is covered by {DescribeHwnd(RootAtPoint(sx, sy))} — the drag would go there, not to TabDock. Pinning the container topmost for the drag instead of touching the other window.");
-            NativeMethods.SetWindowPos(container, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
-                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+            if (!VerifiedWindowOps.SetWindowPos(
+                    GetRememberedContainerIdentity(ctx, container),
+                    NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
+                    NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE))
+                throw new InvalidOperationException("Container identity changed before the topmost drag probe.");
             madeTopmost = true;
             Thread.Sleep(300);
         }
@@ -160,7 +165,9 @@ internal static partial class Scenarios
         {
             if (madeTopmost)
             {
-                NativeMethods.SetWindowPos(container, NativeMethods.HWND_NOTOPMOST, 0, 0, 0, 0,
+                VerifiedWindowOps.SetWindowPos(
+                    GetRememberedContainerIdentity(ctx, container),
+                    NativeMethods.HWND_NOTOPMOST, 0, 0, 0, 0,
                     NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
             }
         }
@@ -168,8 +175,11 @@ internal static partial class Scenarios
 
     private static void PinTopmostAndVerify(Ctx ctx, IntPtr container, int x, int y, string what)
     {
-        NativeMethods.SetWindowPos(container, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
-            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        if (!VerifiedWindowOps.SetWindowPos(
+                GetRememberedContainerIdentity(ctx, container),
+                NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE))
+            throw new InvalidOperationException("Container identity changed before the topmost pin.");
         Thread.Sleep(250);
         IntPtr root = RootAtPoint(x, y);
         if (root != container)
@@ -391,7 +401,8 @@ internal static partial class Scenarios
         ctx.Check(picker != IntPtr.Zero, "'+' add-window button still opens the picker after drag-reorder + immediate pop-out");
         if (picker != IntPtr.Zero)
         {
-            Input.ForceForeground(picker);
+            if (!Input.ForceForeground(picker))
+                throw new InvalidOperationException("Could not bring the picker to the foreground; refusing to send Esc.");
             Input.SendKey(Input.VK_ESCAPE);
             ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(picker), 3000), "picker dismissed with Esc without capturing");
         }
@@ -509,7 +520,9 @@ internal static partial class Scenarios
             && rc.top >= mi.rcWork.top + 120 && rc.bottom <= mi.rcWork.bottom - 120;
         if (fits)
             return;
-        NativeMethods.SetWindowPos(container, IntPtr.Zero, mi.rcWork.left + 80, mi.rcWork.top + 80, 0, 0,
+        VerifiedWindowOps.SetWindowPos(
+            GetRememberedContainerIdentity(ctx, container), IntPtr.Zero,
+            mi.rcWork.left + 80, mi.rcWork.top + 80, 0, 0,
             NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
         Thread.Sleep(500);
         // Vacuity guard: the drag trajectory (max excursion +160/+100px) and

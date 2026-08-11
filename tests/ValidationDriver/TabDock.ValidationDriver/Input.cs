@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -25,6 +26,34 @@ internal static class Input
     private const uint MOUSEEVENTF_WHEEL = 0x0800;
     private const int WHEEL_DELTA = 120;
 
+    // The driver injects real input at screen coordinates, so the coordinate
+    // itself is not an identity. Keep a per-run allow-list of the windows the
+    // driver discovered/spawned and verify the live root window immediately
+    // before every click/scroll and foreground-dependent key event. This
+    // makes a stale/recycled HWND fail closed instead of sending input to the
+    // user's foreground application.
+    private static readonly Dictionary<IntPtr, WindowIdentity> RegisteredWindows = new();
+    private static readonly HashSet<uint> RegisteredProcessIds = new();
+    private static WindowIdentity? _activeTarget;
+    private static int _lastX;
+    private static int _lastY;
+    private static bool _hasLastPoint;
+
+    public static void ResetIdentityScope()
+    {
+        RegisteredWindows.Clear();
+        RegisteredProcessIds.Clear();
+        RegisteredProcessIds.Add(NativeMethods.CurrentProcessId);
+        _activeTarget = null;
+        _hasLastPoint = false;
+    }
+
+    public static void RegisterIdentity(WindowIdentity identity)
+    {
+        RegisteredWindows[identity.Hwnd] = identity;
+        RegisteredProcessIds.Add(identity.ProcessId);
+    }
+
     /// <summary>Real mouse-wheel scroll at (x,y). Positive notches scroll up, negative scroll down.</summary>
     public static void ScrollWheel(int x, int y, int notches)
     {
@@ -36,7 +65,7 @@ internal static class Input
             dwFlags = MOUSEEVENTF_WHEEL,
             mouseData = unchecked((uint)(notches * WHEEL_DELTA)),
         };
-        Send(input);
+        Send(input, verifyPoint: true, allowUnverifiedCleanup: false);
         Thread.Sleep(120);
     }
 
@@ -52,33 +81,58 @@ internal static class Input
     /// </summary>
     public static bool ForceForeground(IntPtr hwnd)
     {
+        IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
+        if (root == IntPtr.Zero)
+            root = hwnd;
+        if (!Discover.TryCaptureIdentity(root, out WindowIdentity target)
+            || !IsScoped(target))
+        {
+            GuardedProc.Log($"WARNING: refusing foreground operation for unverified HWND 0x{root.ToInt64():X}.");
+            return false;
+        }
+        _activeTarget = target;
+
         for (int attempt = 0; attempt < 4; attempt++)
         {
-            if (!NativeMethods.IsWindow(hwnd))
+            if (!MatchesStableIdentity(target.Hwnd, target))
                 return false;
-            if (NativeMethods.GetForegroundWindow() == hwnd)
+            if (NativeMethods.GetForegroundWindow() == target.Hwnd)
                 return true;
 
-            SendVk(VK_MENU, up: true); // benign key-up; grants foreground-change rights
+            // This isolated key-up is deliberately non-targeting and carries
+            // no character or button transition. It grants this process the
+            // foreground-change right on Windows versions that deny a direct
+            // SetForegroundWindow call from a background test console.
+            SendRawVk(VK_MENU, up: true);
             NativeMethods.AllowSetForegroundWindow(NativeMethods.ASFW_ANY);
             Thread.Sleep(30);
-            NativeMethods.SetForegroundWindow(hwnd);
+            if (!MatchesStableIdentity(target.Hwnd, target))
+                return false;
+            NativeMethods.SetForegroundWindow(target.Hwnd);
             Thread.Sleep(150);
-            if (NativeMethods.GetForegroundWindow() == hwnd)
+            if (NativeMethods.GetForegroundWindow() == target.Hwnd
+                && MatchesStableIdentity(target.Hwnd, target))
                 return true;
 
             // Fallback: pulse TOPMOST to rise above the covering window, then drop
             // back to the normal band and try again.
-            NativeMethods.SetWindowPos(hwnd, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
+            if (!MatchesStableIdentity(target.Hwnd, target))
+                return false;
+            NativeMethods.SetWindowPos(target.Hwnd, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
                 NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
-            NativeMethods.SetWindowPos(hwnd, NativeMethods.HWND_NOTOPMOST, 0, 0, 0, 0,
+            if (!MatchesStableIdentity(target.Hwnd, target))
+                return false;
+            NativeMethods.SetWindowPos(target.Hwnd, NativeMethods.HWND_NOTOPMOST, 0, 0, 0, 0,
                 NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
-            NativeMethods.SetForegroundWindow(hwnd);
+            if (!MatchesStableIdentity(target.Hwnd, target))
+                return false;
+            NativeMethods.SetForegroundWindow(target.Hwnd);
             Thread.Sleep(150);
         }
-        bool ok = NativeMethods.GetForegroundWindow() == hwnd;
+        bool ok = NativeMethods.GetForegroundWindow() == target.Hwnd
+            && MatchesStableIdentity(target.Hwnd, target);
         if (!ok)
-            GuardedProc.Log($"WARNING: could not bring 0x{hwnd.ToInt64():X} to the foreground.");
+            GuardedProc.Log($"WARNING: could not bring 0x{target.Hwnd.ToInt64():X} to the foreground.");
         return ok;
     }
 
@@ -87,6 +141,98 @@ internal static class Input
     {
         IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
         return ForceForeground(root == IntPtr.Zero ? hwnd : root);
+    }
+
+    private static bool IsScoped(WindowIdentity current)
+    {
+        if (current.ProcessId == NativeMethods.CurrentProcessId)
+            return true;
+
+        if (!RegisteredProcessIds.Contains(current.ProcessId))
+            return false;
+
+        if (!RegisteredWindows.TryGetValue(current.Hwnd, out WindowIdentity expected))
+            return true; // dynamic dialog/child root in a registered test process
+
+        if (current.ProcessId != expected.ProcessId
+            || !string.Equals(current.ClassName, expected.ClassName, StringComparison.Ordinal)
+            || !string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // Browser titles and clock pages legitimately change while a scenario
+        // is running. Once the stable process/class/executable identity still
+        // matches, refresh the title snapshot used by the next operation.
+        if (!string.Equals(current.Title, expected.Title, StringComparison.Ordinal))
+            RegisteredWindows[current.Hwnd] = current;
+        return true;
+    }
+
+    private static bool MatchesStableIdentity(IntPtr hwnd, WindowIdentity expected)
+    {
+        return Discover.TryCaptureIdentity(hwnd, out WindowIdentity current)
+            && current.ProcessId == expected.ProcessId
+            && string.Equals(current.ClassName, expected.ClassName, StringComparison.Ordinal)
+            && string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase)
+            && IsScoped(current);
+    }
+
+    private static bool VerifyForegroundTarget()
+    {
+        if (!_activeTarget.HasValue)
+        {
+            GuardedProc.Log("WARNING: refusing keyboard input before a verified foreground target was established.");
+            return false;
+        }
+
+        IntPtr foreground = NativeMethods.GetForegroundWindow();
+        IntPtr root = NativeMethods.GetAncestor(foreground, NativeMethods.GA_ROOT);
+        if (root == IntPtr.Zero)
+            root = foreground;
+        if (!Discover.TryCaptureIdentity(root, out WindowIdentity current)
+            || !IsScoped(current)
+            || !MatchesStableIdentity(_activeTarget.Value.Hwnd, _activeTarget.Value)
+            || current.Hwnd != _activeTarget.Value.Hwnd)
+        {
+            GuardedProc.Log($"WARNING: refusing keyboard input; foreground 0x{root.ToInt64():X} is not the verified target.");
+            return false;
+        }
+        _activeTarget = current;
+        return true;
+    }
+
+    private static bool VerifyPointTarget(int x, int y)
+    {
+        if (!_activeTarget.HasValue)
+        {
+            GuardedProc.Log("WARNING: refusing coordinate input before a verified target was established.");
+            return false;
+        }
+
+        IntPtr atPoint = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = x, y = y });
+        IntPtr root = NativeMethods.GetAncestor(atPoint, NativeMethods.GA_ROOT);
+        if (root == IntPtr.Zero)
+        {
+            GuardedProc.Log($"WARNING: refusing coordinate input at ({x},{y}); no window is under the point.");
+            return false;
+        }
+
+        if (!Discover.TryCaptureIdentity(root, out WindowIdentity current) || !IsScoped(current))
+        {
+            GuardedProc.Log($"WARNING: refusing coordinate input at ({x},{y}); root 0x{root.ToInt64():X} is outside the test identity scope.");
+            return false;
+        }
+
+        if (!MatchesStableIdentity(_activeTarget.Value.Hwnd, _activeTarget.Value))
+            return false;
+
+        // The point may be a visible Shepherd guest over a TabDock container;
+        // a real click activates that guest. Promote the verified point root
+        // so subsequent keyboard input is checked against the window that the
+        // click actually targeted.
+        _activeTarget = current;
+        return true;
     }
 
     private static NativeMethods.POINT _savedCursor;
@@ -106,9 +252,14 @@ internal static class Input
 
     public static void MoveTo(int x, int y)
     {
+        if (!VerifyPointTarget(x, y))
+            throw new InvalidOperationException($"Refusing real input at ({x},{y}) because the live target failed identity verification.");
+        _lastX = x;
+        _lastY = y;
+        _hasLastPoint = true;
         NativeMethods.SetCursorPos(x, y);
         // Zero-delta nudge so apps see a genuine WM_MOUSEMOVE from the input queue.
-        SendMouse(NativeMethods.MOUSEEVENTF_MOVE);
+        SendMouse(NativeMethods.MOUSEEVENTF_MOVE, verifyPoint: true);
         Thread.Sleep(30);
     }
 
@@ -116,9 +267,7 @@ internal static class Input
     {
         MoveTo(x, y);
         Thread.Sleep(40);
-        SendMouse(NativeMethods.MOUSEEVENTF_LEFTDOWN);
-        Thread.Sleep(40);
-        SendMouse(NativeMethods.MOUSEEVENTF_LEFTUP);
+        SendButtonClick(NativeMethods.MOUSEEVENTF_LEFTDOWN, NativeMethods.MOUSEEVENTF_LEFTUP, 40);
         Thread.Sleep(60);
     }
 
@@ -134,19 +283,13 @@ internal static class Input
         // the following pair isn't consumed by activation.
         MoveTo(x, y);
         Thread.Sleep(40);
-        SendMouse(NativeMethods.MOUSEEVENTF_LEFTDOWN);
-        Thread.Sleep(30);
-        SendMouse(NativeMethods.MOUSEEVENTF_LEFTUP);
+        SendButtonClick(NativeMethods.MOUSEEVENTF_LEFTDOWN, NativeMethods.MOUSEEVENTF_LEFTUP, 30);
         Thread.Sleep(250);
 
         // The double-click pair, same pixel, tight gaps.
-        SendMouse(NativeMethods.MOUSEEVENTF_LEFTDOWN);
-        Thread.Sleep(20);
-        SendMouse(NativeMethods.MOUSEEVENTF_LEFTUP);
+        SendButtonClick(NativeMethods.MOUSEEVENTF_LEFTDOWN, NativeMethods.MOUSEEVENTF_LEFTUP, 20);
         Thread.Sleep(40);
-        SendMouse(NativeMethods.MOUSEEVENTF_LEFTDOWN);
-        Thread.Sleep(20);
-        SendMouse(NativeMethods.MOUSEEVENTF_LEFTUP);
+        SendButtonClick(NativeMethods.MOUSEEVENTF_LEFTDOWN, NativeMethods.MOUSEEVENTF_LEFTUP, 20);
         Thread.Sleep(60);
     }
 
@@ -154,9 +297,7 @@ internal static class Input
     {
         MoveTo(x, y);
         Thread.Sleep(40);
-        SendMouse(NativeMethods.MOUSEEVENTF_RIGHTDOWN);
-        Thread.Sleep(40);
-        SendMouse(NativeMethods.MOUSEEVENTF_RIGHTUP);
+        SendButtonClick(NativeMethods.MOUSEEVENTF_RIGHTDOWN, NativeMethods.MOUSEEVENTF_RIGHTUP, 40);
         Thread.Sleep(60);
     }
 
@@ -165,9 +306,7 @@ internal static class Input
         MoveTo(x, y);
         GuardedProc.Log($"  middle-click at ({x},{y}) windowFromPoint=0x{NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = x, y = y }).ToInt64():X}");
         Thread.Sleep(40);
-        SendMouse(NativeMethods.MOUSEEVENTF_MIDDLEDOWN);
-        Thread.Sleep(40);
-        SendMouse(NativeMethods.MOUSEEVENTF_MIDDLEUP);
+        SendButtonClick(NativeMethods.MOUSEEVENTF_MIDDLEDOWN, NativeMethods.MOUSEEVENTF_MIDDLEUP, 40);
         Thread.Sleep(60);
     }
 
@@ -179,16 +318,27 @@ internal static class Input
 
         MoveTo(x1, y1);
         Thread.Sleep(60);
-        SendMouse(NativeMethods.MOUSEEVENTF_LEFTDOWN);
-        for (int i = 1; i <= steps; i++)
+        bool sentDown = false;
+        try
         {
-            int x = x1 + (x2 - x1) * i / steps;
-            int y = y1 + (y2 - y1) * i / steps;
-            NativeMethods.SetCursorPos(x, y);
-            SendMouse(NativeMethods.MOUSEEVENTF_MOVE);
-            Thread.Sleep(15);
+            SendMouse(NativeMethods.MOUSEEVENTF_LEFTDOWN, verifyPoint: true);
+            sentDown = true;
+            for (int i = 1; i <= steps; i++)
+            {
+                int x = x1 + (x2 - x1) * i / steps;
+                int y = y1 + (y2 - y1) * i / steps;
+                _lastX = x;
+                _lastY = y;
+                NativeMethods.SetCursorPos(x, y);
+                SendMouse(NativeMethods.MOUSEEVENTF_MOVE, verifyPoint: false);
+                Thread.Sleep(15);
+            }
         }
-        SendMouse(NativeMethods.MOUSEEVENTF_LEFTUP);
+        finally
+        {
+            if (sentDown)
+                SendMouse(NativeMethods.MOUSEEVENTF_LEFTUP, verifyPoint: false, allowUnverifiedCleanup: true);
+        }
         Thread.Sleep(60);
     }
 
@@ -204,22 +354,29 @@ internal static class Input
     {
         MoveTo(x, y);
         Thread.Sleep(40);
-        SendMouse(NativeMethods.MOUSEEVENTF_LEFTDOWN);
+        SendMouse(NativeMethods.MOUSEEVENTF_LEFTDOWN, verifyPoint: true);
         Thread.Sleep(40);
     }
 
     /// <summary>Moves the cursor while the left button is already held down (see <see cref="PressLeftButtonHeld"/>), without a fresh down/up pair.</summary>
     public static void MoveWhileHeld(int x, int y)
     {
+        if (!VerifyForegroundTarget())
+            throw new InvalidOperationException("Refusing a drag move because the verified drag target is no longer foreground.");
+        _lastX = x;
+        _lastY = y;
         NativeMethods.SetCursorPos(x, y);
-        SendMouse(NativeMethods.MOUSEEVENTF_MOVE);
+        SendMouse(NativeMethods.MOUSEEVENTF_MOVE, verifyPoint: false);
         Thread.Sleep(15);
     }
 
     /// <summary>Releases a left-button-down state started by <see cref="PressLeftButtonHeld"/>.</summary>
     public static void ReleaseLeftButtonHeld()
     {
-        SendMouse(NativeMethods.MOUSEEVENTF_LEFTUP);
+        // Always release a physically held button, even if the target vanished
+        // during the test. This is cleanup of global input state, not a new
+        // window action; failing to do so would contaminate the user's desktop.
+        SendMouse(NativeMethods.MOUSEEVENTF_LEFTUP, verifyPoint: false, allowUnverifiedCleanup: true);
         Thread.Sleep(40);
     }
 
@@ -264,17 +421,34 @@ internal static class Input
     {
         foreach (char ch in text)
         {
-            SendUnicode(ch, up: false);
-            SendUnicode(ch, up: true);
+            bool sentDown = false;
+            try
+            {
+                SendUnicode(ch, up: false);
+                sentDown = true;
+            }
+            finally
+            {
+                if (sentDown)
+                    SendUnicode(ch, up: true, allowUnverifiedCleanup: true);
+            }
             Thread.Sleep(15);
         }
     }
 
     public static void SendKey(ushort vk)
     {
-        SendVk(vk, up: false);
-        Thread.Sleep(20);
-        SendVk(vk, up: true);
+        bool sentDown = false;
+        try
+        {
+            SendVk(vk, up: false);
+            sentDown = true;
+        }
+        finally
+        {
+            if (sentDown)
+                SendVk(vk, up: true, allowUnverifiedCleanup: true);
+        }
         Thread.Sleep(30);
     }
 
@@ -286,47 +460,94 @@ internal static class Input
 
     public static void SendKeyUp(ushort vk)
     {
-        SendVk(vk, up: true);
+        SendVk(vk, up: true, allowUnverifiedCleanup: true);
         Thread.Sleep(20);
     }
 
     /// <summary>Ctrl+L: the standard browser shortcut to focus and select-all the address/search bar.</summary>
     public static void SendCtrlL()
     {
-        SendVk(VK_CONTROL, up: false);
-        Thread.Sleep(20);
-        SendVk(VK_L, up: false);
-        Thread.Sleep(20);
-        SendVk(VK_L, up: true);
-        Thread.Sleep(20);
-        SendVk(VK_CONTROL, up: true);
+        bool ctrlDown = false;
+        bool lDown = false;
+        try
+        {
+            SendVk(VK_CONTROL, up: false);
+            ctrlDown = true;
+            Thread.Sleep(20);
+            SendVk(VK_L, up: false);
+            lDown = true;
+            Thread.Sleep(20);
+        }
+        finally
+        {
+            if (lDown)
+                SendVk(VK_L, up: true, allowUnverifiedCleanup: true);
+            if (ctrlDown)
+                SendVk(VK_CONTROL, up: true, allowUnverifiedCleanup: true);
+        }
         Thread.Sleep(50);
     }
 
     public static void SendHotkeyCtrlAltG()
     {
-        SendVk(VK_CONTROL, up: false);
-        Thread.Sleep(20);
-        SendVk(VK_MENU, up: false);
-        Thread.Sleep(20);
-        SendVk(VK_G, up: false);
-        Thread.Sleep(20);
-        SendVk(VK_G, up: true);
-        Thread.Sleep(20);
-        SendVk(VK_MENU, up: true);
-        Thread.Sleep(20);
-        SendVk(VK_CONTROL, up: true);
+        bool ctrlDown = false;
+        bool altDown = false;
+        bool gDown = false;
+        try
+        {
+            SendVk(VK_CONTROL, up: false);
+            ctrlDown = true;
+            Thread.Sleep(20);
+            SendVk(VK_MENU, up: false);
+            altDown = true;
+            Thread.Sleep(20);
+            SendVk(VK_G, up: false);
+            gDown = true;
+            Thread.Sleep(20);
+        }
+        finally
+        {
+            if (gDown)
+                SendVk(VK_G, up: true, allowUnverifiedCleanup: true);
+            if (altDown)
+                SendVk(VK_MENU, up: true, allowUnverifiedCleanup: true);
+            if (ctrlDown)
+                SendVk(VK_CONTROL, up: true, allowUnverifiedCleanup: true);
+        }
         Thread.Sleep(50);
     }
 
-    private static void SendMouse(uint flags)
+    private static void SendButtonClick(uint downFlags, uint upFlags, int downDurationMs)
     {
-        var input = new NativeMethods.INPUT { type = NativeMethods.INPUT_MOUSE };
-        input.u.mi = new NativeMethods.MOUSEINPUT { dwFlags = flags };
-        Send(input);
+        bool sentDown = false;
+        try
+        {
+            SendMouse(downFlags, verifyPoint: true);
+            sentDown = true;
+            Thread.Sleep(downDurationMs);
+        }
+        finally
+        {
+            if (sentDown)
+                // A button-up is global input cleanup. Requiring the original
+                // window to remain alive here can strand a physical button-down
+                // when the click itself closes or releases that window.
+                SendMouse(upFlags, verifyPoint: false, allowUnverifiedCleanup: true);
+        }
     }
 
-    private static void SendVk(ushort vk, bool up)
+    private static void SendMouse(uint flags, bool verifyPoint, bool allowUnverifiedCleanup = false)
+    {
+        if (verifyPoint && (!_hasLastPoint || !VerifyPointTarget(_lastX, _lastY)))
+            throw new InvalidOperationException("Refusing mouse input because the live point failed identity verification.");
+        if (!verifyPoint && !VerifyForegroundTarget() && !allowUnverifiedCleanup)
+            throw new InvalidOperationException("Refusing mouse input because the verified target is no longer foreground.");
+        var input = new NativeMethods.INPUT { type = NativeMethods.INPUT_MOUSE };
+        input.u.mi = new NativeMethods.MOUSEINPUT { dwFlags = flags };
+        SendRaw(input);
+    }
+
+    private static void SendVk(ushort vk, bool up, bool allowUnverifiedCleanup = false)
     {
         var input = new NativeMethods.INPUT { type = NativeMethods.INPUT_KEYBOARD };
         input.u.ki = new NativeMethods.KEYBDINPUT
@@ -334,10 +555,10 @@ internal static class Input
             wVk = vk,
             dwFlags = up ? NativeMethods.KEYEVENTF_KEYUP : 0,
         };
-        Send(input);
+        Send(input, verifyPoint: false, allowUnverifiedCleanup);
     }
 
-    private static void SendUnicode(char ch, bool up)
+    private static void SendUnicode(char ch, bool up, bool allowUnverifiedCleanup = false)
     {
         var input = new NativeMethods.INPUT { type = NativeMethods.INPUT_KEYBOARD };
         input.u.ki = new NativeMethods.KEYBDINPUT
@@ -346,10 +567,31 @@ internal static class Input
             wScan = ch,
             dwFlags = NativeMethods.KEYEVENTF_UNICODE | (up ? NativeMethods.KEYEVENTF_KEYUP : 0),
         };
-        Send(input);
+        Send(input, verifyPoint: false, allowUnverifiedCleanup);
     }
 
-    private static void Send(NativeMethods.INPUT input)
+    private static void SendRawVk(ushort vk, bool up)
+    {
+        var input = new NativeMethods.INPUT { type = NativeMethods.INPUT_KEYBOARD };
+        input.u.ki = new NativeMethods.KEYBDINPUT
+        {
+            wVk = vk,
+            dwFlags = up ? NativeMethods.KEYEVENTF_KEYUP : 0,
+        };
+        SendRaw(input);
+    }
+
+    private static void Send(NativeMethods.INPUT input, bool verifyPoint, bool allowUnverifiedCleanup)
+    {
+        bool verified = verifyPoint
+            ? _hasLastPoint && VerifyPointTarget(_lastX, _lastY)
+            : VerifyForegroundTarget();
+        if (!verified && !allowUnverifiedCleanup)
+            throw new InvalidOperationException("Refusing input because the live foreground target failed identity verification.");
+        SendRaw(input);
+    }
+
+    private static void SendRaw(NativeMethods.INPUT input)
     {
         uint sent = NativeMethods.SendInput(1, new[] { input }, Marshal.SizeOf<NativeMethods.INPUT>());
         if (sent != 1)

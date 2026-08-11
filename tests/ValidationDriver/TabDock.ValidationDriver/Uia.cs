@@ -11,8 +11,8 @@ namespace TabDock.ValidationDriver;
 /// READ-ONLY UI Automation helpers.
 ///
 /// HARD RULE (enforced by construction): this class exposes only find/read helpers that
-/// return elements, rectangles, and strings. It never calls Invoke/SelectionItem/Toggle
-/// or any other action pattern — all clicking is done with the real mouse (see
+/// return elements, rectangles, and strings. It never calls Invoke/SelectionItem/Toggle/
+/// VirtualizedItem or any other action pattern — all clicking is done with the real mouse (see
 /// <see cref="Input"/>) at coordinates read from here.
 /// </summary>
 internal static class Uia
@@ -350,33 +350,4 @@ internal static class Uia
         return null;
     }
 
-    /// <summary>Realizes a virtualized automation element so geometry/patterns can be used.</summary>
-    public static void Realize(AutomationElement element)
-    {
-        try
-        {
-            if (element.TryGetCurrentPattern(VirtualizedItemPattern.Pattern, out object p))
-                ((VirtualizedItemPattern)p).Realize();
-        }
-        catch
-        {
-        }
-    }
-
-    /// <summary>Selects an item via SelectionItemPattern, if supported.</summary>
-    public static bool Select(AutomationElement element)
-    {
-        try
-        {
-            if (element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out object p))
-            {
-                ((SelectionItemPattern)p).Select();
-                return true;
-            }
-        }
-        catch
-        {
-        }
-        return false;
-    }
 }

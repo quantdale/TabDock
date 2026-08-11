@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Windows.Threading;
+using TabDock.Models;
 
 namespace TabDock.Services;
 
@@ -13,6 +14,7 @@ public sealed class WinEventMonitor : IDisposable
 {
     private readonly LoggingService _log;
     private readonly Func<IntPtr, bool> _isCapturedWindow;
+    private readonly Func<IntPtr, CapturedWindow?> _resolveCapturedWindow;
     private readonly NativeMethods.WinEventProc _callback;
     private SynchronizationContext? _uiContext;
     private IntPtr _hookDestroy;
@@ -55,9 +57,13 @@ public sealed class WinEventMonitor : IDisposable
     /// </summary>
     public event EventHandler<WindowEventArgs>? WindowHidden;
 
-    public WinEventMonitor(Func<IntPtr, bool> isCapturedWindow, LoggingService log)
+    /// <summary>True only when the complete hook set is installed and dispatching.</summary>
+    public bool IsRunning => _running && HasAllHooks;
+
+    public WinEventMonitor(Func<IntPtr, bool> isCapturedWindow, Func<IntPtr, CapturedWindow?> resolveCapturedWindow, LoggingService log)
     {
         _isCapturedWindow = isCapturedWindow;
+        _resolveCapturedWindow = resolveCapturedWindow;
         _log = log;
         _callback = new NativeMethods.WinEventProc(OnWinEvent);
     }
@@ -74,8 +80,8 @@ public sealed class WinEventMonitor : IDisposable
         if (_running || _disposed)
             return;
 
-        _uiContext = SynchronizationContext.Current;
-        if (_uiContext == null)
+        SynchronizationContext? uiContext = SynchronizationContext.Current;
+        if (uiContext == null)
         {
             // Without a UI-thread SynchronizationContext, OnWinEvent's only
             // remaining path is to Raise on the WinEvent callback thread,
@@ -84,32 +90,57 @@ public sealed class WinEventMonitor : IDisposable
             _log.Log("WinEventMonitor.Start: no SynchronizationContext on the calling thread; hooks not installed.");
             return;
         }
-        _running = true;
 
-        uint flags = NativeMethods.WINEVENT_OUTOFCONTEXT | NativeMethods.WINEVENT_SKIPOWNPROCESS;
-        _hookDestroy = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_DESTROY, NativeMethods.EVENT_OBJECT_DESTROY, IntPtr.Zero, _callback, 0, 0, flags);
-        _hookForeground = NativeMethods.SetWinEventHook(NativeMethods.EVENT_SYSTEM_FOREGROUND, NativeMethods.EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, _callback, 0, 0, flags);
-        _hookReorder = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_REORDER, NativeMethods.EVENT_OBJECT_REORDER, IntPtr.Zero, _callback, 0, 0, flags);
-        _hookNameChange = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_NAMECHANGE, NativeMethods.EVENT_OBJECT_NAMECHANGE, IntPtr.Zero, _callback, 0, 0, flags);
-        _hookMinimize = NativeMethods.SetWinEventHook(NativeMethods.EVENT_SYSTEM_MINIMIZESTART, NativeMethods.EVENT_SYSTEM_MINIMIZESTART, IntPtr.Zero, _callback, 0, 0, flags);
-        _hookHide = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_HIDE, NativeMethods.EVENT_OBJECT_HIDE, IntPtr.Zero, _callback, 0, 0, flags);
-        // One ranged hook covers MOVESIZESTART (0x000A) and MOVESIZEEND (0x000B).
-        // These fire once per interactive drag start/end system-wide — low volume,
-        // unlike EVENT_OBJECT_LOCATIONCHANGE, which is deliberately not hooked.
-        _hookMoveSize = NativeMethods.SetWinEventHook(NativeMethods.EVENT_SYSTEM_MOVESIZESTART, NativeMethods.EVENT_SYSTEM_MOVESIZEEND, IntPtr.Zero, _callback, 0, 0, flags);
-
-        if (_hookDestroy == IntPtr.Zero || _hookForeground == IntPtr.Zero || _hookReorder == IntPtr.Zero || _hookNameChange == IntPtr.Zero
-            || _hookMinimize == IntPtr.Zero || _hookHide == IntPtr.Zero || _hookMoveSize == IntPtr.Zero)
+        // Hook installation is a small native transaction. A transient partial
+        // failure is retried a bounded number of times, but a failed unhook is
+        // never overwritten with a new handle: retaining that handle is the
+        // only way to retry cleanup safely.
+        const int MaxInstallAttempts = 3;
+        for (int attempt = 1; attempt <= MaxInstallAttempts; attempt++)
         {
+            if (HasInstalledHooks)
+            {
+                Stop();
+                if (HasInstalledHooks)
+                {
+                    _log.Log("WinEventMonitor.Start: residual hook could not be removed; refusing to overwrite its handle.");
+                    return;
+                }
+            }
+
+            _uiContext = uiContext;
+            _running = true;
+            uint flags = NativeMethods.WINEVENT_OUTOFCONTEXT | NativeMethods.WINEVENT_SKIPOWNPROCESS;
+            _hookDestroy = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_DESTROY, NativeMethods.EVENT_OBJECT_DESTROY, IntPtr.Zero, _callback, 0, 0, flags);
+            _hookForeground = NativeMethods.SetWinEventHook(NativeMethods.EVENT_SYSTEM_FOREGROUND, NativeMethods.EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, _callback, 0, 0, flags);
+            _hookReorder = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_REORDER, NativeMethods.EVENT_OBJECT_REORDER, IntPtr.Zero, _callback, 0, 0, flags);
+            _hookNameChange = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_NAMECHANGE, NativeMethods.EVENT_OBJECT_NAMECHANGE, IntPtr.Zero, _callback, 0, 0, flags);
+            _hookMinimize = NativeMethods.SetWinEventHook(NativeMethods.EVENT_SYSTEM_MINIMIZESTART, NativeMethods.EVENT_SYSTEM_MINIMIZESTART, IntPtr.Zero, _callback, 0, 0, flags);
+            _hookHide = NativeMethods.SetWinEventHook(NativeMethods.EVENT_OBJECT_HIDE, NativeMethods.EVENT_OBJECT_HIDE, IntPtr.Zero, _callback, 0, 0, flags);
+            // One ranged hook covers MOVESIZESTART (0x000A) and MOVESIZEEND (0x000B).
+            // These fire once per interactive drag start/end system-wide — low volume,
+            // unlike EVENT_OBJECT_LOCATIONCHANGE, which is deliberately not hooked.
+            _hookMoveSize = NativeMethods.SetWinEventHook(NativeMethods.EVENT_SYSTEM_MOVESIZESTART, NativeMethods.EVENT_SYSTEM_MOVESIZEEND, IntPtr.Zero, _callback, 0, 0, flags);
+
+            if (HasAllHooks)
+            {
+                _log.Log($"WinEventMonitor started (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookReorder.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X})");
+                return;
+            }
+
             // A partial hook set silently drops whole event classes (e.g. no
             // destroy hook means dead tabs never tear down). Unwind whatever
-            // did install and report failure rather than limping along.
-            _log.Log($"WinEventMonitor.Start: incomplete hook installation (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookReorder.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X}); unwinding.");
+            // did install and retry only if every handle was released.
+            _log.Log($"WinEventMonitor.Start attempt {attempt}/{MaxInstallAttempts}: incomplete hook installation (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookReorder.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X}); unwinding.");
             Stop();
-            return;
+            if (HasInstalledHooks)
+            {
+                _log.Log("WinEventMonitor.Start: incomplete installation left a hook that could not be removed; retry stopped.");
+                return;
+            }
         }
 
-        _log.Log($"WinEventMonitor started (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookReorder.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X})");
+        _log.Log($"WinEventMonitor.Start: hook installation failed after {MaxInstallAttempts} bounded attempts; monitoring remains unavailable until the next capture-count transition.");
     }
 
     /// <summary>
@@ -120,7 +151,7 @@ public sealed class WinEventMonitor : IDisposable
     /// </summary>
     public void Stop()
     {
-        if (!_running)
+        if (!_running && !HasInstalledHooks)
             return;
         _running = false;
         // Drop the dispatch target so an in-flight native callback after this
@@ -137,6 +168,16 @@ public sealed class WinEventMonitor : IDisposable
         Unhook(ref _hookMoveSize, "movesize");
         _log.Log("WinEventMonitor stopped.");
     }
+
+    private bool HasInstalledHooks => _hookDestroy != IntPtr.Zero || _hookForeground != IntPtr.Zero
+        || _hookReorder != IntPtr.Zero || _hookNameChange != IntPtr.Zero
+        || _hookMinimize != IntPtr.Zero || _hookHide != IntPtr.Zero
+        || _hookMoveSize != IntPtr.Zero;
+
+    private bool HasAllHooks => _hookDestroy != IntPtr.Zero && _hookForeground != IntPtr.Zero
+        && _hookReorder != IntPtr.Zero && _hookNameChange != IntPtr.Zero
+        && _hookMinimize != IntPtr.Zero && _hookHide != IntPtr.Zero
+        && _hookMoveSize != IntPtr.Zero;
 
     /// <summary>
     /// Unhooks one WinEvent hook, zeroing the field only on success — a failed
@@ -173,7 +214,8 @@ public sealed class WinEventMonitor : IDisposable
             // window. Capture the foreground at callback time so the posted
             // UI handler cannot accidentally pair a different window if a
             // later activation is queued before this event is dispatched.
-            Post(new WindowEventArgs(hwnd, eventType, NativeMethods.GetForegroundWindow()));
+            IntPtr foreground = NativeMethods.GetForegroundWindow();
+            Post(new WindowEventArgs(hwnd, eventType, foreground, _resolveCapturedWindow(foreground)));
             return;
         }
 
@@ -187,10 +229,11 @@ public sealed class WinEventMonitor : IDisposable
         // never a TabDock container, making it useless as an ownership filter) —
         // and a window that just fired EVENT_OBJECT_DESTROY has no ancestors to
         // walk at all regardless.
-        if (!_isCapturedWindow(hwnd))
+        CapturedWindow? capturedMember = _resolveCapturedWindow(hwnd);
+        if (!_isCapturedWindow(hwnd) || capturedMember == null)
             return;
 
-        Post(new WindowEventArgs(hwnd, eventType));
+        Post(new WindowEventArgs(hwnd, eventType, capturedMember: capturedMember));
     }
 
     private void Post(WindowEventArgs args)
@@ -222,8 +265,22 @@ public sealed class WinEventMonitor : IDisposable
 
         bool desktopReorder = args.EventType == NativeMethods.EVENT_OBJECT_REORDER
             && args.Hwnd == NativeMethods.GetDesktopWindow();
-        if (!desktopReorder && !_isCapturedWindow(args.Hwnd))
+        if (desktopReorder)
+        {
+            // The foreground snapshot may have changed before dispatch. If
+            // it was a captured member at callback time, require the same
+            // object to still own that HWND; otherwise a recycled handle must
+            // not receive the old reorder event.
+            if (args.RelatedHwnd == IntPtr.Zero
+                || args.CapturedMember == null
+                || !ReferenceEquals(_resolveCapturedWindow(args.RelatedHwnd), args.CapturedMember))
+                return;
+        }
+        else if (!_isCapturedWindow(args.Hwnd)
+            || !ReferenceEquals(_resolveCapturedWindow(args.Hwnd), args.CapturedMember))
+        {
             return;
+        }
 
         switch (args.EventType)
         {
@@ -269,11 +326,13 @@ public sealed class WindowEventArgs : EventArgs
     public IntPtr Hwnd { get; }
     public uint EventType { get; }
     public IntPtr RelatedHwnd { get; }
+    public CapturedWindow? CapturedMember { get; }
 
-    public WindowEventArgs(IntPtr hwnd, uint eventType, IntPtr relatedHwnd = default)
+    public WindowEventArgs(IntPtr hwnd, uint eventType, IntPtr relatedHwnd = default, CapturedWindow? capturedMember = null)
     {
         Hwnd = hwnd;
         EventType = eventType;
         RelatedHwnd = relatedHwnd;
+        CapturedMember = capturedMember;
     }
 }

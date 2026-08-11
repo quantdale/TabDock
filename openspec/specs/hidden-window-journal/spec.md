@@ -17,6 +17,8 @@ Captures the in-memory caching and write-durability semantics of `WindowShepherd
 
 Additionally, `WindowShepherdService.Hide` SHALL complete the synchronous `JournalHide` write BEFORE issuing `ShowWindow(SW_HIDE)`. The previous order (hide first, journal second) left a force-kill window in which the guest was invisible on disk and in memory but had no journal entry — exactly the orphan the journal exists to rescue. The reversed order is safe: `RescueOrphanedWindows` re-showing an already-visible window is a documented harmless no-op.
 
+If that synchronous journal commit fails, `Hide` SHALL log the failure and leave the guest visible; it SHALL NOT issue `ShowWindow(SW_HIDE)` without a durable recovery entry.
+
 #### Scenario: A hide is durable immediately, with no dependency on any later flush
 - **WHEN** a guest becomes hidden (an inactive tab) and the process is hard-killed immediately afterward, before any other TabDock code runs
 - **THEN** `hidden-windows.json` on disk already reflects that guest as hidden, because the write completed synchronously as part of hiding it — no debounce timer and no exit-handler flush is required for this to be true
@@ -24,6 +26,10 @@ Additionally, `WindowShepherdService.Hide` SHALL complete the synchronous `Journ
 #### Scenario: A force-kill between hide and journal-write can no longer strand an orphan
 - **WHEN** `Hide()` is executing and the process is hard-killed at any point during it
 - **THEN** the on-disk journal either has no entry yet (the guest is still visible — nothing to rescue) or already has the entry (the guest is hidden and will be rescued); there is no interleaving in which the guest is hidden but unjournaled
+
+#### Scenario: A failed hide journal commit leaves the guest visible
+- **WHEN** the synchronous `JournalHide` write fails
+- **THEN** `Hide` records the failure and does not hide the guest, preserving a visible and recoverable state
 
 ### Requirement: Release never hides a guest via an invalid capture-time placement
 When capture-time `GetWindowPlacement` failed (leaving no valid `showCmd`), `WindowShepherdService.Release` SHALL NOT pass the zeroed placement's `showCmd` (0 == `SW_HIDE`) to `ShowWindow`. It SHALL instead show the guest with `SW_SHOW` after restoring its capture-time bounds, so a released guest is never left invisible with its journal entry already cleared.
@@ -61,14 +67,21 @@ When `JournalClear` is invoked for a guest that ends up genuinely visible (the `
 - **WHEN** a designated crash/exit handler runs and no journal mutation is pending
 - **THEN** the flush operation completes without performing an additional disk write
 
-### Requirement: On-disk journal format and rescue behavior are unchanged
-Neither the in-memory caching nor the `JournalClear` debounce SHALL alter the `HiddenWindowJournalFile`/`HiddenWindowEntry` on-disk shape, the `.tmp`-then-`File.Move(overwrite:true)` atomic-write pattern, `LoadJournal`'s corrupt-file recovery behavior, or `RescueOrphanedWindows`' startup validation logic (HWND validity, owning PID, and exe path cross-check).
+### Requirement: On-disk journal format remains stable and rescue is fail-safe and retryable
+Neither the in-memory caching nor the `JournalClear` debounce SHALL alter the
+`HiddenWindowJournalFile`/`HiddenWindowEntry` on-disk shape, the `.tmp`-then-
+`File.Move(overwrite:true)` atomic-write pattern, or `LoadJournal`'s
+corrupt-file recovery behavior. `RescueOrphanedWindows` SHALL validate each
+entry's HWND, owning PID, and exe path before touching it, and SHALL verify that
+the window is visible after `ShowWindow` before consuming the entry. A valid
+entry that remains hidden SHALL be retained for a later startup retry; invalid
+or recycled identities SHALL be discarded.
 
 Two robustness gaps in the existing behavior are closed (format unchanged, tolerance increased): `LoadJournal` SHALL normalize a deserialized null `Entries` to an empty list before returning, so a syntactically valid `{"Entries": null}` journal can no longer wedge rescue into a permanent fail-and-retry loop; and `LoadJournal`'s corrupt-file rename SHALL use a collision-safe name so the rename itself cannot throw out of the `JsonException` recovery path.
 
-#### Scenario: Startup rescue behaves identically after this change
+#### Scenario: Startup rescue consumes only entries that were visibly restored
 - **WHEN** TabDock starts up after a prior session ended in any way (graceful exit, managed exception, session ending, or a hard force-kill)
-- **THEN** `RescueOrphanedWindows` restores exactly the windows it would have restored under the pre-AUDIT25-01, fully-synchronous behavior
+- **THEN** `RescueOrphanedWindows` restores and removes entries for identity-valid windows that become visible, discards invalid or recycled identities, and retains identity-valid windows that could not be made visible for a later retry
 
 #### Scenario: A journal with null Entries is handled once, not retried forever
 - **WHEN** `hidden-windows.json` is syntactically valid JSON but has `"Entries": null`

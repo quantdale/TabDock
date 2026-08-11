@@ -18,6 +18,13 @@ public sealed class CapturedWindow
 
     public string ExePath { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Class name captured with the HWND identity. This is intentionally kept
+    /// separate from persisted tab metadata so immediate cleanup can refuse
+    /// to touch a recycled HWND.
+    /// </summary>
+    public string OriginalClassName { get; set; } = string.Empty;
+
     public string OriginalTitle { get; set; } = string.Empty;
 
     public string CustomLabel { get; set; } = string.Empty;

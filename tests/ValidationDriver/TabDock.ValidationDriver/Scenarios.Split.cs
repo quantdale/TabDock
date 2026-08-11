@@ -353,7 +353,7 @@ internal static partial class Scenarios
         Thread.Sleep(1500);
         AssertSplitPanes(ctx, host, pigA, pigB, "split-resize after-maximize");
 
-        NativeMethods.ShowWindow(container, NativeMethods.SW_RESTORE);
+        VerifiedWindowOps.ShowWindow(container, ctx.TabDockPid, NativeMethods.SW_RESTORE);
         Thread.Sleep(1500);
         AssertSplitPanes(ctx, host, pigA, pigB, "split-resize after-restore");
     }
@@ -408,7 +408,7 @@ internal static partial class Scenarios
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindowVisible(pigA.Hwnd) && !NativeMethods.IsWindowVisible(pigB.Hwnd), 3000),
             "both split members hidden after the container minimize");
 
-        NativeMethods.ShowWindow(container, NativeMethods.SW_RESTORE);
+        VerifiedWindowOps.ShowWindow(container, ctx.TabDockPid, NativeMethods.SW_RESTORE);
         AssertSplitPanes(ctx, host, pigA, pigB, "split-minrestore after-restore");
         ctx.Check(TabCount(container) == 1, "pair still ONE composite tab item after minimize/restore");
     }
@@ -947,9 +947,18 @@ internal static partial class Scenarios
             long offCT = TabDockLog.RecordLogLength();
             if (!Input.ForceForeground(container))
                 throw new InvalidOperationException("Could not bring the container to the foreground for Ctrl+Tab — refusing to continue.");
-            Input.SendKeyDown(Input.VK_CONTROL);
-            Input.SendKey(Input.VK_TAB);
-            Input.SendKeyUp(Input.VK_CONTROL);
+            bool ctrlDown = false;
+            try
+            {
+                Input.SendKeyDown(Input.VK_CONTROL);
+                ctrlDown = true;
+                Input.SendKey(Input.VK_TAB);
+            }
+            finally
+            {
+                if (ctrlDown)
+                    Input.SendKeyUp(Input.VK_CONTROL);
+            }
             ctx.Check(WaitForSplitFocus(offCT, pigA, 3000),
                 $"cycle {i}: Ctrl+Tab cycles to the other split member (SPLIT[focus] member=A)");
             ctx.Check(TabDockLog.CountNewLines(offCT, "SPLIT[exit]") == 0, $"cycle {i}: Ctrl+Tab keeps split active");
@@ -1154,7 +1163,8 @@ internal static partial class Scenarios
             GuardedProc.Log($"  MoveContainerClearOf: no work-area corner clears released guest 0x{avoidHwnd.ToInt64():X} rect {Util.FormatRect(avoid)} — leaving the container in place; the click probe will classify any failure.");
             return;
         }
-        NativeMethods.SetWindowPos(container, IntPtr.Zero, mx, my, 0, 0,
+        VerifiedWindowOps.SetWindowPos(
+            GetRememberedContainerIdentity(ctx, container), IntPtr.Zero, mx, my, 0, 0,
             NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
         Thread.Sleep(500);
         GuardedProc.Log($"  moved container to ({mx},{my}) clear of released guest 0x{avoidHwnd.ToInt64():X} (rect {Util.FormatRect(avoid)})");
@@ -1305,7 +1315,7 @@ internal static partial class Scenarios
             "creating a group does not disturb the existing guest");
 
         if (secondContainer != IntPtr.Zero && NativeMethods.IsWindow(secondContainer))
-            NativeMethods.PostMessage(secondContainer, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+            VerifiedWindowOps.PostMessage(secondContainer, ctx.TabDockPid, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
     }
 
     // -------------------------------------------------------------------------
@@ -1597,6 +1607,8 @@ internal static partial class Scenarios
         ctx.TabDockPid = (uint)td2.Id;
         ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
         ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched");
+        if (ctx.MainHwnd != IntPtr.Zero)
+            RememberMainWindow(ctx);
         // Inverted-wait: poll up to 8s and FAIL if a restored container for the
         // deleted group appears at ANY point (a single snapshot could miss a
         // slow restore and pass vacuously).
@@ -1934,7 +1946,7 @@ internal static partial class Scenarios
             ClickMinimizeButton(container);
             ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindowVisible(pigA.Hwnd) && !NativeMethods.IsWindowVisible(pigB.Hwnd), 3000),
                 $"cycle {i}: both split members hidden on minimize");
-            NativeMethods.ShowWindow(container, NativeMethods.SW_RESTORE);
+            VerifiedWindowOps.ShowWindow(container, ctx.TabDockPid, NativeMethods.SW_RESTORE);
             AssertPanesPartition(ctx, host, pigA, pigB, $"cycle {i} restored-from-minimize");
 
             // Maximized -> Minimized -> Maximized (goal §11's fourth transition).
@@ -1943,7 +1955,7 @@ internal static partial class Scenarios
             ClickMinimizeButton(container);
             ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindowVisible(pigA.Hwnd) && !NativeMethods.IsWindowVisible(pigB.Hwnd), 3000),
                 $"cycle {i}: both members hidden on minimize from maximized");
-            NativeMethods.ShowWindow(container, NativeMethods.SW_SHOWMAXIMIZED);
+            VerifiedWindowOps.ShowWindow(container, ctx.TabDockPid, NativeMethods.SW_SHOWMAXIMIZED);
             AssertPanesPartition(ctx, host, pigA, pigB, $"cycle {i} maximized-from-minimize");
 
             // Cycle-end normalization: the cycle starts with "Normal ->
