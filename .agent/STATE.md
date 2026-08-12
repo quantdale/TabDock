@@ -39,8 +39,10 @@ restored container to the top of the **normal** z-order band via the existing
 `WindowShepherdService.RaiseContainerForChrome(hwnd)` primitive
 (`HWND_TOP` + `SWP_NOACTIVATE`), bounded (one write per container, once), with
 a single `STARTUP[reconcile]` diagnostic. No `Activate`/`SetForegroundWindow`:
-z-order-only, cannot steal focus, preserves no-activation launch, respects
-later user activation. Preserves the Shepherd `guest-above-container` invariant
+z-order-only, cannot steal focus, respects later user activation. (TabDock has
+no supported background/no-activation launch path, so there is no such mode to
+preserve; the accurate policy is "raised in the normal band without taking
+focus.") Preserves the Shepherd `guest-above-container` invariant
 (vacuous at startup; re-established by `PositionAndShow` on first capture).
 No guest style/owner/geometry mutation; no SetParent/WS_CHILD/HWND_TOPMOST/
 Topmost/loop.

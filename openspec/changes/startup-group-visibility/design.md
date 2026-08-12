@@ -18,7 +18,8 @@ overlapping pre-existing window and nothing repairs it for the session.
 - Make restored-container placement above an overlapping unrelated window
   deterministic at startup, independent of OS foreground-grant luck.
 - Keep the fix z-order-only: never steal focus, never fight a later user
-  activation, preserve any no-activation launch path.
+  activation. (TabDock has no supported background/no-activation launch path to
+  preserve.)
 - Preserve the Shepherd local-stack invariant and the single z-order authority
   (`WindowShepherdService`).
 - Add non-vacuous regression coverage.
@@ -40,10 +41,15 @@ overlapping pre-existing window and nothing repairs it for the session.
   leaves on top) stays topmost among TabDock's own containers.
 - **Why z-order-only / no `Activate()`**: `RaiseContainerForChrome` with
   `useTopmostBand:false` does `SetWindowPos(HWND_TOP, SWP_NOACTIVATE)`. It is
-  explicitly non-activating, so it can never steal foreground and it preserves
-  the background/no-activation launch semantic. WPF's `Show()` already requests
+  explicitly non-activating, so it can never steal foreground; a later user
+  activation of another app is respected. WPF's `Show()` already requests
   initial activation under ordinary rules; we do not add a second, riskier
-  activation path.
+  activation path. TabDock has **no supported background/silent/auto-start
+  launch mode** (single-instance exits a second launch; there is no
+  Run-key/tray/silent-launch flag), so there is no such mode whose
+  non-intrusiveness the reconciliation would need to preserve — the accurate
+  policy is simply "restored groups are raised in the normal z-order band
+  without taking focus."
 - **Why this exact timing**: z-order placement depends only on the container
   HWND existing and being shown, which `Show()` guarantees by the time the loop
   returns (`Loaded` already ran synchronously and registered the HWND). The
@@ -69,11 +75,14 @@ overlapping pre-existing window and nothing repairs it for the session.
   supervised real-input scenario `startup-group-not-hidden-behind-existing-window`.
   The fix is safe by construction (no focus call) and its mechanism is
   source-verified.
-- **Coverage of a non-overlapping active app** during a silent/auto-start
-  launch: the raised container can visually cover an unrelated overlapping
-  window, but it does not take focus; the user can click that window to bring
-  it forward and TabDock never re-takes foreground. This matches the stated
-  user-initiated startup semantics.
+- **Visible z-order vs focus**: the raise changes VISIBLE z-order (the restored
+  surface is placed above any overlapping unrelated window) while leaving focus
+  untouched. That is the intended user-initiated surface establishment. Because
+  TabDock has no supported background/auto-start launch path, there is no
+  "background" mode whose non-intrusiveness could be violated by this change; if
+  such a mode is ever added, it must explicitly detect that intent (e.g.
+  `STARTUPINFO` show-window) and suppress the raise — not inferred from an
+  unreliable foreground heuristic.
 - **CRLF/mixed line endings**: `App.xaml.cs` and `Scenarios.cs` have mixed
   line endings; edits were made byte-preserving and validated with a clean diff
   and `git diff --check`.

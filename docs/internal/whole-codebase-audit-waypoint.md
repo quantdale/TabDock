@@ -600,8 +600,10 @@ the restored-container loop in `Application_Startup`. Raises each restored
 container to the top of the normal z-order band via the existing authority
 primitive `WindowShepherdService.RaiseContainerForChrome` (`HWND_TOP` +
 `SWP_NOACTIVATE`). Z-order only — no `Activate`/`SetForegroundWindow`, so no
-focus steal, no-activation launch semantics preserved, later user activation
-respected. Bounded: one write per container, once. Preserves the Shepherd
+focus steal, later user activation respected. (TabDock has no supported
+background/no-activation launch path, so there is no such mode to preserve; the
+accurate policy is "raised in the normal band without taking focus.") Bounded:
+one write per container, once. Preserves the Shepherd
 guest-above-container invariant (vacuous at startup; re-established by
 `PositionAndShow` on first capture). No guest HWND/style/owner/geometry
 mutation; no SetParent/WS_CHILD/HWND_BOTTOM/HWND_TOPMOST/Topmost/loop.

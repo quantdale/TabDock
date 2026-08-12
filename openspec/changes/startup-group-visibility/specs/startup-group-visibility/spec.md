@@ -29,18 +29,22 @@ The startup z-order reconciliation SHALL issue no foreground call
 (`SetForegroundWindow`/`Activate`) of its own. If, after TabDock starts, the
 user activates another application, TabDock SHALL respect that activation and
 SHALL NOT repeatedly re-raise or re-activate its own windows to take foreground
-back.
+back. The reconciliation SHALL raise restored containers in the NORMAL z-order
+band **without taking focus** — it changes visible z-order (the intended
+surface establishment) but never changes which window has focus. TabDock has no
+supported background/silent/auto-start launch mode, so there is no such mode
+whose non-intrusiveness must be preserved.
 
 #### Scenario: external activation is respected after startup
 - **WHEN** the user activates an unrelated application after TabDock has
   started and settled
 - **THEN** that application stays foreground and TabDock does not steal it back
 
-#### Scenario: background/no-activation launch is preserved
-- **WHEN** TabDock is launched through a path that does not grant it foreground
-- **THEN** TabDock does not force itself into the foreground; the restored
-  container is still raised in z-order (so it is not buried) but focus is left
-  with the current foreground window
+#### Scenario: reconciliation changes z-order but not focus
+- **WHEN** TabDock starts and raises a restored group container in the normal
+  z-order band
+- **THEN** the container is raised above any overlapping unrelated window
+  without taking focus, and the foreground window is unchanged
 
 ### Requirement: Local controlled-HWND stack invariant is preserved
 The startup reconciliation SHALL NOT disturb the canonical Shepherd local

@@ -221,10 +221,12 @@ public partial class App : Application
     /// exactly once, through the existing z-order authority primitive
     /// (WindowShepherdService.RaiseContainerForChrome, HWND_TOP + SWP_NOACTIVATE).
     /// It is a z-order-only repair: SWP_NOACTIVATE means it issues no foreground
-    /// call, so it cannot steal focus and it preserves the default no-focus-loss
-    /// semantics of a background launch; a later user activation of another app is
-    /// never fought (nothing persists, no loop). It is bounded — one write per
-    /// restored container, once at startup.
+    /// call, so it cannot steal focus and a later user activation of another app
+    /// is never fought (nothing persists, no loop). Note that this DOES change
+    /// visible z-order (the restored surface is raised in the normal band): TabDock
+    /// has no supported background/silent/auto-start launch mode, so no such mode
+    /// exists whose non-intrusiveness this needs to preserve. It is bounded — one
+    /// write per restored container, once at startup.
     ///
     /// Containers are raised in restore order so the last-restored group (the one
     /// natural Show() ordering leaves on top) stays topmost among TabDock's own

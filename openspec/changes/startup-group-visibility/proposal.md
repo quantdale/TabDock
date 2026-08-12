@@ -19,8 +19,11 @@ session.
   user-initiated launch always places TabDock's restored surface visibly above
   any overlapping unrelated window.
 - The reconciliation is z-order-only — it issues **no foreground call**, so it
-  cannot steal focus, it respects a later user activation of another app, and
-  it preserves the no-focus-loss semantics of a background/no-activation launch.
+  cannot steal focus and it respects a later user activation of another app. It
+  raises restored groups in the **normal** z-order band **without taking focus**.
+  TabDock has no supported background/silent/auto-start launch path (single
+  instance exits a second launch; no Run-key/tray/silent flag), so there is no
+  such mode whose non-intrusiveness would need to be preserved.
 - Preserve the Shepherd local-stack invariant (visible guest above container);
   the startup raise runs before any guest exists and is overwritten cleanly by
   the first capture's `PositionAndShow`.
