@@ -25,8 +25,9 @@ qualification record on a non-main branch.
 - [x] Synchronize durable state/tasks/docs with the observed targeted
       supervised runs and the remaining human qualification gate.
 - [x] Inspect the complete diff and final validation output.
-- [ ] Commit the coherent remediation on this branch; push/draft PR only if
-      credentials and repository workflow allow it.
+- [x] Commit the coherent remediation on this branch; push/draft PR only if
+      credentials and repository workflow allow it. Implementation commit:
+      `0fca47d33d5955b4cb6fcba5a24c26fb44adf89c`.
 
 ## Explicit non-claims
 

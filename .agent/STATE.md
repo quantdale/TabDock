@@ -12,6 +12,10 @@ SUPERVISED RUNS GREEN; HUMAN VISUAL QUALIFICATION PENDING**
 - Branch: `agent/tabdock-deep-audit-remediation`, based on current HEAD
   `d0cea29fd1b8b60008eb3d7021b3c6859951583a`. The initial worktree was clean;
   no unrelated changes were present or modified.
+- Implementation commit: `0fca47d33d5955b4cb6fcba5a24c26fb44adf89c`
+  (`fix: harden whole-codebase audit contracts`). A later state-only commit
+  will record final artifact and publication evidence without changing the
+  implementation.
 - Active plan: `.agent/plans/deep-audit-remediation-2026-08-13.md`.
 - Implemented: pointer-sized HDWP chaining/fallback, corrected
   `WINDOWPLACEMENT` ABI and layout, ShowWindow postcondition handling,
@@ -35,8 +39,8 @@ SUPERVISED RUNS GREEN; HUMAN VISUAL QUALIFICATION PENDING**
 - Per-user duplicate-process check also passed: a first Debug instance held
   the SID-scoped guard and a second same-user instance exited 0; no TabDock
   process remained afterward.
-- Remaining work: record the final validation evidence, commit this branch,
-  and attempt push/draft PR only if credentials permit.
+- Remaining work: record the final published-artifact identity and attempt
+  push/draft PR only if credentials permit.
 - Manual gate: the targeted scenarios above are evidence for their named
   invariants, not a full visual acceptance. Browser/real-app coverage,
   mixed-DPI hardware, crash-rescue, the full ValidationDriver batch, and the
