@@ -570,3 +570,64 @@ production, no uncontrolled polling. Clean.
   confirmed by the user.
 - Cross-monitor/per-monitor-DPI behavior at non-100% scaling requires
   a supervised matrix on representative hardware.
+---
+
+## POST-HARDENING STARTUP VISIBILITY FINDING (2026-08-12)
+
+### Defect
+
+During TabDock startup, a restored/opened group can end up hidden behind an
+already-existing desktop window when the group's initial position overlaps that
+window. Reopens the production-readiness gate.
+
+### Root cause (proven)
+
+`App.Application_Startup` -> `OpenContainer` shows each restored (empty)
+container with a bare `window.Show()` and never issues an explicit z-order or
+activation claim, then hides the launcher. Whether the container lands above or
+below an overlapping pre-existing window depends on the OS foreground grant at
+the moment of `Show()`. With no grant, the container is parked beneath the
+overlapping window; restored groups are empty (persistence is metadata-only),
+so the WinEvent hooks are not installed (`IsMonitoringNeeded` false) and every
+container z-order memory (`LayoutShepherdActiveWindow` ~1985, the `WM_ACTIVATE`
+reassert ~306, `PairZOrderBehindGuest`) requires a live guest the empty
+container has none of. Burial persists for the session.
+
+### Fix
+
+New one-shot `App.ReconcileRestoredContainerZOrder()` called immediately after
+the restored-container loop in `Application_Startup`. Raises each restored
+container to the top of the normal z-order band via the existing authority
+primitive `WindowShepherdService.RaiseContainerForChrome` (`HWND_TOP` +
+`SWP_NOACTIVATE`). Z-order only — no `Activate`/`SetForegroundWindow`, so no
+focus steal, no-activation launch semantics preserved, later user activation
+respected. Bounded: one write per container, once. Preserves the Shepherd
+guest-above-container invariant (vacuous at startup; re-established by
+`PositionAndShow` on first capture). No guest HWND/style/owner/geometry
+mutation; no SetParent/WS_CHILD/HWND_BOTTOM/HWND_TOPMOST/Topmost/loop.
+
+### Tests
+
+ValidationDriver scenarios (built + discoverable; supervised, not run):
+`startup-group-not-hidden-behind-existing-window`,
+`startup-does-not-steal-foreground-after-external-activation`,
+`startup-local-stack-above-unrelated-when-guest-present`
+(`tests/ValidationDriver/.../Scenarios.StartupHide.cs`; registered in
+`Scenarios.cs`).
+
+### Validation
+
+Four project builds + `TabDock.sln`: 0 warnings / 0 errors. `scripts/validate.ps1`
+PASS. `--selftest-geometry` PASS (exit 0). `openspec validate --all --no-interactive`
+13/13 PASS. `git diff --check` PASS. OpenSpec change `startup-group-visibility`
+added (not archived). CLI-safe native check PASS (container visible, center
+resolves to TabDock PID, above blocker; real state restored) — but the burial
+was NOT deterministically reproducible CLI-safely (launched TabDock still
+received foreground), so manual visual acceptance + the supervised scenario
+remain the outstanding gates.
+
+### Manual acceptance status
+
+NOT YET CONFIRMED by the user. Runs of the original real-world overlap case
+(Explorer/Edge/Terminal, full/partial overlap, maximized external window) remain
+outstanding. Final assessment: RESOLVED PENDING MANUAL VISUAL CONFIRMATION.

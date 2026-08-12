@@ -190,6 +190,7 @@ internal static partial class Scenarios
         // Post-audit containment (guest native-minimum) scenarios.
         "split-guest-does-not-overflow-pane", "split-narrow-container-constraints",
         "single-guest-does-not-overflow-content",
+        "startup-local-stack-above-unrelated-when-guest-present",
     };
 
     /// <summary>
@@ -246,6 +247,8 @@ internal static partial class Scenarios
         "dragprobe",
 "capture-dpi-unaware-guest",
 "capture-dpi-system-guest",
+        "startup-group-not-hidden-behind-existing-window",
+        "startup-does-not-steal-foreground-after-external-activation",
     };
 
     // -------------------------------------------------------------------------
@@ -360,6 +363,9 @@ internal static partial class Scenarios
             "keyboard-only-tab-navigation" => KeyboardOnlyTabNavigation,
             "crashkill-during-active-drag" => CrashKillDuringActiveDrag,
             "dwm-transitions-disabled-on-capture" => DwmTransitionsDisabledOnCapture,
+            "startup-group-not-hidden-behind-existing-window" => StartupGroupNotHiddenBehindExistingWindow,
+            "startup-does-not-steal-foreground-after-external-activation" => StartupDoesNotStealForegroundAfterExternalActivation,
+            "startup-local-stack-above-unrelated-when-guest-present" => StartupLocalStackAboveUnrelatedWhenGuestPresent,
             _ => null,
         };
         if (body == null)

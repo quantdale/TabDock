@@ -801,3 +801,41 @@ single-guest-does-not-overflow-content.
 ### Remaining
 
 Manual visual confirmation on real multi-monitor DPI setups.
+---
+
+## POST-HARDENING STARTUP GROUP VISIBILITY (2026-08-12)
+
+### Defect
+
+A restored/opened TabDock group can be hidden behind an already-existing
+overlapping desktop window during startup.
+
+### Root cause (verified)
+
+The startup-restore path shows each restored (empty) container via
+`window.Show()` with no explicit z-order/activation claim, then hides the
+launcher (`App.xaml.cs:729-730`). The container's final placement is whatever
+the OS gives a freshly shown top-level window given the foreground grant at
+`Show()`; with no grant it is parked beneath the overlapping window. Nothing
+repairs it at startup: WinEvent hooks aren't installed for empty groups, and
+the container z-order memories need a live guest.
+
+### Fix
+
+One-shot `App.ReconcileRestoredContainerZOrder()` raised each restored
+container to the top of the normal z-order band via
+`WindowShepherdService.RaiseContainerForChrome` (`HWND_TOP` + `SWP_NOACTIVATE`),
+bounded and z-order-only (no foreground call), preserving the Shepherd pairing
+invariant and user activation semantics. No topmost, no guest mutation, no loop.
+
+### Tests
+
+ValidationDriver scenarios added (supervised, not run): the startup occlusion
+reproduction + no-foreground-steal guard + local-stack guard.
+
+### Status
+
+Implemented, built (0/0), selftest/OpenSpec/diff-check green, CLI-safe native
+check PASS. Burial not deterministically reproducible CLI-safely (foreground
+grant race); manual visual acceptance + supervised scenario outstanding.
+Assessment: RESOLVED PENDING MANUAL VISUAL CONFIRMATION.

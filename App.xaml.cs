@@ -180,6 +180,7 @@ public partial class App : Application
                 }
             }
 
+            ReconcileRestoredContainerZOrder();
             SyncWinEventMonitor();
             _log.Log("TabDock startup complete.");
         }
@@ -198,6 +199,55 @@ public partial class App : Application
             }
             Shutdown(1);
         }
+    }
+
+    /// <summary>
+    /// One-shot startup z-order reconciliation for restored groups.
+    ///
+    /// On the startup-restore path each restored container is shown with
+    /// Window.Show() followed by a launcher Hide() and is never given an explicit
+    /// activation or z-order claim (OpenContainer). Whether the container lands
+    /// above or below an overlapping pre-existing desktop window then depends
+    /// entirely on the OS foreground grant at the moment of Show(): when that
+    /// grant is missing, the container is silently buried behind the existing
+    /// window. Nothing repairs it — the WinEvent pairing pipeline is not installed
+    /// at this point (restored groups are empty, so IsMonitoringNeeded is false),
+    /// and every container z-order memory (LayoutShepherdActiveWindow, the
+    /// WM_ACTIVATE reassert, PairZOrderBehindGuest) requires a live guest, which an
+    /// empty restored container has none of. The burial would persist for the whole
+    /// session.
+    ///
+    /// This raises each restored container to the top of the normal z-order band
+    /// exactly once, through the existing z-order authority primitive
+    /// (WindowShepherdService.RaiseContainerForChrome, HWND_TOP + SWP_NOACTIVATE).
+    /// It is a z-order-only repair: SWP_NOACTIVATE means it issues no foreground
+    /// call, so it cannot steal focus and it preserves the default no-focus-loss
+    /// semantics of a background launch; a later user activation of another app is
+    /// never fought (nothing persists, no loop). It is bounded — one write per
+    /// restored container, once at startup.
+    ///
+    /// Containers are raised in restore order so the last-restored group (the one
+    /// natural Show() ordering leaves on top) stays topmost among TabDock's own
+    /// containers, matching pre-existing behavior. No guest HWND, style, owner, or
+    /// placement is touched, and the container-behind-guest pairing invariant is
+    /// unaffected (it is vacuous at startup and re-established by PositionAndShow
+    /// when the first guest is captured).
+    /// </summary>
+    private void ReconcileRestoredContainerZOrder()
+    {
+        int raised = 0;
+        foreach (var group in _groups.Groups.ToList())
+        {
+            if (!_containers.TryGetValue(group.Id, out ContainerWindow? container))
+                continue;
+            IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(container).Handle;
+            if (hwnd != IntPtr.Zero)
+            {
+                _shepherd.RaiseContainerForChrome(hwnd);
+                raised++;
+            }
+        }
+        _log.Log("STARTUP[reconcile] raised {raised} restored container(s) to the top of the normal z-order band (no activation)");
     }
 
     private void Application_Exit(object sender, ExitEventArgs e)
