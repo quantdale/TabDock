@@ -18,6 +18,11 @@ SUPERVISED RUNS GREEN; HUMAN VISUAL QUALIFICATION PENDING**
   remediation checkpoint`). The final release artifact is rebuilt from the
   final branch HEAD after this checkpoint; its exact identity is recorded in
   the handoff.
+- CI guard follow-up: `4e405803d751003285d0ce40accb675877328e89` makes the
+  hosted SendInput exclusion check inspect command lines without matching its
+  own regex source. The replacement hosted run `31642601057` passed all steps
+  for the pushed branch; the earlier run `31642239988` correctly exposed and
+  failed on that self-match.
 - Active plan: `.agent/plans/deep-audit-remediation-2026-08-13.md`.
 - Implemented: pointer-sized HDWP chaining/fallback, corrected
   `WINDOWPLACEMENT` ABI and layout, ShowWindow postcondition handling,

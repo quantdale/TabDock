@@ -28,7 +28,9 @@ qualification record on a non-main branch.
 - [x] Commit the coherent remediation on this branch; push/draft PR only if
       credentials and repository workflow allow it. Implementation commit:
       `0fca47d33d5955b4cb6fcba5a24c26fb44adf89c`; state-sync commit:
-      `edd14bcc43ce7cf6d9554d785255c45256a34738`.
+      `edd14bcc43ce7cf6d9554d785255c45256a34738`; CI guard fix:
+      `4e405803d751003285d0ce40accb675877328e89`; hosted run
+      `31642601057` passed.
 
 ## Explicit non-claims
 
