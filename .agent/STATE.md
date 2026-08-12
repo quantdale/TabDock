@@ -57,6 +57,28 @@ or credential-like terms. The final OpenSpec handoff tasks are all complete.
 Handoff is ready. No cross-machine reproduction was performed in this local
 session; that remains an explicit qualification step for the known artifact.
 
+## External-machine qualification checkpoint (2026-08-12)
+
+The evidence-only qualification campaign is active. The exact self-contained
+Release publish at
+`bin/Release/net8.0-windows/win-x64/publish/TabDock.exe` is proven to be
+commit `860ab0708e2dd20dbbc1a53e06bbfc233ac46bc8`, with the expected SHA-256
+`BA06F87561C23A32A0B73B00DE1D7A13EF987607E46A8D546BF29B3DA9A5518F`.
+
+Evidence root: `C:\Users\Michael Roy\Desktop\TabDock-Qualification-20260812-205431`.
+The baseline doctor and support bundle succeeded and contain all nine expected
+entries. `%APPDATA%\TabDock` was preserved; it contained only `logs\TabDock.log`
+and no `state.json` or `hidden-windows.json`. No production code was changed.
+
+Independent CIM fingerprint reports Windows 11 Home Single Language, build
+26200, one 1920x1080 100% monitor, AMD Radeon(TM) Graphics driver
+32.0.21045.1000, and NVIDIA GeForce RTX 2050 driver 32.0.16.1062. The doctor
+labels the Windows product as Windows 10 while reporting the same build; this
+diagnostic discrepancy is recorded for the final instrumentation review.
+
+Current phase: awaiting the human-supervised header-disappearance reproduction
+and its in-process `Ctrl+Alt+Shift+D` bundle before any recovery action.
+
 ---
 
 ## Historical checkpoint — STARTUP GROUP VISIBILITY HARDENING (2026-08-12)
