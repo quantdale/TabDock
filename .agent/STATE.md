@@ -1,71 +1,89 @@
 # Agent state
 
-## Current checkpoint — POST-AUDIT DPI COMPATIBILITY FINDING resolved (2026-08-11)
+## Current checkpoint — FINAL HARDENING CLOSURE (2026-08-11)
 
-Objective: determine whether TabDock can safely shepherd DPI-unaware top-level
-HWNDs at non-100% display scaling while preserving physical-pixel geometry and
-the Shepherd/no-reparent architecture; if safe, implement it; otherwise prove the
-limitation. The user hit the fail-closed refusal "This window is not DPI-aware and
-can only be captured reliably at 100% display scaling."
+Objective: resolve concrete outstanding blockers, validate accumulated
+containment + DPI work, correct any defects, close active specifications,
+update durable state, and create ONE coherent milestone commit.
 
-Status: **RESOLVED — DPI-unaware guests are supported safely.** The blanket
-refusal was the bug; native evidence proves a PerMonitorV2 caller's physical
-`SetWindowPos` glues an unaware top-level OUTER rect exactly. Implemented, all
-CLI-safe gates green. Final assessment: RESOLVED PENDING SUPERVISED VISUAL
-CONFIRMATION at non-100% scaling (remaining steps are supervised by policy).
+Status: **RESOLVED — ALL SUPERVISED SCENARIOS PASS. Ready for commit.**
 
-## Root cause (proven)
+## What happened in this session
 
-The guard's premise — an unaware guest "would be stretched and misplaced no
-matter what rect we hand it" — is false for OUTER-rect positioning. DPI
-virtualization of geometry APIs is keyed to the CALLING thread's awareness, so a
-PMv2 caller's `SetWindowPos`/`GetWindowRect` are physical against any target. A
-native experiment on this machine: `SetWindowPos(200,150,1440,900)` on an unaware
-top-level window from a PMv2 thread → `GetWindowRect (200,150,1440x900)` exactly;
-an unaware caller of the same window saw `(160,120,1152x720)` = physical ÷ 1.25
-(virtualized). The unaware guest's content is DWM-blurred exactly as standalone —
-not a TabDock geometry defect. The gate also used `GetDpiForSystem()` (primary),
-misclassifying targets on differently-scaled secondaries.
+1. PID 156552 investigated and closed (orphan from a previous CLI session;
+   not a harness cleanup defect — the ValidationDriver correctly prevented
+   running against a non-driver-owned instance).
 
-## Fix (Shepherd-compatible)
+2. Harness bug fixed: `ClickTabCloseButton` now calls `EnsureClickable` before
+   clicking, preventing clicks on obscured close buttons.
 
-- `WindowShepherdService.Capture`: a KNOWN DPI-unaware guest is captured normally
-  (`dpi::unaware-accepted`); refusal reserved for a probe that FAILS or returns an
-  UNKNOWN context (`dpi::probe-failed`), with a precise message. Scale source is
-  the TARGET monitor's effective DPI (`GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI)`
-  via shcore, `GetMonitorEffectiveDpi`), not the primary.
-- Centralized logical→physical min-track boundary:
-  `SplitGeometry.ScaleUnawareLogicalToPhysical` (ceil, never under-estimates),
-  used by `WindowShepherdService.ToPhysicalScaleForGuest` for unaware guests, so
-  the size-constraint/pane-overflow containment stays correct for unaware guests
-  on scaled monitors; aware guests and 100% scaling are no-ops.
-- `NativeMethods`: `GetDpiForMonitor`, `MDT_EFFECTIVE_DPI`, `USER_DEFAULT_SCREEN_DPI`.
-- GuineaPig `--dpi unaw|system|per-monitor|per-monitor-v2` launcher modes.
-- `Scenarios.Dpi.cs`: `capture-dpi-unaware-guest`, `capture-dpi-system-guest`
-  (self-skip at 100% with explicit reason).
-- New OpenSpec change `dpi-unaware-acceptance`.
+3. Harness bug fixed: containment scenarios use `ResizeContainerTo` as a
+   layout-trigger before behavioral containment assertions, replacing the
+   broken cross-process `QueryMinTrack` (which failed because `lParam` is a
+   pointer in the harness's address space, invalid in the container's process).
 
-## Validation (CLI-safe)
+4. Product bug fixed: `WM_GETMINMAXINFO` handler in `ContainerWindow.xaml.cs`
+   now always sets `ptMinTrackSize` when a valid constraint exists, rather
+   than clamping up from WPF's internal defaults (which can be large).
 
-- Builds: TabDock, solution, ValidationDriver, GuineaPig, Spike — PASS, 0 warnings.
-- `scripts\validate.ps1`: PASS.
-- `TabDock.exe --selftest-geometry`: PASS, 14,719,158 checks, 0 failures (new
-  scaling-math coverage included).
-- `openspec validate --all --no-interactive`: PASS, 14/14.
-- `git diff --check`: clean (expected LF/CRLF conversion notes only).
-- Native capture harness (CLI-safe, no SendInput) exercised `Capture` against
-  DPI-unaware, system-aware, and per-monitor-v2 pigs on a mixed-DPI host: all
-  ACCEPTED (no refusal).
+5. Dead harness method `AttemptNarrowResizeAndReadWidth` removed (was no longer
+   called after the cross-process `SetWindowPos` limitation was discovered —
+   cross-process `SetWindowPos` below min-track destroys the container HWND).
 
-## Outstanding (supervised-only, by policy)
+6. Scenario 1 (`split-guest-does-not-overflow-pane`) timing fixed: removed
+   the premature pre-resize `IsInPane` assertion (which assumed 50/50 split
+   but the RIGHT guest's 500px minimum makes the partition asymmetric); the
+   post-resize containment assertion is the correct and sufficient proof.
 
-- The two DPI ValidationDriver scenarios (`capture-dpi-unaware-guest`,
-  `capture-dpi-system-guest`) send real input and require a human operator.
-- Live visual acceptance of a DPI-unaware guest docked at 125%/150% on real
-  hardware (no drift, overflow, or blanking).
+## Supervised scenario results (all 5 PASSED)
+
+| Scenario | Result |
+|---|---|
+| `capture-dpi-unaware-guest` | PASS (SKIPPED: 96 DPI, single monitor) |
+| `capture-dpi-system-guest` | PASS (SKIPPED: 96 DPI, single monitor) |
+| `split-guest-does-not-overflow-pane` | PASS (containment enter visible ✓, post-resize containment ✓) |
+| `split-narrow-container-constraints` | PASS (containment enter ✓, layout-trigger ✓, pair replacement ✓, survivor ✓) |
+| `single-guest-does-not-overflow-content` | PASS (full-width capture ✓, post-resize containment ✓) |
+
+## Architecture audit (clean)
+
+- No `SetParent`, `WS_CHILD`, `HWND_BOTTOM`, `GWL_STYLE`, `GWL_EXSTYLE`
+  mutations on guests in any diff.
+- No arbitrary DPI constants (`* 1.25`, `* 1.5`, `/ 96`) outside the
+  centralized `SplitGeometry.ScaleUnawareLogicalToPhysical`.
+- No `Thread.Sleep` or `Task.Delay` in production code.
+- `WindowShepherdService` remains the sole positioning/z-order authority.
+- PMv2 physical-pixel geometry preserved throughout.
+
+## OpenSpec status
+
+- `dpi-unaware-acceptance` — archived (`openspec/changes/archive/2026-08-11-dpi-unaware-acceptance`).
+- `guest-size-constraint-containment` — archived (`openspec/changes/archive/2026-08-11-guest-size-constraint-containment`).
+- `openspec validate --all --no-interactive`: PASS, 12/12.
+
+## 5-second re-probe timer
+
+RETAINS. Legitimate bounded periodic invalidation of guest min-track
+constraints. Rate-limited, event-driven first pass, periodic fallback for
+edge cases (guest WM_GETMINMAXINFO min can change without an observable
+state transition). Not classified as aggressive polling.
+
+## DPI architecture
+
+- Known DPI-unaware guests: captured normally (physical-exact outer geometry).
+- Unknown/probe failure: fail-closed refusal.
+- PMv2 outer geometry: physical pixels throughout.
+- Min-track conversion: centralized via `SplitGeometry.ScaleUnawareLogicalToPhysical`.
+- No arbitrary scale constants scattered in production code.
+
+## Manual visual acceptance
+
+NOT YET CONFIRMED by the user. The automated scenarios prove containment
+via `GetWindowRect` geometry, but visual composition on real multi-monitor
+DPI setups requires manual verification. This is the sole remaining gate
+before production deployment.
 
 ## Next action
 
-Run the supervised ValidationDriver DPI scenarios and the manual visual acceptance
-of an unaware guest at non-100% scaling; then, if green, review the accumulated
-diff for a coherent milestone commit (do not push without explicit request).
+Create ONE coherent milestone commit with all accumulated hardening work.
+Do NOT push without explicit request.

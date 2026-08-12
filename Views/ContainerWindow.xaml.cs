@@ -433,11 +433,17 @@ public partial class ContainerWindow : Window
                     // narrower than its own native minimum — the containment
                     // defect. The min track is expressed as the OUTER window
                     // size: content min + the chrome delta (outer minus content).
+                    //
+                    // Always SET the min-track when a valid constraint exists:
+                    // WPF's internal WM_GETMINMAXINFO handler may have already
+                    // written a large default into lParam; a "clamp up" would
+                    // never replace it, leaving the container free to shrink
+                    // below the guest's native minimum.
                     if (ComputeContainerMinTrack(out int minTrackW, out int minTrackH)
                         && minTrackW > 0 && minTrackH > 0)
                     {
-                        if (minTrackW > mmi.ptMinTrackSize.x) mmi.ptMinTrackSize.x = minTrackW;
-                        if (minTrackH > mmi.ptMinTrackSize.y) mmi.ptMinTrackSize.y = minTrackH;
+                        mmi.ptMinTrackSize.x = minTrackW;
+                        mmi.ptMinTrackSize.y = minTrackH;
                     }
                     System.Runtime.InteropServices.Marshal.StructureToPtr(mmi, lParam, true);
                     handled = true;

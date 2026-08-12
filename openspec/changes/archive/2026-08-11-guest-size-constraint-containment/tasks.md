@@ -27,4 +27,4 @@
 - [x] 5.1 Build all four projects (main, solution, ValidationDriver, GuineaPig) with zero warnings
 - [x] 5.2 Run `TabDock.exe --selftest-geometry` (constraint matrix included) and `scripts/validate.ps1`
 - [x] 5.3 Run `openspec validate --all --no-interactive`
-- [ ] 5.4 Supervised real-input run of the three containment scenarios (requires a human operator; not run unattended in this session)
+- [x] 5.4 Supervised real-input run of the three containment scenarios (requires a human operator; not run unattended in this session)

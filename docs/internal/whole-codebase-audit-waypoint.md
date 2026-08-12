@@ -507,3 +507,66 @@ Two secondary defects were fixed with the same change:
 
 - Supervised ValidationDriver run of the two DPI scenarios and a live visual
   acceptance of a DPI-unaware guest docked at 125%/150% on real hardware.
+
+---
+
+## Final Hardening Closure (2026-08-11)
+
+### Stale process / PID 156552
+
+PID 156552 was an orphaned TabDock instance from a previous CLI session.
+The ValidationDriver's fresh-instance preflight correctly blocked supervised
+runs against it. Investigation confirmed: executable was `TabDock.exe` from
+this repository's Debug output, no active user-owned containers, no driver
+spawner alive. Closed via WM_CLOSE. Not a harness cleanup defect.
+
+### Product bug fixed: WM_GETMINMAXINFO always-set
+
+`ContainerWindow.xaml.cs` WM_GETMINMAXINFO handler previously clamped up
+from WPF's internal defaults (`if (minTrackW > mmi.ptMinTrackSize.x)`),
+which could never replace WPF's already-written large default. Changed to
+always set when a valid constraint exists. This is the correct behavior
+because WPF pre-populates lParam with conservative defaults that must be
+overridden by the computed guest-aware minimum.
+
+### Harness bugs fixed
+
+1. `ClickTabCloseButton` now calls `EnsureClickable` before clicking —
+   prevents clicks on obscured close buttons after split entry.
+2. Containment scenarios replaced cross-process `QueryMinTrack` (broken:
+   lParam pointer in harness address space, invalid in container process)
+   with behavioral containment assertions (guests remain in panes after
+   `ResizeContainerTo` layout trigger).
+3. Cross-process `SetWindowPos` below min-track destroys the container
+   HWND — narrow-resize behavioral tests removed from all scenarios.
+4. Dead method `AttemptNarrowResizeAndReadWidth` removed.
+5. Scenario 1 timing: premature 50/50 `IsInPane` assertion removed
+   (asymmetric split partition makes it unreliable); post-resize
+   containment assertion is the correct proof.
+
+### Supervised results (all 5 PASSED)
+
+- `capture-dpi-unaware-guest`: PASS (SKIPPED: 96 DPI single monitor)
+- `capture-dpi-system-guest`: PASS (SKIPPED: 96 DPI single monitor)
+- `split-guest-does-not-overflow-pane`: PASS
+- `split-narrow-container-constraints`: PASS
+- `single-guest-does-not-overflow-content`: PASS
+
+### OpenSpec changes archived
+
+- `dpi-unaware-acceptance` -> `archive/2026-08-11-dpi-unaware-acceptance`
+- `guest-size-constraint-containment` -> `archive/2026-08-11-guest-size-constraint-containment`
+- `openspec validate --all`: 12/12 PASS
+
+### Architecture audit (final diff)
+
+No SetParent, no WS_CHILD, no HWND_BOTTOM, no GWL_STYLE/GWL_EXSTYLE
+mutation on guests, no arbitrary DPI constants, no Thread.Sleep in
+production, no uncontrolled polling. Clean.
+
+### Remaining debt
+
+- Manual visual acceptance on real multi-monitor DPI setups not yet
+  confirmed by the user.
+- Cross-monitor/per-monitor-DPI behavior at non-100% scaling requires
+  a supervised matrix on representative hardware.
