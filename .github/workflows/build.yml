@@ -53,7 +53,15 @@ jobs:
       - name: Confirm real-input validation remains supervised-only
         shell: pwsh
         run: |
-          $workflow = Get-Content .github/workflows/build.yml -Raw
-          if ($workflow -match '(?im)ValidationDriver.*--yes.*all' -or $workflow -match '(?im)dotnet run.*ValidationDriver') {
+          # Inspect only YAML command lines. This avoids matching the guard's
+          # own PowerShell source while still rejecting an actual hosted
+          # ValidationDriver invocation.
+          $hostedDotnetRuns = Get-Content .github/workflows/build.yml |
+            Where-Object { $_ -match '^\s*(?:run:\s*)?(?:&\s*)?dotnet\s+run' }
+          $wildcard = '.' + '*'
+          $forbiddenAllScenario = 'ValidationDriver' + $wildcard + '--yes' + $wildcard + 'all'
+          if ($hostedDotnetRuns -match "(?im)$forbiddenAllScenario" -or
+              $hostedDotnetRuns -match '(?im)ValidationDriver') {
             throw 'Hosted CI must not run SendInput ValidationDriver scenarios.'
           }
+          Write-Host 'Hosted CI SendInput guard: PASS'
