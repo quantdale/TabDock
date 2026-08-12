@@ -27,7 +27,8 @@ qualification record on a non-main branch.
 - [x] Inspect the complete diff and final validation output.
 - [x] Commit the coherent remediation on this branch; push/draft PR only if
       credentials and repository workflow allow it. Implementation commit:
-      `0fca47d33d5955b4cb6fcba5a24c26fb44adf89c`.
+      `0fca47d33d5955b4cb6fcba5a24c26fb44adf89c`; state-sync commit:
+      `edd14bcc43ce7cf6d9554d785255c45256a34738`.
 
 ## Explicit non-claims
 
