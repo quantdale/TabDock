@@ -6,8 +6,9 @@ namespace TabDock.Models;
 /// A top-level window shepherded into a TabDock group (see
 /// Services/WindowShepherdService.cs). The guest's window identity is never
 /// mutated — no SetParent, no style/ex-style change, no owner change — only
-/// reversible placement, z-order, visibility, and DWM transition-suppression
-/// changes are applied. This only needs to snapshot enough to restore its
+/// reversible placement, z-order, and visibility changes are applied. DWM
+/// transition attributes are observed only by diagnostics and are never
+/// mutated by production capture. This only needs to snapshot enough to restore its
 /// on-screen placement and activation state on release, not undo any surgery.
 /// </summary>
 public sealed class CapturedWindow
@@ -34,9 +35,10 @@ public sealed class CapturedWindow
 
     /// <summary>
     /// Whether <see cref="OriginalPlacement"/> came from a successful
-    /// GetWindowPlacement call. When false the struct is zeroed (showCmd ==
-    /// SW_HIDE) and Release must not apply it — it restores
-    /// <see cref="OriginalBounds"/> and shows the guest with SW_SHOW instead.
+    /// GetWindowPlacement call. When false the struct may contain only the
+    /// caller-initialized length or partial native output; Release must not
+    /// apply it — it restores <see cref="OriginalBounds"/> and shows the guest
+    /// with SW_SHOW instead.
     /// </summary>
     public bool HasValidPlacement { get; set; }
 

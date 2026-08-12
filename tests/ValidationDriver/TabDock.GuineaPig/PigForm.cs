@@ -104,6 +104,8 @@ public sealed class PigOptions
     public string Title = string.Empty;
     public string? Color;
     public bool Pulse;
+    public int RenameEveryMilliseconds;
+    public int RenameAfterMilliseconds;
     public bool HideOnClose;
     public bool MinimizeThenHideOnClose;
     public int SelfCloseAfterSeconds = -1;
@@ -148,6 +150,7 @@ public sealed class PigForm : Form
     private readonly Color _baseColor;
     private readonly Color _pulseColor;
     private bool _pulseOn;
+    private int _renameSequence;
     private TextBox? _textBox;
 
     public PigForm(PigOptions opts)
@@ -181,6 +184,39 @@ public sealed class PigForm : Form
                 BackColor = _pulseOn ? _pulseColor : _baseColor;
             };
             pulseTimer.Start();
+        }
+
+        void StartRenameTimer()
+        {
+            var renameTimer = new Timer { Interval = opts.RenameEveryMilliseconds };
+            renameTimer.Tick += (s, e) =>
+            {
+                _renameSequence++;
+                Text = $"{opts.Title}-LIVE-{_renameSequence}";
+                Log($"WINDOW title changed to '{Text}'");
+            };
+            renameTimer.Start();
+        }
+
+        if (opts.RenameEveryMilliseconds > 0)
+        {
+            if (opts.RenameAfterMilliseconds > 0)
+            {
+                Shown += (_, _) =>
+                {
+                    var renameDelayTimer = new Timer { Interval = opts.RenameAfterMilliseconds };
+                    renameDelayTimer.Tick += (s, e) =>
+                    {
+                        renameDelayTimer.Stop();
+                        StartRenameTimer();
+                    };
+                    renameDelayTimer.Start();
+                };
+            }
+            else
+            {
+                StartRenameTimer();
+            }
         }
 
         if (opts.SelfCloseAfterSeconds > 0)

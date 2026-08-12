@@ -1765,11 +1765,9 @@ public partial class ContainerWindow : Window
 
         NativeMethods.GetWindowThreadProcessId(expected.Hwnd, out uint pid);
         string? className = NativeMethods.GetClassNameString(expected.Hwnd);
-        string title = NativeMethods.GetWindowTextString(expected.Hwnd) ?? string.Empty;
         string? exePath = NativeMethods.GetProcessImagePath(pid);
         return pid == expected.ProcessId
             && string.Equals(className, expected.ClassName, StringComparison.Ordinal)
-            && string.Equals(title, expected.Title, StringComparison.Ordinal)
             && string.Equals(exePath, expected.ExePath, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -2690,6 +2688,12 @@ public partial class ContainerWindow : Window
                 return;
 
             NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_RESTORE);
+            if (NativeMethods.IsIconic(window.Hwnd) || NativeMethods.IsZoomed(window.Hwnd))
+            {
+                _log.Log($"SHEPHERD[visibility-postcondition-fail] ShowWindow(SW_RESTORE, minimize-timer) left guest 0x{window.Hwnd.ToInt64():X} iconic={NativeMethods.IsIconic(window.Hwnd)} zoomed={NativeMethods.IsZoomed(window.Hwnd)}");
+                DiagnosticRuntime.Record("repair.visibility-postcondition", _containerHwnd, window.Hwnd,
+                    action: "ShowWindow(SW_RESTORE, minimize-timer)", result: "failed");
+            }
             if (IsSplitActive)
                 LayoutSplitPanes();
             else

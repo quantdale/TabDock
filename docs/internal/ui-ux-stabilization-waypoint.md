@@ -3,6 +3,20 @@
 Compact waypoint for the "visually stable, smooth, understandable, pleasant"
 pass (goal-del-leter.txt). Updated: 2026-08-10.
 
+## Current remediation note (2026-08-13)
+
+The historical stabilization notes below predate the whole-codebase remediation
+branch. The current production contract is documented in
+`docs/internal/whole-codebase-audit-waypoint.md` and
+`docs/internal/win32-interop-audit-2026-08-13.md`: split guests use the corrected
+pointer-sized HDWP chain, ShowWindow return values are treated as prior
+visibility state, DWM transition attributes are not mutated, and the instance
+guard is SID-scoped across the user's sessions. Targeted supervised desktop
+runs are recorded in the current state file and pass for split geometry/z-order,
+direct-click input, mutable-title capture, DWM no-mutation, and startup
+visibility. Human visual acceptance, browser/real-app coverage, mixed-DPI
+coverage, and crash-rescue remain explicitly pending.
+
 ## Baseline
 
 - Branch `main`, starting HEAD `5e2a2ba` (functional vertical split milestone).
@@ -422,8 +436,11 @@ Five adversarial reviewers examined the Round-2 fixes. Accepted and fixed:
   reports EnumDisplayMonitors failure; §16 gaps closed: `ENV[launcher]` line
   (system DPI once the launcher exists) + active guest DescribeWindow appended
   to `ENV[container]`.
-- Not changed (documented risks): `Global\TabDock` mutex semantics (F-B4 —
-  product decision, conservative: keep single-instance across sessions);
+- Historical note (superseded by the 2026-08-13 remediation): the old
+  `Global\TabDock` mutex semantics were intentionally left unchanged in this
+  stabilization pass. The current guard is `Global\TabDock-<user SID>`, which
+  preserves same-user cross-session serialization without blocking another
+  Windows user.
   mixed-DPI system-aware guests (works single-monitor; exotic multi-DPI setups
   documented as a limitation).
 
@@ -830,12 +847,13 @@ invariant and user activation semantics. No topmost, no guest mutation, no loop.
 
 ### Tests
 
-ValidationDriver scenarios added (supervised, not run): the startup occlusion
-reproduction + no-foreground-steal guard + local-stack guard.
+ValidationDriver scenarios were run under supervision on 2026-08-13: the
+startup occlusion reproduction, no-foreground-steal guard, and local-stack
+guard all passed. The broader visual checklist remains separate.
 
 ### Status
 
 Implemented, built (0/0), selftest/OpenSpec/diff-check green, CLI-safe native
-check PASS. Burial not deterministically reproducible CLI-safely (foreground
-grant race); manual visual acceptance + supervised scenario outstanding.
-Assessment: RESOLVED PENDING MANUAL VISUAL CONFIRMATION.
+check PASS, and the three supervised startup scenarios PASS. Burial is a
+foreground-grant race, so broader human visual acceptance remains outstanding.
+Assessment: RESOLVED PENDING HUMAN VISUAL QUALIFICATION.

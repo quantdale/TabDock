@@ -67,6 +67,12 @@ internal static class Program
                 case "--pulse":
                     opts.Pulse = true;
                     break;
+                case "--rename-every-ms":
+                    opts.RenameEveryMilliseconds = int.Parse(Require(args, ref i));
+                    break;
+                case "--rename-after-ms":
+                    opts.RenameAfterMilliseconds = int.Parse(Require(args, ref i));
+                    break;
                 case "--hide-on-close":
                     opts.HideOnClose = true;
                     break;

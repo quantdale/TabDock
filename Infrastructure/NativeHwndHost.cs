@@ -23,8 +23,8 @@ namespace TabDock.Infrastructure;
 /// bugs directly to cross-process SetParent + AttachThreadInput, and TabDock
 /// now exclusively uses the "Shepherd" model (Services/WindowShepherdService.cs)
 /// — a captured guest keeps its identity as a top-level window: no style/parent/
-/// owner mutation, only reversible placement, z-order, visibility, and DWM
-/// transition-suppression changes. Windows manages its focus and activation
+/// owner mutation, only reversible placement, z-order, and visibility changes.
+/// Windows manages its focus and activation
 /// exactly as if TabDock didn't exist.
 /// </summary>
 public class NativeHwndHost : HwndHost
@@ -42,7 +42,7 @@ public class NativeHwndHost : HwndHost
             IntPtr hInstance = NativeMethods.GetModuleHandle(null);
             var wc = new NativeMethods.WNDCLASSEX
             {
-                cbSize = Marshal.SizeOf<NativeMethods.WNDCLASSEX>(),
+                cbSize = (uint)Marshal.SizeOf<NativeMethods.WNDCLASSEX>(),
                 lpfnWndProc = Marshal.GetFunctionPointerForDelegate(s_wndProc),
                 hInstance = hInstance,
                 hCursor = NativeMethods.LoadCursor(IntPtr.Zero, NativeMethods.IDC_ARROW),

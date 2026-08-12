@@ -1,61 +1,46 @@
 # Agent state
 
-## Current checkpoint — PRODUCTION DIAGNOSTICS FOUNDATION (2026-08-12)
+## Current checkpoint — WHOLE-CODEBASE DEEP-AUDIT REMEDIATION (2026-08-13)
 
-Objective: make every distributed TabDock executable self-identifying and make
-a broken session diagnosable locally without a debugger, checkout, telemetry,
-or product-state mutation. This is Phase 0 instrumentation only; Shepherd V2,
-group-shell changes, and split-semantic changes remain deferred.
+Objective: re-audit the current HEAD against the 2026-08-12 findings and
+produce a production-grade, validated remediation without claiming unrun
+desktop acceptance.
 
-Status: **COMPLETE; FINAL RELEASE ARTIFACT VERIFIED**
+Status: **REMEDIATION IMPLEMENTED; AUTOMATED VALIDATION GREEN; TARGETED
+SUPERVISED RUNS GREEN; HUMAN VISUAL QUALIFICATION PENDING**
 
-The repository baseline was clean `main` at `04c214f5776b25b2dbe9cfc1ed02e7d982e9561b`,
-equal to `origin/main`; the terminal is non-elevated. The final diagnostics
-commit is unpushed. The prior active
-`startup-group-visibility` OpenSpec change is preserved and untouched. New
-OpenSpec change: `production-diagnostics-foundation`.
-
-Completed in this phase:
-
-- Generated assembly metadata + `BuildIdentity` expose semantic version,
-  informational version, SourceRevisionId/commit, configuration, RID,
-  deployment model, architecture, file version, executable path, and explicit
-  command-time SHA-256. No build timestamp was added.
-- Early CLI dispatch provides UI-free `--version`, read-only `--doctor`,
-  `--doctor --output`, `--support-bundle --output`, and deterministic
-  `--selftest-diagnostics`. Normal startup logs exactly one `BUILD[identity]`
-  line before ordinary startup work.
-- Structured environment/persistence/monitor-DPI/display-adapter probes,
-  privacy-safe observed HWND rows, z-order/foreground/visibility/iconic state,
-  DWM/DPI/process identity, and fixed header/content/split WindowFromPoint
-  probes are implemented. Destroyed/access-denied probes degrade per row.
-- `ContainerWindow.CreateDiagnosticSnapshot` supplies current logical group,
-  active guest, split pair/focus, expected panes, visibility/window state, and
-  chrome interaction without layout or native writes. The in-process
-  `Ctrl+Alt+Shift+D` hotkey exports this richer live snapshot; command-line
-  doctor/bundle remains machine/native/persistence capable without IPC.
-- `DiagnosticTrace` is a thread-safe 1024-entry sequence-numbered ring with
-  selected callback/dispatch WinEvents, lifecycle/group/split/activation,
-  move-size, and Shepherd repair outcomes. No global location-change hook or
-  health polling was added. Bundles contain sanitized log tails and no upload.
-- README, architecture/testing docs, and an internal diagnostics waypoint are
-  updated with the friend-machine workflow and deferred roadmap.
-
-Validation already green: `dotnet build TabDock.csproj --no-restore` (0/0),
-`--selftest-diagnostics` (15 checks, 0 failures), OpenSpec all (14/14),
-`git diff --check`, CLI version/doctor no-state mutation, doctor file export,
-and support ZIP contents (all 9 expected files; no obvious user-path/token
-matches). Release/solution/ValidationDriver/GuineaPig/Spike builds,
-`scripts/validate.ps1`, geometry self-test, Release `--version`/`--doctor`,
-support-bundle inspection, publish identity comparison, reproducibility check,
-and final privacy/static review are green. The final Release `--version` and
-`--doctor` report the final source HEAD and artifact SHA; a second canonical
-publish produced the same SHA. The final support ZIP exited 0, contains all 9
-documented entries, and has no matches for the local username, machine name,
-or credential-like terms. The final OpenSpec handoff tasks are all complete.
-
-Handoff is ready. No cross-machine reproduction was performed in this local
-session; that remains an explicit qualification step for the known artifact.
+- Branch: `agent/tabdock-deep-audit-remediation`, based on current HEAD
+  `d0cea29fd1b8b60008eb3d7021b3c6859951583a`. The initial worktree was clean;
+  no unrelated changes were present or modified.
+- Active plan: `.agent/plans/deep-audit-remediation-2026-08-13.md`.
+- Implemented: pointer-sized HDWP chaining/fallback, corrected
+  `WINDOWPLACEMENT` ABI and layout, ShowWindow postcondition handling,
+  mutable-title exclusion from ongoing capture identity, removal of production
+  DWM mutation, embedded privacy redaction, Windows-generation normalization,
+  SID-scoped cross-session instance guard, deterministic geometry/diagnostic
+  checks, mutable-title ValidationDriver coverage, CI deterministic gates, and
+  the interop audit note.
+- Additional confirmed interop fix: `WINDOWPLACEMENT` had omitted `rcDevice`
+  and was passed as `out`; it now matches the SDK and is initialized by callers.
+- ContainerWindow extraction remains deliberately deferred. No safe seam was
+  required for the correctness fixes, and a line-count-only refactor would
+  increase HWND ownership risk.
+- Observed supervised Windows-desktop runs in this remediation: mutable-title
+  capture, DWM-attribute unchanged-on-capture, split entry, split direct-click
+  text input, split native move re-glue, split native resize re-glue,
+  split minimize/restore, restored-container visibility above a blocker,
+  startup foreground non-steal, and local guest/container z-order above an
+  unrelated blocker. Each completed PASS with driver cleanup and user-state
+  restoration.
+- Per-user duplicate-process check also passed: a first Debug instance held
+  the SID-scoped guard and a second same-user instance exited 0; no TabDock
+  process remained afterward.
+- Remaining work: record the final validation evidence, commit this branch,
+  and attempt push/draft PR only if credentials permit.
+- Manual gate: the targeted scenarios above are evidence for their named
+  invariants, not a full visual acceptance. Browser/real-app coverage,
+  mixed-DPI hardware, crash-rescue, the full ValidationDriver batch, and the
+  human visual checklist remain explicitly unclaimed.
 
 ## External-machine qualification checkpoint (2026-08-12)
 
@@ -72,12 +57,14 @@ and no `state.json` or `hidden-windows.json`. No production code was changed.
 
 Independent CIM fingerprint reports Windows 11 Home Single Language, build
 26200, one 1920x1080 100% monitor, AMD Radeon(TM) Graphics driver
-32.0.21045.1000, and NVIDIA GeForce RTX 2050 driver 32.0.16.1062. The doctor
-labels the Windows product as Windows 10 while reporting the same build; this
-diagnostic discrepancy is recorded for the final instrumentation review.
+32.0.21045.1000, and NVIDIA GeForce RTX 2050 driver 32.0.16.1062. The
+historical artifact's doctor labeled the product as Windows 10 while reporting
+the same build; the current remediation retains the raw value and normalizes
+build 26200 to Windows 11.
 
-Current phase: awaiting the human-supervised header-disappearance reproduction
-and its in-process `Ctrl+Alt+Shift+D` bundle before any recovery action.
+Historical campaign phase (2026-08-12): awaiting the human-supervised
+header-disappearance reproduction and its in-process `Ctrl+Alt+Shift+D` bundle
+before any recovery action.
 
 ---
 

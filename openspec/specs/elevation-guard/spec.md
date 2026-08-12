@@ -21,8 +21,18 @@ The elevation check used by `WindowShepherdService.Capture` SHALL distinguish th
 - **THEN** the capture is rejected with a clear message, the native error is logged, and no positioning is attempted on the target window
 
 ### Requirement: Guest positioning failures are surfaced in the log
-`SetWindowPos`/`ShowWindow`/`SetForegroundWindow` failures in `PositionAndShow`, `Hide`, and `Release` SHALL be logged with `FormatLastError()` at most once per window per session, so UIPI-blocked or dead-HWND positioning failures are diagnosable without adding per-mouse-tick cost to the hot drag path (PERF25-3 invariant).
+`SetWindowPos` and `SetForegroundWindow` BOOL failures in
+`PositionAndShow`, `Hide`, and `Release` SHALL be logged with
+`FormatLastError()` at most once per window per session. `ShowWindow` SHALL
+not be classified through its return value or `GetLastError`, because its BOOL
+return reports prior visibility; its callers SHALL log a separate bounded
+postcondition failure when the requested visible/iconic state is not observed.
+This keeps UIPI-blocked or dead-HWND positioning failures diagnosable without
+adding per-mouse-tick cost to the hot drag path (PERF25-3 invariant).
 
 #### Scenario: A UIPI-blocked positioning call appears exactly once in the log
 - **WHEN** a captured guest's positioning calls fail repeatedly (e.g. the guest became elevated mid-capture)
-- **THEN** the first failure is logged with the native error, subsequent identical failures for the same window are suppressed, and `SHEPHERD[position]` hot-path logging is unchanged
+- **THEN** the first BOOL native failure is logged with the native error,
+  subsequent identical failures for the same window are suppressed, any
+  ShowWindow postcondition failure is recorded in its separate diagnostic
+  category, and `SHEPHERD[position]` hot-path logging is unchanged

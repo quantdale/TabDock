@@ -48,7 +48,10 @@ Deliverable statement from the task spec:
 ## Confirmed Architecture Facts
 
 (verified against source; citations are `path.cs:line`)
-- Shepherd model: guests are never reparented/restyled; only placement/z-order/visibility/DWM-transition-suppression are mutated (`WindowShepherdService.cs:11-45`).
+- Shepherd model: guests are never reparented/restyled; only placement,
+  z-order, and visibility are mutated (`WindowShepherdService.cs:11-45`). DWM
+  transition attributes are read-only diagnostic observations, not production
+  capture mutations.
 - `WindowShepherdService` is a single instance shared by all containers (`App.xaml.cs:93`). It has NO per-group/per-container instance state for "active guest" — that lives in `ContainerWindow._shepherdActiveWindow` (`ContainerWindow.xaml.cs:35`) and `Group.ActiveIndex`.
 - `ContainerWindow` fields: `_shepherdActiveWindow` (the single visible guest), `_sentinelActiveWindow`? (no — only `_shepherdActiveWindow`). The single-visible-guest assumption is concentrated in `ContainerWindow`:
   - `_shepherdActiveWindow` (`ContainerWindow.xaml.cs:35`)

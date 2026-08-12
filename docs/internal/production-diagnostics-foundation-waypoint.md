@@ -1,5 +1,19 @@
 # Production diagnostics foundation waypoint
 
+## Current remediation overlay (2026-08-13)
+
+The diagnostics foundation is implemented, but the earlier artifact-level
+completion note is historical and does not close the whole-codebase release
+gate. Current behavior retains raw registry `ProductName` as forensic evidence,
+reports a build-derived `ProductFamily`/normalized product label (build 22000+
+is Windows 11), replaces embedded sensitive roots case-insensitively in support
+bundle text, and keeps doctor/export read-only with no upload side effect.
+`scripts/validate.ps1` now generates an isolated doctor report and support ZIP,
+fingerprints the isolated state tree before/after doctor, and scans the actual
+ZIP contents for paths, usernames, machine names, credential-like tokens, and
+raw title fields. Hosted CI runs this deterministic gate; supervised desktop
+qualification remains separate and is not implied by a green CI run.
+
 ## Scope
 
 This milestone adds support evidence only. It does not implement Shepherd V2,

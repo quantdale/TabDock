@@ -23,6 +23,22 @@ snapshot even if the header is hidden. Inspect the ZIP before sending it:
 titles are hashes/lengths, paths are redacted, and no full personal files are
 collected.
 
+### Hosted deterministic gate versus supervised acceptance
+
+The repository workflow runs the CLI-safe gates on `windows-latest` through
+`scripts/validate.ps1`: Debug builds of the app, Spike, ValidationDriver, and
+GuineaPig; `--selftest-diagnostics`; `--selftest-geometry`; doctor; an explicit
+support-bundle export; an isolated no-state-mutation fingerprint; support-bundle
+privacy scans; source guardrails for native contracts; and `git diff --check`.
+It also runs `openspec validate --all --no-interactive`. The workflow must not
+run ValidationDriver scenarios because those scenarios use real `SendInput`.
+
+The ValidationDriver remains a supervised/self-hosted desktop gate. A green
+hosted workflow proves deterministic behavior and buildability only; it is not
+evidence that a human visually accepted startup z-order, split rendering,
+mixed-DPI behavior, browser chrome, or crash-rescue behavior on a specific
+desktop. Record those observations separately in the current agent state.
+
 ---
 
 ## A. Validation harness reference
@@ -41,7 +57,7 @@ Both projects are **not** in `TabDock.sln`; they are built and run by project pa
 
 ### What `TabDock.GuineaPig` is for
 
-`TabDock.GuineaPig` is a tiny WinForms app whose only job is to be captured, released, tab-switched, and dragged by the driver while logging the window messages it receives. It accepts command-line switches such as `--title`, `--color`, `--pulse`, `--hide-on-close`, `--minimize-then-hide-on-close`, `--self-close-after`, `--click-counter-button`, and `--text-box`, so scenarios can test specific behaviors (hide-to-tray, self-close, keyboard input into a text box, etc.) against a deterministic guest.
+`TabDock.GuineaPig` is a tiny WinForms app whose only job is to be captured, released, tab-switched, and dragged by the driver while logging the window messages it receives. It accepts command-line switches such as `--title`, `--color`, `--pulse`, `--rename-every-ms`, `--rename-after-ms`, `--hide-on-close`, `--minimize-then-hide-on-close`, `--self-close-after`, `--click-counter-button`, and `--text-box`, so scenarios can test specific behaviors (including mutable-title capture, hide-to-tray, self-close, and keyboard input into a text box) against a deterministic guest.
 
 ### What `TabDock.ValidationDriver` does
 
@@ -375,13 +391,19 @@ Any warnings should be understood before merging; the project expects zero warni
   tab/chrome controls, and verify GPU-rendered content never becomes black or
   remains covered by the container marker.
 
-Historical closure note (2026-08-10): an earlier bounded run reproduced a
+- **Mutable-title capture:** run `capture-title-change-during-capture` to use a
+  guinea pig that changes its native title continuously during the picker and
+  capture flow; capture must succeed because title is metadata, not identity.
+
+Historical closure note (2026-08-10, superseded for overall release status by
+the 2026-08-13 deep-audit remediation): an earlier bounded run reproduced a
 normal-mode z-order defect in `directclick-foreground-pairing`. The defect was
 closed by correlating the desktop-level `EVENT_OBJECT_REORDER` callback with a
 callback-time foreground HWND and revalidating that HWND on the UI thread. The
 final closure run passed direct-click pairing 10/10, including foreground,
 adjacency, text input, bounded repair latency, process-liveness, and
-no-exception checks. Production readiness for this milestone is **PASS**.
+no-exception checks. Production readiness for that historical milestone was
+**PASS**; this does not close the current deep-audit/manual qualification gate.
 
 The final high-risk smoke set also passed fresh supervised runs of
 `contextmenu-render-stability`, `split-contextmenu-render-stability`,

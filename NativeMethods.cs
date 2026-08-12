@@ -61,15 +61,20 @@ public static partial class NativeMethods
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
 
-        // Atomic multi-window positioning (used to move both split panes plus
-        // the container in a single compositor transaction, eliminating the
-        // visible pane separation that separate SetWindowPos calls produce).
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern IntPtr BeginDeferWindowPos(int nNumWindows);
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern bool DeferWindowPos(IntPtr hWinPosInfo, IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern bool EndDeferWindowPos(IntPtr hWinPosInfo);
+    // Atomic multi-window positioning (used to move both split panes plus
+    // the container in a single compositor transaction, eliminating the
+    // visible pane separation that separate SetWindowPos calls produce).
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr BeginDeferWindowPos(int nNumWindows);
+
+    // HDWP is an opaque pointer-sized handle. DeferWindowPos may return a new
+    // HDWP when it grows the internal transaction, so callers must carry the
+    // returned value into the next append and into EndDeferWindowPos.
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr DeferWindowPos(IntPtr hWinPosInfo, IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool EndDeferWindowPos(IntPtr hWinPosInfo);
 
     // DRIVER-ONLY: used by tests/ValidationDriver via link-include
     [DllImport("user32.dll", SetLastError = true)]
@@ -81,10 +86,10 @@ public static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
 
-    [DllImport("user32.dll", SetLastError = true, EntryPoint = "GetWindowLongPtr")]
+    [DllImport("user32.dll", SetLastError = true, ExactSpelling = true, EntryPoint = "GetWindowLongPtrW")]
     public static extern nint GetWindowLongPtr(IntPtr hWnd, int nIndex);
 
-    [DllImport("user32.dll", SetLastError = true, EntryPoint = "SetWindowLongPtr")]
+    [DllImport("user32.dll", SetLastError = true, ExactSpelling = true, EntryPoint = "SetWindowLongPtrW")]
     public static extern nint SetWindowLongPtr(IntPtr hWnd, int nIndex, nint dwNewLong);
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -117,7 +122,7 @@ public static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool DestroyWindow(IntPtr hWnd);
 
-    [DllImport("user32.dll", SetLastError = true)]
+    [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     [DllImport("user32.dll")]
@@ -130,7 +135,7 @@ public static partial class NativeMethods
     public static extern bool SetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
 
     [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool GetWindowPlacement(IntPtr hWnd, out WINDOWPLACEMENT lpwndpl);
+    public static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -331,10 +336,10 @@ public static partial class NativeMethods
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true, EntryPoint = "Process32FirstW")]
     public static extern bool Process32First(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true, EntryPoint = "Process32NextW")]
     public static extern bool Process32Next(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
 
     // -------------------------------------------------------------------------
@@ -392,9 +397,6 @@ public static partial class NativeMethods
     // -------------------------------------------------------------------------
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr hwnd, uint dwAttribute, out bool pvAttribute, uint cbAttribute);
-
-    [DllImport("dwmapi.dll")]
-    public static extern int DwmSetWindowAttribute(IntPtr hwnd, uint dwAttribute, ref int pvAttribute, uint cbAttribute);
 
     // -------------------------------------------------------------------------
     // Constants
@@ -609,6 +611,7 @@ public static partial class NativeMethods
     public const int SM_CYVIRTUALSCREEN = 79;
 
     public const uint DWMWA_CLOAKED = 14;
+    // DRIVER-ONLY: read-only qualification of the no-DWM-mutation contract.
     public const uint DWMWA_TRANSITIONS_FORCEDISABLED = 3;
 
     public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000;
@@ -703,7 +706,7 @@ public static partial class NativeMethods
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct WNDCLASSEX
     {
-        public int cbSize;
+        public uint cbSize;
         public uint style;
         public IntPtr lpfnWndProc;
         public int cbClsExtra;
@@ -726,6 +729,7 @@ public static partial class NativeMethods
         public POINT ptMinPosition;
         public POINT ptMaxPosition;
         public RECT rcNormalPosition;
+        public RECT rcDevice;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -781,7 +785,7 @@ public static partial class NativeMethods
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct DISPLAY_DEVICE
     {
-        public int cb;
+        public uint cb;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string DeviceName;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceString;
         public uint StateFlags;
@@ -816,7 +820,7 @@ public static partial class NativeMethods
         return copied > 0 ? sb.ToString() : string.Empty;
     }
 
-    [DllImport("user32.dll", SetLastError = true)]
+    [DllImport("user32.dll", SetLastError = true, ExactSpelling = true, EntryPoint = "GetWindowTextLengthW")]
     private static extern int GetWindowTextLength(IntPtr hWnd);
 
     public static string? GetClassNameString(IntPtr hWnd)

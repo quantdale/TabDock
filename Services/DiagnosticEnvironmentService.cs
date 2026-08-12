@@ -30,14 +30,18 @@ public static class DiagnosticEnvironmentService
         try
         {
             using RegistryKey? key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
-            result.ProductName = ReadRegistryString(key, "ProductName");
+            result.RawProductName = ReadRegistryString(key, "ProductName");
             result.DisplayVersion = ReadRegistryString(key, "DisplayVersion");
             result.Build = ReadRegistryString(key, "CurrentBuild");
             result.Revision = ReadRegistryString(key, "UBR");
+            result.ProductFamily = GetWindowsProductFamily(result.Build, result.RawProductName);
+            result.ProductName = NormalizeWindowsProductName(result.RawProductName, result.Build);
         }
         catch (Exception ex) when (ex is SecurityException or IOException or UnauthorizedAccessException)
         {
-            result.ProductName = "unavailable (registry-read-failed)";
+            result.RawProductName = "unavailable (registry-read-failed)";
+            result.ProductName = result.RawProductName;
+            result.ProductFamily = "unavailable (registry-read-failed)";
         }
 
         if (NativeMethods.IsCurrentProcessElevated(out bool elevated))
@@ -73,7 +77,7 @@ public static class DiagnosticEnvironmentService
             {
                 var device = new NativeMethods.DISPLAY_DEVICE
                 {
-                    cb = Marshal.SizeOf<NativeMethods.DISPLAY_DEVICE>(),
+                    cb = (uint)Marshal.SizeOf<NativeMethods.DISPLAY_DEVICE>(),
                 };
                 if (!NativeMethods.EnumDisplayDevices(null, i, ref device, 0))
                     break;
@@ -191,13 +195,43 @@ public static class DiagnosticEnvironmentService
     {
         if (string.IsNullOrWhiteSpace(path))
             return "unavailable";
+
         string result = path;
-        string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        if (!string.IsNullOrWhiteSpace(userProfile))
-            result = ReplacePrefix(result, userProfile, "%USERPROFILE%");
-        if (!string.IsNullOrWhiteSpace(appData))
-            result = ReplacePrefix(result, appData, "%APPDATA%");
+        var sensitivePaths = new List<(string Prefix, string Replacement)>
+        {
+            (Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "%APPDATA%"),
+            (Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "%LOCALAPPDATA%"),
+            (Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "%USERPROFILE%"),
+        };
+
+        try
+        {
+            sensitivePaths.Add((Path.GetTempPath(), "%TEMP%"));
+        }
+        catch (Exception ex) when (ex is IOException or ArgumentException or NotSupportedException)
+        {
+            // A diagnostic export must remain best-effort if the temp-path
+            // provider is unavailable. The profile/AppData entries still apply.
+        }
+
+        // Replace the most-specific path first. AppData and LocalAppData are
+        // normally nested below UserProfile; sorting prevents a path such as
+        // C:\Users\Alice\AppData\Roaming\... from becoming the less useful
+        // %USERPROFILE%\AppData\Roaming\... form. Regex provides a
+        // case-insensitive replacement anywhere in a retained log line, not
+        // merely when the path starts at character zero after a timestamp/tag.
+        foreach ((string prefix, string replacement) in sensitivePaths
+            .Where(item => !string.IsNullOrWhiteSpace(item.Prefix))
+            .OrderByDescending(item => item.Prefix.Length)
+            .DistinctBy(item => item.Prefix, StringComparer.OrdinalIgnoreCase))
+        {
+            result = Regex.Replace(
+                result,
+                Regex.Escape(prefix),
+                replacement,
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+
         return result;
     }
 
@@ -209,6 +243,47 @@ public static class DiagnosticEnvironmentService
 
     public static string FormatHwnd(IntPtr hwnd)
         => hwnd == IntPtr.Zero ? "0x0" : $"0x{hwnd.ToInt64():X}";
+
+    /// <summary>
+    /// Windows 11 starts at build 22000. Some Windows 11 installations retain
+    /// a registry ProductName beginning with "Windows 10", so the raw value is
+    /// preserved separately while this value supplies an accurate display label.
+    /// </summary>
+    internal static string NormalizeWindowsProductName(string? rawProductName, string? build)
+    {
+        string raw = string.IsNullOrWhiteSpace(rawProductName) ? "unavailable" : rawProductName.Trim();
+        if (!TryParseBuild(build, out int buildNumber) || buildNumber < 22000)
+            return raw;
+
+        int windows10Index = raw.IndexOf("Windows 10", StringComparison.OrdinalIgnoreCase);
+        if (windows10Index >= 0)
+        {
+            return raw[..windows10Index] + "Windows 11" + raw[(windows10Index + "Windows 10".Length)..];
+        }
+
+        return raw.Contains("Windows 11", StringComparison.OrdinalIgnoreCase)
+            ? raw
+            : $"Windows 11 (build {buildNumber}; raw ProductName: {raw})";
+    }
+
+    internal static string GetWindowsProductFamily(string? build, string? rawProductName)
+    {
+        if (TryParseBuild(build, out int buildNumber))
+            return buildNumber >= 22000 ? "Windows 11" : "Windows 10 or earlier";
+        if (!string.IsNullOrWhiteSpace(rawProductName)
+            && rawProductName.Contains("Windows 11", StringComparison.OrdinalIgnoreCase))
+            return "Windows 11 (raw registry evidence)";
+        if (!string.IsNullOrWhiteSpace(rawProductName)
+            && rawProductName.Contains("Windows 10", StringComparison.OrdinalIgnoreCase))
+            return "Windows 10 (raw registry evidence)";
+        return "unavailable";
+    }
+
+    private static bool TryParseBuild(string? build, out int buildNumber)
+    {
+        string firstPart = build?.Split('.', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
+        return int.TryParse(firstPart, out buildNumber);
+    }
 
     internal static string ClassifyJsonText(string json, bool isState)
     {
@@ -313,11 +388,6 @@ public static class DiagnosticEnvironmentService
 
     private static string EmptyAsUnavailable(string? value)
         => string.IsNullOrWhiteSpace(value) ? "unavailable" : value.Trim();
-
-    private static string ReplacePrefix(string value, string prefix, string replacement)
-        => value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? replacement + value[prefix.Length..]
-            : value;
 
     private static string Classify(Exception ex)
         => ex switch

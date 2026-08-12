@@ -1,5 +1,52 @@
 # TabDock Whole-Codebase Audit
 
+> Current authoritative checkpoint (2026-08-13): the historical audit notes
+> below describe the pre-remediation state and are retained for provenance.
+> Current implementation status, F1-F11 dispositions, validation evidence, and
+> remaining qualification gates are maintained in this section and in
+> `.agent/STATE.md`.
+
+## 2026-08-13 remediation checkpoint
+
+- Branch: `agent/tabdock-deep-audit-remediation`, based on current HEAD
+  `d0cea29fd1b8b60008eb3d7021b3c6859951583a`; no unrelated work was present
+  when the branch was created.
+- F1 HDWP: fixed `Begin/Defer/EndDeferWindowPos` declarations and chaining;
+  append or commit failure abandons the transaction and uses the bounded
+  non-atomic split fallback.
+- F2 qualification: deterministic checks are closed in CI. Targeted
+  supervised startup/z-order, split, mutable-title, and DWM runs passed on
+  2026-08-13; browser/real-app, mixed-DPI, crash-rescue, full-batch, and human
+  visual acceptance remain unclaimed. Automated green is not manual acceptance.
+- F3 diagnostics: embedded, case-insensitive redaction now replaces the most
+  specific AppData/LocalAppData/profile/temp roots first; generated bundles are
+  scanned by `scripts/validate.ps1`.
+- F4 DWM: production capture no longer calls `DwmSetWindowAttribute`; only
+  read-only DWM diagnostics remain, preserving hard-kill symmetry.
+- F5 instance isolation: `Global\TabDock-<user SID>` serializes one user across
+  sessions without intentionally blocking another Windows user, and acquisition
+  happens before logging/state startup.
+- F6 CI: the hosted workflow runs the deterministic validation script, OpenSpec
+  validation, whitespace checks, and a supervised-only source guard; it does
+  not run SendInput scenarios.
+- F7 `ContainerWindow` extraction: deliberately deferred; no safe,
+  behavior-preserving seam was needed to land the correctness fixes.
+- F8 ShowWindow: all production calls verify postconditions instead of treating
+  the return value as success.
+- F9 capture identity: ongoing HWND/PID/executable/class checks exclude the
+  mutable title; title remains user-facing metadata and picker selection data.
+- F10 diagnostics: raw registry ProductName is retained, while build >= 22000
+  is presented as Windows 11.
+- F11 state/spec drift: current state, canonical requirements, tasks, and
+  waypoints are synchronized; the human acceptance item remains unchecked.
+- Additional confirmed interop discrepancy: `WINDOWPLACEMENT` now matches the
+  current SDK shape (`rcDevice`) and is passed by `ref` with initialized
+  `length`. See `win32-interop-audit-2026-08-13.md` for the full declaration
+  inventory and official contract references.
+
+Do not read the historical “P0 none known” or “production ready” statements
+below as the current release decision; they describe an earlier checkpoint.
+
 ## Baseline
 
 - Date: 2026-08-11.
@@ -139,12 +186,16 @@ called out as gaps rather than claimed as executed.
 - Coverage: static scan confirms scenario native mutators route through the
   helper (aside from the explicitly audited input layer); driver build.
 
-### WCA-09 — capture admission had a recycled-HWND race (Medium, confirmed, fixed)
+### WCA-09 — capture admission had a recycled-HWND race (Medium, confirmed, fixed; historical)
 
 - Picker/capture metadata queries could complete after the candidate HWND had
   changed owner or identity.
-- Capture now performs final PID/executable/class/title verification immediately
-  before admitting the member and before DWM mutation.
+- The historical implementation performed final PID/executable/class/title
+  verification immediately before admitting the member and before DWM
+  mutation. The 2026-08-13 remediation removed the title equality from the
+  stable production admission/rejection predicate and removed DWM mutation;
+  picker selection may still carry title metadata for its separate TOCTOU
+  safety contract.
 - Coverage: source-level identity gate, build, and e2e capture safety checks.
 
 ### WCA-10 — picker selection was TOCTOU-prone (Medium, confirmed, fixed)
@@ -240,12 +291,13 @@ called out as gaps rather than claimed as executed.
   deletes the created brush on failure/collision.
 - Coverage: source review and build.
 
-### WCA-20 — cleanup identity gate could reject a legitimately renamed guest (Medium, confirmed, fixed)
+### WCA-20 — cleanup identity gate could reject a legitimately renamed guest (Medium, confirmed, fixed; historical)
 
 - Title equality was unsuitable as a stable capture identity because guests can
   rename themselves while docked.
-- Stable production cleanup uses PID/class/executable; title is retained for
-  admission and picker TOCTOU checks but excluded from ongoing mutation gates.
+- Stable production cleanup uses PID/class/executable; title is retained as
+  user-facing metadata and picker selection data but excluded from ongoing
+  mutation gates and the stable capture predicate.
 - Coverage: source identity review and build.
 
 ### WCA-21 — native chrome/z-order helpers lacked invalid-container guards (Low, confirmed, fixed)
@@ -610,26 +662,26 @@ mutation; no SetParent/WS_CHILD/HWND_BOTTOM/HWND_TOPMOST/Topmost/loop.
 
 ### Tests
 
-ValidationDriver scenarios (built + discoverable; supervised, not run):
-`startup-group-not-hidden-behind-existing-window`,
-`startup-does-not-steal-foreground-after-external-activation`,
-`startup-local-stack-above-unrelated-when-guest-present`
+ValidationDriver scenarios were built and run under supervision on
+2026-08-13: `startup-group-not-hidden-behind-existing-window`,
+`startup-does-not-steal-foreground-after-external-activation`, and
+`startup-local-stack-above-unrelated-when-guest-present` all passed
 (`tests/ValidationDriver/.../Scenarios.StartupHide.cs`; registered in
 `Scenarios.cs`).
 
 ### Validation
 
 Four project builds + `TabDock.sln`: 0 warnings / 0 errors. `scripts/validate.ps1`
-PASS. `--selftest-geometry` PASS (exit 0). `openspec validate --all --no-interactive`
-13/13 PASS. `git diff --check` PASS. OpenSpec change `startup-group-visibility`
-added (not archived). CLI-safe native check PASS (container visible, center
-resolves to TabDock PID, above blocker; real state restored) — but the burial
-was NOT deterministically reproducible CLI-safely (launched TabDock still
-received foreground), so manual visual acceptance + the supervised scenario
-remain the outstanding gates.
+PASS. `--selftest-diagnostics` and `--selftest-geometry` PASS. `openspec
+validate --all --no-interactive` 14/14 PASS. `git diff --check` PASS. The
+supervised startup scenarios above PASS with the real state restored. The
+human visual checklist and the other named desktop matrices remain the
+outstanding qualification gates.
 
 ### Manual acceptance status
 
-NOT YET CONFIRMED by the user. Runs of the original real-world overlap case
-(Explorer/Edge/Terminal, full/partial overlap, maximized external window) remain
-outstanding. Final assessment: RESOLVED PENDING MANUAL VISUAL CONFIRMATION.
+The targeted startup/z-order scenarios were observed and passed on
+2026-08-13. Human visual confirmation with Explorer/Edge/Terminal, full and
+partial overlap, maximized external windows, and the broader cross-machine
+matrix remains outstanding. Final assessment: RESOLVED PENDING HUMAN VISUAL
+QUALIFICATION.

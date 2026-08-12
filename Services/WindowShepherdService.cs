@@ -14,8 +14,9 @@ namespace TabDock.Services;
 /// for its entire captured lifetime: no SetParent, no style/ex-style mutation,
 /// no owner change, no DPI-message forwarding, no cross-thread input
 /// attachment. The only mutations are reversible presentation state —
-/// placement, z-order, visibility, and DWM transition suppression
-/// (DWMWA_TRANSITIONS_FORCEDISABLED, set at capture, restored on release).
+/// placement, z-order, and visibility. It does not mutate guest-owned DWM
+/// attributes: a hard process termination cannot run release code to restore
+/// an attribute owned by another process.
 /// Instead, the guest is positioned directly over the container's content area
 /// and brought to the true top of the z-order (SetWindowPos with hwndInsertAfter
 /// = HWND_TOP — passing the container itself here would place the guest
@@ -26,7 +27,7 @@ namespace TabDock.Services;
 ///
 /// Because none of those mutations touch the guest's identity (style/parent/
 /// owner), release is symmetric and simple: restore the placement snapshotted
-/// at capture time, re-show it, and undo the DWM transition suppression. There
+/// at capture time and re-show it. There
 /// is no style/owner/parent surgery to get wrong, no permanently-downgraded DPI
 /// awareness, and no compositor invalidation from reparenting — the guest
 /// renders and receives input exactly as if it were never touched. This is
@@ -54,6 +55,11 @@ public sealed class WindowShepherdService
     // integer comparison per tick (PERF25-3 invariant, spec: elevation-guard).
     private readonly HashSet<long> _positioningFailuresLogged = new();
 
+    // ShowWindow's BOOL reports prior visibility, not operation success. Keep
+    // postcondition failures separate from native BOOL failures so an ordinary
+    // hidden-to-hidden call cannot consume a SetWindowPos failure slot.
+    private readonly HashSet<string> _visibilityFailuresLogged = new(StringComparer.Ordinal);
+
     // A captured HWND can be destroyed and recycled before a queued WinEvent
     // or layout callback reaches the UI thread. Keep identity failures quiet
     // after their first report; the hot positioning paths may otherwise log
@@ -72,6 +78,35 @@ public sealed class WindowShepherdService
             _log.Log($"SHEPHERD[position-fail] {operation} failed for 0x{hwnd.ToInt64():X}: {error} (subsequent failures for this window suppressed)");
         DiagnosticRuntime.Record("repair.native-failure", guest: hwnd, action: operation, result: "failed",
             data: new Dictionary<string, string> { ["error"] = error });
+    }
+
+    private void LogPostconditionFailureOnce(IntPtr hwnd, string operation, string detail)
+    {
+        if (_visibilityFailuresLogged.Add($"{hwnd.ToInt64():X}:{operation}"))
+            _log.Log($"SHEPHERD[visibility-postcondition-fail] {operation} did not reach its expected state for 0x{hwnd.ToInt64():X}: {detail}");
+        DiagnosticRuntime.Record("repair.visibility-postcondition", guest: hwnd, action: operation,
+            result: "failed", data: new Dictionary<string, string> { ["detail"] = detail });
+    }
+
+    private void LogVisibilityPostconditionFailureOnce(IntPtr hwnd, string operation, bool expectedVisible, bool actualVisible)
+        => LogPostconditionFailureOnce(
+            hwnd,
+            operation,
+            $"expected visible={expectedVisible}, observed visible={actualVisible} (ShowWindow return value is prior visibility, not success)");
+
+    private void RestoreWindowIfNeeded(IntPtr hwnd, string operation)
+    {
+        if (!NativeMethods.IsIconic(hwnd) && !NativeMethods.IsZoomed(hwnd))
+            return;
+
+        NativeMethods.ShowWindow(hwnd, NativeMethods.SW_RESTORE);
+        bool iconic = NativeMethods.IsIconic(hwnd);
+        bool zoomed = NativeMethods.IsZoomed(hwnd);
+        if (iconic || zoomed)
+        {
+            LogPostconditionFailureOnce(hwnd, operation,
+                $"expected iconic=False and zoomed=False, observed iconic={iconic} zoomed={zoomed}");
+        }
     }
 
     private static readonly string JournalPath = Path.Combine(
@@ -121,7 +156,6 @@ public sealed class WindowShepherdService
         }
 
         string? initialClass = NativeMethods.GetClassNameString(hwnd);
-        string initialTitle = NativeMethods.GetWindowTextString(hwnd) ?? string.Empty;
         if (string.IsNullOrEmpty(initialClass))
         {
             error = "Could not verify the window's class identity.";
@@ -236,7 +270,7 @@ public sealed class WindowShepherdService
         }
 
         var originalPlacement = new NativeMethods.WINDOWPLACEMENT { length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>() };
-        bool hasValidPlacement = NativeMethods.GetWindowPlacement(hwnd, out originalPlacement);
+        bool hasValidPlacement = NativeMethods.GetWindowPlacement(hwnd, ref originalPlacement);
         if (!hasValidPlacement)
         {
             _log.Log($"GetWindowPlacement failed for 0x{hwnd.ToInt64():X}: {NativeMethods.FormatLastError()}");
@@ -258,8 +292,10 @@ public sealed class WindowShepherdService
         }
 
         // The picker and the capture call race with normal window teardown.
-        // Recheck the identity after all metadata probes and before changing
-        // DWM state, so a recycled/dead HWND is not admitted as a member.
+        // Recheck the stable identity after all metadata probes and before
+        // admitting the member, so a recycled/dead HWND is not captured. The
+        // title is deliberately read only as current user-facing metadata: it
+        // is expected to change in browsers, terminals, editors, and documents.
         if (!NativeMethods.IsWindow(hwnd))
         {
             error = "The window closed while it was being captured.";
@@ -276,13 +312,16 @@ public sealed class WindowShepherdService
         string? currentExePath = NativeMethods.GetProcessImagePath(currentPid);
         string? finalClass = NativeMethods.GetClassNameString(hwnd);
         string finalTitle = NativeMethods.GetWindowTextString(hwnd) ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(currentExePath)
-            || !string.Equals(currentExePath, exePath, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(finalClass, initialClass, StringComparison.Ordinal)
-            || !string.Equals(finalTitle, initialTitle, StringComparison.Ordinal))
+        if (!MatchesStableCaptureIdentity(
+                pid,
+                currentPid,
+                exePath,
+                currentExePath,
+                initialClass,
+                finalClass))
         {
             error = "The window identity changed while it was being captured.";
-            _log.Log($"Shepherd capture blocked: HWND 0x{hwnd.ToInt64():X} failed final identity verification (pid={currentPid}, class/title changed or executable changed).");
+            _log.Log($"Shepherd capture blocked: HWND 0x{hwnd.ToInt64():X} failed final identity verification (pid={currentPid}, class or executable changed).");
             return null;
         }
 
@@ -299,21 +338,29 @@ public sealed class WindowShepherdService
             WasMaximized = originalPlacement.showCmd == NativeMethods.SW_SHOWMAXIMIZED,
         };
 
-        // DWM plays its own default fade transition whenever a top-level
-        // window's visibility changes — with no reparenting to hide behind,
-        // this is directly visible as a "fade" on every tab switch (Hide the
-        // outgoing guest, Show the incoming one). Force it off for the whole
-        // captured lifetime so hide/show is instantaneous; restored on release.
-        SetTransitionsDisabled(hwnd, true);
-
         _log.Log($"Shepherd-captured 0x{hwnd.ToInt64():X} ({cw.OriginalTitle}) without reparenting; guest={NativeMethods.DescribeWindow(hwnd)}");
         return cw;
     }
 
-    private static void SetTransitionsDisabled(IntPtr hwnd, bool disabled)
+    /// <summary>
+    /// Stable capture identity deliberately excludes the mutable window title.
+    /// Keep this predicate small and independently testable because it guards
+    /// admission of an HWND after several cross-process metadata probes.
+    /// </summary>
+    internal static bool MatchesStableCaptureIdentity(
+        uint expectedPid,
+        uint currentPid,
+        string? expectedExePath,
+        string? currentExePath,
+        string? expectedClassName,
+        string? currentClassName)
     {
-        int value = disabled ? 1 : 0;
-        NativeMethods.DwmSetWindowAttribute(hwnd, NativeMethods.DWMWA_TRANSITIONS_FORCEDISABLED, ref value, sizeof(int));
+        return expectedPid != 0
+            && currentPid == expectedPid
+            && !string.IsNullOrWhiteSpace(expectedExePath)
+            && string.Equals(currentExePath, expectedExePath, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(expectedClassName)
+            && string.Equals(currentClassName, expectedClassName, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -373,11 +420,7 @@ public sealed class WindowShepherdService
             || !IsCurrentCapturedWindow(window, "position", verifyExecutable: false))
             return;
 
-        if (NativeMethods.IsIconic(window.Hwnd) || NativeMethods.IsZoomed(window.Hwnd))
-        {
-            if (!NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_RESTORE))
-                LogPositioningFailureOnce(window.Hwnd, "ShowWindow(SW_RESTORE)");
-        }
+        RestoreWindowIfNeeded(window.Hwnd, "ShowWindow(SW_RESTORE)");
 
         // SetWindowPos's hWndInsertAfter PRECEDES (sits above) hWnd in z-order,
         // so passing containerHwnd here would put the guest BEHIND its own
@@ -423,11 +466,7 @@ public sealed class WindowShepherdService
         if (!IsCurrentCapturedWindow(window, "position-split", verifyExecutable: false))
             return;
 
-        if (NativeMethods.IsIconic(window.Hwnd) || NativeMethods.IsZoomed(window.Hwnd))
-        {
-            if (!NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_RESTORE))
-                LogPositioningFailureOnce(window.Hwnd, "ShowWindow(SW_RESTORE)");
-        }
+        RestoreWindowIfNeeded(window.Hwnd, "ShowWindow(SW_RESTORE)");
 
         if (!NativeMethods.SetWindowPos(
             window.Hwnd,
@@ -546,34 +585,76 @@ public sealed class WindowShepherdService
             || !NativeMethods.IsWindow(containerHwnd))
             return;
 
-        if (NativeMethods.IsIconic(top.Hwnd) || NativeMethods.IsZoomed(top.Hwnd))
-            NativeMethods.ShowWindow(top.Hwnd, NativeMethods.SW_RESTORE);
-        if (NativeMethods.IsIconic(bottom.Hwnd) || NativeMethods.IsZoomed(bottom.Hwnd))
-            NativeMethods.ShowWindow(bottom.Hwnd, NativeMethods.SW_RESTORE);
+        RestoreWindowIfNeeded(top.Hwnd, "ShowWindow(SW_RESTORE, split-top)");
+        RestoreWindowIfNeeded(bottom.Hwnd, "ShowWindow(SW_RESTORE, split-bottom)");
 
         IntPtr hdwp = NativeMethods.BeginDeferWindowPos(3);
         if (hdwp == IntPtr.Zero)
         {
+            LogPositioningFailureOnce(top.Hwnd, "BeginDeferWindowPos");
             FallbackPosition(top, topRect, bottom, bottomRect, containerHwnd);
             return;
         }
 
-        bool deferredOk = NativeMethods.DeferWindowPos(hdwp, top.Hwnd, NativeMethods.HWND_TOP, topRect.left, topRect.top, topRect.Width, topRect.Height, NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW)
-            && NativeMethods.DeferWindowPos(hdwp, bottom.Hwnd, top.Hwnd, bottomRect.left, bottomRect.top, bottomRect.Width, bottomRect.Height, NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW)
-            && NativeMethods.DeferWindowPos(hdwp, containerHwnd, bottom.Hwnd, 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
-        bool applied = NativeMethods.EndDeferWindowPos(hdwp);
-
-        if (!deferredOk || !applied)
+        // DeferWindowPos returns the updated HDWP, which may be a different
+        // pointer-sized handle after the transaction grows. A NULL return
+        // abandons the transaction; Microsoft explicitly requires callers not
+        // to pass the failed chain to EndDeferWindowPos.
+        IntPtr next = NativeMethods.DeferWindowPos(
+            hdwp,
+            top.Hwnd,
+            NativeMethods.HWND_TOP,
+            topRect.left,
+            topRect.top,
+            topRect.Width,
+            topRect.Height,
+            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+        if (next == IntPtr.Zero)
         {
-            // A failed deferred batch applies NOTHING (EndDeferWindowPos returns
-            // FALSE if any entry failed). The panes would silently stay at their
-            // old rects until the next re-glue tick, with the success log below
-            // claiming they moved. Fall back to the per-guest path — same rects,
-            // same z semantics — and log the failure at most once per window
-            // (a persistent failure — e.g. a guest that became elevated
-            // mid-capture — would otherwise spam the log on every drag tick).
-            // Self-healing on the next tick either way.
-            LogPositioningFailureOnce(top.Hwnd, "DeferWindowPos(batch)");
+            LogPositioningFailureOnce(top.Hwnd, "DeferWindowPos(top)");
+            FallbackPosition(top, topRect, bottom, bottomRect, containerHwnd);
+            return;
+        }
+
+        next = NativeMethods.DeferWindowPos(
+            next,
+            bottom.Hwnd,
+            top.Hwnd,
+            bottomRect.left,
+            bottomRect.top,
+            bottomRect.Width,
+            bottomRect.Height,
+            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+        if (next == IntPtr.Zero)
+        {
+            LogPositioningFailureOnce(bottom.Hwnd, "DeferWindowPos(bottom)");
+            FallbackPosition(top, topRect, bottom, bottomRect, containerHwnd);
+            return;
+        }
+
+        next = NativeMethods.DeferWindowPos(
+            next,
+            containerHwnd,
+            bottom.Hwnd,
+            0,
+            0,
+            0,
+            0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        if (next == IntPtr.Zero)
+        {
+            LogPositioningFailureOnce(containerHwnd, "DeferWindowPos(container)");
+            FallbackPosition(top, topRect, bottom, bottomRect, containerHwnd);
+            return;
+        }
+
+        if (!NativeMethods.EndDeferWindowPos(next))
+        {
+            // EndDeferWindowPos is the only BOOL in this transaction. Capture
+            // its last-error value immediately, then use the same bounded,
+            // non-atomic path as append failures. FallbackPosition never calls
+            // this deferred method, so a bad transaction cannot recurse here.
+            LogPositioningFailureOnce(containerHwnd, "EndDeferWindowPos");
             FallbackPosition(top, topRect, bottom, bottomRect, containerHwnd);
             return;
         }
@@ -746,10 +827,11 @@ public sealed class WindowShepherdService
         // Hide on an already-hidden window returns false benignly. Verify the
         // post-state instead: a window that is still visible after SW_HIDE is
         // a real (e.g. UIPI-blocked) failure.
-        if (NativeMethods.IsWindowVisible(window.Hwnd))
-            LogPositioningFailureOnce(window.Hwnd, "ShowWindow(SW_HIDE)");
+        bool hidden = !NativeMethods.IsWindowVisible(window.Hwnd);
+        if (!hidden)
+            LogVisibilityPostconditionFailureOnce(window.Hwnd, "ShowWindow(SW_HIDE)", expectedVisible: false, actualVisible: true);
         DiagnosticRuntime.Record("repair.visibility", guest: window.Hwnd, action: "ShowWindow(SW_HIDE)",
-            result: NativeMethods.IsWindowVisible(window.Hwnd) ? "failed" : "success");
+            result: hidden ? "success" : "failed");
         _log.Log($"SHEPHERD[hide] guest=0x{window.Hwnd.ToInt64():X}");
     }
 
@@ -842,10 +924,11 @@ public sealed class WindowShepherdService
     /// <summary>
     /// Releases a shepherded guest back to its original placement. Because
     /// nothing about the guest's identity was mutated while docked (no style,
-    /// no parent, no owner — only reversible placement, z-order, visibility,
-    /// and DWM transition-suppression changes), this only needs to restore the
-    /// placement snapshotted at capture and undo the transition suppression —
-    /// there is no style/owner/parent surgery to undo. When
+    /// no parent, no owner — only reversible placement, z-order, and
+    /// visibility), this only needs to restore the placement snapshotted at
+    /// capture. DWM transition attributes are not changed by TabDock, so a
+    /// hard termination cannot leave cross-process compositor state behind.
+    /// When
     /// <paramref name="show"/> is false the window is left hidden
     /// (guest-initiated hide / tray-style close) and journaled the same as
     /// <see cref="Hide"/>.
@@ -882,15 +965,13 @@ public sealed class WindowShepherdService
                 // ambiguity on disk.
                 NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_SHOW);
                 if (!NativeMethods.IsWindowVisible(window.Hwnd))
-                    LogPositioningFailureOnce(window.Hwnd, "ShowWindow(SW_SHOW) after journal-clear failure");
-                SetTransitionsDisabled(window.Hwnd, false);
+                    LogVisibilityPostconditionFailureOnce(window.Hwnd, "ShowWindow(SW_SHOW) after journal-clear failure", expectedVisible: true, actualVisible: false);
                 _log.Log($"SHEPHERD[release-blocked] guest=0x{window.Hwnd.ToInt64():X}: hidden-window journal could not be cleared; restored visibility.");
                 return;
             }
             NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
             if (NativeMethods.IsWindowVisible(window.Hwnd))
-                LogPositioningFailureOnce(window.Hwnd, "ShowWindow(SW_HIDE)");
-            SetTransitionsDisabled(window.Hwnd, false);
+                LogVisibilityPostconditionFailureOnce(window.Hwnd, "ShowWindow(SW_HIDE)", expectedVisible: false, actualVisible: true);
             _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide)");
             return;
         }
@@ -898,9 +979,9 @@ public sealed class WindowShepherdService
         if (!window.HasValidPlacement)
         {
             // Capture-time GetWindowPlacement failed, so OriginalPlacement is
-            // zeroed — its showCmd (0 == SW_HIDE) would hide the released guest
-            // forever with its journal entry already cleared. Restore the
-            // capture-time bounds and show explicitly instead.
+            // not trusted — its showCmd must never decide whether the released
+            // guest is visible. Restore the capture-time bounds and show
+            // explicitly instead.
             if (!NativeMethods.SetWindowPos(
                 window.Hwnd,
                 IntPtr.Zero,
@@ -914,14 +995,13 @@ public sealed class WindowShepherdService
             }
             NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_SHOW);
             if (!NativeMethods.IsWindowVisible(window.Hwnd))
-                LogPositioningFailureOnce(window.Hwnd, "ShowWindow(SW_SHOW)");
+                LogVisibilityPostconditionFailureOnce(window.Hwnd, "ShowWindow(SW_SHOW)", expectedVisible: true, actualVisible: false);
             if (!NativeMethods.SetForegroundWindow(window.Hwnd)
                 && NativeMethods.GetForegroundWindow() != window.Hwnd)
             {
                 LogPositioningFailureOnce(window.Hwnd, "SetForegroundWindow(release)");
             }
             JournalClear(window.Hwnd);
-            SetTransitionsDisabled(window.Hwnd, false);
             _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) via bounds fallback (no valid capture-time placement); guest={NativeMethods.DescribeWindow(window.Hwnd)}");
             return;
         }
@@ -946,15 +1026,16 @@ public sealed class WindowShepherdService
         }
 
         NativeMethods.ShowWindow(window.Hwnd, (int)placement.showCmd);
-        if (placement.showCmd != NativeMethods.SW_HIDE && !NativeMethods.IsWindowVisible(window.Hwnd))
-            LogPositioningFailureOnce(window.Hwnd, "ShowWindow(release)");
+        bool expectedVisible = placement.showCmd != NativeMethods.SW_HIDE;
+        bool actualVisible = NativeMethods.IsWindowVisible(window.Hwnd);
+        if (actualVisible != expectedVisible)
+            LogVisibilityPostconditionFailureOnce(window.Hwnd, "ShowWindow(release)", expectedVisible, actualVisible);
         if (!NativeMethods.SetForegroundWindow(window.Hwnd)
             && NativeMethods.GetForegroundWindow() != window.Hwnd)
         {
             LogPositioningFailureOnce(window.Hwnd, "SetForegroundWindow(release)");
         }
         JournalClear(window.Hwnd);
-        SetTransitionsDisabled(window.Hwnd, false);
 
         _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) guest={NativeMethods.DescribeWindow(window.Hwnd)}");
     }
@@ -1223,12 +1304,16 @@ public sealed class WindowShepherdService
                 if (!string.Equals(currentExe, entry.ExePath, StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                if (NativeMethods.IsIconic(hwnd))
+                bool wasIconic = NativeMethods.IsIconic(hwnd);
+                if (wasIconic)
                     NativeMethods.ShowWindow(hwnd, NativeMethods.SW_RESTORE);
                 else
                     NativeMethods.ShowWindow(hwnd, NativeMethods.SW_SHOW);
 
-                if (NativeMethods.IsWindowVisible(hwnd))
+                bool visible = NativeMethods.IsWindowVisible(hwnd);
+                bool iconic = NativeMethods.IsIconic(hwnd);
+                bool zoomed = NativeMethods.IsZoomed(hwnd);
+                if (visible && (!wasIconic || !iconic))
                 {
                     rescued++;
                     log.Log($"SHEPHERD[rescue] restored hidden guest 0x{hwnd.ToInt64():X} (pid={entry.Pid}, exe={entry.ExePath}) after an unclean previous shutdown.");
@@ -1236,7 +1321,7 @@ public sealed class WindowShepherdService
                 else
                 {
                     retry.Add(entry);
-                    log.Log($"SHEPHERD[rescue-retry] could not make hidden guest 0x{hwnd.ToInt64():X} visible; retaining journal entry.");
+                    log.Log($"SHEPHERD[rescue-retry] ShowWindow restore postcondition failed for hidden guest 0x{hwnd.ToInt64():X}; visible={visible} iconic={iconic} zoomed={zoomed}; retaining journal entry.");
                 }
             }
 

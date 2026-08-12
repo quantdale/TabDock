@@ -13,6 +13,7 @@ public enum DiagnosticCommandKind
     Doctor,
     SupportBundle,
     SelfTest,
+    GeometrySelfTest,
 }
 
 public sealed class DiagnosticCommandRequest
@@ -38,6 +39,7 @@ public static class DiagnosticCommandLine
             "--doctor" => DiagnosticCommandKind.Doctor,
             "--support-bundle" => DiagnosticCommandKind.SupportBundle,
             "--selftest-diagnostics" => DiagnosticCommandKind.SelfTest,
+            "--selftest-geometry" => DiagnosticCommandKind.GeometrySelfTest,
             _ => DiagnosticCommandKind.None,
         };
         if (kind == DiagnosticCommandKind.None)
@@ -107,6 +109,10 @@ public static class DiagnosticCommandLine
                     (int checks, int failures) = DiagnosticSelfTest.Run();
                     Write($"SELFTEST[diagnostics] checks={checks} failures={failures} result={(failures == 0 ? "PASS" : "FAIL")}");
                     return failures == 0 ? 0 : 1;
+                case DiagnosticCommandKind.GeometrySelfTest:
+                    (int geometryChecks, int geometryFailures) = SplitGeometry.RunSelfTest(Write);
+                    Write($"SELFTEST[geometry] checks={geometryChecks} failures={geometryFailures} result={(geometryFailures == 0 ? "PASS" : "FAIL")}");
+                    return geometryFailures == 0 ? 0 : 1;
                 default:
                     return 0;
             }
@@ -167,6 +173,67 @@ internal static class DiagnosticSelfTest
             && doctor.Kind == DiagnosticCommandKind.Doctor && doctor.OutputPath == "report.txt");
         Check(DiagnosticCommandLine.TryParse(new[] { "--doctor", "--bad" }, out _, out string? parserError)
             && parserError != null);
+        Check(DiagnosticCommandLine.TryParse(new[] { "--selftest-geometry" }, out DiagnosticCommandRequest geometry, out _)
+            && geometry.Kind == DiagnosticCommandKind.GeometrySelfTest);
+
+        Check(typeof(NativeMethods).GetMethod(nameof(NativeMethods.DeferWindowPos))?.ReturnType == typeof(IntPtr));
+        var placementMethod = typeof(NativeMethods).GetMethod(nameof(NativeMethods.GetWindowPlacement));
+        var placementParameters = placementMethod?.GetParameters();
+        Check(placementParameters?.Length == 2
+            && placementParameters[1].ParameterType == typeof(NativeMethods.WINDOWPLACEMENT).MakeByRefType());
+        Check(System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>() == 60
+            && typeof(NativeMethods.WINDOWPLACEMENT).GetField(nameof(NativeMethods.WINDOWPLACEMENT.rcDevice)) != null);
+        Check(typeof(NativeMethods).GetMethod(nameof(NativeMethods.ShowWindow))?.GetCustomAttributes(typeof(System.Runtime.InteropServices.DllImportAttribute), inherit: false)
+            is System.Runtime.InteropServices.DllImportAttribute[] { Length: 1 } showWindowImport
+            && !showWindowImport[0].SetLastError);
+        Check(WindowShepherdService.MatchesStableCaptureIdentity(
+            expectedPid: 42,
+            currentPid: 42,
+            expectedExePath: @"C:\Program Files\Guest\guest.exe",
+            currentExePath: @"c:\program files\guest\guest.exe",
+            expectedClassName: "GuestClass",
+            currentClassName: "GuestClass"));
+        const string initialTitle = "Document - before";
+        const string finalTitle = "Document - after";
+        Check(!string.Equals(initialTitle, finalTitle, StringComparison.Ordinal)
+            && WindowShepherdService.MatchesStableCaptureIdentity(
+                expectedPid: 42,
+                currentPid: 42,
+                expectedExePath: @"C:\Program Files\Guest\guest.exe",
+                currentExePath: @"c:\program files\guest\guest.exe",
+                expectedClassName: "GuestClass",
+                currentClassName: "GuestClass"));
+
+        Check(DiagnosticEnvironmentService.NormalizeWindowsProductName("Windows 10 Home", "26200") == "Windows 11 Home");
+        Check(DiagnosticEnvironmentService.NormalizeWindowsProductName("Windows 10 Pro", "19045") == "Windows 10 Pro");
+        Check(DiagnosticEnvironmentService.GetWindowsProductFamily("26200", "Windows 10 Home") == "Windows 11");
+
+        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(appData))
+        {
+            string embeddedAppData = $"[2026-08-12 22:00:00.000] STARTUP[cleanup] removed stale temp file: {appData.ToUpperInvariant()}\\TabDock\\state.json.tmp";
+            string redacted = DiagnosticEnvironmentService.RedactPath(embeddedAppData);
+            Check(redacted.Contains("%APPDATA%", StringComparison.Ordinal)
+                && !redacted.Contains(appData, StringComparison.OrdinalIgnoreCase)
+                && !redacted.Contains("%USERPROFILE%\\AppData", StringComparison.OrdinalIgnoreCase));
+        }
+        if (!string.IsNullOrWhiteSpace(userProfile))
+        {
+            string redactedProfile = DiagnosticEnvironmentService.RedactPath($"path={userProfile.ToUpperInvariant()}\\Documents\\file.txt");
+            Check(redactedProfile.Contains("%USERPROFILE%", StringComparison.Ordinal)
+                && !redactedProfile.Contains(userProfile, StringComparison.OrdinalIgnoreCase));
+        }
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (!string.IsNullOrWhiteSpace(localAppData))
+        {
+            string redactedLocal = DiagnosticEnvironmentService.RedactPath($"local={localAppData.ToUpperInvariant()}\\TabDock\\cache.bin");
+            Check(redactedLocal.Contains("%LOCALAPPDATA%", StringComparison.Ordinal)
+                && !redactedLocal.Contains(localAppData, StringComparison.OrdinalIgnoreCase));
+        }
+
+        Check(SingleInstanceGuard.BuildMutexName("S-1-5-21-100-200-300-400") != SingleInstanceGuard.BuildMutexName("S-1-5-21-100-200-300-401")
+            && SingleInstanceGuard.BuildMutexName("S-1-5-21-100-200-300-400").StartsWith(@"Global\TabDock-", StringComparison.Ordinal));
 
         var trace = new DiagnosticTrace(3);
         long first = trace.Record("one");

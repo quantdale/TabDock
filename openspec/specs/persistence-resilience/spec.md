@@ -48,7 +48,14 @@ When a restored group's `AccentColor` string cannot be parsed by `ColorConverter
 - **THEN** the restored group uses the default accent color and its container renders and hit-tests normally
 
 ### Requirement: Only one TabDock instance runs at a time
-`App.OnStartup` SHALL acquire a named `Global\TabDock` mutex; a second instance SHALL log the contention and exit gracefully instead of sharing `state.json` / `hidden-windows.json` with the first (last-writer-wins temp-file replacement would silently discard one instance's groups and can double-rescue journaled windows).
+`App.OnStartup` SHALL acquire a named, per-Windows-user cross-session writer
+guard; a second instance for the same user SHALL log the contention and exit
+gracefully instead of sharing `state.json` / `hidden-windows.json` with the
+first (last-writer-wins temp-file replacement would silently discard one
+instance's groups and can double-rescue journaled windows). The guard SHALL
+use a stable user SID in the `Global` namespace (or an equivalently robust
+per-user cross-session primitive), so different Windows users do not block one
+another while the same user's sessions remain serialized.
 
 #### Scenario: A second instance exits without touching shared state
 - **WHEN** TabDock is already running and a second instance is launched

@@ -1193,6 +1193,12 @@ internal static partial class Scenarios
         int leftCx = hostRect.left + hostRect.Width / 4;      // center of the LEFT pane
         int rightCx = hostRect.left + 3 * hostRect.Width / 4; // center of the RIGHT pane
 
+        // The split-menu click closes a transient WPF menu, so the driver's
+        // last verified input target is no longer live. Re-establish a stable
+        // guest target before the first direct content click.
+        if (!Input.ForceForeground(pigA.Hwnd))
+            throw new InvalidOperationException("Could not foreground the left split member — refusing to click blind.");
+
         // Click into A's (left) text box and type.
         Input.ClickAt(leftCx, cy);
         ctx.Check(Util.WaitUntil(() => NativeMethods.GetForegroundWindow() == pigA.Hwnd, 3000),

@@ -25,7 +25,12 @@ public sealed class BuildIdentityInfo
 /// <summary>Read-only Windows/runtime context for a support report.</summary>
 public sealed class WindowsEnvironmentSnapshot
 {
+    /// <summary>Normalized presentation label, derived with the build evidence when available.</summary>
     public string ProductName { get; set; } = "unavailable";
+    /// <summary>Raw registry ProductName retained for forensic comparison.</summary>
+    public string RawProductName { get; set; } = "unavailable";
+    /// <summary>Windows generation inferred from the build number.</summary>
+    public string ProductFamily { get; set; } = "unavailable";
     public string DisplayVersion { get; set; } = "unavailable";
     public string Build { get; set; } = "unavailable";
     public string Revision { get; set; } = "unavailable";

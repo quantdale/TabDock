@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using System.Windows;
 using Microsoft.Win32;
 using TabDock.Models;
@@ -30,7 +29,8 @@ public partial class App : Application
     private WinEventMonitor _events = null!;
     private GuestLifecycleService _guestLifecycle = null!;
     private HotkeyService _hotkey = null!;
-    private Mutex? _singleInstanceMutex;
+    private SingleInstanceGuard? _singleInstanceGuard;
+    private bool _instanceGuardUnavailable;
     private MainWindow? _mainWindow;
     private MainViewModel? _mainViewModel;
     private readonly Dictionary<Guid, ContainerWindow> _containers = new();
@@ -60,15 +60,30 @@ public partial class App : Application
             // but no windows, hooks, mutex, persistence, or services are started.
             if (!DiagnosticCommandLine.IsDiagnosticCommand(Environment.GetCommandLineArgs().Skip(1)))
             {
-                _log = new LoggingService();
-                _log.Log(BuildIdentity.ToLogLine(BuildIdentity.Current));
-                _log.Log("TabDock starting.");
+                // Acquire the writer guard before constructing LoggingService:
+                // the logger creates the per-user log directory, so even that
+                // shared product state must not be touched by a rejected
+                // duplicate instance.
+                if (!AcquireSingleInstanceGuard(out string? guardFailure))
+                {
+                    _instanceGuardUnavailable = true;
+                    System.Diagnostics.Debug.WriteLine($"TabDock startup blocked: {guardFailure}");
+                }
+                else
+                {
+                    _log = new LoggingService();
+                    _log.Log(BuildIdentity.ToLogLine(BuildIdentity.Current));
+                    _log.Log("TabDock starting.");
+                }
             }
             AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Fatal: failed to initialize logging or AppDomain handler: {ex}");
+            _singleInstanceGuard?.Dispose();
+            _singleInstanceGuard = null;
+            _instanceGuardUnavailable = true;
         }
 
         InitializeComponent();
@@ -87,6 +102,16 @@ public partial class App : Application
                 return;
             }
 
+            if (_instanceGuardUnavailable)
+            {
+                // The constructor deliberately did not create a logger or
+                // touch persisted state when another same-user instance held
+                // the guard (or the guard could not be resolved). Exit before
+                // any startup cleanup, rescue, or state load.
+                Shutdown(0);
+                return;
+            }
+
             // The logger and AppDomain handler are initialized in the constructor. If
             // that failed, create a best-effort logger now so the rest of startup can
             // still be diagnosed.
@@ -94,31 +119,6 @@ public partial class App : Application
             {
                 _log = new LoggingService();
                 _log.Log(BuildIdentity.ToLogLine(BuildIdentity.Current));
-            }
-
-            // Deterministic split-geometry self-test mode (goal §27/§28): runs the
-            // partition matrix + seeded fuzz with no windows, no input, no single
-            // instance — usable on ANY machine (including a friend's) and by the
-            // ValidationDriver as a standalone hermetic check. Exit 0 = all checks
-            // pass; exit 1 = any failure. Must run before the mutex/UI setup.
-            if (e.Args.Any(a => a.Equals("--selftest-geometry", StringComparison.OrdinalIgnoreCase)))
-            {
-                var (checks, failures) = SplitGeometry.RunSelfTest(_log.Log);
-                _log.Log($"SELFTEST[geometry] checks={checks} failures={failures} result={(failures == 0 ? "PASS" : "FAIL")}");
-                // Application_Exit disposes the logger and releases the (never
-                // acquired) mutex; no explicit cleanup needed here.
-                Shutdown(failures == 0 ? 0 : 1);
-                return;
-            }
-
-            // Only one instance may run at a time: sharing state.json and the hidden-
-            // window journal between two processes leads to lost updates and double
-            // rescue attempts. Exit cleanly if another instance already holds the mutex.
-            if (!AcquireSingleInstanceMutex())
-            {
-                _log.Log("Another TabDock instance is already running. Exiting.");
-                Shutdown(0);
-                return;
             }
 
             // Remove orphaned atomic-write temp files left behind by a prior run that
@@ -337,8 +337,8 @@ public partial class App : Application
             _events?.Dispose();
             _winEventMonitorDisposed = true;
             _hotkey?.Dispose();
-            _singleInstanceMutex?.ReleaseMutex();
-            _singleInstanceMutex?.Dispose();
+            _singleInstanceGuard?.Dispose();
+            _singleInstanceGuard = null;
             DiagnosticRuntime.LogicalSnapshotProvider = null;
             _log?.Dispose();
         }
@@ -917,29 +917,20 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Acquires the global single-instance mutex. Returns false if another
-    /// TabDock process already owns it, in which case this instance must exit
-    /// without touching shared state files.
+    /// Acquires the per-user, cross-session single-instance guard. Returns false
+    /// if another TabDock process for this Windows user already owns it, or if
+    /// the user identity/security boundary cannot be established. In either
+    /// case startup must exit before touching shared product state.
     /// </summary>
-    private bool AcquireSingleInstanceMutex()
+    private bool AcquireSingleInstanceGuard(out string? failure)
     {
-        try
-        {
-            bool createdNew;
-            _singleInstanceMutex = new Mutex(initiallyOwned: true, name: @"Global\TabDock", createdNew: out createdNew);
-            if (!createdNew)
-            {
-                _singleInstanceMutex.Dispose();
-                _singleInstanceMutex = null;
-                return false;
-            }
+        _singleInstanceGuard = new SingleInstanceGuard();
+        if (_singleInstanceGuard.TryAcquire(out failure))
             return true;
-        }
-        catch (Exception ex)
-        {
-            _log?.LogException("AcquireSingleInstanceMutex", ex);
-            return false;
-        }
+
+        _singleInstanceGuard.Dispose();
+        _singleInstanceGuard = null;
+        return false;
     }
 
     /// <summary>

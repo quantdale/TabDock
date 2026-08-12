@@ -19,6 +19,14 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.x
+
+      - name: Install pinned OpenSpec CLI
+        shell: pwsh
+        run: npm install --global @fission-ai/openspec@1.6.0
+
       - name: Build main solution (TabDock app + Spike)
         run: dotnet build TabDock.sln -c Release --nologo
 
@@ -29,3 +37,23 @@ jobs:
       # bin\Debug\net8.0-windows\ with no win-x64 subdirectory (see docs/TESTING.md).
       - name: Build GuineaPig (no RID)
         run: dotnet build tests/ValidationDriver/TabDock.GuineaPig/TabDock.GuineaPig.csproj -c Release --nologo
+
+      - name: Run deterministic validation and privacy gates
+        shell: pwsh
+        run: ./scripts/validate.ps1
+
+      - name: Validate OpenSpec artifacts
+        shell: pwsh
+        run: openspec validate --all --no-interactive
+
+      - name: Check repository diff whitespace
+        shell: pwsh
+        run: git diff --check
+
+      - name: Confirm real-input validation remains supervised-only
+        shell: pwsh
+        run: |
+          $workflow = Get-Content .github/workflows/build.yml -Raw
+          if ($workflow -match '(?im)ValidationDriver.*--yes.*all' -or $workflow -match '(?im)dotnet run.*ValidationDriver') {
+            throw 'Hosted CI must not run SendInput ValidationDriver scenarios.'
+          }

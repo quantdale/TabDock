@@ -48,6 +48,31 @@ function Invoke-Step {
     }
 }
 
+function Invoke-DiagnosticProcess {
+    param([string[]]$Arguments, [string]$Name)
+
+    $process = Start-Process -FilePath $DebugExe -ArgumentList $Arguments -NoNewWindow -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        Write-Host "FAILED: $Name (exit code $($process.ExitCode))" -ForegroundColor Red
+        exit 5
+    }
+}
+
+function Get-TreeFingerprint {
+    param([string]$Root)
+
+    if (-not (Test-Path -LiteralPath $Root)) {
+        return ''
+    }
+
+    $records = foreach ($file in Get-ChildItem -LiteralPath $Root -Recurse -File | Sort-Object FullName) {
+        $relative = [IO.Path]::GetRelativePath($Root, $file.FullName)
+        $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+        "$relative|$($file.Length)|$hash"
+    }
+    return ($records -join "`n")
+}
+
 Push-Location $RepoRoot
 try {
     # (a) Main app, Debug.
@@ -71,18 +96,106 @@ try {
         exit 5
     }
 
-    $doctorPath = Join-Path ([IO.Path]::GetTempPath()) "TabDock-doctor-$PID-$([Guid]::NewGuid().ToString('N')).txt"
+    $geometrySelfTest = Start-Process -FilePath $DebugExe -ArgumentList '--selftest-geometry' -NoNewWindow -Wait -PassThru
+    if ($geometrySelfTest.ExitCode -ne 0) {
+        Write-Host "FAILED: geometry self-test (exit code $($geometrySelfTest.ExitCode))" -ForegroundColor Red
+        exit 5
+    }
+
+    # Source-level guardrails for the two contract regressions that are not
+    # safely inducible on a hosted worker. These are deliberately narrow and
+    # fail closed if a future edit reintroduces the old assumptions.
+    $nativeSource = Get-Content -LiteralPath (Join-Path $RepoRoot 'NativeMethods.cs') -Raw
+    $shepherdSource = Get-Content -LiteralPath (Join-Path $RepoRoot 'Services\WindowShepherdService.cs') -Raw
+    if ($nativeSource -match 'extern\s+bool\s+DeferWindowPos' -or
+        $shepherdSource -match 'if\s*\(\s*!?\s*NativeMethods\.ShowWindow' -or
+        $nativeSource -match 'DwmSetWindowAttribute') {
+        Write-Host 'FAILED: native-contract source guard detected an invalid production declaration or ShowWindow/DWM mutation.' -ForegroundColor Red
+        exit 5
+    }
+
+    $diagnosticRoot = Join-Path ([IO.Path]::GetTempPath()) "TabDock-validation-$PID-$([Guid]::NewGuid().ToString('N'))"
+    $isolatedAppData = Join-Path $diagnosticRoot 'AppData\Roaming'
+    $isolatedLocalAppData = Join-Path $diagnosticRoot 'AppData\Local'
+    $isolatedTemp = Join-Path $diagnosticRoot 'Temp'
+    New-Item -ItemType Directory -Force -Path $isolatedAppData, $isolatedLocalAppData, $isolatedTemp | Out-Null
+    $originalAppData = [Environment]::GetEnvironmentVariable('APPDATA', 'Process')
+    $originalLocalAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA', 'Process')
+    $originalUserProfile = [Environment]::GetEnvironmentVariable('USERPROFILE', 'Process')
+    $originalTemp = [Environment]::GetEnvironmentVariable('TEMP', 'Process')
+    $originalTmp = [Environment]::GetEnvironmentVariable('TMP', 'Process')
     try {
-        $doctorArgs = '--doctor --output "' + $doctorPath + '"'
-        $doctor = Start-Process -FilePath $DebugExe -ArgumentList $doctorArgs -NoNewWindow -Wait -PassThru
-        if ($doctor.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $doctorPath)) {
-            Write-Host "FAILED: doctor smoke test (exit code $($doctor.ExitCode))" -ForegroundColor Red
+        [Environment]::SetEnvironmentVariable('APPDATA', $isolatedAppData, 'Process')
+        [Environment]::SetEnvironmentVariable('LOCALAPPDATA', $isolatedLocalAppData, 'Process')
+        [Environment]::SetEnvironmentVariable('TEMP', $isolatedTemp, 'Process')
+        [Environment]::SetEnvironmentVariable('TMP', $isolatedTemp, 'Process')
+
+        $stateRoot = Join-Path $isolatedAppData 'TabDock'
+        $beforeDoctor = Get-TreeFingerprint $stateRoot
+        $doctorPath = Join-Path $diagnosticRoot 'doctor.txt'
+        Invoke-DiagnosticProcess @('--doctor', '--output', $doctorPath) 'doctor smoke test'
+        if (-not (Test-Path -LiteralPath $doctorPath)) {
+            Write-Host 'FAILED: doctor did not create its explicit output file.' -ForegroundColor Red
             exit 5
+        }
+        $afterDoctor = Get-TreeFingerprint $stateRoot
+        if ($beforeDoctor -cne $afterDoctor) {
+            Write-Host 'FAILED: doctor changed the isolated TabDock state tree.' -ForegroundColor Red
+            exit 5
+        }
+        Write-Host 'doctor no-state-mutation: PASS' -ForegroundColor Green
+
+        $supportPath = Join-Path $diagnosticRoot 'support-bundle.zip'
+        Invoke-DiagnosticProcess @('--support-bundle', '--output', $supportPath) 'support-bundle export'
+        if (-not (Test-Path -LiteralPath $supportPath)) {
+            Write-Host 'FAILED: support-bundle export did not create its explicit ZIP.' -ForegroundColor Red
+            exit 5
+        }
+
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $archive = [IO.Compression.ZipFile]::OpenRead($supportPath)
+        try {
+            $bundleText = foreach ($entry in $archive.Entries) {
+                if ($entry.Length -eq 0) { continue }
+                $reader = [IO.StreamReader]::new($entry.Open())
+                try { "[$($entry.FullName)]`n$($reader.ReadToEnd())" }
+                finally { $reader.Dispose() }
+            }
+            $bundleText = $bundleText -join "`n"
+            $sensitiveTokens = @(
+                [Environment]::UserName,
+                [Environment]::MachineName,
+                $originalAppData,
+                $originalLocalAppData,
+                $originalUserProfile,
+                $originalTemp,
+                $originalTmp,
+                'password=', 'access_token', 'refresh_token', 'Bearer ', 'secret='
+            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            foreach ($token in $sensitiveTokens) {
+                if ($bundleText.IndexOf($token, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                    Write-Host "FAILED: support bundle contains a forbidden raw token/path: $token" -ForegroundColor Red
+                    exit 5
+                }
+            }
+            if ($bundleText -match '(?i)(^|\s)title\s*=\s*[^<\r\n]+' -or
+                $bundleText -match '(?i)DwmSetWindowAttribute') {
+                Write-Host 'FAILED: support bundle contains an unredacted title field or forbidden DWM setter evidence.' -ForegroundColor Red
+                exit 5
+            }
+            Write-Host 'support-bundle privacy scan: PASS' -ForegroundColor Green
+        }
+        finally {
+            $archive.Dispose()
         }
     }
     finally {
-        if (Test-Path -LiteralPath $doctorPath) {
-            Remove-Item -LiteralPath $doctorPath -Force
+        [Environment]::SetEnvironmentVariable('APPDATA', $originalAppData, 'Process')
+        [Environment]::SetEnvironmentVariable('LOCALAPPDATA', $originalLocalAppData, 'Process')
+        [Environment]::SetEnvironmentVariable('TEMP', $originalTemp, 'Process')
+        [Environment]::SetEnvironmentVariable('TMP', $originalTmp, 'Process')
+        if (Test-Path -LiteralPath $diagnosticRoot) {
+            Remove-Item -LiteralPath $diagnosticRoot -Recurse -Force
         }
     }
 

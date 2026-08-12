@@ -62,8 +62,11 @@ the richer live logical snapshot when a session is running.
 attaches `AppDomain.UnhandledException` *before* `InitializeComponent()` so the earliest
 failures are still logged (`App.xaml.cs:49-66`). `Application_Startup` (`App.xaml.cs:68`):
 
-1. **Single-instance mutex** `Global\TabDock` — a second instance exits cleanly without
-   touching shared state (`App.xaml.cs:80-85`, `AcquireSingleInstanceMutex` at `App.xaml.cs:615`).
+1. **Per-user single-instance guard** `Global\TabDock-<user SID>` — a second
+   instance for the same Windows user (including another session) exits cleanly
+   without touching shared state, while a different user receives a distinct
+   name. `SingleInstanceGuard` applies an explicit mutex ACL granting access
+   only to that SID (`Services/SingleInstanceGuard.cs`, `App.xaml.cs`).
 2. **`CleanupStaleTempFiles`** — removes orphaned `state.json.tmp` / `hidden-windows.json.tmp`
    from a prior crashed atomic write (`App.xaml.cs:90`, `App.xaml.cs:642-674`).
 3. **Service construction** (`App.xaml.cs:92-97`): `IconService`, `WindowShepherdService`,
@@ -119,7 +122,9 @@ no-nesting and already-captured rules, then `_shepherd.Capture(hwnd, out error)`
 - **Elevation check fails closed** — indeterminate target elevation + non-elevated TabDock
   refuses the capture (`WindowShepherdService.cs:105-131`).
 - Snapshots `WINDOWPLACEMENT` (`HasValidPlacement`, `WindowShepherdService.cs:133-139`), bounds,
-  title, exe path; disables DWM transitions for the captured lifetime (`WindowShepherdService.cs:159,165-169`);
+  title, exe path. DWM attributes are read-only diagnostics; production capture
+  does not call `DwmSetWindowAttribute`, so hard termination cannot leave a
+  cross-process compositor mutation behind;
   logs `Shepherd-captured`.
 
 `GroupViewModel.AddCapturedWindow` (`GroupViewModel.cs:168-177`) adds to `Group.Members` and
@@ -300,8 +305,9 @@ first (the index drops it via `CollectionChanged`), then `_shepherd.Release(cw, 
 (`WindowShepherdService.cs:328-419`):
 
 - Window already gone → `JournalClear` + log (`WindowShepherdService.cs:330-335`).
-- `show:false` (guest-initiated hide): `JournalClear(immediate: true)` **before** `SW_HIDE`,
-  transitions re-enabled (`WindowShepherdService.cs:337-355`).
+- `show:false` (guest-initiated hide): `JournalClear(immediate: true)` **before**
+  `SW_HIDE` (`WindowShepherdService.cs:337-355`). There is no DWM transition
+  restoration step because TabDock never changes that guest-owned attribute.
 - `!HasValidPlacement`: bounds fallback — `SetWindowPos(OriginalBounds)` + `SW_SHOW` +
   `SetForegroundWindow` (`WindowShepherdService.cs:357-386`).
 - Normal: `SetWindowPlacement(OriginalPlacement)` (falls back to bounds `SetWindowPos` on

@@ -72,7 +72,7 @@ internal static partial class Scenarios
         GuestInfo pig = SpawnPig(ctx, "RAMR", "--color", "blue");
 
         var placementBefore = new NativeMethods.WINDOWPLACEMENT { length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>() };
-        NativeMethods.GetWindowPlacement(pig.Hwnd, out placementBefore);
+        NativeMethods.GetWindowPlacement(pig.Hwnd, ref placementBefore);
         NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT rectBefore);
         long styleBefore = (long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_STYLE);
         long exstyleBefore = (long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_EXSTYLE);
@@ -95,7 +95,7 @@ internal static partial class Scenarios
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(container), 3000), "container closed (last tab popped out)");
 
         var placementAfter = new NativeMethods.WINDOWPLACEMENT { length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>() };
-        NativeMethods.GetWindowPlacement(pig.Hwnd, out placementAfter);
+        NativeMethods.GetWindowPlacement(pig.Hwnd, ref placementAfter);
         NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT rectAfter);
         long styleAfter = (long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_STYLE);
         long exstyleAfter = (long)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_EXSTYLE);

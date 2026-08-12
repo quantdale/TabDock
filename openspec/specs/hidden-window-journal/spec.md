@@ -32,7 +32,7 @@ If that synchronous journal commit fails, `Hide` SHALL log the failure and leave
 - **THEN** `Hide` records the failure and does not hide the guest, preserving a visible and recoverable state
 
 ### Requirement: Release never hides a guest via an invalid capture-time placement
-When capture-time `GetWindowPlacement` failed (leaving no valid `showCmd`), `WindowShepherdService.Release` SHALL NOT pass the zeroed placement's `showCmd` (0 == `SW_HIDE`) to `ShowWindow`. It SHALL instead show the guest with `SW_SHOW` after restoring its capture-time bounds, so a released guest is never left invisible with its journal entry already cleared.
+When capture-time `GetWindowPlacement` failed (leaving no valid `showCmd`), `WindowShepherdService.Release` SHALL NOT pass the caller-initialized or otherwise invalid placement's `showCmd` (which could be `0 == SW_HIDE`) to `ShowWindow`. It SHALL instead show the guest with `SW_SHOW` after restoring its capture-time bounds, so a released guest is never left invisible with its journal entry already cleared.
 
 #### Scenario: A guest captured while its placement was unreadable is still visible after release
 - **WHEN** a guest whose `GetWindowPlacement` failed at capture time is released (pop out or tab close with show)

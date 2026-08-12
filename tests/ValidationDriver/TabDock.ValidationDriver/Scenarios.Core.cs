@@ -1451,10 +1451,33 @@ internal static partial class Scenarios
     }
 
     // -------------------------------------------------------------------------
+    // capture-title-change-during-capture: the guest changes its title on a
+    // timer while the real picker/capture flow is in progress. Admission must
+    // use HWND/PID/executable/class identity, while the latest title remains
+    // ordinary metadata.
+    // -------------------------------------------------------------------------
+    private static void CaptureTitleChangeDuringCapture(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "TCI", "--rename-after-ms", "2500", "--rename-every-ms", "125", "--color", "orange");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+
+        string currentTitle = NativeMethods.GetWindowTextString(pig.Hwnd) ?? string.Empty;
+        ctx.Check(currentTitle.StartsWith("TDVAL-TCI-", StringComparison.Ordinal)
+            && currentTitle.Contains("-LIVE-", StringComparison.Ordinal),
+            $"guest title changed during the capture flow (current='{currentTitle}')");
+        ctx.Check(TabCount(container) == 1, "title-changing guest was admitted as the only tab");
+        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000),
+            "title-changing guest remains shepherded after capture");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "failed final identity verification") == 0,
+            "title change did not trigger final identity rejection");
+        ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "title-changing pig remains alive");
+    }
+
+    // -------------------------------------------------------------------------
     // 30. instant-tabswitch: tab switching under Shepherd must be instantaneous
-    //     (WindowShepherdService.Capture disables DWM transitions and
-    //     ContainerWindow.SyncShepherdActiveWindow shows-before-hides, both
-    //     added this session) — never a visible/timed fade. Measures real
+    //     (ContainerWindow.SyncShepherdActiveWindow shows-before-hides; the
+    //     Shepherd deliberately leaves guest-owned DWM transition attributes
+    //     untouched) — default compositor behavior is accepted. Measures real
     //     wall-clock click-to-docked latency with a Stopwatch (not
     //     Util.WaitUntil's coarser polling) across 3 consecutive round-trip
     //     switches.
@@ -1664,32 +1687,39 @@ internal static partial class Scenarios
     }
 
     // -------------------------------------------------------------------------
-    // 40. dwm-transitions-disabled-on-capture: WindowShepherdService.Capture
-    //     calls DwmSetWindowAttribute(DWMWA_TRANSITIONS_FORCEDISABLED, true)
-    //     on every captured guest, restored to false on release. Empirically
-    //     tests (at run time, since this environment cannot run the app ahead
-    //     of writing this code) whether DwmGetWindowAttribute can read that
-    //     value back at all; if not, falls back to the documented observable
-    //     side effect (no per-switch animation tax across repeated switches).
+    // 40. dwm-transitions-unchanged-on-capture: Shepherd must not mutate the
+    //     guest-owned DWMWA_TRANSITIONS_FORCEDISABLED attribute. A hard TabDock
+    //     termination cannot execute release code in the other process, so the
+    //     safest crash-symmetric contract is to leave the attribute untouched.
     // -------------------------------------------------------------------------
-    private static void DwmTransitionsDisabledOnCapture(Ctx ctx, Options opt)
+    private static void DwmTransitionsUnchangedOnCapture(Ctx ctx, Options opt)
     {
         GuestInfo pigA = SpawnPig(ctx, "DWMA", "--color", "orange");
         GuestInfo pigB = SpawnPig(ctx, "DWMB", "--color", "purple");
+        int hrBefore = NativeMethods.DwmGetWindowAttribute(
+            pigA.Hwnd,
+            NativeMethods.DWMWA_TRANSITIONS_FORCEDISABLED,
+            out bool disabledBeforeCapture,
+            sizeof(int));
+        bool readable = hrBefore == 0;
+        GuardedProc.Log($"  dwm-transitions-unchanged-on-capture: pre-capture DwmGetWindowAttribute hr=0x{hrBefore:X} value={disabledBeforeCapture} readable={readable}.");
+
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
         ctx.Check(TabCount(container) == 2, "2 tabs after capture");
 
-        int hrGet = NativeMethods.DwmGetWindowAttribute(pigA.Hwnd, NativeMethods.DWMWA_TRANSITIONS_FORCEDISABLED, out bool disabledWhileCaptured, sizeof(uint));
-        bool readable = hrGet == 0;
-        GuardedProc.Log($"  dwm-transitions-disabled-on-capture: DwmGetWindowAttribute(TRANSITIONS_FORCEDISABLED) hr=0x{hrGet:X} value={disabledWhileCaptured} readable={readable} " +
-            "(empirical check — this DWM attribute is not documented as guaranteed gettable).");
+        int hrGet = NativeMethods.DwmGetWindowAttribute(
+            pigA.Hwnd,
+            NativeMethods.DWMWA_TRANSITIONS_FORCEDISABLED,
+            out bool disabledWhileCaptured,
+            sizeof(int));
         if (readable)
         {
-            ctx.Check(disabledWhileCaptured, "DWMWA_TRANSITIONS_FORCEDISABLED reads back true (disabled) while the guest is captured");
+            ctx.Check(hrGet == 0 && disabledWhileCaptured == disabledBeforeCapture,
+                "DWMWA_TRANSITIONS_FORCEDISABLED is unchanged while the guest is captured");
         }
         else
         {
-            GuardedProc.Log("  dwm-transitions-disabled-on-capture: attribute not readable back (DwmGetWindowAttribute failed); falling back to the observable-timing assertion only.");
+            GuardedProc.Log("  dwm-transitions-unchanged-on-capture: attribute is not readable on this system; capture/release still exercises the no-setter path.");
         }
 
         if (!Input.ForceForeground(container))
@@ -1710,16 +1740,20 @@ internal static partial class Scenarios
             Util.WaitUntil(() => IsDocked(pigA.Hwnd, host), 1000, 20);
         }
         sw.Stop();
-        GuardedProc.Log($"  dwm-transitions-disabled-on-capture: 3 round-trip switches took {sw.ElapsedMilliseconds}ms total.");
-        ctx.Check(sw.ElapsedMilliseconds < 1500, $"3 round-trip tab switches complete in under 1.5s total ({sw.ElapsedMilliseconds}ms) — no per-switch animation tax accumulates");
+        GuardedProc.Log($"  dwm-transitions-unchanged-on-capture: 3 round-trip switches took {sw.ElapsedMilliseconds}ms total (default DWM transitions are accepted).");
 
         ClickTabMenuItem(ctx, container, pigA.Title, "Pop out");
         ctx.Check(Util.WaitUntil(() => IsReleasedAndShown(pigA.Hwnd, host), 5000), "pigA released by Pop out");
 
         if (readable)
         {
-            int hrGetAfter = NativeMethods.DwmGetWindowAttribute(pigA.Hwnd, NativeMethods.DWMWA_TRANSITIONS_FORCEDISABLED, out bool disabledAfterRelease, sizeof(uint));
-            ctx.Check(hrGetAfter == 0 && !disabledAfterRelease, "DWMWA_TRANSITIONS_FORCEDISABLED reads back false (re-enabled) after release (WindowShepherdService.Release restores it)");
+            int hrGetAfter = NativeMethods.DwmGetWindowAttribute(
+                pigA.Hwnd,
+                NativeMethods.DWMWA_TRANSITIONS_FORCEDISABLED,
+                out bool disabledAfterRelease,
+                sizeof(int));
+            ctx.Check(hrGetAfter == 0 && disabledAfterRelease == disabledBeforeCapture,
+                "DWMWA_TRANSITIONS_FORCEDISABLED remains unchanged after release");
         }
 
         ctx.Check(pigA.Proc != null && !pigA.Proc.HasExited && pigB.Proc != null && !pigB.Proc.HasExited, "both pigs alive throughout");
