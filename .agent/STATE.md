@@ -23,6 +23,12 @@ SUPERVISED RUNS GREEN; HUMAN VISUAL QUALIFICATION PENDING**
   own regex source. The replacement hosted run `31642601057` passed all steps
   for the pushed branch; the earlier run `31642239988` correctly exposed and
   failed on that self-match.
+- Final code-bearing branch commit: `4a92b8fdc12c5a543e3a775806b8bbbe3bac9245`.
+  Hosted run `31642798762` passed all steps for that commit. The verified
+  self-contained Release artifact built from it reports the same commit and
+  SHA-256 `BB566397C13D36DCC6C72E6FED1578A06864D62D06CAFFAA4EF691DAD3CC500A`.
+  A subsequent state-only handoff commit may advance HEAD without changing
+  the audited application or artifact.
 - Active plan: `.agent/plans/deep-audit-remediation-2026-08-13.md`.
 - Implemented: pointer-sized HDWP chaining/fallback, corrected
   `WINDOWPLACEMENT` ABI and layout, ShowWindow postcondition handling,
@@ -46,8 +52,9 @@ SUPERVISED RUNS GREEN; HUMAN VISUAL QUALIFICATION PENDING**
 - Per-user duplicate-process check also passed: a first Debug instance held
   the SID-scoped guard and a second same-user instance exited 0; no TabDock
   process remained afterward.
-- Remaining work: record the final published-artifact identity and attempt
-  push/draft PR only if credentials permit.
+- Remaining work: complete the state-only handoff commit and confirm the
+  pushed draft PR. No application remediation remains; the manual visual and
+  broader real-desktop qualification gate remains explicitly open.
 - Manual gate: the targeted scenarios above are evidence for their named
   invariants, not a full visual acceptance. Browser/real-app coverage,
   mixed-DPI hardware, crash-rescue, the full ValidationDriver batch, and the

@@ -30,7 +30,10 @@ qualification record on a non-main branch.
       `0fca47d33d5955b4cb6fcba5a24c26fb44adf89c`; state-sync commit:
       `edd14bcc43ce7cf6d9554d785255c45256a34738`; CI guard fix:
       `4e405803d751003285d0ce40accb675877328e89`; hosted run
-      `31642601057` passed.
+      `31642601057` passed. Final code-bearing commit:
+      `4a92b8fdc12c5a543e3a775806b8bbbe3bac9245`; hosted run
+      `31642798762` passed; artifact SHA-256 is
+      `BB566397C13D36DCC6C72E6FED1578A06864D62D06CAFFAA4EF691DAD3CC500A`.
 
 ## Explicit non-claims
 
