@@ -312,6 +312,7 @@ public sealed class GroupManager
         var group = new Group { Name = name, AccentColor = accentColor };
         Groups.Add(group);
         _log.Log($"Created group {group.Id} '{name}'");
+        DiagnosticRuntime.Record("group.create", group: group.Id.ToString("N"), action: "create", result: "success");
         RequestSave();
         return group;
     }
@@ -322,6 +323,8 @@ public sealed class GroupManager
             return;
         group.ActiveIndex = index;
         _log.Log($"Switched group {group.Id} to tab {index}");
+        DiagnosticRuntime.Record("group.active-tab", group: group.Id.ToString("N"), action: "switch", result: "success",
+            data: new Dictionary<string, string> { ["index"] = index.ToString(System.Globalization.CultureInfo.InvariantCulture) });
         RequestSave();
     }
 
@@ -339,6 +342,12 @@ public sealed class GroupManager
         group.Members.Insert(newIndex, item);
         group.ActiveIndex = newIndex;
         _log.Log($"Reordered tab {oldIndex}->{newIndex} in group {group.Id}");
+        DiagnosticRuntime.Record("group.reorder", group: group.Id.ToString("N"), action: "reorder", result: "success",
+            data: new Dictionary<string, string>
+            {
+                ["oldIndex"] = oldIndex.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["newIndex"] = newIndex.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            });
         RequestSave();
     }
 
@@ -364,6 +373,7 @@ public sealed class GroupManager
             group.ActiveIndex = group.Members.Count - 1;
 
         _log.Log($"Released tab {index} from group {group.Id}");
+        DiagnosticRuntime.Record("guest.release", guest: cw.Hwnd, group: group.Id.ToString("N"), action: "release", result: "success");
         RequestSave();
     }
 
@@ -395,6 +405,7 @@ public sealed class GroupManager
             Groups.Remove(group);
 
         _log.Log($"Closed group {group.Id}");
+        DiagnosticRuntime.Record("group.close", group: group.Id.ToString("N"), action: "close", result: "success");
         RequestSave();
     }
 

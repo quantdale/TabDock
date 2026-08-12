@@ -31,6 +31,7 @@ $ErrorActionPreference = 'Stop'
 # Resolve everything relative to the repo root (one level above this script).
 $RepoRoot     = Split-Path -Parent $PSScriptRoot
 $MainProject  = Join-Path $RepoRoot 'TabDock.csproj'
+$DebugExe     = Join-Path $RepoRoot 'bin\Debug\net8.0-windows\win-x64\TabDock.exe'
 $SpikeProject = Join-Path $RepoRoot 'Spike\TabDock.Spike\TabDock.Spike.csproj'
 $DriverProject = Join-Path $RepoRoot 'tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj'
 $PigProject   = Join-Path $RepoRoot 'tests\ValidationDriver\TabDock.GuineaPig\TabDock.GuineaPig.csproj'
@@ -60,7 +61,32 @@ try {
     Invoke-Step 'Build TabDock.ValidationDriver' 3 { dotnet build $DriverProject }
     Invoke-Step 'Build TabDock.GuineaPig (no RID)' 4 { dotnet build $PigProject }
 
-    # (d) Optional single-file publish, as documented in AGENTS.md.
+    # (e) CLI-safe diagnostic smoke tests. These run before any optional
+    # publish/real-input work and must not create the app state file or open
+    # the normal WPF UI. Start-Process is used because WinExe processes do not
+    # reliably populate PowerShell's $LASTEXITCODE.
+    $selfTest = Start-Process -FilePath $DebugExe -ArgumentList '--selftest-diagnostics' -NoNewWindow -Wait -PassThru
+    if ($selfTest.ExitCode -ne 0) {
+        Write-Host "FAILED: diagnostic self-test (exit code $($selfTest.ExitCode))" -ForegroundColor Red
+        exit 5
+    }
+
+    $doctorPath = Join-Path ([IO.Path]::GetTempPath()) "TabDock-doctor-$PID-$([Guid]::NewGuid().ToString('N')).txt"
+    try {
+        $doctorArgs = '--doctor --output "' + $doctorPath + '"'
+        $doctor = Start-Process -FilePath $DebugExe -ArgumentList $doctorArgs -NoNewWindow -Wait -PassThru
+        if ($doctor.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $doctorPath)) {
+            Write-Host "FAILED: doctor smoke test (exit code $($doctor.ExitCode))" -ForegroundColor Red
+            exit 5
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $doctorPath) {
+            Remove-Item -LiteralPath $doctorPath -Force
+        }
+    }
+
+    # (f) Optional single-file publish, as documented in AGENTS.md.
     if ($Publish) {
         $publishArgs = @(
             'publish', $MainProject,
@@ -74,7 +100,7 @@ try {
         Invoke-Step 'Publish single-file exe (Release, win-x64)' 5 { dotnet @publishArgs }
     }
 
-    # (e) Optional real-input scenario via the ValidationDriver.
+    # (g) Optional real-input scenario via the ValidationDriver.
     if ($Scenario) {
         Write-Host ''
         Write-Host "==> Running ValidationDriver scenario: $Scenario" -ForegroundColor Cyan

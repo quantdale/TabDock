@@ -9,6 +9,53 @@ claim below was verified against current source; citations use `path.cs:line`.
 
 ---
 
+## Production diagnostics foundation
+
+TabDock's supportability boundary is intentionally read-only and separate from
+Shepherd's presentation authority:
+
+```text
+BuildIdentity + environment/persistence probes
+                    |
+             DoctorReportService
+                    |
+       observed HWND snapshot + bounded trace
+                    |
+       optional in-process logical presentation snapshot
+```
+
+`BuildIdentity` reads generated assembly metadata (`AssemblyInformationalVersion`
+and MSBuild `AssemblyMetadata`) so a published executable retains its commit
+without Git or a checkout. It does not add a build timestamp; the embedded
+commit plus an explicit artifact SHA-256 identifies a distributed build while
+preserving deterministic rebuilds. The hash is computed only for explicit
+diagnostic commands/export, never on ordinary startup.
+
+`NativeSnapshotService` observes top-level HWNDs, process identity, geometry,
+visibility/iconic/zoomed state, foreground and z-order neighbors, monitor/DPI,
+DWM cloak status, and fixed `WindowFromPoint` probes. It tolerates destroyed or
+inaccessible windows and does not send pointer-bearing cross-process messages.
+`ContainerWindow.CreateDiagnosticSnapshot` exposes desired/logical group and
+split state without invoking layout, activation, capture/release, or Shepherd
+operations. The two models remain distinct so a report can show requested pane
+rectangles beside the actual guest rectangles.
+
+`DiagnosticTrace` is a lock-protected 1024-entry ring. Selected foreground,
+reorder, move-size, activation, group/split, guest lifecycle, and repair events
+carry monotonic sequence numbers and callback/dispatch context where useful.
+There is no global `EVENT_OBJECT_LOCATIONCHANGE` subscription and no periodic
+health poll. The existing `WindowShepherdService` remains the only native
+write authority; diagnostic instrumentation records its existing actions but
+does not add a repair loop.
+
+Reports and support ZIPs redact paths under the current user profile, omit raw
+window titles, and include only a filtered/sanitized log tail. Nothing is
+uploaded automatically. The command-line report can observe the machine and
+native TabDock surfaces without an instance; the `Ctrl+Alt+Shift+D` hotkey adds
+the richer live logical snapshot when a session is running.
+
+---
+
 ## 1. Startup sequence
 
 `App` is the orchestrator (`App.xaml.cs:23`). Its constructor creates `LoggingService` and

@@ -67,8 +67,11 @@ public sealed class WindowShepherdService
     /// </summary>
     private void LogPositioningFailureOnce(IntPtr hwnd, string operation)
     {
+        string error = NativeMethods.FormatLastError();
         if (_positioningFailuresLogged.Add(hwnd.ToInt64()))
-            _log.Log($"SHEPHERD[position-fail] {operation} failed for 0x{hwnd.ToInt64():X}: {NativeMethods.FormatLastError()} (subsequent failures for this window suppressed)");
+            _log.Log($"SHEPHERD[position-fail] {operation} failed for 0x{hwnd.ToInt64():X}: {error} (subsequent failures for this window suppressed)");
+        DiagnosticRuntime.Record("repair.native-failure", guest: hwnd, action: operation, result: "failed",
+            data: new Dictionary<string, string> { ["error"] = error });
     }
 
     private static readonly string JournalPath = Path.Combine(
@@ -380,14 +383,15 @@ public sealed class WindowShepherdService
         // so passing containerHwnd here would put the guest BEHIND its own
         // container. Bring the guest to the true top instead, then pin the
         // container immediately behind it so nothing else can slot between.
-        if (!NativeMethods.SetWindowPos(
+        bool positioned = NativeMethods.SetWindowPos(
             window.Hwnd,
             NativeMethods.HWND_TOP,
             screenRect.left,
             screenRect.top,
             screenRect.Width,
             screenRect.Height,
-            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW))
+            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+        if (!positioned)
         {
             LogPositioningFailureOnce(window.Hwnd, "SetWindowPos(guest)");
         }
@@ -604,11 +608,15 @@ public sealed class WindowShepherdService
             return;
 
         IntPtr insertAfter = useTopmostBand ? NativeMethods.HWND_TOPMOST : NativeMethods.HWND_TOP;
-        if (!NativeMethods.SetWindowPos(
+        bool raised = NativeMethods.SetWindowPos(
             containerHwnd,
             insertAfter,
             0, 0, 0, 0,
-            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE))
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        DiagnosticRuntime.Record("repair.container-z-order", containerHwnd,
+            action: useTopmostBand ? "raise-topmost-band" : "raise-normal-band",
+            result: raised ? "success" : "failed");
+        if (!raised)
         {
             LogPositioningFailureOnce(containerHwnd, "SetWindowPos(container-chrome)");
         }
@@ -675,6 +683,13 @@ public sealed class WindowShepherdService
             guestHwnd,
             0, 0, 0, 0,
             NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        DiagnosticRuntime.Record("repair.pair-z-order", containerHwnd, guestHwnd,
+            action: "SetWindowPos(container-behind-guest)", result: ok ? "success" : "failed",
+            data: new Dictionary<string, string>
+            {
+                ["observedBeforePairing"] = "container-not-below-guest",
+                ["observedAfterPairing"] = IsContainerBelowGuest(containerHwnd, guestHwnd).ToString(),
+            });
         if (!ok)
         {
             LogPositioningFailureOnce(containerHwnd, "SetWindowPos(container)");
@@ -733,6 +748,8 @@ public sealed class WindowShepherdService
         // a real (e.g. UIPI-blocked) failure.
         if (NativeMethods.IsWindowVisible(window.Hwnd))
             LogPositioningFailureOnce(window.Hwnd, "ShowWindow(SW_HIDE)");
+        DiagnosticRuntime.Record("repair.visibility", guest: window.Hwnd, action: "ShowWindow(SW_HIDE)",
+            result: NativeMethods.IsWindowVisible(window.Hwnd) ? "failed" : "success");
         _log.Log($"SHEPHERD[hide] guest=0x{window.Hwnd.ToInt64():X}");
     }
 
@@ -773,6 +790,9 @@ public sealed class WindowShepherdService
             SendBenignKeyNudge();
             fg = NativeMethods.SetForegroundWindow(window.Hwnd);
         }
+        DiagnosticRuntime.Record("repair.foreground", containerHwnd, window.Hwnd,
+            foreground: NativeMethods.GetForegroundWindow(), action: "SetForegroundWindow",
+            result: fg && NativeMethods.GetForegroundWindow() == window.Hwnd ? "success" : "refused-or-changed");
         _log.Log($"SHEPHERD[bring-to-front] guest=0x{window.Hwnd.ToInt64():X} fg={fg}");
     }
 
@@ -796,6 +816,9 @@ public sealed class WindowShepherdService
             SendBenignKeyNudge();
             fg = NativeMethods.SetForegroundWindow(window.Hwnd);
         }
+        DiagnosticRuntime.Record("repair.foreground", guest: window.Hwnd,
+            foreground: NativeMethods.GetForegroundWindow(), action: "SetForegroundWindow",
+            result: fg && NativeMethods.GetForegroundWindow() == window.Hwnd ? "success" : "refused-or-changed");
         _log.Log($"SHEPHERD[split-foreground] guest=0x{window.Hwnd.ToInt64():X} fg={fg}");
     }
 

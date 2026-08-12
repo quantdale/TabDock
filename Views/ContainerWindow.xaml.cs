@@ -179,6 +179,75 @@ public partial class ContainerWindow : Window
     /// </summary>
     public bool IsClosePromptOpen => _closePromptOpen;
 
+    /// <summary>
+    /// Returns the current desired/logical presentation without invoking layout,
+    /// activation, Shepherd positioning, or any other native mutation. Native
+    /// observations are collected separately so a broken presentation remains
+    /// visible in the diagnostic comparison.
+    /// </summary>
+    public LogicalPresentationSnapshot CreateDiagnosticSnapshot()
+    {
+        var snapshot = new LogicalPresentationSnapshot
+        {
+            GroupId = Group.Id,
+            ContainerHwnd = _containerHwnd.ToInt64(),
+            ContainerVisible = _containerHwnd != IntPtr.Zero && NativeMethods.IsWindowVisible(_containerHwnd),
+            WindowState = WindowState.ToString(),
+            Minimized = WindowState == WindowState.Minimized,
+            Maximized = WindowState == WindowState.Maximized,
+            ActiveMemberKey = _shepherdActiveWindow == null ? null : DiagnosticMemberKey(_shepherdActiveWindow),
+            ActiveGuestHwnd = _shepherdActiveWindow?.Hwnd.ToInt64() ?? 0,
+            SplitActive = IsSplitActive,
+            SplitLeftMemberKey = _splitLeft == null ? null : DiagnosticMemberKey(_splitLeft),
+            SplitLeftHwnd = _splitLeft?.Hwnd.ToInt64() ?? 0,
+            SplitRightMemberKey = _splitRight == null ? null : DiagnosticMemberKey(_splitRight),
+            SplitRightHwnd = _splitRight?.Hwnd.ToInt64() ?? 0,
+            SplitForegroundMemberKey = _splitForeground == null ? null : DiagnosticMemberKey(_splitForeground),
+            SplitForegroundHwnd = _splitForeground?.Hwnd.ToInt64() ?? 0,
+            ChromeInteractionActive = IsContainerChromeInteractionActive(),
+            Monitor = _containerHwnd == IntPtr.Zero ? "unavailable" : EnvironmentFingerprint.DescribeWindowMonitor(_containerHwnd),
+        };
+
+        NativeMethods.RECT content = GetContentAreaScreenRect();
+        NativeMethods.RECT left = default;
+        NativeMethods.RECT right = default;
+        if (content.Width > 0 && content.Height > 0)
+        {
+            (left, right) = SplitRect(content);
+            if (IsSplitActive)
+            {
+                snapshot.ExpectedPaneRects.Add(DiagnosticRect.From(left));
+                snapshot.ExpectedPaneRects.Add(DiagnosticRect.From(right));
+            }
+        }
+
+        foreach (CapturedWindow member in Group.Members)
+        {
+            var memberSnapshot = new DiagnosticMemberSnapshot
+            {
+                MemberKey = DiagnosticMemberKey(member),
+                Hwnd = member.Hwnd.ToInt64(),
+                ProcessId = member.ProcessId,
+                ExecutableName = string.IsNullOrWhiteSpace(member.ExePath) ? "unavailable" : System.IO.Path.GetFileName(member.ExePath),
+                WindowClass = string.IsNullOrWhiteSpace(member.OriginalClassName) ? "unavailable" : member.OriginalClassName,
+                Visible = NativeMethods.IsWindow(member.Hwnd) && NativeMethods.IsWindowVisible(member.Hwnd),
+                Iconic = NativeMethods.IsWindow(member.Hwnd) && NativeMethods.IsIconic(member.Hwnd),
+                Zoomed = NativeMethods.IsWindow(member.Hwnd) && NativeMethods.IsZoomed(member.Hwnd),
+            };
+            if (IsSplitActive && ReferenceEquals(member, _splitLeft))
+                memberSnapshot.ExpectedPaneRect = DiagnosticRect.From(left);
+            else if (IsSplitActive && ReferenceEquals(member, _splitRight))
+                memberSnapshot.ExpectedPaneRect = DiagnosticRect.From(right);
+            else if (!IsSplitActive && ReferenceEquals(member, _shepherdActiveWindow) && content.Width > 0 && content.Height > 0)
+                memberSnapshot.ExpectedPaneRect = DiagnosticRect.From(content);
+            snapshot.Members.Add(memberSnapshot);
+        }
+        return snapshot;
+    }
+
+    private static string DiagnosticMemberKey(CapturedWindow member)
+        => $"pid:{member.ProcessId}/hwnd:0x{member.Hwnd.ToInt64():X}";
+
     public ContainerWindow(GroupViewModel viewModel, GroupManager manager, WindowShepherdService shepherd, LoggingService log, IconService icons)
     {
         _viewModel = viewModel;
@@ -308,6 +377,13 @@ public partial class ContainerWindow : Window
         if ((uint)msg == NativeMethods.WM_ACTIVATE)
         {
             uint activateKind = (uint)(wParam.ToInt64() & 0xFFFF);
+            DiagnosticRuntime.Record("container.wm-activate", hwnd, _shepherdActiveWindow?.Hwnd ?? IntPtr.Zero,
+                group: Group.Id.ToString("N"), action: "observe", result: activateKind.ToString(),
+                data: new Dictionary<string, string>
+                {
+                    ["activateKind"] = activateKind.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    ["foreground"] = DiagnosticEnvironmentService.FormatHwnd(NativeMethods.GetForegroundWindow()),
+                });
             // On activation (alt-tab back, click on caption), re-assert the
             // guest's overlay position/z-order (it may have drifted while
             // inactive) and give it real foreground activation. On
@@ -381,6 +457,8 @@ public partial class ContainerWindow : Window
         }
         else if ((uint)msg == NativeMethods.WM_EXITSIZEMOVE)
         {
+            DiagnosticRuntime.Record("container.wm-exitsizemove", hwnd, _shepherdActiveWindow?.Hwnd ?? IntPtr.Zero,
+                group: Group.Id.ToString("N"), action: "reconcile-request", result: "queued");
             _inNativeMoveLoop = false;
             // The container's resize just ended: re-probe the visible guest(s)'
             // native minima (a size change can accompany a UI-state shift) and
@@ -1655,6 +1733,8 @@ public partial class ContainerWindow : Window
         try
         {
             AddCapturedWindow(cw);
+            DiagnosticRuntime.Record("guest.capture", _containerHwnd, cw.Hwnd,
+                group: Group.Id.ToString("N"), action: "capture", result: "success");
             return null;
         }
         catch (Exception addEx)
@@ -1723,7 +1803,12 @@ public partial class ContainerWindow : Window
     {
         var tab = _viewModel.Tabs.FirstOrDefault(t => t.Model == window);
         if (tab != null)
+        {
             _viewModel.ReleaseTab(tab, show);
+            DiagnosticRuntime.Record("guest.release", _containerHwnd, window.Hwnd,
+                group: Group.Id.ToString("N"), action: "release", result: "requested",
+                data: new Dictionary<string, string> { ["show"] = show.ToString() });
+        }
     }
 
     #region Shepherd active-tab sync
@@ -1743,6 +1828,14 @@ public partial class ContainerWindow : Window
         CapturedWindow? oldWindow = _shepherdActiveWindow;
         if (ReferenceEquals(oldWindow, newWindow))
             return;
+
+        DiagnosticRuntime.Record("presentation.active-member", _containerHwnd, newWindow?.Hwnd ?? IntPtr.Zero,
+            group: Group.Id.ToString("N"), action: "active-tab-change", result: "logical-state-updated",
+            data: new Dictionary<string, string>
+            {
+                ["oldGuest"] = DiagnosticEnvironmentService.FormatHwnd(oldWindow?.Hwnd ?? IntPtr.Zero),
+                ["newGuest"] = DiagnosticEnvironmentService.FormatHwnd(newWindow?.Hwnd ?? IntPtr.Zero),
+            });
 
         if (IsSplitActive)
         {
@@ -1841,7 +1934,11 @@ public partial class ContainerWindow : Window
         // re-syncs Group.ActiveIndex through the view model.
         _viewModel.SetActiveTab(member);
         if (changed)
+        {
             _log.Log($"SPLIT[focus] guest=0x{member.Model.Hwnd.ToInt64():X}");
+            DiagnosticRuntime.Record("split.focus", _containerHwnd, member.Model.Hwnd,
+                group: Group.Id.ToString("N"), action: "focus", result: "logical-state-updated");
+        }
         LayoutSplitPanes();
         // Give the clicked member REAL foreground after the panes are laid out
         // (strip clicks never raise a guest natively, so without this the
@@ -2388,6 +2485,10 @@ public partial class ContainerWindow : Window
         }
 
         _log.Log($"SPLIT[enter] left=0x{left.Hwnd.ToInt64():X} right=0x{right.Hwnd.ToInt64():X}");
+        DiagnosticRuntime.Record("split.enter", _containerHwnd, left.Hwnd,
+            group: Group.Id.ToString("N"), action: "enter",
+            result: "logical-state-updated",
+            data: new Dictionary<string, string> { ["rightGuest"] = DiagnosticEnvironmentService.FormatHwnd(right.Hwnd) });
         LayoutSplitPanes();
     }
 
@@ -2429,6 +2530,8 @@ public partial class ContainerWindow : Window
         }
 
         _log.Log("SPLIT[exit]");
+        DiagnosticRuntime.Record("split.exit", _containerHwnd, survivor?.Hwnd ?? IntPtr.Zero,
+            group: Group.Id.ToString("N"), action: "exit", result: "logical-state-updated");
         if (survivor != null)
         {
             var survivorTab = _viewModel.Tabs.FirstOrDefault(t => t.Model == survivor);
@@ -2607,7 +2710,11 @@ public partial class ContainerWindow : Window
     public void NoteGuestMoveSize(CapturedWindow window, bool started)
     {
         if (started)
+        {
+            DiagnosticRuntime.Record("guest.movesize.start", _containerHwnd, window.Hwnd,
+                group: Group.Id.ToString("N"), action: "observe", result: "callback-received");
             return;
+        }
         // In split mode either visible member may be dragged out by its own real
         // title bar; otherwise only the active tab is tracked.
         if (IsSplitActive)
@@ -2636,6 +2743,18 @@ public partial class ContainerWindow : Window
             LayoutSplitPanes();
         else
             LayoutShepherdActiveWindow(forceZOrder: true);
+
+        NativeMethods.GetWindowRect(window.Hwnd, out NativeMethods.RECT after);
+        DiagnosticRuntime.Record("guest.movesize.end", _containerHwnd, window.Hwnd,
+            group: Group.Id.ToString("N"), action: moved ? "re-glue" : "observe",
+            result: "dispatched",
+            data: new Dictionary<string, string>
+            {
+                ["assignedPane"] = $"{docked.left},{docked.top},{docked.Width}x{docked.Height}",
+                ["guestBefore"] = $"{guest.left},{guest.top},{guest.Width}x{guest.Height}",
+                ["guestAfter"] = $"{after.left},{after.top},{after.Width}x{after.Height}",
+                ["reGlueRequested"] = moved.ToString(),
+            });
     }
 
     /// <summary>

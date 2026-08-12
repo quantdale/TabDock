@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
+using TabDock.Models;
 
 namespace TabDock.Services;
 
@@ -67,6 +68,65 @@ public static class EnvironmentFingerprint
         {
             return $"monitor-description failed: {ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// Structured monitor snapshot shared by startup logging and the explicit
+    /// doctor/export path. This keeps monitor bounds, negative coordinates, and
+    /// effective-DPI probing under the existing environment-fingerprint owner.
+    /// </summary>
+    public static List<MonitorSnapshot> CaptureMonitors()
+    {
+        var monitors = new List<MonitorSnapshot>();
+        try
+        {
+            bool ok = NativeMethods.EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero,
+                (IntPtr handle, IntPtr _, ref NativeMethods.RECT _, IntPtr _) =>
+                {
+                    int index = monitors.Count;
+                    var snapshot = new MonitorSnapshot
+                    {
+                        Index = index,
+                        MonitorHandle = $"0x{handle.ToInt64():X}",
+                    };
+                    var info = new NativeMethods.MONITORINFO
+                    {
+                        cbSize = (uint)Marshal.SizeOf<NativeMethods.MONITORINFO>(),
+                    };
+                    if (!NativeMethods.GetMonitorInfo(handle, ref info))
+                    {
+                        snapshot.Status = "unavailable (GetMonitorInfo)";
+                    }
+                    else
+                    {
+                        snapshot.Primary = (info.dwFlags & NativeMethods.MONITORINFOF_PRIMARY) != 0;
+                        snapshot.Bounds = DiagnosticRect.From(info.rcMonitor);
+                        snapshot.WorkArea = DiagnosticRect.From(info.rcWork);
+                    }
+
+                    int hr = NativeMethods.GetDpiForMonitor(handle, NativeMethods.MDT_EFFECTIVE_DPI, out uint dpiX, out uint dpiY);
+                    if (hr == 0)
+                    {
+                        snapshot.EffectiveDpiX = dpiX;
+                        snapshot.EffectiveDpiY = dpiY;
+                        snapshot.ScalePercent = $"{dpiX * 100.0 / NativeMethods.USER_DEFAULT_SCREEN_DPI:0.#}%";
+                    }
+                    else
+                    {
+                        snapshot.Status = "degraded (DPI unavailable)";
+                    }
+                    snapshot.Orientation = "unavailable (not queried)";
+                    monitors.Add(snapshot);
+                    return true;
+                }, IntPtr.Zero);
+            if (!ok)
+                monitors.Add(new MonitorSnapshot { Index = 0, Status = "unavailable (EnumDisplayMonitors)" });
+        }
+        catch (Exception ex)
+        {
+            monitors.Add(new MonitorSnapshot { Index = 0, Status = $"unavailable ({ex.GetType().Name})" });
+        }
+        return monitors;
     }
 
     /// <summary>

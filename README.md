@@ -36,6 +36,50 @@ The resulting single executable is at:
 .\bin\Release\net8.0-windows\win-x64\publish\TabDock.exe
 ```
 
+### Support diagnostics
+
+Every build carries its semantic version, source commit, build configuration,
+runtime identifier, and informational version. The diagnostic commands run
+without opening the main WPF UI, acquiring the TabDock mutex, installing
+WinEvent hooks, or loading/saving product state:
+
+```powershell
+.\TabDock.exe --version
+.\TabDock.exe --doctor
+.\TabDock.exe --doctor --output .\TabDock-doctor.txt
+.\TabDock.exe --support-bundle --output .\TabDock-Diagnostics.zip
+```
+
+`--doctor` is a read-only report. It includes sanitized Windows/runtime,
+monitor/DPI, display-adapter, persistence, TabDock-process, HWND geometry and
+z-order, foreground, visibility/minimize, point-probe, and bounded trace
+sections. Window titles are represented by length and a short SHA-256; default
+reports do not include document names, URLs, command lines, clipboard data,
+credentials, cookies, or telemetry. Optional probes report `unavailable` and
+do not make the command fail.
+
+When a running session is visibly broken, press `Ctrl+Alt+Shift+D`. This
+diagnostic-only global hotkey writes a sanitized ZIP to the desktop without
+depending on the possibly-hidden TabDock header. The in-process bundle adds
+the current logical group/split presentation and captured guest identities to
+the native snapshot. The command-line bundle remains useful when no TabDock
+instance is running.
+
+#### Friend-machine workflow
+
+1. Build and publish one known Release artifact, then record the SHA-256 from
+   `TabDock.exe --version` (or `--doctor`). Send that exact executable.
+2. Ask the friend to run `TabDock.exe --version` and return the output before
+   reproducing anything. The commit and SHA-256 must match the developer's
+   record.
+3. Ask them to run TabDock normally and reproduce the issue.
+4. While the failure is visible, press `Ctrl+Alt+Shift+D`; send the resulting
+   desktop ZIP. If the hotkey is unavailable, run
+   `TabDock.exe --support-bundle --output TabDock-Diagnostics.zip` after the
+   failure and also send `TabDock.exe --doctor` output.
+5. Do not send the whole `%APPDATA%\TabDock` directory. The ZIP and doctor
+   report are the intended support artifacts; review them before sharing.
+
 ### Notes on Native AOT
 
 WPF relies on COM activation, reflection emit, and other runtime features that are incompatible with .NET Native AOT, so the publish profile uses a **self-contained single-file executable** instead. This still produces one distributable file with no external runtime dependency.
@@ -71,6 +115,12 @@ WPF relies on COM activation, reflection emit, and other runtime features that a
 - `Views/ContainerWindow.xaml` — custom chrome, tab strip, content host.
 - `Views/CapturePickerWindow.xaml` — fallback window picker used from the global
   hotkey/launcher when no selected container can host the inline capture surface.
+- `Services/BuildIdentity.cs`, `Services/DiagnosticReportService.cs`, and
+  `Services/NativeSnapshotService.cs` — local, read-only build/environment/HWND
+  evidence. `DiagnosticRuntime` retains a 1024-event in-memory trace and the
+  in-product diagnostic exporter correlates that trace with the current
+  logical presentation snapshot. These services never become a second native
+  positioning authority.
 
 ## Manual test checklist
 

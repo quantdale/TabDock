@@ -55,8 +55,15 @@ public partial class App : Application
         // exception during the very earliest startup is still recorded.
         try
         {
-            _log = new LoggingService();
-            _log.Log("TabDock starting.");
+            // Diagnostic commands must not touch product state, including the
+            // normal rotating log. WPF still constructs the Application object,
+            // but no windows, hooks, mutex, persistence, or services are started.
+            if (!DiagnosticCommandLine.IsDiagnosticCommand(Environment.GetCommandLineArgs().Skip(1)))
+            {
+                _log = new LoggingService();
+                _log.Log(BuildIdentity.ToLogLine(BuildIdentity.Current));
+                _log.Log("TabDock starting.");
+            }
             AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
         }
         catch (Exception ex)
@@ -71,10 +78,23 @@ public partial class App : Application
     {
         try
         {
+            if (DiagnosticCommandLine.TryParse(e.Args, out DiagnosticCommandRequest command, out string? commandError))
+            {
+                int exitCode = commandError == null
+                    ? DiagnosticCommandLine.Run(command)
+                    : DiagnosticCommandLine.Run(e.Args);
+                Shutdown(exitCode);
+                return;
+            }
+
             // The logger and AppDomain handler are initialized in the constructor. If
             // that failed, create a best-effort logger now so the rest of startup can
             // still be diagnosed.
-            _log ??= new LoggingService();
+            if (_log == null)
+            {
+                _log = new LoggingService();
+                _log.Log(BuildIdentity.ToLogLine(BuildIdentity.Current));
+            }
 
             // Deterministic split-geometry self-test mode (goal §27/§28): runs the
             // partition matrix + seeded fuzz with no windows, no input, no single
@@ -112,6 +132,7 @@ public partial class App : Application
             _groups = new GroupManager(_shepherd, _persistence, _log);
             _events = new WinEventMonitor(_groups.IsCapturedWindow, _groups.GetCapturedWindow, _log);
             _hotkey = new HotkeyService(_log);
+            DiagnosticRuntime.LogicalSnapshotProvider = CaptureLogicalSnapshots;
 
             // All WinEvent-driven guest lifecycle policy (destroy/hide teardown,
             // minimize restore, move/size re-glue, foreground pairing, title
@@ -146,6 +167,7 @@ public partial class App : Application
             };
             _hotkey.Register();
             _hotkey.HotkeyPressed += (_, _) => OnCaptureRequested(this, EventArgs.Empty);
+            _hotkey.DiagnosticHotkeyPressed += (_, _) => ExportDiagnosticsFromHotkey();
             _mainWindow.Show();
 
             // Startup DPI (goal §16): the startup fingerprint runs before the
@@ -201,6 +223,49 @@ public partial class App : Application
         }
     }
 
+    private IReadOnlyList<LogicalPresentationSnapshot> CaptureLogicalSnapshots()
+    {
+        var snapshots = new List<LogicalPresentationSnapshot>();
+        foreach (ContainerWindow container in _containers.Values.ToList())
+        {
+            try
+            {
+                snapshots.Add(container.CreateDiagnosticSnapshot());
+            }
+            catch (Exception ex)
+            {
+                DiagnosticRuntime.Record("logical.snapshot", action: "observe", result: "failed",
+                    data: new Dictionary<string, string> { ["error"] = ex.GetType().Name });
+            }
+        }
+        return snapshots;
+    }
+
+    private void ExportDiagnosticsFromHotkey()
+    {
+        try
+        {
+            string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            if (string.IsNullOrWhiteSpace(desktop) || !Directory.Exists(desktop))
+                desktop = Environment.CurrentDirectory;
+            string path = Path.Combine(desktop, $"TabDock-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
+            string output = DiagnosticReportService.ExportBundle(path);
+            DiagnosticRuntime.Record("support.export", action: "zip", result: "success",
+                data: new Dictionary<string, string>
+                {
+                    ["path"] = DiagnosticEnvironmentService.RedactPath(output),
+                    ["trigger"] = "Ctrl+Alt+Shift+D",
+                });
+            _log.Log($"DIAGNOSTICS[export] path={DiagnosticEnvironmentService.RedactPath(output)}");
+        }
+        catch (Exception ex)
+        {
+            DiagnosticRuntime.Record("support.export", action: "zip", result: "failed",
+                data: new Dictionary<string, string> { ["error"] = ex.GetType().Name });
+            _log.LogException("Diagnostic bundle export", ex);
+        }
+    }
+
     /// <summary>
     /// One-shot startup z-order reconciliation for restored groups.
     ///
@@ -249,7 +314,7 @@ public partial class App : Application
                 raised++;
             }
         }
-        _log.Log("STARTUP[reconcile] raised {raised} restored container(s) to the top of the normal z-order band (no activation)");
+        _log.Log($"STARTUP[reconcile] raised {raised} restored container(s) to the top of the normal z-order band (no activation)");
     }
 
     private void Application_Exit(object sender, ExitEventArgs e)
@@ -274,6 +339,7 @@ public partial class App : Application
             _hotkey?.Dispose();
             _singleInstanceMutex?.ReleaseMutex();
             _singleInstanceMutex?.Dispose();
+            DiagnosticRuntime.LogicalSnapshotProvider = null;
             _log?.Dispose();
         }
     }

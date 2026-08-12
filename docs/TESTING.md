@@ -2,6 +2,27 @@
 
 This document consolidates how to validate changes to TabDock without rediscovering the harness, checklist, and repro techniques from scratch every session. It is a companion to the user-facing `README.md` manual checklist — it does not replace it.
 
+## CLI-safe diagnostics
+
+The version, doctor, and support-bundle commands are safe to run from a normal
+non-elevated terminal and do not start the main UI or WinEvent hooks:
+
+```powershell
+dotnet build TabDock.csproj -c Release -r win-x64
+& .\bin\Release\net8.0-windows\win-x64\TabDock.exe --version
+& .\bin\Release\net8.0-windows\win-x64\TabDock.exe --doctor
+& .\bin\Release\net8.0-windows\win-x64\TabDock.exe --selftest-diagnostics
+```
+
+`--doctor` must exit 0 when state is absent, malformed, or an optional native
+probe is unavailable, and it must not create or modify `%APPDATA%\TabDock`.
+Use `--doctor --output <path>` for a copyable text file and
+`--support-bundle --output <path>.zip` for a portable local bundle. During a
+live repro, `Ctrl+Alt+Shift+D` captures the in-process logical group/split
+snapshot even if the header is hidden. Inspect the ZIP before sending it:
+titles are hashes/lengths, paths are redacted, and no full personal files are
+collected.
+
 ---
 
 ## A. Validation harness reference

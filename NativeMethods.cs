@@ -221,6 +221,9 @@ public static partial class NativeMethods
     public static extern IntPtr GetWindowDpiAwarenessContext(IntPtr hwnd);
 
     [DllImport("user32.dll", SetLastError = true)]
+    public static extern int GetAwarenessFromDpiAwarenessContext(IntPtr value);
+
+    [DllImport("user32.dll", SetLastError = true)]
     public static extern bool AreDpiAwarenessContextsEqual(IntPtr dpiContextA, IntPtr dpiContextB);
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -248,6 +251,15 @@ public static partial class NativeMethods
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MONITORENUMPROC lpfnEnum, IntPtr dwData);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool AttachConsole(uint dwProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool FreeConsole();
 
     public delegate bool MONITORENUMPROC(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);
 
@@ -572,8 +584,10 @@ public static partial class NativeMethods
     public const uint MOD_NOREPEAT = 0x4000;
 
     public const uint VK_G = 0x47;
+    public const uint VK_D = 0x44;
     public const uint VK_MENU = 0x12;
     public const int ASFW_ANY = -1;
+    public const uint ATTACH_PARENT_PROCESS = 0xFFFFFFFF;
 
     public const uint PW_CLIENTONLY = 0x00000001;
     public const uint PW_RENDERFULLCONTENT = 0x00000002;
@@ -762,6 +776,17 @@ public static partial class NativeMethods
         public RECT rcMonitor;
         public RECT rcWork;
         public uint dwFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct DISPLAY_DEVICE
+    {
+        public int cb;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string DeviceName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceString;
+        public uint StateFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceId;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceKey;
     }
 
     public enum TOKEN_INFORMATION_CLASS

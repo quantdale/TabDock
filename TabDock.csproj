@@ -9,6 +9,8 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>TabDock</AssemblyName>
     <RootNamespace>TabDock</RootNamespace>
+    <Version>1.0.0</Version>
+    <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
     <!-- The build environment cannot reach nuget.org for vulnerability audit data; disable it so the build is warning-free.
          This project currently has zero third-party NuGet dependencies, so there is nothing for the audit to flag today.
          Re-verify the network constraint still holds and re-run an audit out-of-band before adding any NuGet dependency,
@@ -32,6 +34,16 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <TrimMode>partial</TrimMode>
   </PropertyGroup>
+
+  <!-- These generated attributes are consumed by BuildIdentity. They are
+       build metadata, not a second source of truth, and intentionally contain
+       no timestamp so deterministic source rebuilds remain comparable. -->
+  <ItemGroup>
+    <AssemblyMetadata Include="BuildConfiguration" Value="$(Configuration)" />
+    <AssemblyMetadata Include="RuntimeIdentifier" Value="$(RuntimeIdentifier)" />
+    <AssemblyMetadata Include="SelfContained" Value="$(SelfContained)" />
+    <AssemblyMetadata Include="SourceRevisionId" Value="$(SourceRevisionId)" Condition="'$(SourceRevisionId)' != ''" />
+  </ItemGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <DebugType>embedded</DebugType>

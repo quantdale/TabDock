@@ -1,6 +1,65 @@
 # Agent state
 
-## Current checkpoint — STARTUP GROUP VISIBILITY HARDENING (2026-08-12)
+## Current checkpoint — PRODUCTION DIAGNOSTICS FOUNDATION (2026-08-12)
+
+Objective: make every distributed TabDock executable self-identifying and make
+a broken session diagnosable locally without a debugger, checkout, telemetry,
+or product-state mutation. This is Phase 0 instrumentation only; Shepherd V2,
+group-shell changes, and split-semantic changes remain deferred.
+
+Status: **COMPLETE; FINAL RELEASE ARTIFACT VERIFIED**
+
+The repository baseline was clean `main` at `04c214f5776b25b2dbe9cfc1ed02e7d982e9561b`,
+equal to `origin/main`; the terminal is non-elevated. The final diagnostics
+commit is unpushed. The prior active
+`startup-group-visibility` OpenSpec change is preserved and untouched. New
+OpenSpec change: `production-diagnostics-foundation`.
+
+Completed in this phase:
+
+- Generated assembly metadata + `BuildIdentity` expose semantic version,
+  informational version, SourceRevisionId/commit, configuration, RID,
+  deployment model, architecture, file version, executable path, and explicit
+  command-time SHA-256. No build timestamp was added.
+- Early CLI dispatch provides UI-free `--version`, read-only `--doctor`,
+  `--doctor --output`, `--support-bundle --output`, and deterministic
+  `--selftest-diagnostics`. Normal startup logs exactly one `BUILD[identity]`
+  line before ordinary startup work.
+- Structured environment/persistence/monitor-DPI/display-adapter probes,
+  privacy-safe observed HWND rows, z-order/foreground/visibility/iconic state,
+  DWM/DPI/process identity, and fixed header/content/split WindowFromPoint
+  probes are implemented. Destroyed/access-denied probes degrade per row.
+- `ContainerWindow.CreateDiagnosticSnapshot` supplies current logical group,
+  active guest, split pair/focus, expected panes, visibility/window state, and
+  chrome interaction without layout or native writes. The in-process
+  `Ctrl+Alt+Shift+D` hotkey exports this richer live snapshot; command-line
+  doctor/bundle remains machine/native/persistence capable without IPC.
+- `DiagnosticTrace` is a thread-safe 1024-entry sequence-numbered ring with
+  selected callback/dispatch WinEvents, lifecycle/group/split/activation,
+  move-size, and Shepherd repair outcomes. No global location-change hook or
+  health polling was added. Bundles contain sanitized log tails and no upload.
+- README, architecture/testing docs, and an internal diagnostics waypoint are
+  updated with the friend-machine workflow and deferred roadmap.
+
+Validation already green: `dotnet build TabDock.csproj --no-restore` (0/0),
+`--selftest-diagnostics` (15 checks, 0 failures), OpenSpec all (14/14),
+`git diff --check`, CLI version/doctor no-state mutation, doctor file export,
+and support ZIP contents (all 9 expected files; no obvious user-path/token
+matches). Release/solution/ValidationDriver/GuineaPig/Spike builds,
+`scripts/validate.ps1`, geometry self-test, Release `--version`/`--doctor`,
+support-bundle inspection, publish identity comparison, reproducibility check,
+and final privacy/static review are green. The final Release `--version` and
+`--doctor` report the final source HEAD and artifact SHA; a second canonical
+publish produced the same SHA. The final support ZIP exited 0, contains all 9
+documented entries, and has no matches for the local username, machine name,
+or credential-like terms. The final OpenSpec handoff tasks are all complete.
+
+Handoff is ready. No cross-machine reproduction was performed in this local
+session; that remains an explicit qualification step for the known artifact.
+
+---
+
+## Historical checkpoint — STARTUP GROUP VISIBILITY HARDENING (2026-08-12)
 
 Objective: fix the HIGH-priority startup z-order defect where a restored/opened
 TabDock group can be hidden behind an already-existing overlapping desktop

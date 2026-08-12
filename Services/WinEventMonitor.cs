@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Windows.Threading;
 using TabDock.Models;
@@ -199,6 +200,8 @@ public sealed class WinEventMonitor : IDisposable
         if (hwnd == IntPtr.Zero)
             return;
 
+        bool traceEvent = IsDiagnosticEvent(eventType);
+
         // EVENT_SYSTEM_FOREGROUND identifies the foreground top-level window.
         // EVENT_OBJECT_REORDER is different: for a top-level z-order change,
         // Windows reports the desktop's client object (OBJID_CLIENT), not the
@@ -215,6 +218,15 @@ public sealed class WinEventMonitor : IDisposable
             // UI handler cannot accidentally pair a different window if a
             // later activation is queued before this event is dispatched.
             IntPtr foreground = NativeMethods.GetForegroundWindow();
+            if (traceEvent)
+            {
+                DiagnosticRuntime.Record($"{EventName(eventType)}.callback", guest: foreground, foreground: foreground,
+                    action: "observe", data: new Dictionary<string, string>
+                    {
+                        ["source"] = "desktop-reorder",
+                        ["eventTime"] = dwmsEventTime.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    });
+            }
             Post(new WindowEventArgs(hwnd, eventType, foreground, _resolveCapturedWindow(foreground)));
             return;
         }
@@ -232,6 +244,16 @@ public sealed class WinEventMonitor : IDisposable
         CapturedWindow? capturedMember = _resolveCapturedWindow(hwnd);
         if (!_isCapturedWindow(hwnd) || capturedMember == null)
             return;
+
+        if (traceEvent)
+        {
+            DiagnosticRuntime.Record($"{EventName(eventType)}.callback", guest: hwnd,
+                foreground: NativeMethods.GetForegroundWindow(), action: "observe",
+                data: new Dictionary<string, string>
+                {
+                    ["eventTime"] = dwmsEventTime.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                });
+        }
 
         Post(new WindowEventArgs(hwnd, eventType, capturedMember: capturedMember));
     }
@@ -255,6 +277,14 @@ public sealed class WinEventMonitor : IDisposable
 
     private void Raise(WindowEventArgs args)
     {
+        bool traceEvent = IsDiagnosticEvent(args.EventType);
+        IntPtr traceGuest = args.EventType == NativeMethods.EVENT_OBJECT_REORDER ? args.RelatedHwnd : args.Hwnd;
+        if (traceEvent)
+        {
+            DiagnosticRuntime.Record($"{EventName(args.EventType)}.dispatch", guest: traceGuest,
+                foreground: NativeMethods.GetForegroundWindow(), action: "dispatch");
+        }
+
         // A posted dispatch can outlive Stop() (its guard drops it here), and
         // the guest may have been released between the native event and this
         // hop — Windows aggressively recycles HWND values, so re-verify the
@@ -319,6 +349,28 @@ public sealed class WinEventMonitor : IDisposable
             _disposed = true;
         }
     }
+
+    private static bool IsDiagnosticEvent(uint eventType)
+        => eventType == NativeMethods.EVENT_SYSTEM_FOREGROUND
+            || eventType == NativeMethods.EVENT_OBJECT_REORDER
+            || eventType == NativeMethods.EVENT_SYSTEM_MOVESIZESTART
+            || eventType == NativeMethods.EVENT_SYSTEM_MOVESIZEEND
+            || eventType == NativeMethods.EVENT_SYSTEM_MINIMIZESTART
+            || eventType == NativeMethods.EVENT_OBJECT_DESTROY
+            || eventType == NativeMethods.EVENT_OBJECT_HIDE;
+
+    private static string EventName(uint eventType)
+        => eventType switch
+        {
+            NativeMethods.EVENT_SYSTEM_FOREGROUND => "EVENT_SYSTEM_FOREGROUND",
+            NativeMethods.EVENT_OBJECT_REORDER => "EVENT_OBJECT_REORDER",
+            NativeMethods.EVENT_SYSTEM_MOVESIZESTART => "EVENT_SYSTEM_MOVESIZESTART",
+            NativeMethods.EVENT_SYSTEM_MOVESIZEEND => "EVENT_SYSTEM_MOVESIZEEND",
+            NativeMethods.EVENT_SYSTEM_MINIMIZESTART => "EVENT_SYSTEM_MINIMIZESTART",
+            NativeMethods.EVENT_OBJECT_DESTROY => "EVENT_OBJECT_DESTROY",
+            NativeMethods.EVENT_OBJECT_HIDE => "EVENT_OBJECT_HIDE",
+            _ => $"EVENT_0x{eventType:X}",
+        };
 }
 
 public sealed class WindowEventArgs : EventArgs

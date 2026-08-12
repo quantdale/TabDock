@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-08-12
+goal: Support cross-machine diagnosis without a debugger, checkout, telemetry,
+  or product-state mutation.
