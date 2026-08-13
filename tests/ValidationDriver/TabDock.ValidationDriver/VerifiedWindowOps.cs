@@ -38,7 +38,12 @@ internal static class VerifiedWindowOps
             return false;
         }
 
-        NativeMethods.ShowWindow(expected.Hwnd, command);
+        // ShowWindow's BOOL is the window's previous visibility, not an
+        // operation result. Safety is determined from the identity re-read;
+        // callers that need a presentation assertion also poll the resulting
+        // native state (for example IsIconic after restore/minimize).
+        bool previouslyVisible = NativeMethods.ShowWindow(expected.Hwnd, command);
+        _ = previouslyVisible;
         return Discover.MatchesIdentity(expected);
     }
 

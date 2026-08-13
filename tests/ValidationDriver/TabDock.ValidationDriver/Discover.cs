@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Text;
 
 namespace TabDock.ValidationDriver;
@@ -9,6 +8,7 @@ namespace TabDock.ValidationDriver;
 internal readonly record struct WindowIdentity(
     IntPtr Hwnd,
     uint ProcessId,
+    uint WindowThreadId,
     string ClassName,
     string Title,
     string ExePath,
@@ -18,8 +18,8 @@ internal readonly record struct WindowIdentity(
 internal static class Discover
 {
     /// <summary>
-    /// Captures the process/class/title tuple used by the driver's safety
-    /// checks. A zero/invalid HWND never becomes an actionable identity.
+    /// Captures the process/thread/class/title/start-time identity used by the
+    /// driver's safety checks. A zero/invalid HWND never becomes actionable.
     /// </summary>
     public static bool TryCaptureIdentity(IntPtr hwnd, out WindowIdentity identity)
     {
@@ -27,14 +27,19 @@ internal static class Discover
         if (!NativeMethods.IsWindow(hwnd))
             return false;
 
-        NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
+        uint threadId = NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
         string? className = NativeMethods.GetClassNameString(hwnd);
         string? title = NativeMethods.GetWindowTextString(hwnd);
         string? exePath = pid == 0 ? null : NativeMethods.GetProcessImagePath(pid);
-        if (pid == 0 || string.IsNullOrEmpty(className) || title == null || string.IsNullOrWhiteSpace(exePath))
+        if (pid == 0 || threadId == 0 || string.IsNullOrEmpty(className)
+            || title == null || string.IsNullOrWhiteSpace(exePath))
             return false;
 
-        identity = new WindowIdentity(hwnd, pid, className, title, exePath, TryGetProcessStartTimeUtcTicks(pid));
+        long processStartTicks = TryGetProcessStartTimeUtcTicks(pid);
+        if (processStartTicks == 0)
+            return false;
+
+        identity = new WindowIdentity(hwnd, pid, threadId, className, title, exePath, processStartTicks);
         return true;
     }
 
@@ -49,30 +54,21 @@ internal static class Discover
             return false;
 
         return current.ProcessId == expected.ProcessId
+            && current.WindowThreadId == expected.WindowThreadId
             && string.Equals(current.ClassName, expected.ClassName, StringComparison.Ordinal)
             && string.Equals(current.Title, expected.Title, StringComparison.Ordinal)
             && string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase)
-            && (expected.ProcessStartTimeUtcTicks == 0
-                || current.ProcessStartTimeUtcTicks == expected.ProcessStartTimeUtcTicks);
+            && current.ProcessStartTimeUtcTicks == expected.ProcessStartTimeUtcTicks;
     }
 
     /// <summary>
     /// Reads the process-start identity used to distinguish a recycled PID.
-    /// A zero result is retained as an unavailable optional field; the driver
-    /// still requires the existing PID/class/executable checks in that case.
+    /// This uses the same native FILETIME seam as production. A zero result is
+    /// unavailable and causes identity capture to fail closed before the
+    /// driver can send input or mutate a window.
     /// </summary>
     public static long TryGetProcessStartTimeUtcTicks(uint pid)
-    {
-        try
-        {
-            using Process process = Process.GetProcessById(unchecked((int)pid));
-            return process.StartTime.ToUniversalTime().Ticks;
-        }
-        catch
-        {
-            return 0;
-        }
-    }
+        => NativeMethods.GetProcessStartTimeUtcTicks(pid);
 
     public static List<IntPtr> GetTopLevelWindowsByPid(uint pid, bool visibleOnly)
     {

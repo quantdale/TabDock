@@ -199,6 +199,9 @@ internal static class DiagnosticSelfTest
         Check(SessionEndingPolicySelfTest.TeardownIsOneWayAndIdempotent());
         Check(MinTrackProbeSelfTest.InitializesEveryField());
         Check(WindowShepherdService.MinTrackProbeTimeoutMilliseconds <= 100);
+        Check(WindowIdentitySelfTest.CoversIdentityTiers());
+        Check(MonitorDpiSelfTest.CoversProbeAndConversionSeam());
+        Check(ShowWindowSemanticsSelfTest.CoversPostStateSemantics());
         Check(ContainerGeometrySelfTest.UsesContainingMonitorWorkArea());
         (int journalChecks, int journalFailures) = RecoveryJournalSelfTest.Run();
         checks += journalChecks;
@@ -214,6 +217,42 @@ internal static class DiagnosticSelfTest
         Check(concurrent.Snapshot().Count == 128);
         Check(concurrent.Snapshot().Zip(concurrent.Snapshot().Skip(1), (left, right) => left.Sequence < right.Sequence).All(value => value));
         return (checks, failures);
+    }
+}
+
+internal static class ShowWindowSemanticsSelfTest
+{
+    public static bool CoversPostStateSemantics()
+    {
+        // The first argument models ShowWindow's previous-visibility BOOL.
+        // It is deliberately false for hidden/minimized restore and must not
+        // turn a successful post-state into a failure.
+        bool hiddenRestore = ShowWindowSemantics.RestoreSucceeded(
+            previouslyVisible: false, iconicAfter: false, zoomedAfter: false);
+        bool minimizedRestore = ShowWindowSemantics.RestoreSucceeded(
+            previouslyVisible: true, iconicAfter: false, zoomedAfter: false);
+        bool visibleRestore = ShowWindowSemantics.RestoreSucceeded(
+            previouslyVisible: true, iconicAfter: false, zoomedAfter: false);
+        bool failedRestore = !ShowWindowSemantics.RestoreSucceeded(
+            previouslyVisible: false, iconicAfter: true, zoomedAfter: false);
+        bool hide = ShowWindowSemantics.VisibilitySucceeded(
+            previouslyVisible: true, visibleAfter: false, expectedVisible: false);
+        bool releaseShow = ShowWindowSemantics.VisibilitySucceeded(
+            previouslyVisible: false, visibleAfter: true, expectedVisible: true);
+        bool intentionalHide = ShowWindowSemantics.VisibilitySucceeded(
+            previouslyVisible: true, visibleAfter: false, expectedVisible: false);
+        bool failedVisibility = !ShowWindowSemantics.VisibilitySucceeded(
+            previouslyVisible: false, visibleAfter: false, expectedVisible: true);
+        var positioningFailuresLogged = new HashSet<IntPtr>();
+        if (!hiddenRestore)
+            positioningFailuresLogged.Add(new IntPtr(1));
+        bool genuineFailureWasRecorded = failedRestore
+            && positioningFailuresLogged.Add(new IntPtr(1));
+        bool benignFalseDidNotConsumeFailureSlot = genuineFailureWasRecorded;
+
+        return hiddenRestore && minimizedRestore && visibleRestore && failedRestore
+            && hide && releaseShow && intentionalHide && failedVisibility
+            && benignFalseDidNotConsumeFailureSlot;
     }
 }
 

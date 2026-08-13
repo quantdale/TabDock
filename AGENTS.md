@@ -20,6 +20,20 @@ For a fresh session, read this file, `.agent/STATE.md`, and the referenced activ
 
 Use the templates in `.agent/` for plans, decisions, and investigations. Make the plan the source of truth for multi-step work and link it from `STATE.md`.
 
+## Git authority and self-reference rule
+
+Git is authoritative for the current `HEAD`, branch, `origin/main`, and
+clean/dirty state. A fresh session resolves those values dynamically with
+`git rev-parse HEAD`, `git branch --show-current`, `git rev-parse origin/main`,
+and `git status`; `.agent/STATE.md` must not claim that an embedded SHA is the
+commit containing the state file itself. Embedded SHAs describe historical or
+last-substantive implementation commits only. CI run IDs are historical
+evidence for the SHA they name, not a reason to create a state-only commit.
+After a push, report the final SHA and CI result in the session output and
+have the next session verify them independently. Do not create another commit
+merely to record the preceding push or its CI run when repository content does
+not otherwise need modification.
+
 ## Repository exploration
 
 For architecture, ownership, callers, dependencies, history, implementations, and broad discovery, use the project-local Repowise MCP/index first when available. Its lean profile exposes six core tools: `search_codebase`, `get_answer`, `get_risk`, `get_context`, `get_symbol`, and `get_why`. Treat retrieval as a map, then read and verify the actual source before editing. Fall back to `rg`, Git, and focused file reads when the index is unavailable, stale, incomplete, or the question requires exact current text. Avoid repeated repository-wide crawls and giant command output; expand focused output only when needed.

@@ -2716,12 +2716,12 @@ public partial class ContainerWindow : Window
             {
                 return;
             }
-            if (!_shepherd.IsCurrentCapturedWindow(window)
-                || !NativeMethods.IsIconic(window.Hwnd)
+            if (!NativeMethods.IsIconic(window.Hwnd)
                 || !NativeMethods.IsWindowVisible(window.Hwnd))
                 return;
 
-            NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_RESTORE);
+            if (!_shepherd.RestoreMinimized(window))
+                return;
             if (IsSplitActive)
                 LayoutSplitPanes();
             else

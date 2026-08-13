@@ -118,9 +118,16 @@ no-nesting and already-captured rules, then `_shepherd.Capture(hwnd, out error)`
 - Refuses dead HWNDs and own-process windows (`WindowShepherdService.cs:92-103`).
 - **Elevation check fails closed** — indeterminate target elevation + non-elevated TabDock
   refuses the capture (`WindowShepherdService.cs:105-131`).
-- Snapshots `WINDOWPLACEMENT` (`HasValidPlacement`, `WindowShepherdService.cs:133-139`), bounds,
-  title, exe path; disables DWM transitions for the captured lifetime (`WindowShepherdService.cs:159,165-169`);
-  logs `Shepherd-captured`.
+- Classifies the target's DPI context and probes the target monitor's effective DPI
+  through the contract-correct PMv2 helper (`Services/MonitorDpiService.cs`); a known
+  DPI-unaware guest remains accepted because Shepherd placement is in the caller's
+  physical screen coordinates. A failed/unknown probe fails closed.
+- Snapshots `WINDOWPLACEMENT` (`HasValidPlacement`), bounds, title, executable path,
+  PID, GUI thread, process-start time, and a reversible per-capture HWND token.
+  The token is removed on release and prevents a same-process recycled HWND from
+  becoming a valid delayed callback. DWM transitions are disabled only after the
+  durable capture journal is committed (`WindowShepherdService.cs`); logs
+  `Shepherd-captured`.
 
 `GroupViewModel.AddCapturedWindow` (`GroupViewModel.cs:168-177`) adds to `Group.Members` and
 `Tabs` and activates the new tab; `GroupManager`'s `CollectionChanged` hook maintains the O(1)
@@ -344,12 +351,36 @@ placeholders until the user repopulates or deletes them.
 
 ### Cross-machine hardening
 
-- **DPI-aware guests only at non-100% scale.** Capture refuses a DPI-unaware
-  guest when `GetDpiForSystem() != 96` (its DWM-virtualized 96-DPI coordinate
-  space cannot be glued with physical-pixel rects); an invalid awareness or
-  system-DPI probe fails closed and reports a capture refusal. System-aware
-  guests work on single-DPI systems (mixed-DPI multi-monitor is a documented
-  limitation). The Shepherd physical-pixel convention itself is unchanged.
+- **Physical-coordinate Shepherding and DPI-unaware acceptance.** TabDock remains
+  PerMonitorV2 and positions every independent top-level guest using physical
+  screen coordinates. A known DPI-unaware guest is accepted; its DWM-scaled
+  content may be blurry, but its outer rect still follows the physical pane.
+  Unknown or failed guest-awareness/monitor probes fail closed.
+- **Contract-correct arbitrary-monitor DPI probing.** Microsoft documents
+  [`GetDpiForMonitor`](https://learn.microsoft.com/en-us/windows/win32/api/shellscalingapi/nf-shellscalingapi-getdpiformonitor)
+  as not DPI-aware and says not to call it from a per-monitor-aware thread, so
+  production no longer calls it. `NativeMonitorDpiProbe` temporarily sets the
+  calling thread to PMv2, verifies that context, creates a hidden top-level PMv2
+  helper HWND at the target monitor, and reads `GetDpiForWindow(helper)`. This
+  avoids the 96-DPI result that [`GetDpiForWindow(target)`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdpiforwindow)
+  can return for an unaware guest. The helper is destroyed and the original
+  thread context restored in a `finally`; a zero result is unavailable and is
+  rejected by capture and treated as an unavailable/no-scale result by the
+  min-track conversion.
+- **Two-tier native window identity.** Hot layout paths check `IsWindow`, PID,
+  GUI thread, class, the live `CapturedWindow` binding, and the zero-allocation
+  HWND token. Slow/destructive/delayed paths add executable path and native
+  `GetProcessTimes` process-start identity. Crash rescue retains the strict
+  process-start gate and requires/verifies/removes the journaled HWND token;
+  entries without that generation token are skipped. This distinguishes PID
+  reuse and same-process HWND recycling without managed `Process` allocation
+  on layout ticks.
+  The hot tier is limited to `PositionAndShow`, `PositionGuest`,
+  `PositionGuestsDeferred`, and z-order re-glue. The strong tier is used for
+  `Hide`, `Release`, `BringToFront`/foreground handoff, delayed minimized
+  restore, dirty min-track probing, lifecycle teardown, and crash recovery —
+  every path that can hide, restore, release, or otherwise make a delayed
+  native mutation against an external window.
 - **Monitor-specific maximize bounds** — `WM_GETMINMAXINFO` uses the work area
   of the monitor containing the container. The WPF container has no independent
   primary-monitor `MaxWidth`/`MaxHeight` clamp, so a larger secondary monitor
@@ -364,16 +395,18 @@ placeholders until the user repopulates or deletes them.
   deliberately non-pumping GuineaPig scenario protects the dispatcher bound.
 - **Environment fingerprint** (`Services/EnvironmentFingerprint.cs`): one
   `ENV[startup]` line (OS version/build, .NET runtime, bitness, full monitor
-  table with bounds/work/primary via `EnumDisplayMonitors`), one
+  table with bounds/work/primary/effective DPI via `EnumDisplayMonitors` and the
+  PMv2 helper), one
   `ENV[launcher]` line (system DPI once the launcher exists), one
   `ENV[container]` line per open container (rects, window state, active
   monitor, DPI, guest), and the `STATE[settled]` snapshot carries the platform
   and guest executable. Bounded — never per-frame — so customer logs are
   self-describing.
-- **Deterministic partition self-test**: `TabDock.exe --selftest-geometry`
-  runs `SplitGeometry.RunSelfTest` (matrix widths 1..4096 × heights × origins
-  incl. negative, odd widths, 100 k seeded fuzz rects, seed 20260810) with no
-  UI/input, logs `SELFTEST[geometry]`, exits 0/1.
+- **Deterministic partition and identity/DPI self-tests**: `TabDock.exe
+  --selftest-geometry` runs the partition matrix; `--selftest-diagnostics`
+  covers post-state `ShowWindow` semantics, the two identity tiers including
+  same-process HWND recycling, recovery identity, and the injectable monitor-DPI
+  conversion seam.
 
 ## 3. WinEvent pipeline: event → handler → effect
 
@@ -513,7 +546,7 @@ journal can be durably written.
 | `STATE[transition] winState=… hostRect=…` | `ContainerWindow.xaml.cs` (`StateChanged`) | One line per window-state transition (pre-layout rect diagnostic) |
 | `ENV[startup]` / `ENV[launcher]` / `ENV[container]` | `App.xaml.cs` / `ContainerWindow.xaml.cs` | Environment fingerprint (startup, launcher DPI, per-container) |
 | `SELFTEST[geometry]` | `App.xaml.cs` (`--selftest-geometry`) | Deterministic partition self-test result |
-| `Shepherd capture blocked: DPI-unaware target…` | `WindowShepherdService.cs` (`Capture`) | DPI-unaware guest refused at non-100% scale |
+| `Shepherd capture blocked: …dpi::probe-failed…` | `WindowShepherdService.cs` (`Capture`) | Guest awareness/target-monitor DPI probe failed closed |
 
 Rules:
 - **The log file is held open for the process lifetime** (`FileShare.ReadWrite`, `LoggingService.cs:226`);

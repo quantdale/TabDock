@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <Compile Include="..\..\..\NativeMethods.cs" Link="NativeMethods.cs" />
+    <Compile Include="..\..\..\Services\MonitorDpiService.cs" Link="MonitorDpiService.cs" />
   </ItemGroup>
 
 </Project>

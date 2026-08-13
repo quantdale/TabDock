@@ -88,6 +88,15 @@ public static partial class NativeMethods
     public static extern nint SetWindowLongPtr(IntPtr hWnd, int nIndex, nint dwNewLong);
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool SetProp(IntPtr hWnd, string lpString, IntPtr hData);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern IntPtr GetProp(IntPtr hWnd, string lpString);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern IntPtr RemoveProp(IntPtr hWnd, string lpString);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -218,6 +227,12 @@ public static partial class NativeMethods
     public static extern bool SetProcessDpiAwarenessContext(IntPtr dpiAwarenessContext);
 
     [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiAwarenessContext);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr GetThreadDpiAwarenessContext();
+
+    [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr GetWindowDpiAwarenessContext(IntPtr hwnd);
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -236,15 +251,6 @@ public static partial class NativeMethods
     /// window inhabits. The physical scale factor applied to an unaware guest's
     /// content and its logical coordinate space is (monitorEffectiveDpi / 96).</summary>
     public const uint USER_DEFAULT_SCREEN_DPI = 96;
-
-    /// <summary>MDT_EFFECTIVE_DPI — GetDpiForMonitor's effective-DPI type. This is
-    /// the correct per-monitor scale source for a PerMonitorV2 caller:
-    /// GetDpiForWindow(monitor handle) returns 0, and GetDpiForWindow(hwnd) on an
-    /// unaware window returns 96 by definition, so neither is usable here.</summary>
-    public const int MDT_EFFECTIVE_DPI = 0;
-
-    [DllImport("shcore.dll")]
-    public static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
@@ -288,6 +294,14 @@ public static partial class NativeMethods
 
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GetProcessTimes(
+        IntPtr hProcess,
+        out FILETIME lpCreationTime,
+        out FILETIME lpExitTime,
+        out FILETIME lpKernelTime,
+        out FILETIME lpUserTime);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern bool CloseHandle(IntPtr hObject);
@@ -645,6 +659,16 @@ public static partial class NativeMethods
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    public struct FILETIME
+    {
+        public uint dwLowDateTime;
+        public uint dwHighDateTime;
+
+        public long ToInt64()
+            => ((long)dwHighDateTime << 32) | dwLowDateTime;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     public struct MINMAXINFO
     {
         public POINT ptReserved;
@@ -853,6 +877,41 @@ public static partial class NativeMethods
         finally
         {
             CloseHandle(hProcess);
+        }
+    }
+
+    /// <summary>
+    /// Reads the process creation time without allocating a managed
+    /// <see cref="System.Diagnostics.Process"/> object. The returned value is
+    /// UTC <see cref="DateTime.Ticks"/>, matching the identity persisted by
+    /// CapturedWindow and the recovery journal. A zero result is unavailable
+    /// and callers that use it as an identity must fail closed.
+    /// </summary>
+    public static long GetProcessStartTimeUtcTicks(uint pid)
+    {
+        if (pid == 0)
+            return 0;
+
+        IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (process == IntPtr.Zero)
+            return 0;
+        try
+        {
+            if (!GetProcessTimes(process, out FILETIME creation, out _, out _, out _))
+                return 0;
+
+            long fileTime = creation.ToInt64();
+            if (fileTime <= 0)
+                return 0;
+            return DateTime.FromFileTimeUtc(fileTime).Ticks;
+        }
+        catch
+        {
+            return 0;
+        }
+        finally
+        {
+            CloseHandle(process);
         }
     }
 

@@ -461,6 +461,14 @@ disabled; a memory-only log fallback does not weaken this safety gate.
 
 ### 5. Cross-monitor / DPI
 
+- `GetDpiForMonitor` is intentionally not used: Microsoft documents it as
+  not DPI-aware and unsuitable from a PerMonitorV2 thread. Production probes
+  an arbitrary target monitor with the hidden PMv2 helper in
+  `Services/MonitorDpiService.cs` and `GetDpiForWindow(helper)`; an unaware
+  guest's own `GetDpiForWindow` result of 96 is therefore not used as the
+  monitor scale.
+- `--selftest-diagnostics` exercises the injectable DPI probe/conversion seam;
+  it does not pretend to qualify physical mixed-DPI hardware.
 - Move a container between monitors with different scaling (e.g. 100% and 150%).
 - Verify the content area re-lays out and the active guest fills it.
 - Maximize on a larger secondary monitor (1440p/4K), including negative monitor

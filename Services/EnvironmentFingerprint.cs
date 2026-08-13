@@ -104,12 +104,12 @@ public static class EnvironmentFingerprint
                         snapshot.WorkArea = DiagnosticRect.From(info.rcWork);
                     }
 
-                    int hr = NativeMethods.GetDpiForMonitor(handle, NativeMethods.MDT_EFFECTIVE_DPI, out uint dpiX, out uint dpiY);
-                    if (hr == 0)
+                    uint dpi = MonitorDpiService.GetEffectiveDpi(handle);
+                    if (dpi != 0)
                     {
-                        snapshot.EffectiveDpiX = dpiX;
-                        snapshot.EffectiveDpiY = dpiY;
-                        snapshot.ScalePercent = $"{dpiX * 100.0 / NativeMethods.USER_DEFAULT_SCREEN_DPI:0.#}%";
+                        snapshot.EffectiveDpiX = dpi;
+                        snapshot.EffectiveDpiY = dpi;
+                        snapshot.ScalePercent = $"{dpi * 100.0 / NativeMethods.USER_DEFAULT_SCREEN_DPI:0.#}%";
                     }
                     else
                     {

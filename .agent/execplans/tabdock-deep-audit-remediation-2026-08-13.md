@@ -4,6 +4,52 @@
 **Owner/session:** Codex remediation campaign
 **Updated:** 2026-08-13
 
+## Post-remediation review follow-up — active narrow pass
+
+This follow-up is separate from the completed deep-audit remediation above.
+Its starting canonical handoff was observed dynamically at
+`c6b119a028cc83c3a955b15a488f609976404f6e`; the prior remediation baseline
+for substantive code is `f1dc7ab3ac616d6f1517efafdced5eb6418d3462`.
+
+Scope and decisions:
+
+- R3: Git is authoritative for current refs/status. State records campaign
+  facts and substantive baselines only; it never embeds the SHA of the commit
+  containing itself, and it never requires a post-push state-only CI record.
+- R4: production uses a two-tier gate. Hot layout/re-glue checks retain
+  HWND/PID/thread/class, live object binding, and a reversible per-capture HWND
+  token. Slow/destructive/delayed/foreground/recovery paths add executable
+  path and native `GetProcessTimes` process-start identity. The token closes
+  the same-process HWND-recycling case that PID/start checks cannot distinguish;
+  recovery requires a nonzero journaled token, and journal cleanup also matches
+  that identity tuple instead of HWND alone.
+- R5: every production restore/show path uses the `ShowWindow` post-state;
+  its BOOL is treated only as previous visibility. Hidden, minimized, visible,
+  hide, release/show, and intentional-hide semantics have deterministic tests.
+- R6/M8: `GetDpiForMonitor` is removed from production and driver code. A
+  controlled PMv2 helper HWND on the target monitor is queried with
+  `GetDpiForWindow`; the helper is destroyed and the thread context restored.
+  The DPI probe/conversion seam is deterministic; physical mixed-DPI hardware
+  remains external qualification.
+
+The active implementation/specification checklist is
+`openspec/changes/post-remediation-review-followup-2026-08-13/tasks.md`.
+Final pushed SHA and push-triggered CI values belong in the session output,
+not in a follow-up state-only commit.
+
+### Local follow-up validation checkpoint
+
+- Debug and Release solution builds and the Release ValidationDriver build pass
+  with 0 warnings/errors; the final canonical Release gate also passes.
+- `--selftest-diagnostics` passes 89 checks / 0 failures; geometry self-test
+  passes.
+- `.\scripts\validate.ps1 -Configuration Release -Ci -Publish` passes audited
+  restore, no-vulnerability report, all Release builds, diagnostics/privacy,
+  doctor, support-bundle inspection, 16/16 OpenSpec validation, and publish/
+  version smoke.
+- Physical mixed-DPI, supervised M2 session-ending, Chrome, and any
+  foreground-activation-limited scenario remain external qualification items.
+
 ## Final Qualification / Integration Pass
 
 ### Final durable checkpoint push and CI verified (2026-08-13 22:18 +08:00)

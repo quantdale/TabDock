@@ -4,11 +4,13 @@ namespace TabDock.Models;
 
 /// <summary>
 /// A top-level window shepherded into a TabDock group (see
-/// Services/WindowShepherdService.cs). The guest's window identity is never
-/// mutated — no SetParent, no style/ex-style change, no owner change — only
-/// reversible placement, z-order, visibility, and DWM transition-suppression
-/// changes are applied. This only needs to snapshot enough to restore its
-/// on-screen placement and activation state on release, not undo any surgery.
+/// Services/WindowShepherdService.cs). The guest's hierarchy/style/owner
+/// identity is never mutated — no SetParent, no style/ex-style change, no
+/// owner change. A reversible private HWND token is used only to reject
+/// same-process handle recycling. Presentation changes are limited to
+/// placement, z-order, visibility, and DWM transition suppression. This only
+/// needs to snapshot enough to restore its on-screen placement and activation
+/// state on release, not undo any surgery.
 /// </summary>
 public sealed class CapturedWindow
 {
@@ -16,7 +18,17 @@ public sealed class CapturedWindow
 
     public uint ProcessId { get; set; }
 
-    /// <summary>Best-effort process-start identity used by crash rescue in addition to PID.</summary>
+    /// <summary>GUI thread that owned the HWND at capture time.</summary>
+    public uint WindowThreadId { get; set; }
+
+    /// <summary>
+    /// Nonzero per-capture token stored as a reversible HWND property. It
+    /// distinguishes same-process HWND recycling, which PID/thread/class/exe
+    /// checks alone cannot prove is the original window instance.
+    /// </summary>
+    public long WindowIdentityToken { get; set; }
+
+    /// <summary>Required process-instance identity used by mutation gates and crash rescue.</summary>
     public long ProcessStartTimeUtcTicks { get; set; }
 
     public string ExePath { get; set; } = string.Empty;

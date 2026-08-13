@@ -43,6 +43,9 @@ public sealed class HiddenWindowEntry
 {
     public long Hwnd { get; set; }
     public uint Pid { get; set; }
+    public uint WindowThreadId { get; set; }
+    /// <summary>Per-capture HWND property token used to reject same-process HWND recycling during rescue.</summary>
+    public long WindowIdentityToken { get; set; }
     public string ExePath { get; set; } = string.Empty;
     public string ClassName { get; set; } = string.Empty;
     public long ProcessStartTimeUtcTicks { get; set; }

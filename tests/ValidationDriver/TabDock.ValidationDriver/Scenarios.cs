@@ -1576,8 +1576,8 @@ internal static partial class Scenarios
         if (!Discover.TryCaptureIdentity(expected.Hwnd, out current))
             return false;
         return current.ProcessId == expected.ProcessId
-            && (expected.ProcessStartTimeUtcTicks == 0
-                || current.ProcessStartTimeUtcTicks == expected.ProcessStartTimeUtcTicks)
+            && current.WindowThreadId == expected.WindowThreadId
+            && current.ProcessStartTimeUtcTicks == expected.ProcessStartTimeUtcTicks
             && string.Equals(current.ClassName, expected.ClassName, StringComparison.Ordinal)
             && string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase);
     }

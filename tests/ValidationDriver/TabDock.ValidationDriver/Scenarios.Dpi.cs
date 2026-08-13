@@ -4,6 +4,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using TabDock.Services;
 
 namespace TabDock.ValidationDriver;
 
@@ -24,8 +25,9 @@ namespace TabDock.ValidationDriver;
 ///   * Known DPI-aware guest    -> captured normally.
 ///   * Probe failed / UNKNOWN   -> still fails closed (unchanged).
 ///
-/// The gate is PER-MONITOR, matching production: it enumerates the real monitors,
-/// reads each one's MDT_EFFECTIVE_DPI, deliberately places the controlled guest on a
+    /// The gate is PER-MONITOR, matching production: it enumerates the real monitors,
+    /// reads each one's effective DPI through the contract-correct PMv2 helper,
+    /// deliberately places the controlled guest on a
 /// non-100% monitor when one exists (so a mixed-DPI machine exercises the policy
 /// without touching the primary's scaling), verifies the placement with
 /// MonitorFromWindow, re-reads the ACTUAL monitor the guest landed on, and only then
@@ -37,13 +39,13 @@ namespace TabDock.ValidationDriver;
 /// </summary>
 internal static partial class Scenarios
 {
-    /// <summary>One enumerated monitor's geometry plus its effective DPI (MDT_EFFECTIVE_DPI).</summary>
+    /// <summary>One enumerated monitor's geometry plus its effective DPI.</summary>
     private sealed class DpiMonitor
     {
         public IntPtr Handle;
         public NativeMethods.RECT Bounds;
         public NativeMethods.RECT Work;
-        /// <summary>Set only when GetDpiForMonitor returned S_OK; 0 also means "probe failed".</summary>
+        /// <summary>Set only when the contract-correct monitor probe succeeded; 0 also means "probe failed".</summary>
         public uint Dpi;
 
         public bool DpiProbeFailed => Dpi == 0;
@@ -58,7 +60,7 @@ internal static partial class Scenarios
     }
 
     /// <summary>Enumerates every display monitor and its effective DPI. A monitor whose
-    /// GetDpiForMonitor call fails records Dpi==0 (DpiProbeFailed).</summary>
+    /// The PMv2 helper probe fails records Dpi==0 (DpiProbeFailed).</summary>
     private static List<DpiMonitor> EnumerateDpiMonitors()
     {
         var list = new List<DpiMonitor>();
@@ -67,9 +69,8 @@ internal static partial class Scenarios
             {
                 var mi = new NativeMethods.MONITORINFO { cbSize = (uint)Marshal.SizeOf<NativeMethods.MONITORINFO>() };
                 NativeMethods.GetMonitorInfo(h, ref mi);
-                uint dpi = 0;
-                int hr = NativeMethods.GetDpiForMonitor(h, NativeMethods.MDT_EFFECTIVE_DPI, out dpi, out _);
-                list.Add(new DpiMonitor { Handle = h, Bounds = mi.rcMonitor, Work = mi.rcWork, Dpi = hr == 0 ? dpi : 0 });
+                uint dpi = MonitorDpiService.GetEffectiveDpi(h);
+                list.Add(new DpiMonitor { Handle = h, Bounds = mi.rcMonitor, Work = mi.rcWork, Dpi = dpi });
                 return true;
             }, IntPtr.Zero);
         return list;
@@ -125,7 +126,7 @@ internal static partial class Scenarios
         if (probeFailed != null)
             throw new InvalidOperationException(
                 $"DPI scenario '{scenario}': monitor DPI probe FAILED for 0x{probeFailed.Handle.ToInt64():X} " +
-                $"(GetDpiForMonitor != S_OK). FAILING rather than converting the probe failure into a 100%-scaling skip.");
+                $"(contract-correct PMv2 monitor probe failed). FAILING rather than converting the probe failure into a 100%-scaling skip.");
 
         DpiMonitor? non100 = monitors.FirstOrDefault(m => m.Dpi != NativeMethods.USER_DEFAULT_SCREEN_DPI);
         if (non100 == null)

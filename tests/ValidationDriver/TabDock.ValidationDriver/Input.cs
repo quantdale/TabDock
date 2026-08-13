@@ -161,18 +161,17 @@ internal static class Input
             return false;
 
         if (!string.Equals(current.ExePath, processIdentity.ExePath, StringComparison.OrdinalIgnoreCase)
-            || (processIdentity.StartTimeUtcTicks != 0
-                && current.ProcessStartTimeUtcTicks != processIdentity.StartTimeUtcTicks))
+            || current.ProcessStartTimeUtcTicks != processIdentity.StartTimeUtcTicks)
             return false;
 
         if (!RegisteredWindows.TryGetValue(current.Hwnd, out WindowIdentity expected))
             return true; // dynamic dialog/child root in a registered test process
 
         if (current.ProcessId != expected.ProcessId
+            || current.WindowThreadId != expected.WindowThreadId
             || !string.Equals(current.ClassName, expected.ClassName, StringComparison.Ordinal)
             || !string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase)
-            || (expected.ProcessStartTimeUtcTicks != 0
-                && current.ProcessStartTimeUtcTicks != expected.ProcessStartTimeUtcTicks))
+            || current.ProcessStartTimeUtcTicks != expected.ProcessStartTimeUtcTicks)
         {
             return false;
         }
@@ -189,10 +188,10 @@ internal static class Input
     {
         return Discover.TryCaptureIdentity(hwnd, out WindowIdentity current)
             && current.ProcessId == expected.ProcessId
+            && current.WindowThreadId == expected.WindowThreadId
             && string.Equals(current.ClassName, expected.ClassName, StringComparison.Ordinal)
             && string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase)
-            && (expected.ProcessStartTimeUtcTicks == 0
-                || current.ProcessStartTimeUtcTicks == expected.ProcessStartTimeUtcTicks)
+            && current.ProcessStartTimeUtcTicks == expected.ProcessStartTimeUtcTicks
             && IsScoped(current);
     }
 
@@ -216,8 +215,7 @@ internal static class Input
         bool sameProcessIdentity = currentValid
             && current.ProcessId == previousTarget.ProcessId
             && string.Equals(current.ExePath, previousTarget.ExePath, StringComparison.OrdinalIgnoreCase)
-            && (previousTarget.ProcessStartTimeUtcTicks == 0
-                || current.ProcessStartTimeUtcTicks == previousTarget.ProcessStartTimeUtcTicks);
+            && current.ProcessStartTimeUtcTicks == previousTarget.ProcessStartTimeUtcTicks;
         // A WPF menu, picker, or dialog can legitimately disappear after it
         // supplied the prior target. If that prior HWND is no longer live, the
         // independently validated current foreground root may become the new
@@ -228,10 +226,10 @@ internal static class Input
         bool registeredDragTarget = allowRegisteredDragTarget && currentValid
             && RegisteredWindows.TryGetValue(current.Hwnd, out WindowIdentity registered)
             && registered.ProcessId == current.ProcessId
+            && registered.WindowThreadId == current.WindowThreadId
             && string.Equals(registered.ClassName, current.ClassName, StringComparison.Ordinal)
             && string.Equals(registered.ExePath, current.ExePath, StringComparison.OrdinalIgnoreCase)
-            && (registered.ProcessStartTimeUtcTicks == 0
-                || registered.ProcessStartTimeUtcTicks == current.ProcessStartTimeUtcTicks);
+            && registered.ProcessStartTimeUtcTicks == current.ProcessStartTimeUtcTicks;
         bool registeredTargetTransition = currentValid
             && RegisteredWindows.ContainsKey(previousTarget.Hwnd)
             && RegisteredWindows.ContainsKey(current.Hwnd)
@@ -256,10 +254,10 @@ internal static class Input
     {
         return RegisteredWindows.TryGetValue(current.Hwnd, out WindowIdentity expected)
             && expected.ProcessId == current.ProcessId
+            && expected.WindowThreadId == current.WindowThreadId
             && string.Equals(expected.ClassName, current.ClassName, StringComparison.Ordinal)
             && string.Equals(expected.ExePath, current.ExePath, StringComparison.OrdinalIgnoreCase)
-            && (expected.ProcessStartTimeUtcTicks == 0
-                || expected.ProcessStartTimeUtcTicks == current.ProcessStartTimeUtcTicks);
+            && expected.ProcessStartTimeUtcTicks == current.ProcessStartTimeUtcTicks;
     }
 
     private static bool VerifyPointTarget(int x, int y)

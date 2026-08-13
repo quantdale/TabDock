@@ -1,0 +1,52 @@
+## ADDED Requirements
+
+### Requirement: Slow native guest mutations SHALL require process-instance identity
+
+Hide, release, foreground handoff, delayed restore, and recovery operations
+SHALL fail closed unless the live HWND still matches the captured PID, window
+thread, class, executable where required, a nonzero captured process-start
+identity, and the per-capture HWND token. A legacy journal entry without a
+process-start identity or token SHALL be ineligible for recovery mutation.
+
+#### Scenario: A same-HWND different-PID replacement is refused
+
+- **WHEN** a delayed destructive callback observes the captured HWND with a
+  different PID
+- **THEN** it SHALL perform no native hide, release, restore, or foreground
+  mutation
+
+#### Scenario: A same-PID different-process-instance replacement is refused
+
+- **WHEN** the current PID and class match but the native process-start time
+  differs from the captured value
+- **THEN** the operation SHALL fail closed without native mutation
+
+#### Scenario: A same-process HWND is re-captured before an old callback runs
+
+- **WHEN** an HWND value is released and then captured into a new
+  `CapturedWindow` in the same process before a callback for the old object
+- **THEN** the old callback SHALL be rejected by the captured-object binding
+
+#### Scenario: A same-process HWND is recycled before the old callback runs
+
+- **WHEN** the original window is destroyed and Windows reuses its HWND for a
+  different window in the same process, even if PID, GUI thread, class, and
+  executable still match
+- **THEN** the old callback SHALL be rejected by the per-capture HWND token
+
+#### Scenario: A valid current member remains actionable
+
+- **WHEN** all captured identity fields and the live object binding match
+- **THEN** the guarded operation SHALL be admitted
+
+### Requirement: Hot layout identity checks SHALL remain bounded
+
+High-frequency positioning SHALL retain HWND/PID/thread/class safeguards and
+SHALL NOT allocate a managed `Process` or perform a process-start lookup on
+every layout tick. A missing process-start identity SHALL fail closed on slow
+paths rather than be treated as a wildcard.
+
+#### Scenario: Hot validation does not probe process start
+
+- **WHEN** a valid member is checked repeatedly through the hot tier
+- **THEN** the identity seam SHALL report zero process-start probes
