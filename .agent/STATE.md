@@ -1,5 +1,36 @@
 # Agent state
 
+## Current checkpoint — canonical push and hosted CI verified (2026-08-13 22:10 +08:00)
+
+The authorized push/qualification workflow is complete. After fetching
+`origin`, canonical `origin/main` had not advanced from the recorded base
+`d0cea29fd1b8b60008eb3d7021b3c6859951583a`; local `main` was a clean,
+exactly-three-commit fast-forward with no unrelated or unreviewed local
+commits:
+
+- `f1dc7ab3ac616d6f1517efafdced5eb6418d3462` — `fix: complete TabDock deep audit remediation`
+- `65002f6e4ee852e1c1f151d3e38e612e8b7bb973` — `docs: record final TabDock qualification state`
+- `15c340be52b8b240fb38b536c9c0f1ae028a1eff` — `docs: finalize TabDock handoff state`
+
+`git push origin main` completed as a fast-forward from `d0cea29` to
+`15c340be`; no force push or history rewrite was used. GitHub's public main
+ref and commit API report `15c340be52b8b240fb38b536c9c0f1ae028a1eff` as the
+current main HEAD. A post-push fetch confirmed local `HEAD`, `origin/main`,
+and `refs/heads/main` all match, and the worktree is clean.
+
+The push-triggered GitHub Actions `build` workflow, run 15
+(`31708377398`), completed successfully for this SHA. Its Windows job
+(`94474626224`) passed checkout, .NET/Node setup, pinned OpenSpec CLI
+installation, `scripts\\validate.ps1 -Configuration Release -Ci -Publish`,
+and all post-run steps. M6 hosted CI is therefore RESOLVED. The overall
+result remains **READY WITH EXTERNAL QUALIFICATION REMAINING** for M2
+supervised session-ending cancellation, M8 multi-monitor/mixed-DPI hardware,
+unavailable Chrome coverage, and the documented split-render foreground
+activation limitation.
+
+Next action: preserve this checkpoint and, if external qualification resumes,
+update only from observed M2/M8/Chrome/split-render evidence.
+
 ## Current checkpoint — clean handoff verification (2026-08-13 20:28 +08:00)
 
 The final qualification record was committed locally as

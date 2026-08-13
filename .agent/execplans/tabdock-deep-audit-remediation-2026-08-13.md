@@ -6,6 +6,30 @@
 
 ## Final Qualification / Integration Pass
 
+### Canonical push and hosted CI verified (2026-08-13 22:10 +08:00)
+
+- After `git fetch origin`, canonical `origin/main` was still
+  `d0cea29fd1b8b60008eb3d7021b3c6859951583a`; no remote integration was
+  required. Local `main` was clean and contained exactly the expected three
+  non-merge descendants, with no unrelated or unreviewed local commits.
+- `git push origin main` completed as a fast-forward from `d0cea29` to
+  `15c340be52b8b240fb38b536c9c0f1ae028a1eff`. No force push, force-with-lease,
+  reset, or history rewrite was used.
+- Post-push `git fetch origin` verified local `HEAD`, `origin/main`, and the
+  public GitHub `refs/heads/main` all equal
+  `15c340be52b8b240fb38b536c9c0f1ae028a1eff`; `git status` reports a clean
+  worktree.
+- GitHub Actions `build` workflow run 15 (`31708377398`), triggered by this
+  push, completed `success` for this SHA. Its Windows job (`94474626224`) and
+  every step passed, including
+  `scripts\\validate.ps1 -Configuration Release -Ci -Publish`. M6 is now
+  `RESOLVED`.
+- The final result remains **READY WITH EXTERNAL QUALIFICATION REMAINING**:
+  M2 session-ending cancellation and M8 multi-monitor/mixed-DPI hardware
+  remain environment-qualified items; Chrome-dependent coverage and the
+  documented split-render foreground-activation limitation remain external
+  desktop qualifications.
+
 ### Durable record committed; clean handoff verified (2026-08-13 20:28 +08:00)
 
 - The final qualification record was committed locally as
@@ -440,13 +464,13 @@ there are no remaining findings whose final status is `VALIDATING`.
 
 | ID | Final status | Evidence / remaining qualification |
 |---|---|---|
-| H1 | BLOCKED_ENVIRONMENT | P/Invoke and HDWP chain fixed; deterministic seam and core Release split/move/resize/minimize/torture coverage pass. Focus and drag-release real-input cases remain blocked by the live-target identity guard. |
+| H1 | RESOLVED | P/Invoke and HDWP chain fixed; deterministic seam and core Release split/move/resize/minimize/torture coverage pass. The bounded split-focus shard and dedicated focus/drag evidence pass without weakening the identity guard. |
 | M1 | RESOLVED | Versioned full-state journal, identity gates, deterministic recovery fixtures, and Release active/rapid/self-hide/drag/maximized/minimized/split crash matrix pass. |
 | M2 | BLOCKED_ENVIRONMENT | One-way idempotent teardown and explicit `Shutdown(0)` policy plus self-test pass; OS logoff/shutdown cancellation remains a supervised desktop check. |
 | M3 | RESOLVED | Injected hook-install failure self-test, bounded retry, capture admission gate, and fail-closed release/normalization implementation pass source/self-test review. |
 | M4 | RESOLVED | Adversarial sanitizer self-test and actual Release support ZIP entry inspection pass; no profile/AppData path or credential-like material leaked. |
 | M5 | RESOLVED | Corrupt/missing/valid-backup/future/unreadable/injected-access-denied matrix passes; corrupt evidence and unreadable-primary no-overwrite rules hold. |
-| M6 | BLOCKED_EXTERNAL | CI-safe Release/publish workflow simulation passes locally, including audited restore, self-tests, privacy, OpenSpec, and version smoke; hosted GitHub workflow has not run because this session did not push. |
+| M6 | RESOLVED | Push-triggered GitHub Actions `build` run 15 (`31708377398`) completed successfully for `15c340be`; the Windows job passed the Release qualification workflow, including audited restore, self-tests, privacy, OpenSpec, and publish smoke. |
 | M7 | RESOLVED | Release/Debug/RID/path configuration, 65-scenario/11-shard coverage, bounded shard orchestration, help, and list validation pass. |
 | M8 | BLOCKED_ENVIRONMENT | Primary-monitor clamp removed and containing-monitor deterministic contract passes; secondary/mixed-DPI hardware matrix is unavailable on this one-monitor desktop. |
 | M9 | RESOLVED | 100ms bounded probe, identity-scoped cache, initialized probe buffer, poisoned-buffer self-test, and non-pumping 800ms guest run with ~9ms resize response pass. |
@@ -797,7 +821,9 @@ an implementation and validation result, or an explicit environment/external
 classification in the final matrix. The empty-group regression is resolved:
 unmaterialized groups are session-only, picker destinations survive refresh,
 all-failed provisional captures clean up their shell, and the ValidationDriver
-isolates/restores both state snapshots. No unresolved implementation defect is
-being marked green. Remaining work is supervised focus/drag and session-
-cancellation validation, multi-monitor qualification, and hosted CI execution;
-none can be performed safely or honestly in this local session.
+isolates/restores both state snapshots. Hosted GitHub CI is green for the
+canonical pushed SHA. No unresolved implementation defect is being marked
+green. Remaining work is supervised session-ending cancellation, multi-monitor
+qualification, unavailable Chrome coverage, and the documented split-render
+desktop activation qualification; these cannot be completed safely or
+honestly on the current desktop.
