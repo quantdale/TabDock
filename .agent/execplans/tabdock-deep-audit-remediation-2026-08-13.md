@@ -6,6 +6,22 @@
 
 ## Final Qualification / Integration Pass
 
+### Durable record committed; clean handoff verified (2026-08-13 20:28 +08:00)
+
+- The final qualification record was committed locally as
+  `65002f6e4ee852e1c1f151d3e38e612e8b7bb973` (`docs: record final TabDock
+  qualification state`) after committed-tree verification.
+- The three local commits are `f1dc7ab` (complete remediation), `65002f6`
+  (durable qualification record), and this final handoff-state record (use
+  `git log` for its exact SHA). `main` is clean and ahead of unchanged
+  `origin/main`; no push, PR, reset, stash, cleanup, or published-history
+  rewrite was performed.
+- Final clean check: no TabDock/ValidationDriver/GuineaPig processes, no
+  repository-local generated artifacts, `state.json`/`.bak` unchanged, and
+  `git diff --check` clean. The final result remains READY WITH EXTERNAL
+  QUALIFICATION REMAINING with M2/M6/M8 and the documented Chrome and
+  split-render desktop limitations.
+
 ### Final committed-tree verification and disposition (2026-08-13 20:26 +08:00)
 
 - Committed remediation: `f1dc7ab3ac616d6f1517efafdced5eb6418d3462`,

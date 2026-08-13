@@ -1,5 +1,23 @@
 # Agent state
 
+## Current checkpoint — clean handoff verification (2026-08-13 20:28 +08:00)
+
+The final qualification record was committed locally as
+`65002f6e4ee852e1c1f151d3e38e612e8b7bb973` (`docs: record final TabDock
+qualification state`), followed by this handoff-state record. `main` is
+clean and ahead of unchanged `origin/main` by three local commits: the
+`f1dc7ab` remediation, the `65002f6` qualification record, and this final
+handoff record (use `git log` for its exact SHA). No push, PR, reset, stash,
+cleanup, or published-history rewrite was performed. The final post-record
+clean check found no TabDock/ValidationDriver/GuineaPig processes, no
+repository-local generated artifacts, and unchanged user state hashes.
+
+The current final result is READY WITH EXTERNAL QUALIFICATION REMAINING. The
+exact findings, validation evidence, blockers, and supervised procedures are
+recorded below in this state file and in the execplan. A fresh session should
+use the current Git log for the final HEAD and must not redo the audit or
+committed-tree validation.
+
 ## Current checkpoint — final durable state before handoff (2026-08-13 20:26 +08:00)
 
 Committed-tree verification passed against `f1dc7ab3ac616d6f1517efafdced5eb6418d3462`:
