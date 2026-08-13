@@ -11,7 +11,9 @@ namespace TabDock.Models;
 /// </summary>
 public sealed class PersistedState
 {
-    public int Version { get; set; } = 1;
+    public const int CurrentVersion = 2;
+
+    public int Version { get; set; } = CurrentVersion;
     public List<PersistedGroup> Groups { get; set; } = new();
 }
 
@@ -42,11 +44,37 @@ public sealed class HiddenWindowEntry
     public long Hwnd { get; set; }
     public uint Pid { get; set; }
     public string ExePath { get; set; } = string.Empty;
+    public string ClassName { get; set; } = string.Empty;
+    public long ProcessStartTimeUtcTicks { get; set; }
+    public bool OriginallyVisible { get; set; }
+    public bool HasOriginalPlacement { get; set; }
+    public uint OriginalPlacementFlags { get; set; }
+    public int OriginalShowCommand { get; set; }
+    public int OriginalMinPositionX { get; set; }
+    public int OriginalMinPositionY { get; set; }
+    public int OriginalMaxPositionX { get; set; }
+    public int OriginalMaxPositionY { get; set; }
+    public int OriginalNormalLeft { get; set; }
+    public int OriginalNormalTop { get; set; }
+    public int OriginalNormalRight { get; set; }
+    public int OriginalNormalBottom { get; set; }
+    public bool HasOriginalTransitionsState { get; set; }
+    public bool OriginalTransitionsDisabled { get; set; }
+
+    /// <summary>
+    /// Durable marker used for the tiny self-hide transition window. Rescue
+    /// consumes an entry with this marker without showing the guest, even if
+    /// the subsequent clear was interrupted by a hard kill.
+    /// </summary>
+    public bool DoNotRescue { get; set; }
 }
 
 /// <summary>Root DTO for %APPDATA%\TabDock\hidden-windows.json.</summary>
 public sealed class HiddenWindowJournalFile
 {
+    public const int CurrentVersion = 2;
+
+    public int Version { get; set; } = CurrentVersion;
     public List<HiddenWindowEntry> Entries { get; set; } = new();
 }
 

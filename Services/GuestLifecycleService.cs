@@ -28,6 +28,7 @@ public sealed class GuestLifecycleService
 
     // Debounces EVENT_OBJECT_NAMECHANGE storms (see DebounceNameChanged).
     private readonly Dictionary<IntPtr, (DispatcherTimer Timer, CapturedWindow Member)> _nameChangeDebounce = new();
+    private readonly Dictionary<IntPtr, (DispatcherTimer Timer, CapturedWindow Member)> _minimizeHideDebounce = new();
 
     public GuestLifecycleService(GroupManager groups, Dictionary<Guid, ContainerWindow> containers, LoggingService log)
     {
@@ -51,7 +52,7 @@ public sealed class GuestLifecycleService
     public void Attach(WinEventMonitor monitor)
     {
         monitor.WindowDestroyed += (_, args) => OnWindowDestroyed(args.Hwnd);
-        monitor.WindowHidden += (_, args) => OnWindowHidden(args.Hwnd);
+        monitor.WindowHidden += (_, args) => OnWindowHidden(args.Hwnd, args.VisibleAtCallback);
         monitor.WindowMinimized += (_, args) => OnWindowMinimized(args.Hwnd);
         monitor.WindowMoveSizeStarted += (_, args) => OnGuestMoveSize(args.Hwnd, started: true);
         monitor.WindowMoveSizeEnded += (_, args) => OnGuestMoveSize(args.Hwnd, started: false);
@@ -62,6 +63,7 @@ public sealed class GuestLifecycleService
 
     private void OnWindowDestroyed(IntPtr hwnd)
     {
+        StopMinimizeHideProbe(hwnd);
         if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match))
             return;
 
@@ -69,8 +71,9 @@ public sealed class GuestLifecycleService
         RemoveDeadMember(group, match, show: true);
     }
 
-    private void OnWindowHidden(IntPtr hwnd)
+    private void OnWindowHidden(IntPtr hwnd, bool? visibleAtCallback)
     {
+        StopMinimizeHideProbe(hwnd);
         if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match))
             return;
 
@@ -105,7 +108,15 @@ public sealed class GuestLifecycleService
         }
         if (!NativeMethods.IsWindow(hwnd))
             return; // EVENT_OBJECT_DESTROY owns this case.
-        if (NativeMethods.IsWindowVisible(hwnd))
+        // A hide event is posted to the UI thread because the WinEvent callback
+        // cannot mutate WPF state directly. A guest can be re-shown by a
+        // synchronous activation/reassert path before this queued event runs;
+        // in that case the current visibility is no longer evidence that the
+        // original hide was transient. Preserve the native observation from
+        // the callback and only apply the current-visibility filter when the
+        // callback did not observe a hidden state.
+        bool wasHiddenAtCallback = visibleAtCallback == false;
+        if (!wasHiddenAtCallback && NativeMethods.IsWindowVisible(hwnd))
             return; // Transient hide; the window is visible again.
 
         // TabDock itself hides the ACTIVE guest when its container is
@@ -136,7 +147,59 @@ public sealed class GuestLifecycleService
         if (_containers.TryGetValue(group.Id, out var container))
         {
             container.RestoreMinimizedWindow(match);
+            ArmMinimizeHideProbe(hwnd, match, container);
         }
+    }
+
+    private void ArmMinimizeHideProbe(IntPtr hwnd, CapturedWindow member, ContainerWindow container)
+    {
+        StopMinimizeHideProbe(hwnd);
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        timer.Tick += (_, _) =>
+        {
+            if (!_minimizeHideDebounce.TryGetValue(hwnd, out var pending)
+                || !ReferenceEquals(pending.Timer, timer))
+            {
+                timer.Stop();
+                return;
+            }
+
+            timer.Stop();
+            _minimizeHideDebounce.Remove(hwnd);
+
+            // Some guests implement close as WindowState=Minimized followed
+            // immediately by Hide(). The minimize event can reach this UI
+            // thread before the hide has settled, while an activation reassert
+            // can otherwise make the HWND visible again before EVENT_OBJECT_HIDE
+            // is dispatched. Treat a still-captured, non-minimized-container
+            // guest that is now hidden as the same guest-initiated hide path.
+            // Normal self-minimize leaves WS_VISIBLE set and therefore does not
+            // enter this branch.
+            if (!ReferenceEquals(_resolveCurrentMember(member), member)
+                || container.WindowState == WindowState.Minimized
+                || !NativeMethods.IsWindow(hwnd)
+                || NativeMethods.IsWindowVisible(hwnd))
+            {
+                return;
+            }
+
+            OnWindowHidden(hwnd, visibleAtCallback: false);
+        };
+        _minimizeHideDebounce[hwnd] = (timer, member);
+        timer.Start();
+    }
+
+    private CapturedWindow? _resolveCurrentMember(CapturedWindow expected)
+    {
+        return _groups.TryGetCapturedMember(expected.Hwnd, out _, out CapturedWindow? current)
+            ? current
+            : null;
+    }
+
+    private void StopMinimizeHideProbe(IntPtr hwnd)
+    {
+        if (_minimizeHideDebounce.Remove(hwnd, out var pending))
+            pending.Timer.Stop();
     }
 
     // The guest became the system foreground window by some means other

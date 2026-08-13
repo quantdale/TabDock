@@ -53,7 +53,10 @@ internal static class GuardedProc
             if (_totalSpawnCount >= MaxTotalSpawnsHard)
                 throw new InvalidOperationException($"Hard total spawn cap of {MaxTotalSpawnsHard} exceeded — aborting.");
 
-            Log($"Spawning {_scenarioSpawnCount + 1}/{MaxTotalSpawns} (scenario), {_totalSpawnCount + 1}/{MaxTotalSpawnsHard} (run): {psi.FileName} {psi.Arguments}");
+            string argumentText = psi.ArgumentList.Count == 0
+                ? psi.Arguments
+                : string.Join(" ", psi.ArgumentList);
+            Log($"Spawning {_scenarioSpawnCount + 1}/{MaxTotalSpawns} (scenario), {_totalSpawnCount + 1}/{MaxTotalSpawnsHard} (run): {psi.FileName} {argumentText}");
             Process? p = Process.Start(psi);
             if (p == null)
                 throw new InvalidOperationException("SpawnGuarded received a null Process.");
@@ -64,6 +67,16 @@ internal static class GuardedProc
             Log($"Spawned PID {p.Id}.");
             return p;
         }
+    }
+
+    /// <summary>
+    /// Starts one bounded child driver for the top-level <c>all</c> shard
+    /// orchestrator. It uses the same tracked-process and kill-on-exit guard;
+    /// the child obtains its own single-instance mutex and spawn/time budgets.
+    /// </summary>
+    public static Process SpawnDriverShard(ProcessStartInfo psi)
+    {
+        return SpawnGuarded(psi);
     }
 
     /// <summary>

@@ -16,6 +16,9 @@ public sealed class CapturedWindow
 
     public uint ProcessId { get; set; }
 
+    /// <summary>Best-effort process-start identity used by crash rescue in addition to PID.</summary>
+    public long ProcessStartTimeUtcTicks { get; set; }
+
     public string ExePath { get; set; } = string.Empty;
 
     /// <summary>
@@ -44,6 +47,14 @@ public sealed class CapturedWindow
 
     /// <summary>Tracks whether the guest was maximized at capture; restored to that state when released.</summary>
     public bool WasMaximized { get; set; }
+
+    /// <summary>Whether the guest was visible before TabDock began shepherding it.</summary>
+    public bool OriginallyVisible { get; set; }
+
+    /// <summary>Whether DWM transition suppression was already enabled before capture.</summary>
+    public bool HasOriginalTransitionsState { get; set; }
+
+    public bool OriginalTransitionsDisabled { get; set; }
 
     public string DisplayLabel => string.IsNullOrWhiteSpace(CustomLabel) ? OriginalTitle : CustomLabel;
 

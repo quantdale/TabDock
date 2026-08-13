@@ -66,17 +66,14 @@ internal static partial class Scenarios
     }
 
     // -------------------------------------------------------------------------
-    // 28b. crashkill-rapidswitch-rescue: regression guard for AUDIT25-01's
-    //      debounced JournalClear. Fires a rapid, no-settle-time burst of tab
+    // 28b. crashkill-rapidswitch-rescue: regression guard for the synchronous
+    //      capture-session journal. Fires a rapid, no-settle-time burst of tab
     //      switches (no wait between clicks, unlike instant-tabswitch's
     //      poll-until-docked loop) and force-kills immediately after the last
-    //      one, before the ~300ms JournalClear debounce window can possibly
-    //      have elapsed. Verifies the pig left hidden by the final switch is
-    //      still rescued: JournalHide (WindowShepherdService) writes
-    //      synchronously on every call specifically so this holds regardless
-    //      of debounced JournalClear timing — a hard kill (TerminateProcess)
-    //      allows no App.xaml.cs handler to run, so nothing could rescue a
-    //      debounced write here if JournalHide were ever debounced too.
+    //      one, before any later UI work can run. Verifies the pig left hidden
+    //      by the final switch is still rescued: the full session journal
+    //      writes synchronously before each presentation mutation, and a hard
+    //      kill (TerminateProcess) allows no exit handler to fill that gap.
     // -------------------------------------------------------------------------
     private static void CrashKillRapidSwitchRescue(Ctx ctx, Options opt)
     {
@@ -99,15 +96,15 @@ internal static partial class Scenarios
                 throw new InvalidOperationException($"switch {i}: tab for '{otherGuest.Title}' not found uniquely (count={count}).");
             (int tx, int ty) = Uia.Center(otherTab);
             Input.ClickAt(tx, ty);
-            // No settle wait, deliberately: the point is to force-kill before any
-            // prior switch's debounced JournalClear write could possibly land.
+            // No settle wait, deliberately: the point is to force-kill during
+            // rapid semantic transitions, not after a quiet period.
 
             (activeGuest, otherGuest) = (otherGuest, activeGuest);
         }
 
         // The pig left inactive by the final switch is the one JournalHide must
         // have already durably written before we kill — with no dependency on
-        // settle time, a debounce timer, or any exit-handler flush.
+        // settle time or any exit-handler flush.
         GuestInfo hiddenPig = otherGuest;
         GuestInfo dockedPig = activeGuest;
 
@@ -142,22 +139,21 @@ internal static partial class Scenarios
     }
 
     // -------------------------------------------------------------------------
-    // 28c. crashkill-selfhide-not-rescued: regression guard for a gap found
-    //      during AUDIT25-01 review — JournalClear's debounce is only safe
-    //      when the guest ends up genuinely visible (a stale entry just causes
-    //      a harmless redundant show). Release's guest-initiated-hide path
+    // 28c. crashkill-selfhide-not-rescued: regression guard for the
+    //      intentional-hide contract — a stale journal entry is only safe to
+    //      replay when the guest was meant to be visible. Release's
+    //      guest-initiated-hide path
     //      (tray-style close) is the opposite: the guest ends up intentionally
     //      hidden, so a stale "hidden" entry surviving a crash would be
     //      indistinguishable from a real orphan and get incorrectly
-    //      un-hidden by RescueOrphanedWindows. The fix made that one call site
-    //      pass JournalClear(hwnd, immediate: true). This scenario sets up the
+    //      un-hidden by RescueOrphanedWindows. The fix writes a durable
+    //      DoNotRescue marker before completing that path. This scenario sets up the
     //      exact precondition (a real JournalHide entry already on disk from
-    //      an earlier inactive-tab hide, then switched back to active so a
-    //      JournalClear is debounced-pending) and self-hides immediately,
-    //      force-killing right after — asserting the self-hidden guest is
-    //      NOT resurrected on relaunch and no SHEPHERD[rescue] line appears
-    //      at all (the journal must be empty, not merely "will end up
-    //      empty eventually").
+    //      an earlier inactive-tab hide, then switches back to active so its
+    //      capture-session entry is still present) and self-hides immediately,
+    //      force-killing right after. The full-session journal may legitimately
+    //      rescue the other still-captured guest, but the intentional-hide
+    //      marker must consume the target entry without restoring it.
     // -------------------------------------------------------------------------
     private static void CrashKillSelfHideNotRescued(Ctx ctx, Options opt)
     {
@@ -177,13 +173,14 @@ internal static partial class Scenarios
         GuestInfo targetPig = ReferenceEquals(dockedPig, pigA) ? pigB : pigA;
         ctx.Check(!NativeMethods.IsWindowVisible(targetPig.Hwnd), $"'{targetPig.Title}' starts hidden (inactive tab, JournalHide already on disk)");
 
-        // Switch to targetPig: PositionAndShow -> JournalClear(debounced, pending).
+        // Switch to targetPig: PositionAndShow clears the old hidden-tab entry
+        // synchronously while the full capture-session entry remains active.
         AutomationElement? targetTab = FindTabText(container, targetPig.Title, out int count);
         if (targetTab == null || count != 1)
             throw new InvalidOperationException($"tab for '{targetPig.Title}' not found uniquely (count={count}).");
         (int tx, int ty) = Uia.Center(targetTab);
         Input.ClickAt(tx, ty);
-        ctx.Check(Util.WaitUntil(() => IsDocked(targetPig.Hwnd, host), 3000), $"switched to '{targetPig.Title}' (its JournalClear is now debounced-pending)");
+        ctx.Check(Util.WaitUntil(() => IsDocked(targetPig.Hwnd, host), 3000), $"switched to '{targetPig.Title}' (full capture-session journal remains durable)");
 
         // Immediately trigger guest-initiated self-hide (WM_CLOSE via the tab's
         // context menu; --hide-on-close makes the pig hide instead of exit) —
@@ -218,8 +215,8 @@ internal static partial class Scenarios
 
         Thread.Sleep(1500); // let RescueOrphanedWindows run (or correctly no-op) and settle
 
-        ctx.Check(!TabDockLog.ContainsNewLine(relaunchOffset, "SHEPHERD[rescue]"),
-            "no SHEPHERD[rescue] line on relaunch — the journal was already empty of the self-hidden pig's entry (the immediate clear landed before the kill, not the 300ms debounce)");
+        ctx.Check(!TabDockLog.ContainsNewLine(relaunchOffset, $"SHEPHERD[rescue] restored guest 0x{targetPig.Hwnd.ToInt64():X}"),
+            "relaunch did not restore the intentionally self-hidden pig (other capture-session entries may be rescued)");
         ctx.Check(!NativeMethods.IsWindowVisible(targetPig.Hwnd),
             "the self-hidden pig was NOT incorrectly resurrected by rescue after the relaunch");
     }
@@ -288,5 +285,95 @@ internal static partial class Scenarios
             RememberMainWindow(ctx);
         ctx.Check(Util.WaitUntil(() => !ctx.TabDock.HasExited, 2000), "relaunched TabDock stays up (no immediate crash from any stuck drag/capture state)");
         ctx.Check(TabDockLog.CountNewLines(off, "EXCEPTION") == 0, "no EXCEPTION lines around the kill/relaunch");
+    }
+
+    private static void CrashKillMaximizedRecovery(Ctx ctx, Options opt)
+        => CrashKillOriginalWindowState(ctx, "CKMAX", NativeMethods.SW_SHOWMAXIMIZED, expectedMaximized: true, expectedMinimized: false);
+
+    private static void CrashKillMinimizedRecovery(Ctx ctx, Options opt)
+        => CrashKillOriginalWindowState(ctx, "CKMIN", NativeMethods.SW_SHOWMINIMIZED, expectedMaximized: false, expectedMinimized: true);
+
+    private static void CrashKillSplitRescue(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "CKSPL-A", "--color", "red");
+        GuestInfo pigB = SpawnPig(ctx, "CKSPL-B", "--color", "blue");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
+        EnterSplitTwo(ctx, container, pigA);
+        ctx.Check(Util.WaitUntil(() => IsInPane(pigA.Hwnd, host, left: true)
+            && IsInPane(pigB.Hwnd, host, left: false), 5000),
+            "both guests entered exact split panes before hard kill");
+
+        ctx.TabDock.Kill();
+        ctx.Check(Util.WaitUntil(() => ctx.TabDock.HasExited, 5000), "TabDock force-killed with split pair active");
+        Thread.Sleep(700);
+        ctx.Check(!pigA.Proc!.HasExited && !pigB.Proc!.HasExited, "both split guest processes survived force-kill");
+
+        long relaunchOffset = TabDockLog.RecordLogLength();
+        Process td2 = GuardedProc.SpawnGuarded(new ProcessStartInfo(TabDockExe)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(TabDockExe)!,
+        });
+        ctx.TabDock = td2;
+        ctx.TabDockPid = (uint)td2.Id;
+        ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
+        ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched after split recovery kill");
+        if (ctx.MainHwnd != IntPtr.Zero)
+            RememberMainWindow(ctx);
+        ctx.Check(TabDockLog.WaitForLogLine(relaunchOffset, $"SHEPHERD[rescue] restored guest 0x{pigA.Hwnd.ToInt64():X}", 10000),
+            "split guest A received full-state rescue");
+        ctx.Check(TabDockLog.WaitForLogLine(relaunchOffset, $"SHEPHERD[rescue] restored guest 0x{pigB.Hwnd.ToInt64():X}", 10000),
+            "split guest B received full-state rescue");
+        ctx.Check(Util.WaitUntil(() => NativeMethods.IsWindowVisible(pigA.Hwnd)
+            && NativeMethods.IsWindowVisible(pigB.Hwnd), 5000),
+            "both split guests are visible after rescue");
+    }
+
+    /// <summary>
+    /// Verifies the v2 capture-session journal restores an originally maximized
+    /// or minimized guest after an abrupt TabDock termination. Capture itself
+    /// temporarily restores iconic/zoomed guests for exact docking; the journal
+    /// must restore the user's original presentation state on the next launch.
+    /// </summary>
+    private static void CrashKillOriginalWindowState(
+        Ctx ctx,
+        string tag,
+        int showCommand,
+        bool expectedMaximized,
+        bool expectedMinimized)
+    {
+        GuestInfo pig = SpawnPig(ctx, tag, "--color", "blue");
+        if (!VerifiedWindowOps.ShowWindow(pig.Hwnd, pig.Pid, showCommand))
+            throw new InvalidOperationException($"Could not set original {tag} presentation state safely.");
+        ctx.Check(Util.WaitUntil(() => NativeMethods.IsZoomed(pig.Hwnd) == expectedMaximized
+            && NativeMethods.IsIconic(pig.Hwnd) == expectedMinimized, 3000),
+            $"guest entered original {tag} state before capture");
+
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 4000), "guest docked before hard kill");
+        ctx.TabDock.Kill();
+        ctx.Check(Util.WaitUntil(() => ctx.TabDock.HasExited, 5000), "TabDock force-killed for original-state recovery");
+        Thread.Sleep(700);
+        ctx.Check(!pig.Proc!.HasExited, "guest process survived original-state recovery kill");
+
+        long relaunchOffset = TabDockLog.RecordLogLength();
+        Process td2 = GuardedProc.SpawnGuarded(new ProcessStartInfo(TabDockExe)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(TabDockExe)!,
+        });
+        ctx.TabDock = td2;
+        ctx.TabDockPid = (uint)td2.Id;
+        ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
+        ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched for original-state recovery");
+        if (ctx.MainHwnd != IntPtr.Zero)
+            RememberMainWindow(ctx);
+        ctx.Check(TabDockLog.WaitForLogLine(relaunchOffset, $"SHEPHERD[rescue] restored guest 0x{pig.Hwnd.ToInt64():X}", 10000),
+            "relaunch rescue restored the full-state journal entry");
+        ctx.Check(Util.WaitUntil(() => NativeMethods.IsZoomed(pig.Hwnd) == expectedMaximized
+            && NativeMethods.IsIconic(pig.Hwnd) == expectedMinimized
+            && NativeMethods.IsWindowVisible(pig.Hwnd), 5000),
+            $"guest returned to original {tag} placement/state after rescue");
+        ctx.Check(TabDockLog.CountNewLines(relaunchOffset, "EXCEPTION") == 0, "no EXCEPTION lines during original-state rescue");
     }
 }

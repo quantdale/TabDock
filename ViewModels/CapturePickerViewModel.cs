@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Linq;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -16,6 +18,7 @@ public sealed class CapturePickerViewModel : ViewModelBase
 {
     private readonly GroupManager _manager;
     private readonly IconService _icons;
+    private readonly LoggingService _log;
     private GroupOption? _selectedGroupOption;
 
     public ObservableCollection<WindowInfo> Windows { get; } = new();
@@ -45,10 +48,11 @@ public sealed class CapturePickerViewModel : ViewModelBase
     public event EventHandler? GroupingRequested;
     public event EventHandler? Canceled;
 
-    public CapturePickerViewModel(GroupManager manager, IconService icons)
+    public CapturePickerViewModel(GroupManager manager, IconService icons, LoggingService log)
     {
         _manager = manager;
         _icons = icons;
+        _log = log;
 
         RefreshCommand = new RelayCommand(_ => Refresh());
         GroupSelectedCommand = new RelayCommand(_ => GroupingRequested?.Invoke(this, EventArgs.Empty), _ => HasSelection);
@@ -59,6 +63,10 @@ public sealed class CapturePickerViewModel : ViewModelBase
 
     public void Refresh()
     {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        int windowsSeen = 0;
+        int candidates = 0;
+        Guid? previouslySelectedGroupId = SelectedGroupOption?.Id;
         Windows.Clear();
         Groups.Clear();
 
@@ -67,7 +75,12 @@ public sealed class CapturePickerViewModel : ViewModelBase
         {
             Groups.Add(new GroupOption(g.Id, g.Name));
         }
-        SelectedGroupOption = Groups.FirstOrDefault();
+        // Refreshing the expensive desktop enumeration must not silently
+        // change the destination selected by the user. Resetting to
+        // <New group> here caused a refresh from an existing container to
+        // create an unintended empty group when the subsequent capture was
+        // cancelled or failed.
+        SelectedGroupOption = SelectGroupAfterRefresh(Groups, previouslySelectedGroupId);
 
         // The filters below run for every top-level window on the desktop
         // (typically a few hundred, of which a handful are real candidates), so
@@ -78,6 +91,7 @@ public sealed class CapturePickerViewModel : ViewModelBase
         // others, so only the order in which they reject differs.
         NativeMethods.EnumWindows((hwnd, _) =>
         {
+            windowsSeen++;
             if (!NativeMethods.IsWindowVisible(hwnd))
                 return true;
 
@@ -137,9 +151,19 @@ public sealed class CapturePickerViewModel : ViewModelBase
                 ((RelayCommand)GroupSelectedCommand).RaiseCanExecuteChanged();
             };
             Windows.Add(info);
+            candidates++;
             return true;
         }, IntPtr.Zero);
+
+        stopwatch.Stop();
+        _log.Log($"PICKER[refresh] windowsSeen={windowsSeen} candidates={candidates} elapsedMs={stopwatch.ElapsedMilliseconds}");
     }
+
+    internal static GroupOption? SelectGroupAfterRefresh(
+        IEnumerable<GroupOption> options,
+        Guid? previouslySelectedGroupId)
+        => options.FirstOrDefault(option => option.Id == previouslySelectedGroupId)
+            ?? options.FirstOrDefault();
 
     public sealed class WindowInfo : ViewModelBase
     {

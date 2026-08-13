@@ -63,7 +63,10 @@ internal static partial class Scenarios
         // peers for re-inserted items go stale (observed: FindTabText count=0 for
         // several seconds while the tab was demonstrably alive).
         NativeMethods.GetWindowRect(container, out NativeMethods.RECT rc);
-        Input.DragFromTo((int)(leftRect.X + leftRect.Width / 2), sy, rc.right + 150, rc.bottom + 150, 14);
+        int dragOutX = (int)(leftRect.X + leftRect.Width / 2);
+        if (!EnsureClickable(container, dragOutX, sy))
+            throw new InvalidOperationException("Could not bring the container to the foreground before drag-out; refusing to drag blind.");
+        Input.DragFromTo(dragOutX, sy, rc.right + 150, rc.bottom + 150, 14);
 
         ctx.Check(Util.WaitUntil(() => IsReleased(movedPig, host), 5000), $"moved pig '{movedPig.Title}' released by drag-out");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines after drag-out");
@@ -185,6 +188,8 @@ internal static partial class Scenarios
         if (root != container)
             GuardedProc.Log($"  DragProbe: even topmost-pinned, ({x},{y}) for the {what} resolves to {DescribeHwnd(root)} — the obscuring window is itself topmost.");
         ctx.Check(root == container, $"{what} start point resolves to the container after topmost pin");
+        if (root == container && !EnsureClickable(container, x, y))
+            throw new InvalidOperationException($"Could not bring the container to the foreground for the {what}; refusing to drag blind.");
     }
 
     private static (int sx, int sy, Rect leftRect, GuestInfo movedPig, int lx, int ly) FindDragGeometry(Ctx ctx, IntPtr container, GuestInfo pigA, GuestInfo pigB)
@@ -386,25 +391,27 @@ internal static partial class Scenarios
 
         foreach (GuestInfo p in remaining)
         {
-            if (!Input.ForceForeground(container))
-                throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
             AutomationElement? t = FindTabText(container, p.Title, out int c3);
             if (t == null || c3 != 1)
                 throw new InvalidOperationException($"Remaining tab for '{p.Title}' not found uniquely (count={c3}).");
             (int tx, int ty) = Uia.Center(t);
+            if (!EnsureClickable(container, tx, ty))
+                throw new InvalidOperationException("Could not bring the container to the foreground before clicking a remaining tab; refusing to click blind.");
             Input.ClickAt(tx, ty);
             ctx.Check(Util.WaitUntil(() => IsDocked(p.Hwnd, host), 3000), $"remaining tab '{p.Title}' is clickable/switchable after the drag+immediate-popout sequence");
         }
 
         ClickAddWindowButton(container);
-        IntPtr picker = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 5000);
-        ctx.Check(picker != IntPtr.Zero, "'+' add-window button still opens the picker after drag-reorder + immediate pop-out");
-        if (picker != IntPtr.Zero)
+        AutomationElement? containerRoot = Uia.FromHwnd(container);
+        bool panelOpened = containerRoot != null && Util.WaitUntil(() =>
+            Uia.FindDescendantByName(containerRoot, ControlType.Button, "Add selected", null, out _) != null, 5000);
+        ctx.Check(panelOpened, "'+' add-window button still opens the inline capture surface after drag-reorder + immediate pop-out");
+        if (panelOpened)
         {
-            if (!Input.ForceForeground(picker))
-                throw new InvalidOperationException("Could not bring the picker to the foreground; refusing to send Esc.");
-            Input.SendKey(Input.VK_ESCAPE);
-            ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(picker), 3000), "picker dismissed with Esc without capturing");
+            ClickAddWindowButton(container);
+            ctx.Check(Util.WaitUntil(() =>
+                Uia.FindDescendantByName(containerRoot!, ControlType.Button, "Add selected", null, out _) == null, 3000),
+                "inline capture surface dismissed with the second '+' click without capturing");
         }
 
         ctx.Check(middlePig.Proc != null && !middlePig.Proc.HasExited, "popped-out pig alive standalone");

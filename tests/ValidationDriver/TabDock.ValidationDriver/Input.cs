@@ -34,24 +34,32 @@ internal static class Input
     // user's foreground application.
     private static readonly Dictionary<IntPtr, WindowIdentity> RegisteredWindows = new();
     private static readonly HashSet<uint> RegisteredProcessIds = new();
+    private static readonly Dictionary<uint, (string ExePath, long StartTimeUtcTicks)> RegisteredProcesses = new();
     private static WindowIdentity? _activeTarget;
     private static int _lastX;
     private static int _lastY;
     private static bool _hasLastPoint;
+    private static bool _leftButtonHeld;
 
     public static void ResetIdentityScope()
     {
         RegisteredWindows.Clear();
         RegisteredProcessIds.Clear();
+        RegisteredProcesses.Clear();
         RegisteredProcessIds.Add(NativeMethods.CurrentProcessId);
+        RegisteredProcesses[NativeMethods.CurrentProcessId] =
+            (NativeMethods.GetProcessImagePath(NativeMethods.CurrentProcessId) ?? string.Empty,
+                Discover.TryGetProcessStartTimeUtcTicks(NativeMethods.CurrentProcessId));
         _activeTarget = null;
         _hasLastPoint = false;
+        _leftButtonHeld = false;
     }
 
     public static void RegisterIdentity(WindowIdentity identity)
     {
         RegisteredWindows[identity.Hwnd] = identity;
         RegisteredProcessIds.Add(identity.ProcessId);
+        RegisteredProcesses[identity.ProcessId] = (identity.ExePath, identity.ProcessStartTimeUtcTicks);
     }
 
     /// <summary>Real mouse-wheel scroll at (x,y). Positive notches scroll up, negative scroll down.</summary>
@@ -148,7 +156,13 @@ internal static class Input
         if (current.ProcessId == NativeMethods.CurrentProcessId)
             return true;
 
-        if (!RegisteredProcessIds.Contains(current.ProcessId))
+        if (!RegisteredProcessIds.Contains(current.ProcessId)
+            || !RegisteredProcesses.TryGetValue(current.ProcessId, out var processIdentity))
+            return false;
+
+        if (!string.Equals(current.ExePath, processIdentity.ExePath, StringComparison.OrdinalIgnoreCase)
+            || (processIdentity.StartTimeUtcTicks != 0
+                && current.ProcessStartTimeUtcTicks != processIdentity.StartTimeUtcTicks))
             return false;
 
         if (!RegisteredWindows.TryGetValue(current.Hwnd, out WindowIdentity expected))
@@ -156,7 +170,9 @@ internal static class Input
 
         if (current.ProcessId != expected.ProcessId
             || !string.Equals(current.ClassName, expected.ClassName, StringComparison.Ordinal)
-            || !string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase))
+            || !string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase)
+            || (expected.ProcessStartTimeUtcTicks != 0
+                && current.ProcessStartTimeUtcTicks != expected.ProcessStartTimeUtcTicks))
         {
             return false;
         }
@@ -175,10 +191,12 @@ internal static class Input
             && current.ProcessId == expected.ProcessId
             && string.Equals(current.ClassName, expected.ClassName, StringComparison.Ordinal)
             && string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase)
+            && (expected.ProcessStartTimeUtcTicks == 0
+                || current.ProcessStartTimeUtcTicks == expected.ProcessStartTimeUtcTicks)
             && IsScoped(current);
     }
 
-    private static bool VerifyForegroundTarget()
+    private static bool VerifyForegroundTarget(bool allowRegisteredDragTarget = false)
     {
         if (!_activeTarget.HasValue)
         {
@@ -190,16 +208,58 @@ internal static class Input
         IntPtr root = NativeMethods.GetAncestor(foreground, NativeMethods.GA_ROOT);
         if (root == IntPtr.Zero)
             root = foreground;
-        if (!Discover.TryCaptureIdentity(root, out WindowIdentity current)
-            || !IsScoped(current)
-            || !MatchesStableIdentity(_activeTarget.Value.Hwnd, _activeTarget.Value)
-            || current.Hwnd != _activeTarget.Value.Hwnd)
+        bool currentValid = Discover.TryCaptureIdentity(root, out WindowIdentity current)
+            && IsScoped(current);
+        WindowIdentity previousTarget = _activeTarget.Value;
+        bool previousTargetLive = MatchesStableIdentity(previousTarget.Hwnd, previousTarget);
+        bool targetChanged = currentValid && current.Hwnd != _activeTarget.Value.Hwnd;
+        bool sameProcessIdentity = currentValid
+            && current.ProcessId == previousTarget.ProcessId
+            && string.Equals(current.ExePath, previousTarget.ExePath, StringComparison.OrdinalIgnoreCase)
+            && (previousTarget.ProcessStartTimeUtcTicks == 0
+                || current.ProcessStartTimeUtcTicks == previousTarget.ProcessStartTimeUtcTicks);
+        // A WPF menu, picker, or dialog can legitimately disappear after it
+        // supplied the prior target. If that prior HWND is no longer live, the
+        // independently validated current foreground root may become the new
+        // target, but only inside the already-registered test process scope.
+        // A modal dialog or edit surface created by the same verified process
+        // is also a safe transition while the owner HWND remains live. A live
+        // target in a different process still requires exact matching.
+        bool registeredDragTarget = allowRegisteredDragTarget && currentValid
+            && RegisteredWindows.TryGetValue(current.Hwnd, out WindowIdentity registered)
+            && registered.ProcessId == current.ProcessId
+            && string.Equals(registered.ClassName, current.ClassName, StringComparison.Ordinal)
+            && string.Equals(registered.ExePath, current.ExePath, StringComparison.OrdinalIgnoreCase)
+            && (registered.ProcessStartTimeUtcTicks == 0
+                || registered.ProcessStartTimeUtcTicks == current.ProcessStartTimeUtcTicks);
+        bool registeredTargetTransition = currentValid
+            && RegisteredWindows.ContainsKey(previousTarget.Hwnd)
+            && RegisteredWindows.ContainsKey(current.Hwnd)
+            && (registeredDragTarget || IsRegisteredIdentity(current));
+        if (!currentValid || (previousTargetLive && targetChanged && !sameProcessIdentity
+            && !registeredTargetTransition))
         {
-            GuardedProc.Log($"WARNING: refusing keyboard input; foreground 0x{root.ToInt64():X} is not the verified target.");
+            string actual = Discover.TryCaptureIdentity(root, out WindowIdentity observed)
+                ? $"pid={observed.ProcessId} class='{observed.ClassName}' title='{observed.Title}' exe='{observed.ExePath}' start={observed.ProcessStartTimeUtcTicks}"
+                : "identity-unavailable";
+            WindowIdentity expected = _activeTarget.Value;
+            GuardedProc.Log($"WARNING: refusing keyboard input; foreground 0x{root.ToInt64():X} is not the verified target (expected=0x{expected.Hwnd.ToInt64():X} pid={expected.ProcessId} class='{expected.ClassName}' start={expected.ProcessStartTimeUtcTicks}; actual={actual}).");
             return false;
         }
+        if (!previousTargetLive || targetChanged)
+            GuardedProc.Log($"  Input identity transition: previous keyboard target 0x{previousTarget.Hwnd.ToInt64():X} -> current foreground root 0x{current.Hwnd.ToInt64():X}; registered process identity and scope validation passed.");
         _activeTarget = current;
         return true;
+    }
+
+    private static bool IsRegisteredIdentity(WindowIdentity current)
+    {
+        return RegisteredWindows.TryGetValue(current.Hwnd, out WindowIdentity expected)
+            && expected.ProcessId == current.ProcessId
+            && string.Equals(expected.ClassName, current.ClassName, StringComparison.Ordinal)
+            && string.Equals(expected.ExePath, current.ExePath, StringComparison.OrdinalIgnoreCase)
+            && (expected.ProcessStartTimeUtcTicks == 0
+                || expected.ProcessStartTimeUtcTicks == current.ProcessStartTimeUtcTicks);
     }
 
     private static bool VerifyPointTarget(int x, int y)
@@ -224,8 +284,14 @@ internal static class Input
             return false;
         }
 
+        // The previous target may be a transient WPF context-menu popup that
+        // legitimately disappeared after the last action. A dead previous
+        // target is not evidence that the independently discovered point root
+        // is unsafe: the current root has already passed the registered
+        // process-start, PID, executable, class, and HWND checks above. Keep
+        // the scope gate, but allow this safe identity transition.
         if (!MatchesStableIdentity(_activeTarget.Value.Hwnd, _activeTarget.Value))
-            return false;
+            GuardedProc.Log($"  Input identity transition: previous target 0x{_activeTarget.Value.Hwnd.ToInt64():X} is no longer live; current point root 0x{current.Hwnd.ToInt64():X} passed independent scope validation.");
 
         // The point may be a visible Shepherd guest over a TabDock container;
         // a real click activates that guest. Promote the verified point root
@@ -323,6 +389,7 @@ internal static class Input
         {
             SendMouse(NativeMethods.MOUSEEVENTF_LEFTDOWN, verifyPoint: true);
             sentDown = true;
+            _leftButtonHeld = true;
             for (int i = 1; i <= steps; i++)
             {
                 int x = x1 + (x2 - x1) * i / steps;
@@ -338,6 +405,7 @@ internal static class Input
         {
             if (sentDown)
                 SendMouse(NativeMethods.MOUSEEVENTF_LEFTUP, verifyPoint: false, allowUnverifiedCleanup: true);
+            _leftButtonHeld = false;
         }
         Thread.Sleep(60);
     }
@@ -355,6 +423,7 @@ internal static class Input
         MoveTo(x, y);
         Thread.Sleep(40);
         SendMouse(NativeMethods.MOUSEEVENTF_LEFTDOWN, verifyPoint: true);
+        _leftButtonHeld = true;
         Thread.Sleep(40);
     }
 
@@ -377,6 +446,7 @@ internal static class Input
         // during the test. This is cleanup of global input state, not a new
         // window action; failing to do so would contaminate the user's desktop.
         SendMouse(NativeMethods.MOUSEEVENTF_LEFTUP, verifyPoint: false, allowUnverifiedCleanup: true);
+        _leftButtonHeld = false;
         Thread.Sleep(40);
     }
 
@@ -464,6 +534,61 @@ internal static class Input
         Thread.Sleep(20);
     }
 
+    /// <summary>
+    /// Sends Ctrl+Tab as one real-input batch after proving that the exact
+    /// requested top-level window is foreground. Split activation deliberately
+    /// reasserts the focused guest shortly after container activation; sending
+    /// the modifier and key as separate calls can therefore race that benign
+    /// reassert and deliver Ctrl+Tab to the guest instead of TabDock. The batch
+    /// keeps the safety gate strict while removing that harness-only gap.
+    /// </summary>
+    public static bool SendCtrlTabTo(IntPtr hwnd)
+    {
+        IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
+        if (root == IntPtr.Zero)
+            root = hwnd;
+        if (!ForceForeground(root)
+            || !_activeTarget.HasValue
+            || _activeTarget.Value.Hwnd != root
+            || !MatchesStableIdentity(root, _activeTarget.Value))
+        {
+            GuardedProc.Log($"WARNING: refusing Ctrl+Tab because exact container foreground could not be proven for 0x{root.ToInt64():X}.");
+            return false;
+        }
+
+        // ForceForeground intentionally waits for ordinary windows to settle,
+        // but this product has a legitimate delayed guest reassert on container
+        // activation. Reassert the exact container immediately before the
+        // atomic key batch so the reassert timer cannot win the handoff between
+        // the foreground check and SendInput.
+        NativeMethods.AllowSetForegroundWindow(NativeMethods.ASFW_ANY);
+        SendRawVk(VK_MENU, up: true);
+        NativeMethods.SetForegroundWindow(root);
+        if (NativeMethods.GetForegroundWindow() != root
+            || !MatchesStableIdentity(root, _activeTarget.Value)
+            || !VerifyForegroundTarget())
+        {
+            GuardedProc.Log($"WARNING: refusing Ctrl+Tab because exact container foreground was lost at dispatch for 0x{root.ToInt64():X}.");
+            return false;
+        }
+
+        var inputs = new[]
+        {
+            KeyboardInput(VK_CONTROL, up: false),
+            KeyboardInput(VK_TAB, up: false),
+            KeyboardInput(VK_TAB, up: true),
+            KeyboardInput(VK_CONTROL, up: true),
+        };
+        uint sent = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeMethods.INPUT>());
+        if (sent != inputs.Length)
+        {
+            GuardedProc.Log($"WARNING: Ctrl+Tab SendInput batch failed: sent={sent}/{inputs.Length}; {NativeMethods.FormatLastError()}");
+            return false;
+        }
+        Thread.Sleep(30);
+        return true;
+    }
+
     /// <summary>Ctrl+L: the standard browser shortcut to focus and select-all the address/search bar.</summary>
     public static void SendCtrlL()
     {
@@ -540,7 +665,7 @@ internal static class Input
     {
         if (verifyPoint && (!_hasLastPoint || !VerifyPointTarget(_lastX, _lastY)))
             throw new InvalidOperationException("Refusing mouse input because the live point failed identity verification.");
-        if (!verifyPoint && !VerifyForegroundTarget() && !allowUnverifiedCleanup)
+        if (!verifyPoint && !VerifyForegroundTarget(_leftButtonHeld) && !allowUnverifiedCleanup)
             throw new InvalidOperationException("Refusing mouse input because the verified target is no longer foreground.");
         var input = new NativeMethods.INPUT { type = NativeMethods.INPUT_MOUSE };
         input.u.mi = new NativeMethods.MOUSEINPUT { dwFlags = flags };
@@ -549,13 +674,19 @@ internal static class Input
 
     private static void SendVk(ushort vk, bool up, bool allowUnverifiedCleanup = false)
     {
+        NativeMethods.INPUT input = KeyboardInput(vk, up);
+        Send(input, verifyPoint: false, allowUnverifiedCleanup);
+    }
+
+    private static NativeMethods.INPUT KeyboardInput(ushort vk, bool up)
+    {
         var input = new NativeMethods.INPUT { type = NativeMethods.INPUT_KEYBOARD };
         input.u.ki = new NativeMethods.KEYBDINPUT
         {
             wVk = vk,
             dwFlags = up ? NativeMethods.KEYEVENTF_KEYUP : 0,
         };
-        Send(input, verifyPoint: false, allowUnverifiedCleanup);
+        return input;
     }
 
     private static void SendUnicode(char ch, bool up, bool allowUnverifiedCleanup = false)

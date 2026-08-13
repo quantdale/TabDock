@@ -302,7 +302,7 @@ document.getElementById('btn').addEventListener('click', function() {
 
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, browser);
 
-        // Let post-capture settling finish (render-health check, debounced
+        // Let post-capture settling finish (render-health check, durable
         // persistence save, any foreground contention against the terminal
         // that launched this driver) before touching the guest, so the
         // baseline measurement isn't itself confounded by that transient
@@ -520,10 +520,9 @@ input.addEventListener('input', function() {
             bool selected = false;
             for (int attempt = 0; attempt < 3 && !selected; attempt++)
             {
-                if (!Input.ForceForeground(container))
-                    throw new InvalidOperationException("Could not bring the container to the foreground — refusing to select blind.");
-
                 (int tx, int ty) = Uia.Center(item);
+                if (!EnsureClickable(container, tx, ty))
+                    throw new InvalidOperationException("Could not bring the container to the foreground and the tab is obscured — refusing to select blind.");
                 Input.ClickAt(tx, ty);
                 Thread.Sleep(350);
                 selected = Uia.IsSelected(item) == true;
@@ -588,7 +587,7 @@ input.addEventListener('input', function() {
         GuestInfo notepad = SpawnNotepad(ctx);
 
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, browser, notepad);
-        Thread.Sleep(1500); // let post-capture settling (render-health, debounced save) finish
+        Thread.Sleep(1500); // let post-capture settling (render-health, durable save) finish
 
         // A genuinely external app TabDock never captured (never another
         // TabDock tab) — the driver's own console window, falling back to a

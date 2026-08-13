@@ -63,6 +63,14 @@ public sealed class Group : INotifyPropertyChanged
     public List<PersistedTabMetadata> PersistedTabs { get; } = new();
 
     /// <summary>
+    /// Whether this group represents actual tab/layout intent. A newly
+    /// created group is an interactive shell until its first live member is
+    /// captured; restored groups retain this flag through their persisted tab
+    /// metadata even though their HWNDs are not restored automatically.
+    /// </summary>
+    public bool HasMaterializedTabs => Members.Count > 0 || PersistedTabs.Count > 0;
+
+    /// <summary>
     /// The active-tab index saved from the previous session, kept alongside
     /// <see cref="PersistedTabs"/> and for exactly the same reason: a restored
     /// group has no live <see cref="Members"/>, so assigning the loaded index to

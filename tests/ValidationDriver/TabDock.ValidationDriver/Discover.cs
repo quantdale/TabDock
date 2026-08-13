@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text;
 
 namespace TabDock.ValidationDriver;
@@ -10,7 +11,8 @@ internal readonly record struct WindowIdentity(
     uint ProcessId,
     string ClassName,
     string Title,
-    string ExePath);
+    string ExePath,
+    long ProcessStartTimeUtcTicks);
 
 /// <summary>Win32 EnumWindows / EnumChildWindows discovery helpers.</summary>
 internal static class Discover
@@ -32,7 +34,7 @@ internal static class Discover
         if (pid == 0 || string.IsNullOrEmpty(className) || title == null || string.IsNullOrWhiteSpace(exePath))
             return false;
 
-        identity = new WindowIdentity(hwnd, pid, className, title, exePath);
+        identity = new WindowIdentity(hwnd, pid, className, title, exePath, TryGetProcessStartTimeUtcTicks(pid));
         return true;
     }
 
@@ -49,7 +51,27 @@ internal static class Discover
         return current.ProcessId == expected.ProcessId
             && string.Equals(current.ClassName, expected.ClassName, StringComparison.Ordinal)
             && string.Equals(current.Title, expected.Title, StringComparison.Ordinal)
-            && string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase);
+            && string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase)
+            && (expected.ProcessStartTimeUtcTicks == 0
+                || current.ProcessStartTimeUtcTicks == expected.ProcessStartTimeUtcTicks);
+    }
+
+    /// <summary>
+    /// Reads the process-start identity used to distinguish a recycled PID.
+    /// A zero result is retained as an unavailable optional field; the driver
+    /// still requires the existing PID/class/executable checks in that case.
+    /// </summary>
+    public static long TryGetProcessStartTimeUtcTicks(uint pid)
+    {
+        try
+        {
+            using Process process = Process.GetProcessById(unchecked((int)pid));
+            return process.StartTime.ToUniversalTime().Ticks;
+        }
+        catch
+        {
+            return 0;
+        }
     }
 
     public static List<IntPtr> GetTopLevelWindowsByPid(uint pid, bool visibleOnly)

@@ -8,9 +8,10 @@ The version, doctor, and support-bundle commands are safe to run from a normal
 non-elevated terminal and do not start the main UI or WinEvent hooks:
 
 ```powershell
-dotnet build TabDock.csproj -c Release -r win-x64
+dotnet build TabDock.csproj -c Release
 & .\bin\Release\net8.0-windows\win-x64\TabDock.exe --version
 & .\bin\Release\net8.0-windows\win-x64\TabDock.exe --doctor
+& .\bin\Release\net8.0-windows\win-x64\TabDock.exe --selftest-geometry
 & .\bin\Release\net8.0-windows\win-x64\TabDock.exe --selftest-diagnostics
 ```
 
@@ -37,7 +38,17 @@ tests/ValidationDriver/
 └── TabDock.GuineaPig/          # Disposable WinForms target window
 ```
 
-Both projects are **not** in `TabDock.sln`; they are built and run by project path.
+Both projects are **not** in `TabDock.sln`; the validation script builds them by
+project path. The CI-safe entry point is:
+
+```powershell
+.\scripts\validate.ps1 -Configuration Release -Ci -Publish
+```
+
+It performs audited restore, solution/app/Spike/driver/GuineaPig Release
+builds, geometry and diagnostics/persistence/privacy self-tests, `--version`,
+`--doctor`, support-bundle ZIP inspection, OpenSpec validation, and a
+self-contained publish smoke. It never sends desktop input.
 
 ### What `TabDock.GuineaPig` is for
 
@@ -47,7 +58,13 @@ Both projects are **not** in `TabDock.sln`; they are built and run by project pa
 
 `TabDock.ValidationDriver` is a console harness that:
 
-1. Builds/expects `TabDock.exe` to already exist at `bin\Debug\net8.0-windows\win-x64\TabDock.exe` and `TabDock.GuineaPig.exe` at `tests\ValidationDriver\TabDock.GuineaPig\bin\Debug\net8.0-windows\TabDock.GuineaPig.exe` — note the pig path has **no `win-x64` RID segment**: build the pig project without `-r win-x64` (`dotnet build tests\ValidationDriver\TabDock.GuineaPig\TabDock.GuineaPig.csproj`, per the driver's own hint at `Program.cs:97-102`). Both paths resolve relative to the repo root, located by walking up from the driver assembly until `TabDock.sln` is found, so the driver works from any machine checkout (`Scenarios.cs:79-83`).
+1. Discovers `TabDock.exe` and `TabDock.GuineaPig.exe` from the selected
+   configuration (`Debug` or `Release`) and RID (`auto`, `none`, or
+   `win-x64`). Use `--tabdock <path>` and `--guineapig <path>` for explicit
+   artifacts. The pig remains a framework-dependent WinForms artifact without
+   a `win-x64` RID segment by default. Both paths resolve relative to the repo
+   root, located by walking up from the driver assembly until `TabDock.sln` is
+   found.
 2. Spawns a fresh TabDock instance plus guinea-pig windows.
 3. Drives them exclusively with real `SendInput` mouse/keyboard events at UIA-read coordinates.
 4. Asserts on window state, screen pixels, the TabDock log, and the pigs' window-message logs.
@@ -58,7 +75,7 @@ Because it sends real input, the run must be supervised: do not touch the mouse 
 ### How to invoke it
 
 ```powershell
-dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- [options] <scenario|all>
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- [options] <scenario|shard|all>
 ```
 
 Options:
@@ -67,7 +84,12 @@ Options:
 - `--cycles N` — cycle count for `maximize-repro` (default 3), `repeat-cycles`
   (default 5), and `reattach-repeated-cycles` (minimum 3).
 - `--guest KIND` — guest app for scenarios that need one (default `pig`). The full set of kinds is `pig`, `wt`, `chrome-nogpu`, `chrome-gpu` (`maximize-repro`), `chrome-normal`, `edge-normal`, `firefox-normal` (`browser-*` scenarios), and `codex`, `chatgptclassic` (`realapp` — attaches to your own already-running app). Dispatch is defined in `Program.cs` and `Scenarios.cs`.
-- `--list` — print every dispatchable scenario and registration group, then exit
+- `--configuration Debug|Release` — select the artifact configuration (default
+  `Debug`).
+- `--rid auto|none|win-x64` — select RID-aware discovery (default `auto`).
+- `--tabdock PATH` / `--guineapig PATH` — override artifact discovery.
+- `--shard NAME` — run one named bounded shard.
+- `--list` — print every dispatchable scenario and shard assignment, then exit
   without starting TabDock or sending input.
 
 Core scenarios (from `Program.cs` / `Scenarios.cs`):
@@ -191,18 +213,40 @@ only when every invariant holds; the result is logged as
 mutex/UI and is safe unattended — use it for cross-machine pane-math
 verification and as a fast smoke after any split-geometry change.
 
-**Run-budget note:** `AllOrder` now has 65 scenarios; the 90-spawn hard cap and
-10-minute `GuardedProc.Cts` budget mean a single `--yes all` cannot complete —
-run logical batches instead (see `docs/TESTING.md` §A batch plan in the goal
-waypoint, or the split/group/movement groupings in `Scenarios.cs`).
+The diagnostics self-test also poisons and verifies the synthetic
+`WM_GETMINMAXINFO` probe buffer. This catches the cross-process difference
+between a real USER32 message (which supplies initialized `MINMAXINFO` storage)
+and TabDock's manually allocated probe buffer.
 
-Run `all` to execute the core scenarios in order, fresh TabDock per scenario:
+**Run-budget note:** each driver process has a bounded 12-spawn scenario cap
+and 10-minute safety budget. `all` is now a guarded parent orchestrator: it
+launches the named hermetic shards as separate child driver processes, so each
+shard receives its own bounded budget. It does not remove caps and it does not
+include browser/real-app families that require an explicit guest choice.
+
+Named shards are:
+`core-lifecycle`, `capture-group`, `split-core`, `split-render`, `split-focus`,
+`drag-z-order`, `crash-recovery`, `keyboard-input`, `dpi-multi-monitor`,
+`startup`, and `diagnostics`. The split family is deliberately divided into
+three bounded processes because its original single shard exceeded the fixed
+10-minute driver budget. `browser` and `real-app` are explicit-only shards.
+
+Run one bounded shard during development:
 
 ```powershell
-dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --yes all
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes --shard split-focus
 ```
 
-Browser, real-app, and extra standalone scenarios exist but are deliberately excluded from `all` because they require an explicit `--guest` or attach to the user's own live applications. See `Scenarios.cs` for the full list (`BrowserOnlyScenarios`, `StandaloneExtraScenarios`, `RealAppGuestKinds`).
+Run the complete hermetic suite through the guarded orchestrator:
+
+```powershell
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes all
+```
+
+Browser and real-app families remain deliberately explicit because they require
+`--guest` or attach to the user's own live applications. Standalone extras are
+also listed by `--list` but are not silently folded into a bounded hermetic
+shard. See `Scenarios.cs` for the full dispatch tables.
 
 ### What passing output looks like
 
@@ -217,14 +261,14 @@ returning exit code `0`. Any failure prints `ONE OR MORE SCENARIOS FAILED.` and 
 Example help output (no scenario supplied):
 
 ```
-Usage: TabDock.ValidationDriver.exe [--yes] [--cycles N] [--guest pig|wt|chrome-nogpu|chrome-gpu|chrome-normal|edge-normal|firefox-normal|codex|chatgptclassic] <scenario|all>
+Usage: TabDock.ValidationDriver.exe [options] <scenario|shard|all>
 
 Scenarios:
   rename
   popout
   closewin
   ...
-  all            runs every scenario above in order (fresh TabDock per scenario)
+  all            runs every bounded hermetic shard in separate child processes
 
 Options:
   --yes          skip the interactive confirmation (supervised runs)
@@ -232,6 +276,11 @@ Options:
   --guest KIND   guest app for maximize-repro: pig (default), wt, chrome-nogpu, chrome-gpu;
                  browser-* scenarios: chrome-normal, edge-normal, firefox-normal;
                  realapp: codex, chatgptclassic
+  --configuration Debug|Release
+  --rid auto|none|win-x64
+  --tabdock PATH --guineapig PATH
+  --shard NAME    run one bounded shard
+  --list          list scenarios and shard assignments
 ```
 
 > **Note:** The `LAYOUT[drift]`/`LAYOUT[movesize]`/`LAYOUT[capture]` and `unhealthy`
@@ -248,15 +297,11 @@ Options:
 Verified facts about the harness's own limits — several are easy to mistake for
 scenario failures:
 
-- **10-minute whole-run budget.** `GuardedProc.Cts` is a `CancellationTokenSource`
-  created with a 10-minute timeout (`GuardedProc.cs:34`) that is never reset
-  between scenarios; the countdown effectively starts at the single-instance
-  mutex acquisition (`Program.cs:84`) and covers the confirmation plus every
-  scenario. When it fires mid-scenario, the driver logs "ABORTED: overall time
-  budget exceeded or Ctrl+C" (`Scenarios.cs:304-310`) and exits with code `5`
-  (`Program.cs:145-149`) — **indistinguishable from a scenario failure**. A
-  full `all` run (26 scenarios) must fit inside the 10 minutes. Ctrl+C cancels
-  the same token.
+- **Bounded budgets.** Each driver process has a 10-minute cancellation token
+  and each scenario has a 12-spawn cap. The `all` parent starts each hermetic
+  shard in a separate guarded child process, so a growing scenario catalog does
+  not consume one impossible global budget. A budget abort still returns code
+  `5` and is not a pass.
 - **No TabDock may already be running.** The run banner advertises that the
   driver spawns a fresh TabDock and aborts if one is already running
   (`Program.cs:108`); the enforcement is a per-scenario preflight in
@@ -269,20 +314,11 @@ scenario failures:
   interactive confirmation; `4` — `TabDock.exe` or `TabDock.GuineaPig.exe`
   build not found (`Program.cs:91-102`); `5` — any scenario failure **or** the
   10-minute budget abort.
-- **Full `--guest` kinds.** `pig`, `wt`, `chrome-nogpu`, `chrome-gpu`
-  (`maximize-repro`), `chrome-normal`, `edge-normal`, `firefox-normal`
-  (`browser-*`), `codex`, `chatgptclassic` (`realapp`). Per-family validation
-  lives in `Program.cs:75-81`; the dispatch switch in `Scenarios.cs:573-636`.
-  The driver's own `Usage()` text still prints only the old
-  `pig|wt|chrome-nogpu|chrome-gpu` subset — the switch and the validation are
-  authoritative, not the usage text.
-- **No `--list` option.** The CLI accepts only `--yes`, `--cycles`, and
-  `--guest` (`Program.cs:33-57`). To enumerate dispatchable scenario names,
-  read the registration arrays in `Scenarios.cs`: `AllOrder` (lines 153-165 —
-  the `all` set, also what `Usage()` prints), `BrowserOnlyScenarios`
-  (189-192), `StandaloneExtraScenarios` (207-219), plus `RealAppGuestKinds`
-  (173) and `BrowserGuestKinds` (193). `realapp` and `browser-multi` are
-  recognized by name outside those arrays (`Program.cs:68-71`).
+- **Artifact and guest selection.** `--configuration`, `--rid`, explicit
+  executable paths, and `--guest` are validated before input begins. `--help`
+  and `--list` are authoritative and do not start TabDock. Supported guest
+  kinds include `pig`, `wt`, `chrome-nogpu`, `chrome-gpu`, browser guests,
+  `codex`, and `chatgptclassic`; browser/real-app shards remain explicit-only.
 
 ### How to add a new scenario
 
@@ -320,13 +356,16 @@ registration. To add one:
    at `Scenarios.cs:181-188`).
 4. **State isolation is automatic.** `StartScenario` and `Cleanup`
    (`Scenarios.cs:407-647`)
-   resets the per-scenario spawn budget, makes an atomic write-ahead disk copy
-   at `state.json.driver-snapshot` before deleting the user's `state.json`,
-   and `Cleanup` restores the disk copy before removing it. If a driver run
-   crashes, the next scenario recovers the leftover snapshot first; the
-   snapshot is never deleted before a complete restore. The method refuses to
-   start while an unspawned TabDock is running, and spawns a fresh TabDock
-   instance. Any process you start must go through
+   reset the per-scenario spawn budget, make atomic write-ahead disk copies at
+   `state.json.driver-snapshot` and `state.json.bak.driver-snapshot` before
+   deleting both the user's primary and backup state files, and `Cleanup`
+   restores both copies before removing them. This is required because the
+   product intentionally recovers a valid backup when the primary is missing;
+   isolating only `state.json` would repopulate an empty scenario from stale
+   validation data. If a driver run crashes, the next scenario recovers the
+   leftover snapshots first; neither snapshot is deleted before its complete
+   restore. The method refuses to start while an unspawned TabDock is running,
+   and spawns a fresh TabDock instance. Any process you start must go through
    `GuardedProc.SpawnGuarded`/`Track` (`GuardedProc.cs:47-81`), or `Cleanup`
    will not kill it.
 5. **If you assert on a log line**, first verify the substring exists in
@@ -402,13 +441,59 @@ The final high-risk smoke set also passed fresh supervised runs of
 
 - Force-kill TabDock (`taskkill /F /IM TabDock.exe`) while a hidden tab is captured.
 - Relaunch TabDock.
-- Verify the hidden guest is restored and the previously active guest remains wherever it was.
-- Check `%APPDATA%\TabDock\state.json` and `hidden-windows.json` are valid JSON after the kill.
+- Verify every captured guest is restored to its original reversible
+  presentation state (normal/maximized/minimized placement, visibility, and
+  transition state) when identity still matches.
+- Repeat with an intentionally self-hidden/tray-style guest; it must remain
+  hidden after relaunch and must not be resurrected.
+- Repeat with two guests in split, rapid tab switching, and a drag in progress.
+- Check `%APPDATA%\TabDock\state.json` and `hidden-windows.json` are valid JSON
+  after the kill; recycled HWND/PID identities must not be touched.
+- Create a group without capturing a tab, exit, and relaunch: the empty shell
+  must not return. Also exercise a picker attempt where every selected target
+  fails; the provisional picker-created group must close and must not be saved.
+  A restored group with persisted tab metadata must remain available for
+  repopulation.
+
+The journal is versioned and written through before capture/presentation
+mutation. If its directory is unavailable, startup warns and capture is
+disabled; a memory-only log fallback does not weaken this safety gate.
 
 ### 5. Cross-monitor / DPI
 
 - Move a container between monitors with different scaling (e.g. 100% and 150%).
 - Verify the content area re-lays out and the active guest fills it.
+- Maximize on a larger secondary monitor (1440p/4K), including negative monitor
+  coordinates, and confirm the work area—not the primary monitor—controls the
+  bounds and taskbar clearance.
+- Repeat normal → maximize → restore and maximize → minimize → maximize with an
+  active split; both panes must remain an exact partition.
+- For a deterministic no-hardware check, run `--selftest-geometry`; the real
+  multi-monitor/DPI matrix remains supervised hardware validation.
+
+### 6. Lifecycle and diagnostics hardening
+
+- Use the diagnostics self-test to exercise persistence versions, valid backup
+  recovery, unreadable-primary protection, monitor-hook failure injection,
+  storage-degraded startup fixtures, native deferred-position chaining, and
+  adversarial support-bundle sanitization.
+- A real support ZIP must be inspected entry-by-entry for the username,
+  profile/AppData paths, executable paths, and credential-like values.
+- Hook-install failure after the bounded retry budget must release guests,
+  disable capture, persist layout intent, and show a restart-required warning;
+  it must not leave unsupported captured guests active.
+- A Windows logoff/shutdown cancellation test is supervised and destructive.
+  On a disposable, instrumented Release session only: (1) capture two
+  GuineaPig windows and create a split, (2) initiate Windows logoff or
+  shutdown, (3) cancel the request from a separately controlled application,
+  (4) verify TabDock has still exited after releasing guests and normalizing
+  layout intent, rather than resuming half-torn-down with hooks stopped, (5)
+  verify both guests are standalone and alive, (6) relaunch TabDock, (7)
+  confirm no stale recovery journal remains and persisted group metadata is
+  coherent, and (8) confirm repeated exit/session-ending callbacks do not
+  produce prompts or duplicate mutations. Do not run this on an unsaved
+  production session or on the agent workstation without a supervised recovery
+  plan.
 
 ---
 

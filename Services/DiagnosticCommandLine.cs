@@ -2,7 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
+using TabDock.ViewModels;
+using TabDock.Views;
 
 namespace TabDock.Services;
 
@@ -106,6 +109,8 @@ public static class DiagnosticCommandLine
                 case DiagnosticCommandKind.SelfTest:
                     (int checks, int failures) = DiagnosticSelfTest.Run();
                     Write($"SELFTEST[diagnostics] checks={checks} failures={failures} result={(failures == 0 ? "PASS" : "FAIL")}");
+                    if (PersistenceSelfTest.LastAccessDeniedFixtureStatus is string aclStatus && aclStatus != "pass")
+                        Write($"SELFTEST[diagnostics] persistence-acl-fixture={aclStatus}");
                     return failures == 0 ? 0 : 1;
                 default:
                     return 0;
@@ -180,10 +185,208 @@ internal static class DiagnosticSelfTest
         Check(DiagnosticEnvironmentService.HashTitle("secret") != "secret");
         Check(DiagnosticEnvironmentService.ClassifyJsonText("{\"Version\":1,\"Groups\":[]}", isState: true) == "valid");
         Check(DiagnosticEnvironmentService.ClassifyJsonText("not-json", isState: true).StartsWith("corrupt", StringComparison.Ordinal));
+        Check(DeferredWindowPositionSelfTest.ChangedHandlesAreChained());
+        Check(DeferredWindowPositionSelfTest.FailedDeferAbandonsWithoutEnd());
+        Guid selectedGroupId = Guid.NewGuid();
+        var pickerOptions = new[]
+        {
+            new CapturePickerViewModel.GroupOption(Guid.Empty, "<New group>"),
+            new CapturePickerViewModel.GroupOption(selectedGroupId, "Existing"),
+        };
+        Check(CapturePickerViewModel.SelectGroupAfterRefresh(pickerOptions, selectedGroupId)?.Id == selectedGroupId);
+        Check(CapturePickerViewModel.SelectGroupAfterRefresh(pickerOptions, Guid.NewGuid())?.Id == Guid.Empty);
+        Check(WinEventMonitorSelfTest.FailedInstallUnwindsAndFailsClosed());
+        Check(SessionEndingPolicySelfTest.TeardownIsOneWayAndIdempotent());
+        Check(MinTrackProbeSelfTest.InitializesEveryField());
+        Check(WindowShepherdService.MinTrackProbeTimeoutMilliseconds <= 100);
+        Check(ContainerGeometrySelfTest.UsesContainingMonitorWorkArea());
+        (int journalChecks, int journalFailures) = RecoveryJournalSelfTest.Run();
+        checks += journalChecks;
+        failures += journalFailures;
+        (int persistenceChecks, int persistenceFailures) = PersistenceSelfTest.Run();
+        checks += persistenceChecks;
+        failures += persistenceFailures;
+        (int privacyChecks, int privacyFailures) = DiagnosticPrivacySelfTest.Run();
+        checks += privacyChecks;
+        failures += privacyFailures;
         var concurrent = new DiagnosticTrace(128);
         Parallel.For(0, 512, i => concurrent.Record("concurrent"));
         Check(concurrent.Snapshot().Count == 128);
         Check(concurrent.Snapshot().Zip(concurrent.Snapshot().Skip(1), (left, right) => left.Sequence < right.Sequence).All(value => value));
         return (checks, failures);
+    }
+}
+
+internal static class MinTrackProbeSelfTest
+{
+    public static bool InitializesEveryField()
+    {
+        IntPtr buffer = System.Runtime.InteropServices.Marshal.AllocHGlobal(
+            System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MINMAXINFO>());
+        try
+        {
+            // Poison the allocation first so the test proves the helper writes
+            // the complete structure rather than relying on allocator zeroing.
+            for (int i = 0; i < System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MINMAXINFO>(); i++)
+                System.Runtime.InteropServices.Marshal.WriteByte(buffer, i, 0xA5);
+
+            WindowShepherdService.InitializeMinTrackProbeBuffer(buffer);
+            NativeMethods.MINMAXINFO value = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeMethods.MINMAXINFO>(buffer);
+            return value.ptReserved.x == 0 && value.ptReserved.y == 0
+                && value.ptMaxSize.x == 0 && value.ptMaxSize.y == 0
+                && value.ptMaxPosition.x == 0 && value.ptMaxPosition.y == 0
+                && value.ptMinTrackSize.x == 0 && value.ptMinTrackSize.y == 0
+                && value.ptMaxTrackSize.x == 0 && value.ptMaxTrackSize.y == 0;
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.FreeHGlobal(buffer);
+        }
+    }
+}
+
+internal static class ContainerGeometrySelfTest
+{
+    public static bool UsesContainingMonitorWorkArea()
+    {
+        var monitor = new NativeMethods.MONITORINFO
+        {
+            rcMonitor = new NativeMethods.RECT { left = 1920, top = -300, right = 3840, bottom = 1140 },
+            rcWork = new NativeMethods.RECT { left = 1920, top = -260, right = 3840, bottom = 1100 },
+        };
+        var minMax = new NativeMethods.MINMAXINFO
+        {
+            ptMaxPosition = new NativeMethods.POINT { x = -1, y = -1 },
+            ptMaxSize = new NativeMethods.POINT { x = -1, y = -1 },
+        };
+        ContainerWindow.ApplyMonitorMaximizeBounds(monitor, ref minMax);
+        return minMax.ptMaxPosition.x == 0
+            && minMax.ptMaxPosition.y == 40
+            && minMax.ptMaxSize.x == 1920
+            && minMax.ptMaxSize.y == 1360;
+    }
+}
+
+internal static class WinEventMonitorSelfTest
+{
+    public static bool FailedInstallUnwindsAndFailsClosed()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "TabDock-winevent-selftest-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(new SynchronizationContext());
+            var api = new FakeApi(failOnHookInAttempt: 4);
+            using var log = new LoggingService(root);
+            using var monitor = new WinEventMonitor(_ => false, _ => null, log, api);
+            bool started = monitor.Start();
+            return !started && !monitor.IsRunning && api.SetCount >= 7 && api.UnhookCount >= 3;
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+            try
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, recursive: true);
+            }
+            catch { }
+        }
+    }
+
+    private sealed class FakeApi : IWinEventHookApi
+    {
+        private readonly int _failOnHookInAttempt;
+        private int _hookInAttempt;
+
+        public FakeApi(int failOnHookInAttempt)
+        {
+            _failOnHookInAttempt = failOnHookInAttempt;
+        }
+
+        public int SetCount { get; private set; }
+        public int UnhookCount { get; private set; }
+
+        public IntPtr Set(uint eventMin, uint eventMax, NativeMethods.WinEventProc callback, uint flags)
+        {
+            SetCount++;
+            _hookInAttempt++;
+            if (_hookInAttempt == 7)
+                _hookInAttempt = 0;
+            return _hookInAttempt == _failOnHookInAttempt
+                ? IntPtr.Zero
+                : new IntPtr(SetCount);
+        }
+
+        public bool Unhook(IntPtr hook)
+        {
+            UnhookCount++;
+            return true;
+        }
+    }
+}
+
+internal static class DeferredWindowPositionSelfTest
+{
+    public static bool ChangedHandlesAreChained()
+    {
+        var api = new FakeApi(new[] { new IntPtr(0x22), new IntPtr(0x33), new IntPtr(0x44) });
+        DeferredWindowPositionResult result = DeferredWindowPositionBatch.Apply(api, Entries());
+        return result == DeferredWindowPositionResult.Applied
+            && api.DeferInputs.Count == 3
+            && api.DeferInputs[0] == new IntPtr(0x11)
+            && api.DeferInputs[1] == new IntPtr(0x22)
+            && api.DeferInputs[2] == new IntPtr(0x33)
+            && api.EndInput == new IntPtr(0x44);
+    }
+
+    public static bool FailedDeferAbandonsWithoutEnd()
+    {
+        var api = new FakeApi(new[] { new IntPtr(0x22), IntPtr.Zero, new IntPtr(0x44) });
+        DeferredWindowPositionResult result = DeferredWindowPositionBatch.Apply(api, Entries());
+        return result == DeferredWindowPositionResult.DeferFailed
+            && api.DeferInputs.Count == 2
+            && api.DeferInputs[0] == new IntPtr(0x11)
+            && api.DeferInputs[1] == new IntPtr(0x22)
+            && api.EndInput == IntPtr.Zero;
+    }
+
+    private static IReadOnlyList<DeferredWindowPositionEntry> Entries()
+    {
+        return new[]
+        {
+            new DeferredWindowPositionEntry(new IntPtr(0x101), IntPtr.Zero, 1, 2, 3, 4, 5),
+            new DeferredWindowPositionEntry(new IntPtr(0x102), IntPtr.Zero, 6, 7, 8, 9, 10),
+            new DeferredWindowPositionEntry(new IntPtr(0x103), IntPtr.Zero, 11, 12, 13, 14, 15),
+        };
+    }
+
+    private sealed class FakeApi : IDeferredWindowPositionApi
+    {
+        private readonly IReadOnlyList<IntPtr> _returns;
+        private int _deferIndex;
+
+        public FakeApi(IReadOnlyList<IntPtr> returns)
+        {
+            _returns = returns;
+        }
+
+        public List<IntPtr> DeferInputs { get; } = new();
+        public IntPtr EndInput { get; private set; }
+
+        public IntPtr Begin(int windowCount) => new(0x11);
+
+        public IntPtr Defer(IntPtr hdwp, IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags)
+        {
+            DeferInputs.Add(hdwp);
+            return _returns[_deferIndex++];
+        }
+
+        public bool End(IntPtr hdwp)
+        {
+            EndInput = hdwp;
+            return true;
+        }
     }
 }

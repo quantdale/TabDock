@@ -949,20 +949,8 @@ internal static partial class Scenarios
             // (7) Ctrl+Tab while split cycles ONLY between the pair's members:
             // with B focused, one Ctrl+Tab must focus A and leave the pair intact.
             long offCT = TabDockLog.RecordLogLength();
-            if (!Input.ForceForeground(container))
+            if (!Input.SendCtrlTabTo(container))
                 throw new InvalidOperationException("Could not bring the container to the foreground for Ctrl+Tab — refusing to continue.");
-            bool ctrlDown = false;
-            try
-            {
-                Input.SendKeyDown(Input.VK_CONTROL);
-                ctrlDown = true;
-                Input.SendKey(Input.VK_TAB);
-            }
-            finally
-            {
-                if (ctrlDown)
-                    Input.SendKeyUp(Input.VK_CONTROL);
-            }
             ctx.Check(WaitForSplitFocus(offCT, pigA, 3000),
                 $"cycle {i}: Ctrl+Tab cycles to the other split member (SPLIT[focus] member=A)");
             ctx.Check(TabDockLog.CountNewLines(offCT, "SPLIT[exit]") == 0, $"cycle {i}: Ctrl+Tab keeps split active");
@@ -2130,6 +2118,35 @@ private static void SingleGuestDoesNotOverflowContent(Ctx ctx, Options opt)
     // (the min-track is enforced by the OS but the cross-process SetWindowPos
     // bypasses the normal WPF resize pipeline).
 
+    ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines");
+}
+
+// hung-guest-mintrack: a guest that deliberately sleeps while answering
+// WM_GETMINMAXINFO must not hold the driver/UI resize path for the old 500 ms
+// bound. The scenario measures only the native resize request, not the settle
+// delay used by the other containment scenarios.
+private static void HungGuestMinTrack(Ctx ctx, Options opt)
+{
+    GuestInfo pig = SpawnPig(ctx, "HUNG-MIN", "--color", "red", "--min-width", "400", "--block-messages-ms", "800");
+    (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+    ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 4000), "hung guest docked before min-track probe");
+
+    if (!Discover.TryCaptureIdentity(container, out WindowIdentity identity))
+        throw new InvalidOperationException("Container identity could not be captured for hung min-track timing.");
+
+    int x = NativeMethods.GetSystemMetrics(NativeMethods.SM_XVIRTUALSCREEN) + 40;
+    int y = NativeMethods.GetSystemMetrics(NativeMethods.SM_YVIRTUALSCREEN) + 40;
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    VerifiedWindowOps.SetWindowPos(identity, IntPtr.Zero, x, y, 1000, 500, NativeMethods.SWP_NOACTIVATE);
+    sw.Stop();
+    ctx.Check(sw.ElapsedMilliseconds < 450,
+        $"resize request remains bounded with non-pumping guest ({sw.ElapsedMilliseconds}ms; expected below old 500ms bound)");
+    Thread.Sleep(900);
+    ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "hung guest remains contained after timeout and settle");
+    ctx.Check(TabDockLog.WaitForLogLine(ctx.LogOffset, "SHEPHERD[sizemin]", 3000),
+        "TabDock recorded a bounded min-track timeout instead of waiting for the guest");
+    ctx.Check(PigLog.WaitForPigLine(pig.Pid, "BLOCK_MESSAGES WM_GETMINMAXINFO", 3000),
+        "GuineaPig confirmed a deliberately non-pumping WM_GETMINMAXINFO handler");
     ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines");
 }
 

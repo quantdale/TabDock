@@ -68,34 +68,46 @@ internal static partial class Scenarios
         }, 3000);
         ctx.Check(panelClosed, "inline capture surface dismissed with the second '+' click");
 
+        // Rename through the Group header while the freshly reattached shell
+        // is in its stable visible state. The same menu path is exercised here
+        // after reattach; the native minimize/restore below is then kept as a
+        // separate cleanup transition so stale post-restore UIA rectangles do
+        // not turn this test into an unsafe coordinate guess.
+        AutomationElement containerEl = Uia.FromHwnd(container)
+            ?? throw new InvalidOperationException("Container UIA element unavailable.");
+        AutomationElement? groupButton = Uia.FindDescendantByName(containerEl, ControlType.Button, "Group ▾", null, out int groupButtonCount);
+        ctx.Check(groupButton != null && groupButtonCount == 1,
+            $"Group header button found uniquely after reattach (count={groupButtonCount})");
+        if (groupButton == null || groupButtonCount != 1)
+            throw new InvalidOperationException("Group header button was not available after reattach.");
+        (int groupX, int groupY) = Uia.Center(groupButton);
+        if (!EnsureClickable(container, groupX, groupY))
+            throw new InvalidOperationException("Could not bring the container to the foreground and its Group header was obscured — refusing to click blind.");
+        Input.ClickAt(groupX, groupY);
+        AutomationElement? renameItem = Uia.FindMenuItemOnDesktop(ctx.TabDockPid, "Rename group", 3000);
+        if (renameItem == null)
+            throw new InvalidOperationException("Group menu did not expose 'Rename group' after reattach.");
+        (int renameX, int renameY) = Uia.Center(renameItem);
+        Input.ClickAt(renameX, renameY);
+        bool renameBoxOpened = Util.WaitUntil(() =>
+        {
+            AutomationElement? currentRoot = Uia.FromHwnd(container);
+            return currentRoot != null && Uia.FindFirstOfType(currentRoot, ControlType.Edit) != null;
+        }, 3000);
+        ctx.Check(renameBoxOpened, "rename box opened after the reattach");
+        if (renameBoxOpened)
+        {
+            Input.TypeText("TDVAL-Reattached");
+            Input.SendKey(Input.VK_RETURN);
+        }
+        ctx.Check(Util.WaitUntil(() => NativeMethods.GetWindowTextString(container) == "TDVAL-Reattached", 2000),
+            "rename after the reattach worked (container title changed)");
+
         // Minimize / restore.
         ClickMinimizeButton(container);
         ctx.Check(Util.WaitUntil(() => NativeMethods.IsIconic(container), 3000), "minimize button minimized the container after the reattach");
         VerifiedWindowOps.ShowWindow(container, ctx.TabDockPid, NativeMethods.SW_RESTORE);
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsIconic(container), 3000), "container restored (test cleanup step, not the restore gesture itself)");
-
-        // Rename (mirrors the `rename` scenario's exact pattern). Retried: the
-        // first double-click right after the restore can be consumed by the
-        // window's own activation (observed live).
-        AutomationElement containerEl = Uia.FromHwnd(container)
-            ?? throw new InvalidOperationException("Container UIA element unavailable.");
-        AutomationElement? caption = Uia.FindDescendantByName(containerEl, ControlType.Text, "Group", null, out int capCount);
-        ctx.Check(caption != null && capCount == 1, $"caption title TextBlock 'Group' found uniquely after reattach (count={capCount})");
-        bool renamed = false;
-        for (int attempt = 0; attempt < 3 && !renamed; attempt++)
-        {
-            if (caption == null || capCount != 1)
-                break;
-            (int cx, int cy) = Uia.Center(caption);
-            if (!EnsureClickable(container, cx, cy))
-                throw new InvalidOperationException("Could not bring the container to the foreground and its caption is obscured — refusing to click blind.");
-            Input.DoubleClickAt(cx, cy);
-            Thread.Sleep(300);
-            Input.TypeText("TDVAL-Reattached");
-            Input.SendKey(Input.VK_RETURN);
-            renamed = Util.WaitUntil(() => NativeMethods.GetWindowTextString(container) == "TDVAL-Reattached", 2000);
-        }
-        ctx.Check(renamed, "rename after the reattach worked (container title changed)");
 
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
         ctx.Check(pigA.Proc != null && !pigA.Proc.HasExited && pigB.Proc != null && !pigB.Proc.HasExited, "both pigs alive throughout");

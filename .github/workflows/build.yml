@@ -19,13 +19,21 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Build main solution (TabDock app + Spike)
-        run: dotnet build TabDock.sln -c Release --nologo
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
 
-      - name: Build ValidationDriver harness
-        run: dotnet build tests/ValidationDriver/TabDock.ValidationDriver/TabDock.ValidationDriver.csproj -c Release --nologo
+      - name: Install pinned OpenSpec CLI
+        run: npm install --global @fission-ai/openspec@1.8.0
 
-      # The GuineaPig must be built without a -r RID: the harness resolves its exe at
-      # bin\Debug\net8.0-windows\ with no win-x64 subdirectory (see docs/TESTING.md).
-      - name: Build GuineaPig (no RID)
-        run: dotnet build tests/ValidationDriver/TabDock.GuineaPig/TabDock.GuineaPig.csproj -c Release --nologo
+      # This is intentionally the hermetic qualification entry point. It runs
+      # audited restore, Release builds, native/geometry/diagnostics/persistence
+      # self-tests, doctor/version/bundle privacy checks, OpenSpec validation,
+      # and a publish --version smoke. SendInput/hardware scenarios remain
+      # supervised and are never run on the hosted runner.
+      - name: Run Release qualification
+        shell: pwsh
+        env:
+          OPENSPEC_NO_UPDATE_CHECK: '1'
+          OPENSPEC_TELEMETRY: '0'
+        run: .\scripts\validate.ps1 -Configuration Release -Ci -Publish

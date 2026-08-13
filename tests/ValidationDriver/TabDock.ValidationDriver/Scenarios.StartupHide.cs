@@ -21,14 +21,14 @@ namespace TabDock.ValidationDriver;
 internal static partial class Scenarios
 {
     /// <summary>Shared: build a persisted group, rename it to <paramref name="groupTitle"/>,
-    /// wait for the debounced state.json save, then kill TabDock and the leftover pig so the
+    /// wait for the durable state.json save, then kill TabDock and the leftover pig so the
     /// group restores EMPTY on relaunch. Mirrors restored-group-survives-member-reclose.</summary>
     private static void BuildPersistedGroupThenKill(Ctx ctx, string pigTag, string color, string groupTitle)
     {
         GuestInfo pig = SpawnPig(ctx, pigTag, "--color", color);
         (IntPtr container, _) = CaptureIntoGroup(ctx, pig);
         ctx.Check(Util.WaitUntil(() => StateJsonContains(pig.Title), 5000),
-            "state.json contains the captured tab's title (debounced save)");
+            "state.json contains the captured tab's title (durable semantic save)");
 
         AutomationElement containerEl = Uia.FromHwnd(container)
             ?? throw new InvalidOperationException("Container UIA element unavailable.");

@@ -8,6 +8,7 @@ using System.Security;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 using TabDock.Models;
@@ -17,6 +18,19 @@ namespace TabDock.Services;
 /// <summary>Read-only environment and persistence probes used by doctor/export.</summary>
 public static class DiagnosticEnvironmentService
 {
+    private static readonly Regex s_absolutePath = new(
+        @"(?:[A-Za-z]:[\\/]|\\\\)[^\r\n""'<>|]+",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex s_secretValue = new(
+        @"\b(password|passwd|token|secret|api[-_]?key|authorization)\b\s*[:=]\s*(?:""[^""]*""|'[^']*'|[^,\s}\]]+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex s_bearerValue = new(
+        @"\bBearer\s+[^,\s}\]]+",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex s_obviousSecretToken = new(
+        @"\b(?:secret|token|api[-_]?key)[-_][A-Za-z0-9_-]+\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     public static WindowsEnvironmentSnapshot CaptureWindows()
     {
         var result = new WindowsEnvironmentSnapshot
@@ -180,7 +194,7 @@ public static class DiagnosticEnvironmentService
                 && !line.Contains("CHROME[", StringComparison.OrdinalIgnoreCase)
                 && !line.Contains("DIAGNOSTICS[", StringComparison.OrdinalIgnoreCase))
                 continue;
-            line = RedactPath(line);
+            line = SanitizeText(line);
             line = Regex.Replace(line, "'[^']*'", "'<redacted>'");
             lines.Add(line);
         }
@@ -191,14 +205,118 @@ public static class DiagnosticEnvironmentService
     {
         if (string.IsNullOrWhiteSpace(path))
             return "unavailable";
-        string result = path;
+        return SanitizeText(path);
+    }
+
+    /// <summary>
+    /// Sanitizes arbitrary report text, not just a value known to be a path.
+    /// Support data contains timestamped log lines, JSON-escaped strings, and
+    /// diagnostic exception text, so prefix-only replacement is insufficient.
+    /// Known profile roots are replaced in both Windows separator forms and a
+    /// conservative absolute-path pass catches embedded executable/temp paths.
+    /// Credential-like values are removed before any bundle entry is written.
+    /// </summary>
+    public static string SanitizeText(string? text)
+    {
+        if (text == null)
+            return "unavailable";
+
+        string result = text;
         string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        if (!string.IsNullOrWhiteSpace(userProfile))
-            result = ReplacePrefix(result, userProfile, "%USERPROFILE%");
         if (!string.IsNullOrWhiteSpace(appData))
-            result = ReplacePrefix(result, appData, "%APPDATA%");
+            result = ReplacePathVariants(result, appData, "%APPDATA%");
+        if (!string.IsNullOrWhiteSpace(userProfile))
+            result = ReplacePathVariants(result, userProfile, "%USERPROFILE%");
+
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (!string.IsNullOrWhiteSpace(localAppData))
+            result = ReplacePathVariants(result, localAppData, "%LOCALAPPDATA%");
+
+        string userName = Environment.UserName;
+        if (!string.IsNullOrWhiteSpace(userName))
+            result = result.Replace(userName, "<user>", StringComparison.OrdinalIgnoreCase);
+
+        string domainUser = Environment.UserDomainName + "\\" + Environment.UserName;
+        if (!string.IsNullOrWhiteSpace(Environment.UserDomainName)
+            && !string.IsNullOrWhiteSpace(Environment.UserName))
+        {
+            result = ReplacePathVariants(result, domainUser, "<user>");
+        }
+
+        result = s_absolutePath.Replace(result, "<path>");
+        result = s_secretValue.Replace(result, match =>
+        {
+            int separator = match.Value.IndexOfAny(new[] { ':', '=' });
+            return separator >= 0 ? match.Value[..(separator + 1)] + "<redacted>" : "<redacted>";
+        });
+        result = s_bearerValue.Replace(result, "Bearer <redacted>");
+        result = s_obviousSecretToken.Replace(result, "<redacted>");
         return result;
+    }
+
+    /// <summary>Sanitizes JSON values while preserving a parseable JSON document.</summary>
+    internal static string SanitizeJsonText(string json)
+    {
+        try
+        {
+            JsonNode? root = JsonNode.Parse(json);
+            if (root == null)
+                return SanitizeText(json);
+            root = SanitizeJsonNode(root)!;
+            return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        }
+        catch (JsonException)
+        {
+            return SanitizeText(json);
+        }
+    }
+
+    private static JsonNode? SanitizeJsonNode(JsonNode? node)
+    {
+        if (node == null)
+            return null;
+        if (node is JsonObject obj)
+        {
+            var sanitized = new JsonObject();
+            foreach (KeyValuePair<string, JsonNode?> property in obj.ToList())
+            {
+                if (IsSensitiveKey(property.Key))
+                {
+                    sanitized[property.Key] = "<redacted>";
+                }
+                else
+                {
+                    sanitized[property.Key] = SanitizeJsonNode(property.Value);
+                }
+            }
+            return sanitized;
+        }
+        if (node is JsonArray array)
+        {
+            var sanitized = new JsonArray();
+            for (int i = 0; i < array.Count; i++)
+            {
+                sanitized.Add(SanitizeJsonNode(array[i]));
+            }
+            return sanitized;
+        }
+        if (node is JsonValue value && value.TryGetValue<string>(out string? text) && text != null)
+        {
+            return JsonValue.Create(SanitizeText(text));
+        }
+        return node.DeepClone();
+    }
+
+    private static bool IsSensitiveKey(string key)
+    {
+        string normalized = new(key.Where(char.IsLetterOrDigit).ToArray());
+        return normalized.Contains("password", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("passwd", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("token", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("secret", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("apikey", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("authorization", StringComparison.OrdinalIgnoreCase);
     }
 
     public static string HashTitle(string? title)
@@ -314,10 +432,17 @@ public static class DiagnosticEnvironmentService
     private static string EmptyAsUnavailable(string? value)
         => string.IsNullOrWhiteSpace(value) ? "unavailable" : value.Trim();
 
-    private static string ReplacePrefix(string value, string prefix, string replacement)
-        => value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? replacement + value[prefix.Length..]
-            : value;
+    private static string ReplacePathVariants(string value, string path, string replacement)
+    {
+        string slash = path.Replace('\\', '/');
+        string backslash = path.Replace('/', '\\');
+        string result = value.Replace(path, replacement, StringComparison.OrdinalIgnoreCase);
+        if (!string.Equals(slash, path, StringComparison.Ordinal))
+            result = result.Replace(slash, replacement, StringComparison.OrdinalIgnoreCase);
+        if (!string.Equals(backslash, path, StringComparison.Ordinal))
+            result = result.Replace(backslash, replacement, StringComparison.OrdinalIgnoreCase);
+        return result;
+    }
 
     private static string Classify(Exception ex)
         => ex switch

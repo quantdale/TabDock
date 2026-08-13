@@ -94,6 +94,9 @@ internal static class Program
                 case "--min-height":
                     opts.MinHeight = int.Parse(Require(args, ref i));
                     break;
+                case "--block-messages-ms":
+                    opts.BlockMessagesMilliseconds = int.Parse(Require(args, ref i));
+                    break;
                 case "--dpi":
                     opts.DpiMode = ParseDpiMode(Require(args, ref i));
                     break;

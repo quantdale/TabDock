@@ -40,6 +40,8 @@ public partial class App : Application
     private bool _winEventMonitorDisposed;
     private System.Windows.Threading.DispatcherTimer? _winEventRetryTimer;
     private int _winEventRetryAttempts;
+    private bool _sessionEndingTeardownStarted;
+    private bool _winEventFailureHandled;
 
     // Re-entrancy guard for ShowCapturePicker. ShowDialog runs a nested
     // dispatcher loop, which keeps pumping WM_HOTKEY to the HotkeyService sink
@@ -170,6 +172,8 @@ public partial class App : Application
             _hotkey.DiagnosticHotkeyPressed += (_, _) => ExportDiagnosticsFromHotkey();
             _mainWindow.Show();
 
+            ShowStorageCapabilityWarningIfNeeded();
+
             // Startup DPI (goal §16): the startup fingerprint runs before the
             // launcher exists, so the system DPI for the session is captured
             // once the launcher is on screen. Bounded — one line at startup.
@@ -263,6 +267,36 @@ public partial class App : Application
             DiagnosticRuntime.Record("support.export", action: "zip", result: "failed",
                 data: new Dictionary<string, string> { ["error"] = ex.GetType().Name });
             _log.LogException("Diagnostic bundle export", ex);
+        }
+    }
+
+    private void ShowStorageCapabilityWarningIfNeeded()
+    {
+        var warnings = new List<string>();
+        if (!_log.IsFileBacked)
+            warnings.Add("diagnostic logs are memory-only");
+        if (!_persistence.IsStorageAvailable)
+            warnings.Add("layout persistence is disabled");
+        if (!_shepherd.RecoveryJournalStorageAvailable)
+        {
+            _groups.SetCaptureAllowed(false, "durable crash-recovery journal storage is unavailable.");
+            warnings.Add("guest capture is disabled because crash-recovery journaling is unavailable");
+        }
+
+        if (warnings.Count == 0)
+            return;
+
+        string message = "TabDock started with limited storage capabilities:\n\n- "
+            + string.Join("\n- ", warnings)
+            + "\n\nResolve the AppData/storage problem and restart TabDock before capturing windows.";
+        _log.Log("STARTUP[storage-warning] " + string.Join("; ", warnings));
+        try
+        {
+            MessageBox.Show(_mainWindow, message, "TabDock storage warning", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            _log.LogException("STARTUP[storage-warning-dialog]", ex);
         }
     }
 
@@ -408,9 +442,18 @@ public partial class App : Application
 
     private void Application_SessionEnding(object sender, SessionEndingCancelEventArgs e)
     {
+        // WPF raises SessionEnding before Windows has committed the logoff or
+        // shutdown. TabDock deliberately chooses a one-way policy: once this
+        // handler starts irreversible guest release and hook teardown, the app
+        // exits completely. It never attempts to resume a half-normalized live
+        // session if another application later causes Windows to cancel the
+        // original session request.
+        if (!SessionEndingPolicy.TryBeginTeardown(ref _sessionEndingTeardownStarted))
+            return;
+
         // Logoff/shutdown can kill the process before Application_Exit runs.
         ContainerWindow.IsAppShuttingDown = true;
-        _log?.Log($"Session ending ({e.ReasonSessionEnding}); saving state and releasing captured windows.");
+        _log?.Log($"Session ending ({e.ReasonSessionEnding}); committing one-way teardown and exiting after guest release.");
         SaveStateGuarded("session ending");
         FlushJournalGuarded("session ending");
         try
@@ -454,6 +497,13 @@ public partial class App : Application
         {
             _log?.LogException("Clearing group members during session ending", ex);
         }
+
+        // Explicitly finish the chosen policy. If Windows cancels the original
+        // logoff/shutdown request, this local exit remains intentional and
+        // prevents a half-running TabDock instance with monitoring disabled and
+        // captured members already normalized away.
+        _log?.Log("Session-ending teardown complete; shutting down TabDock by policy.");
+        Shutdown(0);
     }
 
     /// <summary>
@@ -473,10 +523,10 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// FlushJournal that can never throw (AUDIT25-01): forces the debounced
-    /// hidden-window crash-recovery journal to write immediately, called from
-    /// every exit/crash path so a pending debounced write is never lost to a
-    /// timer that never got the chance to fire.
+    /// FlushJournal that can never throw (AUDIT25-01): finalizes the
+    /// synchronous hidden-window crash-recovery journal on every exit/crash
+    /// path. The call is retained as an idempotent safety boundary even though
+    /// dangerous guest mutations already commit journal state synchronously.
     /// </summary>
     private void FlushJournalGuarded(string context)
     {
@@ -520,10 +570,13 @@ public partial class App : Application
             _events.Start();
             if (_events.IsRunning)
             {
+                _winEventFailureHandled = false;
+                _groups.SetCaptureAllowed(true, "WinEvent monitor is healthy.");
                 StopWinEventMonitorRetry();
             }
             else
             {
+                _groups.SetCaptureAllowed(false, "WinEvent monitor installation is pending retry.");
                 ScheduleWinEventMonitorRetry();
             }
             return;
@@ -580,6 +633,8 @@ public partial class App : Application
             if (_events.IsRunning)
             {
                 _log.Log("WinEventMonitor retry succeeded while captured windows remained active.");
+                _winEventFailureHandled = false;
+                _groups.SetCaptureAllowed(true, "WinEvent monitor retry succeeded.");
                 StopWinEventMonitorRetry();
                 return;
             }
@@ -587,7 +642,7 @@ public partial class App : Application
             _winEventRetryAttempts++;
             if (_winEventRetryAttempts >= 3)
             {
-                _log.Log("WinEventMonitor retry budget exhausted; captured windows remain active but native monitoring is unavailable.");
+                HandleWinEventMonitoringFailure();
                 StopWinEventMonitorRetry();
             }
         };
@@ -600,6 +655,51 @@ public partial class App : Application
         _winEventRetryTimer?.Stop();
         _winEventRetryTimer = null;
         _winEventRetryAttempts = 0;
+    }
+
+    /// <summary>
+    /// A captured guest without destroy/hide/minimize/move monitoring is not a
+    /// supported steady state. After the bounded retry budget, release every
+    /// guest, normalize the view/model, persist the resulting layout intent,
+    /// and keep capture admission closed until a fresh process startup. This
+    /// fails closed instead of silently running an unsupported lifecycle mode.
+    /// </summary>
+    private void HandleWinEventMonitoringFailure()
+    {
+        if (_winEventFailureHandled || _groups == null)
+            return;
+        _winEventFailureHandled = true;
+        _log.Log($"WinEventMonitor permanently unavailable ({_events?.LastStartFailure ?? "unknown"}); releasing captured guests and disabling capture admission.");
+        _groups.SetCaptureAllowed(false, "WinEvent monitor failed its bounded retry budget.");
+        try
+        {
+            _groups.EmergencyReleaseAll();
+            foreach (ContainerWindow container in _containers.Values.ToList())
+            {
+                try { container.ClearReleasedTabsAfterSessionEnding(); }
+                catch (Exception ex) { _log.LogException("Normalizing container after monitor failure", ex); }
+            }
+            _groups.ClearCapturedMembersAfterSessionEnding();
+            SaveStateGuarded("WinEvent monitor failure normalization");
+        }
+        catch (Exception ex)
+        {
+            _log.LogException("WinEvent monitor failure normalization", ex);
+        }
+
+        try
+        {
+            MessageBox.Show(
+                _mainWindow,
+                "TabDock could not maintain its native guest-lifecycle monitor. Captured windows were released safely and capture is disabled for this session. Restart TabDock to try again.",
+                "TabDock monitoring unavailable",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            _log.LogException("WinEvent monitor failure warning", ex);
+        }
     }
 
     private void OnNewGroupRequested(object? sender, EventArgs e)
@@ -707,7 +807,7 @@ public partial class App : Application
 
     private void ShowCapturePickerCore(Group? preselectedGroup)
     {
-        var pickerVm = new CapturePickerViewModel(_groups, _icons);
+        var pickerVm = new CapturePickerViewModel(_groups, _icons, _log);
         if (preselectedGroup != null)
         {
             pickerVm.SelectedGroupOption = pickerVm.Groups.FirstOrDefault(o => o.Id == preselectedGroup.Id)
@@ -743,9 +843,11 @@ public partial class App : Application
             return;
 
         Group? group;
+        bool createdGroupForCapture = false;
         if (picker.Result.TargetGroupId == Guid.Empty)
         {
             group = _groups.CreateGroup();
+            createdGroupForCapture = true;
             try
             {
                 OpenContainer(group);
@@ -765,6 +867,7 @@ public partial class App : Application
             {
                 _log.Log($"Capture picker referenced unknown group {picker.Result.TargetGroupId}; creating new group.");
                 group = _groups.CreateGroup();
+                createdGroupForCapture = true;
                 try
                 {
                     OpenContainer(group);
@@ -782,7 +885,7 @@ public partial class App : Application
         if (group == null)
             return;
 
-        if (!_containers.TryGetValue(group.Id, out var container))
+        if (!_containers.TryGetValue(group.Id, out ContainerWindow? container))
         {
             _log.Log($"No container open for group {group.Id}; opening one.");
             try
@@ -797,18 +900,60 @@ public partial class App : Application
             }
         }
 
-        foreach (WindowCaptureTarget target in picker.Result.SelectedTargets)
+        try
         {
-            string? error = container.CaptureWindow(target);
-            if (error != null)
+            foreach (WindowCaptureTarget target in picker.Result.SelectedTargets)
             {
-                _log.Log($"Capture failed for 0x{target.Hwnd.ToInt64():X}: {error}");
-                // Explicit owner: an owner-less MessageBox falls back to WPF's
-                // own default modal-parent resolution, which can disable more
-                // than just this container if it resolves unexpectedly.
-                MessageBox.Show(container, error, "Could not capture window", MessageBoxButton.OK, MessageBoxImage.Warning);
+                string? error = container.CaptureWindow(target);
+                if (error != null)
+                {
+                    _log.Log($"Capture failed for 0x{target.Hwnd.ToInt64():X}: {error}");
+                    // Explicit owner: an owner-less MessageBox falls back to WPF's
+                    // own default modal-parent resolution, which can disable more
+                    // than just this container if it resolves unexpectedly.
+                    MessageBox.Show(container, error, "Could not capture window", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
             }
         }
+        finally
+        {
+            if (createdGroupForCapture && !group.HasMaterializedTabs)
+                DiscardFailedCaptureGroup(group, container);
+        }
+    }
+
+    /// <summary>
+    /// A picker-created group is provisional until at least one selected window
+    /// is admitted. If every selected capture fails, close its shell and remove
+    /// it from the model so a failed or stale picker action cannot manufacture
+    /// another zero-tab group.
+    /// </summary>
+    private void DiscardFailedCaptureGroup(Group group, ContainerWindow? container)
+    {
+        if (group.HasMaterializedTabs)
+            return;
+
+        _log.Log($"Discarding picker-created empty group {group.Id} after all captures failed.");
+        try
+        {
+            if (container != null
+                && _containers.TryGetValue(group.Id, out ContainerWindow? registered)
+                && ReferenceEquals(registered, container))
+            {
+                container.Close();
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogException($"Closing failed-capture group {group.Id}", ex);
+        }
+
+        // OnContainerClosed normally removes the group synchronously. If the
+        // window was already gone, keep the model equally tidy; if Close()
+        // failed while the window remains registered, retain the live shell so
+        // it cannot become an orphaned container bound to a detached Group.
+        if (!_containers.ContainsKey(group.Id))
+            _groups.RemoveGroup(group);
     }
 
     private void OnExitRequested(object? sender, EventArgs e)

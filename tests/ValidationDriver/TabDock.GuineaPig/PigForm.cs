@@ -116,6 +116,10 @@ public sealed class PigOptions
     // containment defect deterministically.
     public int MinWidth;
     public int MinHeight;
+    // Deliberately blocks the UI thread after the form is shown so a
+    // SendMessageTimeout(WM_GETMINMAXINFO) probe can be qualified against a
+    // non-pumping guest without making the process permanently unkillable.
+    public int BlockMessagesMilliseconds;
     // Deliberate DPI-awareness mode this pig should launch under (see
     // DpiMenuMode). Default = the pig's natural WinForms/no-manifest awareness.
     public DpiMenuMode DpiMode = DpiMenuMode.Default;
@@ -181,6 +185,16 @@ public sealed class PigForm : Form
                 BackColor = _pulseOn ? _pulseColor : _baseColor;
             };
             pulseTimer.Start();
+        }
+
+        if (opts.BlockMessagesMilliseconds > 0)
+        {
+            Shown += (_, _) =>
+            {
+                Log($"BLOCK_MESSAGES start={opts.BlockMessagesMilliseconds}ms");
+                System.Threading.Thread.Sleep(opts.BlockMessagesMilliseconds);
+                Log("BLOCK_MESSAGES end");
+            };
         }
 
         if (opts.SelfCloseAfterSeconds > 0)
@@ -298,6 +312,13 @@ public sealed class PigForm : Form
         // Never throw from WndProc; logging failures are swallowed to Debug output.
         try
         {
+            if (m.Msg == MsgGetMinMaxInfo && _opts.BlockMessagesMilliseconds > 0)
+            {
+                Log($"BLOCK_MESSAGES WM_GETMINMAXINFO start={_opts.BlockMessagesMilliseconds}ms");
+                System.Threading.Thread.Sleep(_opts.BlockMessagesMilliseconds);
+                Log("BLOCK_MESSAGES WM_GETMINMAXINFO end");
+            }
+
             string? name = m.Msg switch
             {
                 MsgClose => "WM_CLOSE",

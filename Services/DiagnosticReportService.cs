@@ -78,7 +78,7 @@ public static class DiagnosticReportService
         builder.AppendLine($"osArchitecture: {identity.OsArchitecture}");
         builder.AppendLine($"deployment: {identity.DeploymentModel}");
         builder.AppendLine($"sha256: {identity.ExecutableSha256}");
-        return builder.ToString().TrimEnd();
+        return DiagnosticEnvironmentService.SanitizeText(builder.ToString().TrimEnd());
     }
 
     public static string FormatDoctor(DiagnosticReport report)
@@ -167,11 +167,11 @@ public static class DiagnosticReportService
             foreach (string issue in report.Issues)
                 builder.AppendLine(issue);
         }
-        return builder.ToString().TrimEnd();
+        return DiagnosticEnvironmentService.SanitizeText(builder.ToString().TrimEnd());
     }
 
     public static string ToJson(DiagnosticReport report)
-        => JsonSerializer.Serialize(report, s_jsonOptions);
+        => DiagnosticEnvironmentService.SanitizeJsonText(JsonSerializer.Serialize(report, s_jsonOptions));
 
     public static string ExportBundle(string? outputPath)
     {
@@ -202,7 +202,13 @@ public static class DiagnosticReportService
     {
         ZipArchiveEntry entry = archive.CreateEntry(name, CompressionLevel.Fastest);
         using StreamWriter writer = new(entry.Open(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        writer.Write(content);
+        string sanitized = name.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+            ? DiagnosticEnvironmentService.SanitizeJsonText(content)
+            : name.Equals("trace.jsonl", StringComparison.OrdinalIgnoreCase)
+                ? string.Join(Environment.NewLine, content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
+                    .Select(DiagnosticEnvironmentService.SanitizeJsonText))
+                : DiagnosticEnvironmentService.SanitizeText(content);
+        writer.Write(sanitized);
     }
 
     private static string FormatRect(DiagnosticRect? rect)
@@ -218,7 +224,7 @@ public static class DiagnosticReportService
             builder.AppendLine($"monitor index={monitor.Index} handle={monitor.MonitorHandle} primary={monitor.Primary} bounds={FormatRect(monitor.Bounds)} work={FormatRect(monitor.WorkArea)} dpi={monitor.EffectiveDpiX}x{monitor.EffectiveDpiY} scale={monitor.ScalePercent} orientation={monitor.Orientation}");
         foreach (DisplayAdapterSnapshot adapter in report.DisplayAdapters)
             builder.AppendLine($"displayAdapter index={adapter.Index} description={adapter.Description} driverVersion={adapter.DriverVersion}");
-        return builder.ToString().TrimEnd();
+        return DiagnosticEnvironmentService.SanitizeText(builder.ToString().TrimEnd());
     }
 
     private static string FormatData(IReadOnlyDictionary<string, string> data)

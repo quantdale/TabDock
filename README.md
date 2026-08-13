@@ -103,6 +103,10 @@ WPF relies on COM activation, reflection emit, and other runtime features that a
    not restored after a restart.
 8. Closing a container asks whether to close the grouped applications or release them back to standalone windows.
 
+Empty group shells are session-only: a group with no captured tabs is not saved
+or reopened on the next launch. Groups restored with saved tab metadata remain
+available as layout placeholders until you repopulate or delete them.
+
 ## Architecture overview
 
 - `NativeMethods.cs` — all P/Invoke declarations in one place.
@@ -176,31 +180,34 @@ Use this checklist to verify a build before considering it ready.
 
 18. Group several windows, with at least one on an inactive tab.
 19. Kill `TabDock.exe` from Task Manager (`taskkill /F /IM TabDock.exe`).
-20. Verify every captured window/process is still running — since none of them were ever reparented, killing TabDock can no longer destroy them. The window that was on the active tab is left wherever it was positioned; relaunch TabDock and verify the window that was on an inactive (hidden) tab reappears automatically (the crash-recovery journal restores it).
+20. Verify every captured window/process is still running — since none of them
+    were ever reparented, killing TabDock can no longer destroy them. Relaunch
+    TabDock and verify every identity-valid guest returns to its original
+    reversible presentation state. An intentionally self-hidden/tray-style
+    guest must remain hidden and must not be resurrected.
+21. If `%APPDATA%` is unavailable, TabDock may launch with memory-only logs or
+    persistence disabled, but capture is disabled unless the durable
+    crash-recovery journal is available. Resolve the storage issue and restart
+    before capturing windows.
 
 ### DPI change
 
-21. Move the container between monitors with different scaling (e.g., 100% and 150%).
-22. Verify the content area re-lays out and the active window fills the host.
+22. Move the container between monitors with different scaling (e.g., 100% and 150%).
+23. Verify the content area re-lays out and the active window fills the host.
 
 ### Maximize / restore
 
-23. Maximize the container with a window docked; verify the docked window resizes to fill the whole content area.
-24. Restore the container; verify the docked window shrinks back to match.
-25. Repeat maximize/restore a few times with a **split screen** active; verify both panes stay exactly side-by-side (no overlap, no gap) after every transition.
+24. Maximize the container with a window docked; verify the docked window resizes to fill the whole content area.
+25. Restore the container; verify the docked window shrinks back to match.
+26. Repeat maximize/restore a few times with a **split screen** active; verify both panes stay exactly side-by-side (no overlap, no gap) after every transition.
 
 ### Split screen
 
-26. With two captured windows, right-click a tab and choose **Split screen**; verify both windows appear side by side as one `[ A | B ]` tab item.
-27. Click the LEFT half, then the RIGHT half, alternating several times; verify BOTH panes stay rendered and the clicked side receives input every time (switching focus must never hide the partner or leave a blank pane).
-28. Pop one half out via its `×` (or middle-click); verify the other half takes the full width immediately and stays visible.
-29. Maximize and restore the container while split; verify the panes stay cleanly partitioned.
-30. **Split persistence:** with three captured windows A/B/C and A+B split, hover C's tab, then click it, then right-click it and dismiss the menu, then click the LEFT half, then the RIGHT half, then click C again — the A+B pair must stay split and rendered the whole time (C never becomes the single visible guest; split ends only via **Exit split screen**, a new Split Screen selection, or popping/closing a member).
-
-### DPI change
-
-21. Move the container between monitors with different scaling (e.g., 100% and 150%).
-22. Verify the content area re-lays out and the active window fills the host.
+27. With two captured windows, right-click a tab and choose **Split screen**; verify both windows appear side by side as one `[ A | B ]` tab item.
+28. Click the LEFT half, then the RIGHT half, alternating several times; verify BOTH panes stay rendered and the clicked side receives input every time (switching focus must never hide the partner or leave a blank pane).
+29. Pop one half out via its `×` (or middle-click); verify the other half takes the full width immediately and stays visible.
+30. Maximize and restore the container while split; verify the panes stay cleanly partitioned.
+31. **Split persistence:** with three captured windows A/B/C and A+B split, hover C's tab, then click it, then right-click it and dismiss the menu, then click the LEFT half, then the RIGHT half, then click C again — the A+B pair must stay split and rendered the whole time (C never becomes the single visible guest; split ends only via **Exit split screen**, a new Split Screen selection, or popping/closing a member).
 
 ## Known limitations
 
@@ -210,9 +217,13 @@ Use this checklist to verify a build before considering it ready.
 
 - **DPI-unaware windows at non-100% scaling:** Windows whose process is not DPI-aware run in a system-virtualized coordinate space, which cannot be docked reliably with physical-pixel geometry; TabDock refuses to capture them when the system scale is not 100% (with a clear message). Per-monitor-aware and system-aware windows (all modern apps, including every mainstream browser and terminal) are unaffected. On a single-DPI system at any scale, system-aware windows dock correctly; mixed-DPI multi-monitor setups with system-aware guests are the one documented gap.
 
-- **Persistence across reboots:** HWNDs are not stable across reboots, so TabDock cannot reliably re-attach the exact same live windows after a restart. It persists group names, accent colors, custom labels, tab order, and executable paths as layout intent. On startup it restores the group definitions but leaves them empty for the user to re-populate. It never persists application content.
+- **Persistence across reboots:** HWNDs are not stable across reboots, so TabDock cannot reliably re-attach the exact same live windows after a restart. It persists group names, accent colors, custom labels, tab order, and executable paths as layout intent. It restores only groups that contain saved tab metadata, leaves those groups empty at runtime for the user to re-populate, and does not persist fresh zero-tab shells. It never persists application content.
 
-- **Task Manager kill:** captured windows are never reparented, so force-killing TabDock (`taskkill /F`) no longer destroys them — a strict improvement over earlier versions. A window that was on an inactive (hidden) tab at the moment of the kill has no way to reappear on its own; TabDock journals hides to `%APPDATA%\TabDock\hidden-windows.json` and restores any still-valid entry the next time it starts.
+- **Task Manager kill:** captured windows are never reparented, so force-killing
+  TabDock (`taskkill /F`) no longer destroys them. The versioned journal records
+  the full reversible presentation state before mutation and restores every
+  identity-valid guest on the next launch. A guest that intentionally hides
+  itself receives a durable no-rescue marker and remains hidden.
 
 ## Diagnostics
 
@@ -220,6 +231,11 @@ Use this checklist to verify a build before considering it ready.
   the split-partition matrix + seeded fuzz (14.7M checks) with no UI and no
   input; exit code 0 = all pass. Safe to run on any machine, including a
   customer's, to validate the pane math without touching the desktop.
+- **Diagnostics/privacy self-test:** `TabDock.exe --selftest-diagnostics`
+  exercises native deferred-position chaining, persistence backup/version and
+  unreadable-file handling, journal identity gates, monitor failure policy,
+  storage degradation, and adversarial support-bundle sanitization. It creates
+  only disposable temp fixtures and exits nonzero on any failure.
 - **Environment fingerprint:** every startup writes `ENV[startup]` (OS, .NET,
   bitness, monitor layout) and `ENV[launcher]` (system DPI); every container
   logs `ENV[container]` (rects, monitor, DPI, guest). Paste

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
+using System.Windows.Automation;
 
 namespace TabDock.ValidationDriver;
 
@@ -15,6 +16,14 @@ internal static partial class Scenarios
     // -------------------------------------------------------------------------
     private static void HotkeyHoldSinglePicker(Ctx ctx, Options opt)
     {
+        // The driver process can regain the desktop foreground during the
+        // startup settle delay (for example when the hosting terminal paints a
+        // prompt). Re-establish the verified TabDock target immediately before
+        // sending the held-key sequence; keyboard input must still fail closed
+        // if this activation cannot be proven.
+        if (!Input.ForceForeground(ctx.MainHwnd))
+            throw new InvalidOperationException("Could not bring the launcher to the foreground before the hotkey hold; refusing to send input.");
+
         // SendInput does not auto-repeat (that comes from the keyboard hardware),
         // so simulate a held key the way it behaves at the hotkey registration:
         // Ctrl+Alt down, then a rapid series of G down/up taps for ~2 s — each tap
@@ -30,6 +39,23 @@ internal static partial class Scenarios
             var hold = Stopwatch.StartNew();
             while (hold.ElapsedMilliseconds < 2000)
             {
+                // The first hotkey opens the picker and legitimately moves the
+                // foreground to that new TabDock-owned window. Subsequent
+                // simulated repeat taps must target the currently foreground
+                // registered TabDock window, otherwise the safety gate would
+                // correctly reject input aimed at the old launcher HWND.
+                IntPtr inputTarget = ctx.MainHwnd;
+                foreach (IntPtr candidate in Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true))
+                {
+                    if (string.Equals(NativeMethods.GetWindowTextString(candidate), "Capture windows", StringComparison.Ordinal))
+                    {
+                        inputTarget = candidate;
+                        break;
+                    }
+                }
+                if (!Input.ForceForeground(inputTarget))
+                    throw new InvalidOperationException("Could not bring the current hotkey target to the foreground; refusing to send input.");
+
                 bool gDown = false;
                 try
                 {
@@ -93,20 +119,16 @@ internal static partial class Scenarios
         ctx.Check(container1 != container2, "two distinct containers were created");
 
         ClickAddWindowButton(container2);
-        IntPtr picker = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 10000);
-        ctx.Check(picker != IntPtr.Zero, "picker appeared from container 2's own '+' button");
-        if (picker != IntPtr.Zero)
-        {
-            IntPtr owner = NativeMethods.GetWindow(picker, NativeMethods.GW_OWNER);
-            ctx.Check(owner == container2, $"picker's Win32 owner is container 2 (0x{container2.ToInt64():X}) (got 0x{owner.ToInt64():X})");
-            ctx.Check(owner != container1, "picker owner is NOT container 1");
-            ctx.Check(owner != ctx.MainHwnd, "picker owner is NOT the main launcher");
-
-            if (!Input.ForceForeground(picker))
-                throw new InvalidOperationException("Could not bring picker to the foreground; refusing to send Esc.");
-            Input.SendKey(Input.VK_ESCAPE);
-            ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(picker), 3000), "picker dismissed with Esc without capturing");
-        }
+        AutomationElement? container2Root = Uia.FromHwnd(container2);
+        AutomationElement? container1Root = Uia.FromHwnd(container1);
+        bool panelOpened = container2Root != null && Util.WaitUntil(() =>
+            Uia.FindDescendantByName(container2Root, ControlType.Button, "Add selected", null, out _) != null, 6000);
+        ctx.Check(panelOpened, "inline capture surface appeared from container 2's own '+' button");
+        bool otherPanelOpened = container1Root != null
+            && Uia.FindDescendantByName(container1Root, ControlType.Button, "Add selected", null, out _) != null;
+        ctx.Check(!otherPanelOpened, "container 1 did not receive container 2's inline capture surface");
+        if (panelOpened)
+            ClickAddWindowButton(container2); // documented second-click toggle dismisses it
 
         ctx.Check(IsDocked(pig1.Hwnd, host1) || IsReleasedAndHidden(pig1.Hwnd), "pig1 still captured");
         ctx.Check(IsDocked(pig2.Hwnd, host2) || IsReleasedAndHidden(pig2.Hwnd), "pig2 still captured");
@@ -135,18 +157,12 @@ internal static partial class Scenarios
         ctx.Check(NativeMethods.IsWindowEnabled(container), "container enabled BEFORE opening the picker (launcher closed)");
 
         ClickAddWindowButton(container);
-        IntPtr picker = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 10000);
-        ctx.Check(picker != IntPtr.Zero, "picker still appears from the container's own '+' button after the launcher is closed");
-        if (picker != IntPtr.Zero)
-        {
-            IntPtr owner = NativeMethods.GetWindow(picker, NativeMethods.GW_OWNER);
-            ctx.Check(owner == container, $"picker owner resolves to the requesting container itself with the launcher gone (got 0x{owner.ToInt64():X})");
-
-            if (!Input.ForceForeground(picker))
-                throw new InvalidOperationException("Could not bring picker to the foreground; refusing to send Esc.");
-            Input.SendKey(Input.VK_ESCAPE);
-            ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindow(picker), 3000), "picker dismissed with Esc");
-        }
+        AutomationElement? containerRoot = Uia.FromHwnd(container);
+        bool panelOpened = containerRoot != null && Util.WaitUntil(() =>
+            Uia.FindDescendantByName(containerRoot, ControlType.Button, "Add selected", null, out _) != null, 6000);
+        ctx.Check(panelOpened, "inline capture surface still appears from the container's own '+' button after the launcher is closed");
+        if (panelOpened)
+            ClickAddWindowButton(container); // documented second-click toggle dismisses it
 
         ctx.Check(NativeMethods.IsWindowEnabled(container), "container still enabled AFTER the picker closes");
         ctx.Check(!ctx.TabDock.HasExited, "TabDock alive at scenario end");

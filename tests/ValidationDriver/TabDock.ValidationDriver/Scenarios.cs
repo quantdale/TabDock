@@ -17,6 +17,11 @@ internal sealed class Options
     public bool Yes;
     public int? Cycles;
     public string Guest = "pig";
+    public string Configuration = "Debug";
+    public string Rid = "auto";
+    public string? TabDockPath;
+    public string? GuineaPigPath;
+    public string? Shard;
 }
 
 /// <summary>A window under test: a guinea pig or a real app (wt/chrome) for maximize-repro.</summary>
@@ -83,8 +88,12 @@ internal static partial class Scenarios
     // Resolved relative to the driver assembly's own location (walk up to the
     // repo root, identified by TabDock.sln) so the driver runs on any machine,
     // not just the original dev box (previously hardcoded d:\Documents\... paths).
-    public static readonly string TabDockExe = Path.Combine(RepoRoot, "bin", "Debug", "net8.0-windows", "win-x64", "TabDock.exe");
-    public static readonly string PigExe = Path.Combine(RepoRoot, "tests", "ValidationDriver", "TabDock.GuineaPig", "bin", "Debug", "net8.0-windows", "TabDock.GuineaPig.exe");
+    // Program.ConfigureArtifacts replaces these with the requested Debug/Release
+    // and RID-aware paths before any scenario can spawn a process.
+    public static string TabDockExe { get; private set; } = string.Empty;
+    public static string PigExe { get; private set; } = string.Empty;
+    public static string SelectedConfiguration { get; private set; } = "Debug";
+    public static string SelectedRid { get; private set; } = "auto";
     private static readonly string ChromeExe = FindExe(new[]
     {
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Google", "Chrome", "Application", "chrome.exe"),
@@ -154,6 +163,44 @@ internal static partial class Scenarios
 
     private static readonly Random Rng = new Random();
 
+    // Keep each real-input process comfortably below the fixed 10-minute
+    // GuardedProc budget. The original split category grew to 30 scenarios and
+    // hit that budget before its final cases; these explicit groups preserve
+    // logical coverage without increasing any safety timeout or spawn cap.
+    public static readonly string[] SplitCoreScenarios =
+    {
+        "split-single-disabled", "split-two-auto", "split-select-partner", "split-exit",
+        "split-resize", "split-move", "split-minrestore", "split-reorder",
+        "split-popout-left", "split-popout-right",
+    };
+
+    public static readonly string[] SplitRenderScenarios =
+    {
+        "split-selfclose", "split-native-move-reassert", "split-native-resize-reassert",
+        "split-contextmenu-render-stability", "split-closebutton-left", "split-closebutton-right",
+        "split-click-third", "split-third-tab-hover-persists", "split-third-tab-click-persists",
+        "split-drag-release-render-stability", "drag-release-render-stability",
+        "split-guest-does-not-overflow-pane", "split-narrow-container-constraints",
+    };
+
+    public static readonly string[] SplitFocusScenarios =
+    {
+        "split-directclick", "split-repeat-cycles", "split-composite",
+        "split-three-tab-partner-popout", "split-focus-bidirectional",
+        "split-partner-permutation", "split-maximize-restore-no-overlap",
+    };
+
+    public static readonly string[] OrchestratedShardNames =
+    {
+        "core-lifecycle", "capture-group", "split-core", "split-render", "split-focus", "drag-z-order",
+        "crash-recovery", "keyboard-input", "dpi-multi-monitor", "startup", "diagnostics",
+    };
+
+    public static readonly string[] ExplicitOnlyShardNames =
+    {
+        "browser", "real-app",
+    };
+
     public static readonly string[] AllOrder =
     {
         "rename", "popout", "closewin", "closewin-hide", "selfclose", "selfhide", "selfminhide",
@@ -190,6 +237,9 @@ internal static partial class Scenarios
         // Post-audit containment (guest native-minimum) scenarios.
         "split-guest-does-not-overflow-pane", "split-narrow-container-constraints",
         "single-guest-does-not-overflow-content",
+        "hung-guest-mintrack",
+        "crashkill-maximized-recovery", "crashkill-minimized-recovery",
+        "crashkill-split-rescue",
         "startup-local-stack-above-unrelated-when-guest-present",
     };
 
@@ -250,6 +300,177 @@ internal static partial class Scenarios
         "startup-group-not-hidden-behind-existing-window",
         "startup-does-not-steal-foreground-after-external-activation",
     };
+
+    /// <summary>
+    /// Selects the application and GuineaPig artifacts for one driver process.
+    /// The default is deterministic discovery of the RID-specific output, with
+    /// a no-RID fallback for projects (such as GuineaPig) that are normally
+    /// built without a runtime identifier. Explicit paths always win.
+    /// </summary>
+    public static void ConfigureArtifacts(string configuration, string rid, string? tabDockPath, string? guineaPigPath)
+    {
+        SelectedConfiguration = configuration;
+        SelectedRid = rid;
+        TabDockExe = ResolveArtifact(
+            tabDockPath,
+            "TabDock",
+            Path.Combine("bin", configuration, "net8.0-windows"),
+            "TabDock.exe",
+            rid);
+        PigExe = ResolveArtifact(
+            guineaPigPath,
+            "GuineaPig",
+            Path.Combine("tests", "ValidationDriver", "TabDock.GuineaPig", "bin", configuration, "net8.0-windows"),
+            "TabDock.GuineaPig.exe",
+            rid);
+    }
+
+    private static string ResolveArtifact(string? explicitPath, string label, string relativeDirectory, string fileName, string rid)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitPath))
+            return Path.GetFullPath(explicitPath);
+
+        var candidates = new List<string>();
+        if (!string.Equals(rid, "none", StringComparison.OrdinalIgnoreCase))
+        {
+            string selectedRid = string.Equals(rid, "auto", StringComparison.OrdinalIgnoreCase) ? "win-x64" : rid;
+            candidates.Add(Path.Combine(RepoRoot, relativeDirectory, selectedRid, fileName));
+        }
+        candidates.Add(Path.Combine(RepoRoot, relativeDirectory, fileName));
+
+        foreach (string candidate in candidates)
+        {
+            if (File.Exists(candidate))
+                return candidate;
+        }
+
+        // Return the most likely path so the caller's diagnostic names the
+        // requested configuration/RID rather than hiding the missing artifact.
+        return candidates[0];
+    }
+
+    /// <summary>
+    /// Returns the stable category for every registered scenario. A new
+    /// scenario must be assigned here; ValidateShardCoverage is called at
+    /// startup and fails closed if registration and categorization diverge.
+    /// </summary>
+    public static string? GetScenarioShard(string name)
+    {
+        if (name == "realapp" || name == "realapp-multi-render")
+            return "real-app";
+        if (name == "browser-multi" || Array.IndexOf(BrowserOnlyScenarios, name) >= 0)
+            return "browser";
+        if (name.StartsWith("crashkill-", StringComparison.Ordinal))
+            return "crash-recovery";
+        if (Array.IndexOf(SplitCoreScenarios, name) >= 0)
+            return "split-core";
+        if (Array.IndexOf(SplitRenderScenarios, name) >= 0)
+            return "split-render";
+        if (Array.IndexOf(SplitFocusScenarios, name) >= 0)
+            return "split-focus";
+        if (name.StartsWith("split-", StringComparison.Ordinal) || name == "split")
+            return null;
+        if (name.Contains("drag", StringComparison.Ordinal)
+            || name.Contains("contextmenu", StringComparison.Ordinal)
+            || name.Contains("chrome-click", StringComparison.Ordinal)
+            || name.Contains("directclick", StringComparison.Ordinal)
+            || name == "tab-middleclick-popout")
+            return "drag-z-order";
+        if (name.Contains("keyboard", StringComparison.Ordinal)
+            || name.Contains("input", StringComparison.Ordinal)
+            || name.Contains("alttab", StringComparison.Ordinal)
+            || name.Contains("altswitch", StringComparison.Ordinal)
+            || name == "realworkflow-altswitch")
+            return "keyboard-input";
+        if (name.StartsWith("startup-", StringComparison.Ordinal))
+            return "startup";
+        if (name.Contains("dpi", StringComparison.Ordinal)
+            || name.Contains("mintrack", StringComparison.Ordinal)
+            || name == "maximize-repro"
+            || name == "minrestore"
+            || name == "container-minimize-retains-tabs"
+            || name == "selfminimize-timer-vs-teardown")
+            return "dpi-multi-monitor";
+        if (name.Contains("picker", StringComparison.Ordinal)
+            || name.Contains("dwm", StringComparison.Ordinal)
+            || name == "capture-inline-ui"
+            || name == "launcher-empty-state-hint"
+            || name == "add-window-toggle")
+            return "diagnostics";
+        if (name.Contains("capture", StringComparison.Ordinal)
+            || name.Contains("group", StringComparison.Ordinal)
+            || name.Contains("persist", StringComparison.Ordinal)
+            || name.Contains("reattach", StringComparison.Ordinal)
+            || name == "instant-tabswitch"
+            || name == "double-capture-refused"
+            || name == "three-app-torture"
+            || name == "tab-closebutton-popout")
+            return "capture-group";
+
+        // These are intentionally the small, ordinary lifecycle set. Keeping
+        // this explicit makes a future registration fail validation instead of
+        // silently disappearing into an arbitrary shard.
+        switch (name)
+        {
+            case "rename":
+            case "rename-edge-cases":
+            case "popout":
+            case "closewin":
+            case "closewin-hide":
+            case "selfclose":
+            case "selfhide":
+            case "selfminhide":
+            case "tabswitch-hidesafety":
+            case "repeat-cycles":
+            case "crossfeature":
+            case "hotkey-afterclose":
+            case "hotkey-hold-single-picker":
+            case "closegroupprompt":
+            case "exitpopulated":
+            case "popout-inactive-keeps-active":
+            case "multi-group-independent-interaction":
+            case "single-guest-does-not-overflow-content":
+                return "core-lifecycle";
+            default:
+                return null;
+        }
+    }
+
+    public static void ValidateShardCoverage()
+    {
+        var registered = AllOrder
+            .Concat(BrowserOnlyScenarios)
+            .Concat(StandaloneExtraScenarios)
+            .Concat(new[] { "realapp", "browser-multi" })
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        var unknown = registered
+            .Where(name => GetScenarioShard(name) == null)
+            .ToArray();
+        if (unknown.Length != 0)
+            throw new InvalidOperationException("Uncategorized ValidationDriver scenario(s): " + string.Join(", ", unknown));
+
+        foreach (string shard in OrchestratedShardNames.Concat(ExplicitOnlyShardNames))
+        {
+            if (GetShardScenarios(shard).Count == 0)
+                throw new InvalidOperationException($"ValidationDriver shard '{shard}' has no scenarios.");
+        }
+    }
+
+    public static IReadOnlyList<string> GetShardScenarios(string shard)
+    {
+        if (string.Equals(shard, "browser", StringComparison.Ordinal))
+            return BrowserOnlyScenarios.Concat(new[] { "browser-multi" }).ToArray();
+        if (string.Equals(shard, "real-app", StringComparison.Ordinal))
+            return new[] { "realapp", "realapp-multi-render" };
+
+        return AllOrder
+            .Concat(StandaloneExtraScenarios)
+            .Where(name => string.Equals(GetScenarioShard(name), shard, StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
 
     // -------------------------------------------------------------------------
     // Runner
@@ -327,6 +548,10 @@ internal static partial class Scenarios
             "split-guest-does-not-overflow-pane" => SplitGuestDoesNotOverflowPane,
             "split-narrow-container-constraints" => SplitNarrowContainerConstraints,
             "single-guest-does-not-overflow-content" => SingleGuestDoesNotOverflowContent,
+            "hung-guest-mintrack" => HungGuestMinTrack,
+            "crashkill-maximized-recovery" => CrashKillMaximizedRecovery,
+            "crashkill-minimized-recovery" => CrashKillMinimizedRecovery,
+            "crashkill-split-rescue" => CrashKillSplitRescue,
 "capture-dpi-unaware-guest" => CaptureDpiUnawareGuest,
 "capture-dpi-system-guest" => CaptureDpiSystemGuest,
             "three-app-torture" => ThreeAppTorture,
@@ -423,33 +648,44 @@ internal static partial class Scenarios
     private static string StateJsonPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TabDock", "state.json");
 
+    private static string BackupStateJsonPath => StateJsonPath + ".bak";
+
     /// <summary>Disk mirror of the state.json snapshot (write-ahead backup; see StartScenario).</summary>
     private static string SnapshotJsonPath => StateJsonPath + ".driver-snapshot";
+
+    private static string SnapshotBackupJsonPath => BackupStateJsonPath + ".driver-snapshot";
 
     /// <summary>Same-directory staging paths used to keep snapshot moves atomic.</summary>
     private static string SnapshotTempJsonPath => StateJsonPath + ".driver-snapshot.tmp";
     private static string RestoreTempJsonPath => StateJsonPath + ".driver-restore.tmp";
+    private static string SnapshotBackupTempJsonPath => BackupStateJsonPath + ".driver-snapshot.tmp";
+    private static string RestoreBackupTempJsonPath => BackupStateJsonPath + ".driver-restore.tmp";
 
     /// <summary>
-    /// Per-scenario snapshot of the user's state.json (null = file absent), mirrored to
-    /// disk at SnapshotJsonPath as a write-ahead backup so a driver crash mid-scenario
-    /// can never lose the user's persisted state.
+    /// Per-scenario snapshots of the user's state.json and state.json.bak
+    /// (null = file absent), mirrored to disk as write-ahead backups so a driver
+    /// crash mid-scenario can never lose the user's persisted state or backup.
     /// </summary>
     private static string? s_savedStateJson;
+    private static string? s_savedBackupStateJson;
     private static bool s_snapshotReady;
+    private static bool s_backupSnapshotReady;
+    private static bool s_isolationReady;
 
     private static Ctx StartScenario(string name)
     {
         GuardedProc.ResetScenarioBudget();
         Input.ResetIdentityScope();
         s_snapshotReady = false;
+        s_backupSnapshotReady = false;
+        s_isolationReady = false;
 
-        // Hermetic persisted state: snapshot the user's state.json to BOTH a
-        // disk copy (SnapshotJsonPath) and memory before clearing it for this
-        // scenario. Restored empty containers from groups accumulated by earlier
-        // sessions/runs otherwise cover the picker and tab strip, so real-input
-        // clicks land on the wrong window. Cleanup restores the snapshot after
-        // the scenario's TabDock has exited.
+        // Hermetic persisted state: snapshot both state.json and its backup to
+        // disk and memory before clearing them for this scenario. The product
+        // deliberately recovers a valid .bak when the primary is missing, so
+        // clearing only state.json would let stale validation data repopulate
+        // every supposedly empty run. Cleanup restores both files after the
+        // scenario's TabDock has exited.
         try
         {
             // Remove only staging files left by an interrupted copy. The
@@ -459,6 +695,10 @@ internal static partial class Scenarios
                 File.Delete(SnapshotTempJsonPath);
             if (File.Exists(RestoreTempJsonPath))
                 File.Delete(RestoreTempJsonPath);
+            if (File.Exists(SnapshotBackupTempJsonPath))
+                File.Delete(SnapshotBackupTempJsonPath);
+            if (File.Exists(RestoreBackupTempJsonPath))
+                File.Delete(RestoreBackupTempJsonPath);
 
             // A previous run may have crashed before Cleanup could restore. In
             // that case the disk snapshot is the authoritative copy of the
@@ -471,8 +711,15 @@ internal static partial class Scenarios
                 File.Move(RestoreTempJsonPath, StateJsonPath, overwrite: true);
                 GuardedProc.Log($"  RECOVERED user state.json from leftover disk snapshot {SnapshotJsonPath}.");
             }
+            if (File.Exists(SnapshotBackupJsonPath))
+            {
+                File.Copy(SnapshotBackupJsonPath, RestoreBackupTempJsonPath, overwrite: true);
+                File.Move(RestoreBackupTempJsonPath, BackupStateJsonPath, overwrite: true);
+                GuardedProc.Log($"  RECOVERED user state backup from leftover disk snapshot {SnapshotBackupJsonPath}.");
+            }
 
             s_savedStateJson = File.Exists(StateJsonPath) ? File.ReadAllText(StateJsonPath) : null;
+            s_savedBackupStateJson = File.Exists(BackupStateJsonPath) ? File.ReadAllText(BackupStateJsonPath) : null;
             if (s_savedStateJson != null)
             {
                 // Keep the original state file intact until the complete
@@ -482,8 +729,18 @@ internal static partial class Scenarios
                 s_snapshotReady = true;
                 GuardedProc.Log($"  state.json snapshot -> {SnapshotJsonPath}.");
             }
+            if (s_savedBackupStateJson != null)
+            {
+                File.Copy(BackupStateJsonPath, SnapshotBackupTempJsonPath, overwrite: true);
+                File.Move(SnapshotBackupTempJsonPath, SnapshotBackupJsonPath, overwrite: true);
+                s_backupSnapshotReady = true;
+                GuardedProc.Log($"  state.json.bak snapshot -> {SnapshotBackupJsonPath}.");
+            }
             if (s_savedStateJson != null)
                 File.Delete(StateJsonPath);
+            if (s_savedBackupStateJson != null)
+                File.Delete(BackupStateJsonPath);
+            s_isolationReady = true;
         }
         catch (Exception ex)
         {
@@ -493,7 +750,10 @@ internal static partial class Scenarios
             // unconditional failure path recover any write-ahead snapshot.
             GuardedProc.Log($"  ERROR: could not establish isolated state.json snapshot: {ex.Message}");
             s_savedStateJson = null;
+            s_savedBackupStateJson = null;
             s_snapshotReady = false;
+            s_backupSnapshotReady = false;
+            s_isolationReady = false;
             throw new InvalidOperationException("ValidationDriver could not establish an isolated state snapshot; refusing to start TabDock.", ex);
         }
 
@@ -668,18 +928,20 @@ internal static partial class Scenarios
     }
 
     /// <summary>
-    /// Restores the user's state.json from the write-ahead disk snapshot, with
-    /// the in-memory copy as a fallback. Idempotent so setup failures can call
-    /// it even when no TabDock context was returned.
+    /// Restores the user's state.json and state.json.bak from their write-ahead
+    /// disk snapshots, with in-memory copies as fallbacks. Idempotent so setup
+    /// failures can call it even when no TabDock context was returned.
     /// </summary>
     private static void RestoreStateSnapshot()
     {
-        if (!s_snapshotReady && s_savedStateJson == null && !File.Exists(SnapshotJsonPath))
+        if (!s_isolationReady && !s_snapshotReady && s_savedStateJson == null && !File.Exists(SnapshotJsonPath)
+            && !s_backupSnapshotReady && s_savedBackupStateJson == null && !File.Exists(SnapshotBackupJsonPath))
             return;
 
         try
         {
-            bool restoredFromDisk = false;
+            bool restoredPrimaryFromDisk = false;
+            bool restoredBackupFromDisk = false;
             if (File.Exists(SnapshotJsonPath))
             {
                 // Restore before deleting the backup. If the driver dies
@@ -687,14 +949,23 @@ internal static partial class Scenarios
                 // for the next scenario run.
                 File.Copy(SnapshotJsonPath, RestoreTempJsonPath, overwrite: true);
                 File.Move(RestoreTempJsonPath, StateJsonPath, overwrite: true);
-                restoredFromDisk = true;
+                restoredPrimaryFromDisk = true;
                 File.Delete(SnapshotJsonPath);
                 GuardedProc.Log($"  restored user state.json from disk snapshot {SnapshotJsonPath}.");
             }
-
-            if (restoredFromDisk)
+            if (File.Exists(SnapshotBackupJsonPath))
             {
-                GuardedProc.Log($"  user state.json restored ({new FileInfo(StateJsonPath).Length} bytes).");
+                File.Copy(SnapshotBackupJsonPath, RestoreBackupTempJsonPath, overwrite: true);
+                File.Move(RestoreBackupTempJsonPath, BackupStateJsonPath, overwrite: true);
+                restoredBackupFromDisk = true;
+                File.Delete(SnapshotBackupJsonPath);
+                GuardedProc.Log($"  restored user state.json.bak from disk snapshot {SnapshotBackupJsonPath}.");
+            }
+
+            if (restoredPrimaryFromDisk)
+            {
+                if (File.Exists(StateJsonPath))
+                    GuardedProc.Log($"  user state.json restored ({new FileInfo(StateJsonPath).Length} bytes).");
             }
             else if (s_savedStateJson != null)
             {
@@ -703,9 +974,26 @@ internal static partial class Scenarios
             }
             else if (File.Exists(StateJsonPath))
             {
-                // The original state was absent; remove only the file created
-                // by the isolated scenario.
+                // The original primary was absent; remove only the file
+                // created by the isolated scenario.
                 File.Delete(StateJsonPath);
+            }
+
+            if (restoredBackupFromDisk)
+            {
+                if (File.Exists(BackupStateJsonPath))
+                    GuardedProc.Log($"  user state.json.bak restored ({new FileInfo(BackupStateJsonPath).Length} bytes).");
+            }
+            else if (s_savedBackupStateJson != null)
+            {
+                File.WriteAllText(BackupStateJsonPath, s_savedBackupStateJson);
+                GuardedProc.Log($"  user state.json.bak restored ({new FileInfo(BackupStateJsonPath).Length} bytes).");
+            }
+            else if (File.Exists(BackupStateJsonPath))
+            {
+                // The original backup was absent; remove only the backup
+                // created by the isolated scenario.
+                File.Delete(BackupStateJsonPath);
             }
         }
         catch (Exception ex)
@@ -715,7 +1003,10 @@ internal static partial class Scenarios
         finally
         {
             s_snapshotReady = false;
+            s_backupSnapshotReady = false;
+            s_isolationReady = false;
             s_savedStateJson = null;
+            s_savedBackupStateJson = null;
         }
     }
 
@@ -1285,6 +1576,8 @@ internal static partial class Scenarios
         if (!Discover.TryCaptureIdentity(expected.Hwnd, out current))
             return false;
         return current.ProcessId == expected.ProcessId
+            && (expected.ProcessStartTimeUtcTicks == 0
+                || current.ProcessStartTimeUtcTicks == expected.ProcessStartTimeUtcTicks)
             && string.Equals(current.ClassName, expected.ClassName, StringComparison.Ordinal)
             && string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase);
     }

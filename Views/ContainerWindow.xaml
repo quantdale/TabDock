@@ -11,8 +11,6 @@
         Width="900"
         MinWidth="320"
         MinHeight="240"
-        MaxWidth="{x:Static SystemParameters.MaximizedPrimaryScreenWidth}"
-        MaxHeight="{x:Static SystemParameters.MaximizedPrimaryScreenHeight}"
         WindowStyle="None"
         ResizeMode="CanResize"
         Background="{Binding AccentBrush}"

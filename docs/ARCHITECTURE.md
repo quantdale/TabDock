@@ -82,15 +82,15 @@ failures are still logged (`App.xaml.cs:49-66`). `Application_Startup` (`App.xam
 ### Shutdown / emergency-release paths
 
 `EmergencyReleaseAll` (`GroupManager.cs:395-419`) is the single release-all primitive;
-`FlushJournalGuarded` (`App.xaml.cs:320-330`) forces the debounced journal clear via
-`_shepherd.FlushJournal()` (`WindowShepherdService.cs:551-563`). Both run on every path:
+`FlushJournalGuarded` (`App.xaml.cs:320-330`) finalizes the synchronous journal
+state via `_shepherd.FlushJournal()` (`WindowShepherdService.cs`). Both run on every path:
 
 | Path | What runs |
 |------|-----------|
 | `Application_Exit` (`App.xaml.cs:167`) | `EmergencyReleaseAll` → `SaveState` → `FlushJournalGuarded` → dispose events/hotkey/mutex/logger (`App.xaml.cs:170-189`) |
 | `Application_DispatcherUnhandledException` (`App.xaml.cs:192`) | `SaveStateGuarded` → `FlushJournalGuarded` → `EmergencyReleaseAll` → `Shutdown(1)` (`App.xaml.cs:194-207`) |
 | `CurrentDomain_UnhandledException` (`App.xaml.cs:210`) | Terminating: log-only (any thread; runtime is tearing down, `App.xaml.cs:215-221`). Non-terminating: marshals `SaveStateGuarded` + `FlushJournalGuarded` + `EmergencyReleaseAll` to the UI dispatcher with a 1 s deadline (`App.xaml.cs:226-252`) |
-| `Application_SessionEnding` (`App.xaml.cs:254`) | `SaveStateGuarded` + `FlushJournalGuarded` + `EmergencyReleaseAll`, then stops dispatch, clears container presentation/timers, preserves released metadata as layout intent, clears live `Members`, and saves the normalized state so a cancelled logoff leaves a coherent state (`App.xaml.cs:291-339`) |
+| `Application_SessionEnding` (`App.xaml.cs:254`) | One-way/idempotent teardown: save and flush, release guests, stop WinEvent dispatch/retry, normalize containers and persisted layout intent, then call `Shutdown(0)` (`App.xaml.cs:443-507`). If Windows later cancels the original logoff/shutdown request, TabDock still exits deliberately; it never resumes half-torn-down. |
 | `Application_Startup` catch (`App.xaml.cs:150`) | Same trio + `Shutdown(1)` (`App.xaml.cs:150-164`) |
 
 `FlushJournalGuarded` call sites: `App.xaml.cs:154`, `:182`, `:197`, `:237`, `:260`.
@@ -126,6 +126,12 @@ no-nesting and already-captured rules, then `_shepherd.Capture(hwnd, out error)`
 `Tabs` and activates the new tab; `GroupManager`'s `CollectionChanged` hook maintains the O(1)
 HWND→member index (`GroupManager.cs:184-292`) and raises `MonitoringNeededChanged`, which
 installs the hooks immediately (`App.xaml.cs:348-361`).
+
+The standalone picker preserves the selected destination across a refresh. A
+picker-created group is provisional until at least one selected window is
+admitted; if every capture fails, `App.ShowCapturePickerCore` closes and removes
+that empty shell. This prevents failed or stale picker actions from creating
+zero-tab groups.
 
 ### Tab switch
 
@@ -205,9 +211,10 @@ an in-window panel; the standalone picker remains for the fallback path.
   `foreground guest → partner guest → container`. The 1px redundant-glue guard
   is per-pane; when a re-glue is needed both panes plus the container pin are
   written in ONE compositor transaction (`PositionGuestsDeferred`:
-  `BeginDeferWindowPos`/`DeferWindowPos`/`EndDeferWindowPos`, with per-entry
-  return checks and a per-guest fallback on failure) so the panes never
-  visibly separate mid-write. The container is paired below the partner
+  `BeginDeferWindowPos`/`DeferWindowPos`/`EndDeferWindowPos`, chaining every
+  returned `HDWP` and calling `EndDeferWindowPos` only for a still-valid batch;
+  a failed batch falls back per guest) so the panes never visibly separate
+  mid-write. The container is paired below the partner
   without being pushed behind unrelated desktop windows. When both panes are
   already glued, the cheap pin runs ONLY after verifying the pair's actual
   order (`GetWindow(top, GW_HWNDNEXT) == bottom`) — a strip-initiated focus
@@ -320,6 +327,10 @@ if `PersistedTabs.Count == 0` (a restored group carries saved layout intent)
 (`GuestLifecycleService.cs:237-257`). Popping out the last tab triggers `EmptiedByPopOut` →
 container `Close` (`ContainerWindow.xaml.cs:136-146`, `GroupViewModel.cs:204-208`);
 `App.OnContainerClosed` removes only empty, never-repopulated groups (`App.xaml.cs:579-608`).
+`PersistenceService.Save` also omits any fresh group with neither live members
+nor persisted tab metadata, and `RestoreGroups` skips legacy zero-tab records;
+restored groups with persisted tab metadata remain open as intentional layout
+placeholders until the user repopulates or deletes them.
 
 ### Pop-out paths
 
@@ -339,6 +350,18 @@ container `Close` (`ContainerWindow.xaml.cs:136-146`, `GroupViewModel.cs:204-208
   system-DPI probe fails closed and reports a capture refusal. System-aware
   guests work on single-DPI systems (mixed-DPI multi-monitor is a documented
   limitation). The Shepherd physical-pixel convention itself is unchanged.
+- **Monitor-specific maximize bounds** — `WM_GETMINMAXINFO` uses the work area
+  of the monitor containing the container. The WPF container has no independent
+  primary-monitor `MaxWidth`/`MaxHeight` clamp, so a larger secondary monitor
+  is not clipped before the native result is applied.
+- **Bounded guest min-track probing** — `SendMessageTimeout` is limited to
+  100 ms per guest. `WindowShepherdService` keeps an identity-scoped last-known
+  result and falls back to that value (or an unconstrained result) on timeout;
+  probes run only when the container's constraint is dirty. The synthetic
+  `WM_GETMINMAXINFO` buffer is initialized before dispatch, matching the buffer
+  contract of a real system message; the poisoned-buffer self-test prevents an
+  indeterminate native minimum from expanding a maximized container. A
+  deliberately non-pumping GuineaPig scenario protects the dispatcher bound.
 - **Environment fingerprint** (`Services/EnvironmentFingerprint.cs`): one
   `ENV[startup]` line (OS version/build, .NET runtime, bitness, full monitor
   table with bounds/work/primary via `EnumDisplayMonitors`), one
@@ -388,6 +411,12 @@ revalidates that snapshot before pairing a captured guest.
   one probe; never scan `Groups`.
 - **Hooks gated on `IsMonitoringNeeded`** (`GroupManager.cs:70`) — `App.SyncWinEventMonitor`
   (`App.xaml.cs:348-376`): install immediately on first capture, removal deferred one dispatcher turn.
+- **Healthy monitoring is an admission invariant** — hook installation is a
+  bounded three-attempt transaction. Capture is disabled while hooks are
+  unhealthy; if retries are exhausted after guests are already captured, TabDock
+  releases and normalizes them, persists layout intent, shows a warning, and
+  remains capture-disabled until restart. It never silently leaves guests in a
+  degraded lifecycle mode.
 
 ---
 
@@ -397,34 +426,54 @@ Two distinct files in `%APPDATA%\TabDock\`:
 
 ### `state.json` — layout intent (metadata only)
 
-`PersistenceService` (`PersistenceService.cs:14-250`): group id/name/accent/active index plus
-per-tab exe path, title, custom label, bounds, `WasMaximized` (`PersistenceService.cs:36-66`).
-**No HWNDs, no app content** — restored groups start empty as layout intent
-(`PersistenceService.cs:164-186`). Saves are debounced ~1 s (`GroupManager.cs:104-117`) and
-**skip the write when the JSON is unchanged**, but only if the file still exists (`_lastSavedJson`,
-`PersistenceService.cs:19-21,99-100`). Writes are atomic: `.bak` copy, `.tmp` + `File.Move`
-(`PersistenceService.cs:104-113`); a corrupt file is quarantined on load (`PersistenceService.cs:218-233`).
+`PersistenceService` (`PersistenceService.cs`): group id/name/accent/active index plus
+per-tab exe path, title, custom label, bounds, and `WasMaximized`. **No HWNDs,
+app content, credentials, or live window handles are persisted** — restored
+groups start empty as layout intent. The schema is version 2: version 1 is
+migrated in memory, while a future/unsupported version is preserved and blocks
+later saves rather than silently dropping fields.
+
+Saves are atomic and durable: an existing primary is copied to `.bak`, JSON is
+written to `.tmp` with write-through flushing, then atomically replaced. Proven
+corruption is quarantined before a valid backup is accepted. Missing primary
+plus valid backup is recoverable; unreadable/access-denied, directory-shaped,
+and future-version primaries are preserved and never treated as empty. The
+service blocks later overwrites after an unreadable/unsupported load. Discrete
+semantic mutations use an immediate durable save; high-frequency drag/reorder
+intermediate changes remain debounced, with an explicit commit at drag end.
+Fresh empty group shells are session-only and are not serialized; valid legacy
+zero-tab records are ignored on restore so they cannot accumulate containers
+across launches.
 
 ### `hidden-windows.json` — crash-recovery journal
 
-`WindowShepherdService` (`WindowShepherdService.cs:64-65,421-675`). Entries:
-HWND + PID + exe path (`WindowShepherdService.cs:440-445`). Ordering rules:
+`WindowShepherdService` (`WindowShepherdService.cs`). Entries are a versioned
+capture-session record containing HWND, PID, executable identity, window class,
+process-start identity, original visibility, full `WINDOWPLACEMENT`/show state,
+and the original DWM transition-suppression state. Ordering rules:
 
-- **Hide journals before hiding** — `Hide` calls `JournalHide` then `ShowWindow(SW_HIDE)`
-  (`WindowShepherdService.cs:247-252`); a force-kill in between never orphans an unjournaled
-  guest. `JournalHide` writes **synchronously** — TerminateProcess bypasses every exit handler
-  (`WindowShepherdService.cs:423-453`).
-- **Show/release clears** — `JournalClear` after any path that leaves the guest genuinely
-  visible; debounced 300 ms (`RequestJournalSave`, `WindowShepherdService.cs:455-541`).
-- **`immediate: true` where the guest ends intentionally hidden** (release `show:false`) — a
-  stale entry must never make rescue un-hide a deliberately hidden window (`WindowShepherdService.cs:337-348,455-473`).
-- **`FlushJournal`** forces a pending debounced clear; called from every App exit/crash path
-  (`App.xaml.cs:154,182,197,237,260`, `WindowShepherdService.cs:551-563`).
-- **`RescueOrphanedWindows`** (startup, `App.xaml.cs:108`) re-shows entries whose PID + exe
-  still match, verifies that the window became visible, and removes only entries
-  that were visibly restored or failed identity validation. An identity-valid
-  entry that remains hidden is retained for a later retry; empty/corrupt
-  journals are normalized or quarantined and are not allowed to fail forever.
+- **Journal before dangerous mutation** — capture writes the complete original
+  state synchronously with write-through flushing before DWM suppression,
+  positioning, or hiding. Every later mutable presentation transition updates
+  the durable session record synchronously, so a force-kill cannot leave an
+  unjournaled state transition.
+- **Intentional self-hide is distinct** — a guest-initiated tray-style hide
+  receives a durable `DoNotRescue` marker and is not resurrected on the next
+  launch. Failed journal writes fail closed and do not hide the guest.
+- **Release clears only after restore** — placement, show state, visibility,
+  and DWM transition state are restored first; the entry is removed only after
+  the required native operations succeed. `FlushJournal` is a synchronous
+  finalization guard, not a debounce timer.
+- **`RescueOrphanedWindows`** validates HWND, PID, executable path, class, and
+  process-start identity before touching a window. It restores the full recorded
+  presentation state, verifies visibility where applicable, and retains failed
+  identity-valid entries for retry. Recycled HWNDs are never touched; stale or
+  corrupt journal evidence is quarantined/preserved.
+
+If durable journal storage is unavailable, startup warns the user and capture
+is disabled. Logging can fall back to a bounded in-memory tail and layout
+persistence can be disabled, but TabDock never hides a guest without durable
+crash-recovery protection.
 
 ---
 
@@ -432,6 +481,11 @@ HWND + PID + exe path (`WindowShepherdService.cs:440-445`). Ordering rules:
 
 `%APPDATA%\TabDock\logs\TabDock.log`, 1 MB rotation (`LoggingService.cs:10,31`). Lines that
 tests and agents may rely on:
+
+If the log directory cannot be created, `LoggingService` keeps a bounded
+memory-only tail and startup shows a storage warning. This fallback never
+weakens the separate crash-journal gate: capture remains disabled unless the
+journal can be durably written.
 
 | Log line (substring) | Emitter | Meaning |
 |---|---|---|

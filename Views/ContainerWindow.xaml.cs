@@ -418,7 +418,9 @@ public partial class ContainerWindow : Window
 
                     activateTimer.Stop();
                     _activateReassertTimer = null;
-                    if (_shepherdActiveWindow == activeWindow && NativeMethods.IsWindowVisible(activeWindow.Hwnd)
+                    if (_shepherdActiveWindow == activeWindow
+                        && !NativeMethods.IsIconic(activeWindow.Hwnd)
+                        && NativeMethods.IsWindowVisible(activeWindow.Hwnd)
                         && !_inNativeMoveLoop && !_isDragging && !IsContainerChromeInteractionActive())
                     {
                         if (IsSplitActive && IsSplitMember(activeWindow))
@@ -500,10 +502,7 @@ public partial class ContainerWindow : Window
                     var mmi = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeMethods.MINMAXINFO>(lParam);
                     // Position/size the maximized window to the work area, expressed
                     // relative to the monitor origin (ptMaxPosition is monitor-relative).
-                    mmi.ptMaxPosition.x = mi.rcWork.left - mi.rcMonitor.left;
-                    mmi.ptMaxPosition.y = mi.rcWork.top - mi.rcMonitor.top;
-                    mmi.ptMaxSize.x = mi.rcWork.Width;
-                    mmi.ptMaxSize.y = mi.rcWork.Height;
+                    ApplyMonitorMaximizeBounds(mi, ref mmi);
                     // Size-constraint policy: the container refuses to shrink
                     // below what the currently visible guest(s) can physically
                     // fit (see RefreshSizeConstraint). This clamps the native
@@ -529,6 +528,16 @@ public partial class ContainerWindow : Window
             }
         }
         return IntPtr.Zero;
+    }
+
+    internal static void ApplyMonitorMaximizeBounds(
+        NativeMethods.MONITORINFO monitorInfo,
+        ref NativeMethods.MINMAXINFO minMaxInfo)
+    {
+        minMaxInfo.ptMaxPosition.x = monitorInfo.rcWork.left - monitorInfo.rcMonitor.left;
+        minMaxInfo.ptMaxPosition.y = monitorInfo.rcWork.top - monitorInfo.rcMonitor.top;
+        minMaxInfo.ptMaxSize.x = monitorInfo.rcWork.Width;
+        minMaxInfo.ptMaxSize.y = monitorInfo.rcWork.Height;
     }
 
     private void ContainerWindow_Loaded(object sender, RoutedEventArgs e)
@@ -1634,7 +1643,7 @@ public partial class ContainerWindow : Window
         // is open so the panel (sited between the tab strip and the content
         // area) is never partially occluded by a guest whose z-order drifted.
         BeginChromePopup();
-        _capturePicker = new CapturePickerViewModel(_manager, _icons);
+        _capturePicker = new CapturePickerViewModel(_manager, _icons, _log);
         _capturePicker.SelectedGroupOption = _capturePicker.Groups
             .FirstOrDefault(g => g.Id == Group.Id) ?? _capturePicker.Groups.FirstOrDefault();
         _capturePicker.GroupingRequested += InlineCapture_GroupingRequested;
@@ -1694,6 +1703,9 @@ public partial class ContainerWindow : Window
 
     private string? CaptureWindow(IntPtr hwnd, WindowCaptureTarget? expected)
     {
+        if (!_manager.CaptureAllowed)
+            return "Capture is temporarily disabled because TabDock's native guest-lifecycle monitor is unavailable. Restart TabDock after the monitor recovers.";
+
         if (expected != null && !MatchesCaptureTarget(expected))
             return "The selected window changed before capture; refresh the picker and try again.";
 
@@ -1733,6 +1745,20 @@ public partial class ContainerWindow : Window
         try
         {
             AddCapturedWindow(cw);
+            if (!_manager.CaptureAllowed)
+            {
+                // The member-collection notification starts the WinEvent
+                // monitor synchronously. If installation fails at that exact
+                // admission boundary, do not let a newly captured guest remain
+                // in an unsupported lifecycle mode while the bounded retry
+                // timer runs. Release the just-captured identity immediately;
+                // the retry policy may recover for a later user attempt.
+                if (MatchesCapturedWindow(cw))
+                    ReleaseCapturedWindow(cw, show: true);
+                else
+                    _log.Log($"Capture cleanup refused for recycled HWND 0x{hwnd.ToInt64():X} after monitor admission failure; replacement left untouched.");
+                return "Capture was refused because TabDock's native guest-lifecycle monitor could not be installed.";
+            }
             DiagnosticRuntime.Record("guest.capture", _containerHwnd, cw.Hwnd,
                 group: Group.Id.ToString("N"), action: "capture", result: "success");
             return null;
@@ -2084,6 +2110,12 @@ public partial class ContainerWindow : Window
         if (_shepherdActiveWindow == null)
             return;
         if (WindowState == WindowState.Minimized)
+            return;
+        // A guest's own minimize is handled by RestoreMinimizedWindow. Do not
+        // let a concurrent container relayout re-show an iconic guest between
+        // the guest's minimize and the bounded restore decision; tray-style
+        // guests commonly follow minimize with Hide() in the same close path.
+        if (NativeMethods.IsIconic(_shepherdActiveWindow.Hwnd))
             return;
 
         IntPtr containerHwnd = new WindowInteropHelper(this).Handle;
@@ -2895,6 +2927,7 @@ public partial class ContainerWindow : Window
 
     private void EndDrag()
     {
+        bool committedReorder = _isDragging;
         Mouse.Capture(null);
         _draggedTab = null;
         _draggedItem = null;
@@ -2902,6 +2935,8 @@ public partial class ContainerWindow : Window
         _dragMidpoints = null;
         _dragMidpointsCount = 0;
         _dragMidpointsValid = false;
+        if (committedReorder)
+            _viewModel.CommitReorder();
     }
 
     private ListBoxItem? FindListBoxItem(object source)

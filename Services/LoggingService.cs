@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -28,6 +29,8 @@ public sealed class LoggingService : IDisposable
 {
     private readonly string _logDirectory;
     private readonly string _logFile;
+    private readonly bool _fileBacked;
+    private readonly string? _storageFailureReason;
     private const long MaxSize = 1 * 1024 * 1024; // 1 MB
     private const int QueueCapacity = 4096;
     // Upper bound on lines coalesced into a single write+flush. Large enough
@@ -37,6 +40,7 @@ public sealed class LoggingService : IDisposable
 
     private readonly BlockingCollection<string> _queue = new(QueueCapacity);
     private readonly Thread _writerThread;
+    private readonly ConcurrentQueue<string> _memoryLines = new();
 
     // Writer-thread-only state. Nothing else may touch these: the writer thread
     // owns the handle for its whole lifetime and closes it as it unwinds.
@@ -66,12 +70,27 @@ public sealed class LoggingService : IDisposable
     private const int RotationRetryEveryBatches = 20;
     private int _batchesUntilRotationRetry;
 
-    public LoggingService()
+    public LoggingService(string? logDirectory = null)
     {
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        _logDirectory = Path.Combine(appData, "TabDock", "logs");
+        _logDirectory = string.IsNullOrWhiteSpace(logDirectory)
+            ? Path.Combine(appData, "TabDock", "logs")
+            : Path.GetFullPath(logDirectory);
         _logFile = Path.Combine(_logDirectory, "TabDock.log");
-        Directory.CreateDirectory(_logDirectory);
+        try
+        {
+            Directory.CreateDirectory(_logDirectory);
+            _fileBacked = true;
+            _storageFailureReason = null;
+        }
+        catch (Exception ex)
+        {
+            // Logging is diagnostic, not a reason to prevent the app from
+            // launching. Keep a bounded in-memory tail; safety-critical guest
+            // capture is gated separately by the recovery journal.
+            _fileBacked = false;
+            _storageFailureReason = ex.GetType().Name + ": " + ex.Message;
+        }
 
         _writerThread = new Thread(WriterLoop)
         {
@@ -80,6 +99,12 @@ public sealed class LoggingService : IDisposable
         };
         _writerThread.Start();
     }
+
+    public bool IsFileBacked => _fileBacked;
+
+    public string? StorageFailureReason => _storageFailureReason;
+
+    internal IReadOnlyList<string> MemoryLines => _memoryLines.ToArray();
 
     public void Log(string message)
     {
@@ -204,6 +229,16 @@ public sealed class LoggingService : IDisposable
     /// </summary>
     private void WriteBatch()
     {
+        if (!_fileBacked)
+        {
+            string[] lines = _batch.ToString().Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string line in lines)
+            {
+                _memoryLines.Enqueue(line);
+                while (_memoryLines.Count > 512 && _memoryLines.TryDequeue(out _)) { }
+            }
+            return;
+        }
         EnsureWriter();
         if (_writer == null)
             throw new IOException($"Log file '{_logFile}' is not open for append.");
@@ -218,6 +253,8 @@ public sealed class LoggingService : IDisposable
 
     private void EnsureWriter()
     {
+        if (!_fileBacked)
+            return;
         if (_writer != null)
             return;
         try

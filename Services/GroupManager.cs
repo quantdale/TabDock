@@ -40,6 +40,7 @@ public sealed class GroupManager
     private readonly Dictionary<IntPtr, CapturedMember> _capturedIndex = new();
     private readonly Dictionary<Group, NotifyCollectionChangedEventHandler> _memberHandlers = new();
     private bool _monitoringNeeded;
+    private bool _captureAllowed = true;
 
     /// <summary>An indexed captured window together with the group that owns it.</summary>
     public readonly struct CapturedMember
@@ -69,6 +70,13 @@ public sealed class GroupManager
     /// </summary>
     public bool IsMonitoringNeeded => _capturedIndex.Count > 0;
 
+    /// <summary>
+    /// Capture admission is disabled when the lifecycle monitor has failed
+    /// permanently. Existing guests are released before this becomes the
+    /// steady state, so the UI cannot silently create unsupported captures.
+    /// </summary>
+    public bool CaptureAllowed => _captureAllowed;
+
     public ObservableCollection<Group> Groups { get; } = new();
 
     public GroupManager(WindowShepherdService shepherd, PersistenceService persistence, LoggingService log)
@@ -93,13 +101,21 @@ public sealed class GroupManager
         _persistence.Save(Groups);
     }
 
+    public void SetCaptureAllowed(bool allowed, string reason)
+    {
+        if (_captureAllowed == allowed)
+            return;
+        _captureAllowed = allowed;
+        _log.Log($"Capture admission {(allowed ? "enabled" : "disabled")}: {reason}");
+    }
+
     private DispatcherTimer? _saveDebounce;
 
     /// <summary>
-    /// Debounced SaveState: persists layout intent ~1s after the most recent
-    /// state change so it survives crashes and force-kills (this app's history
-    /// is dominated by those), without a disk write per event for high-frequency
-    /// mutations such as drag-reorder. UI thread only (DispatcherTimer).
+    /// Debounced SaveState: persists high-frequency layout churn ~1s after the
+    /// most recent event without a disk write per intermediate drag/reorder
+    /// mutation. Discrete semantic mutations use <see cref="RequestDurableSave"/>
+    /// instead. UI thread only (DispatcherTimer).
     /// </summary>
     public void RequestSave()
     {
@@ -114,6 +130,20 @@ public sealed class GroupManager
         }
         _saveDebounce.Stop();
         _saveDebounce.Start();
+    }
+
+    /// <summary>
+    /// Persists a completed semantic mutation immediately. High-frequency
+    /// geometry/reorder activity continues to use <see cref="RequestSave"/>;
+    /// capture, release, group metadata, active-tab selection, and completed
+    /// reorder operations are durable boundaries that must not sit inside the
+    /// one-second force-kill window.
+    /// </summary>
+    public void RequestDurableSave(string reason)
+    {
+        _saveDebounce?.Stop();
+        _persistence.Save(Groups);
+        _log.Log($"Persisted semantic state change: {reason}");
     }
 
     public void RegisterContainerHwnd(IntPtr hwnd)
@@ -313,7 +343,7 @@ public sealed class GroupManager
         Groups.Add(group);
         _log.Log($"Created group {group.Id} '{name}'");
         DiagnosticRuntime.Record("group.create", group: group.Id.ToString("N"), action: "create", result: "success");
-        RequestSave();
+        RequestDurableSave("group-created");
         return group;
     }
 
@@ -325,7 +355,7 @@ public sealed class GroupManager
         _log.Log($"Switched group {group.Id} to tab {index}");
         DiagnosticRuntime.Record("group.active-tab", group: group.Id.ToString("N"), action: "switch", result: "success",
             data: new Dictionary<string, string> { ["index"] = index.ToString(System.Globalization.CultureInfo.InvariantCulture) });
-        RequestSave();
+        RequestDurableSave("active-tab-selected");
     }
 
     public void MoveTab(Group group, int oldIndex, int newIndex)
@@ -351,6 +381,11 @@ public sealed class GroupManager
         RequestSave();
     }
 
+    public void CommitReorder(string reason = "reorder-completed")
+    {
+        RequestDurableSave(reason);
+    }
+
     public void ReleaseTab(Group group, int index, bool show = true)
     {
         if (index < 0 || index >= group.Members.Count)
@@ -374,7 +409,7 @@ public sealed class GroupManager
 
         _log.Log($"Released tab {index} from group {group.Id}");
         DiagnosticRuntime.Record("guest.release", guest: cw.Hwnd, group: group.Id.ToString("N"), action: "release", result: "success");
-        RequestSave();
+        RequestDurableSave("tab-released");
     }
 
     /// <summary>
@@ -406,7 +441,7 @@ public sealed class GroupManager
 
         _log.Log($"Closed group {group.Id}");
         DiagnosticRuntime.Record("group.close", group: group.Id.ToString("N"), action: "close", result: "success");
-        RequestSave();
+        RequestDurableSave("group-closed");
     }
 
     public void RemoveGroup(Group group)
@@ -414,7 +449,7 @@ public sealed class GroupManager
         if (Groups.Contains(group))
         {
             Groups.Remove(group);
-            RequestSave();
+            RequestDurableSave("group-deleted");
         }
     }
 

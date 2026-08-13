@@ -264,6 +264,9 @@ public sealed class GroupViewModel : ViewModelBase
         ActiveTab = item;
     }
 
+    /// <summary>Durably commits the final order after a high-frequency drag.</summary>
+    public void CommitReorder() => _manager.CommitReorder();
+
     public void AddCapturedWindow(CapturedWindow window)
     {
         TabViewModel? previousActive = ActiveTab;
@@ -445,6 +448,11 @@ public sealed class GroupViewModel : ViewModelBase
             OnPropertyChanged(e.PropertyName);
             if (e.PropertyName == nameof(Group.AccentColor))
                 OnPropertyChanged(nameof(AccentBrush));
+            if (e.PropertyName == nameof(Group.Name)
+                || e.PropertyName == nameof(Group.AccentColor))
+            {
+                _manager.RequestDurableSave("group-metadata-committed");
+            }
         }
     }
 
