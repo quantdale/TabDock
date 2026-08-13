@@ -6,6 +6,27 @@
 
 ## Final Qualification / Integration Pass
 
+### Final durable checkpoint push and CI verified (2026-08-13 22:18 +08:00)
+
+- The durable push/CI record was committed as
+  `a48121c7f91d3643096d1b9ec79da681af9633e8` (`docs: record pushed TabDock
+  qualification state`) and pushed fast-forward from
+  `15c340be52b8b240fb38b536c9c0f1ae028a1eff`. No force push or history rewrite
+  occurred.
+- After `git fetch origin`, local `HEAD`, `origin/main`, and GitHub
+  `refs/heads/main` all matched `a48121c7f91d3643096d1b9ec79da681af9633e8`;
+  `main` was clean.
+- Push-triggered GitHub Actions `build` run 16 (`31708992953`) completed
+  `success` for `a48121c7`. Its Windows job (`94476731303`) passed every
+  step, including `scripts\\validate.ps1 -Configuration Release -Ci -Publish`.
+  Run 15 for the preceding remediation/handoff SHA `15c340be` was also green.
+  M6 is `RESOLVED`.
+- The overall result remains **READY WITH EXTERNAL QUALIFICATION REMAINING**:
+  M2 session-ending cancellation and M8 multi-monitor/mixed-DPI hardware
+  remain environment-qualified items; Chrome-dependent coverage and the
+  documented split-render foreground-activation limitation remain external
+  desktop qualifications.
+
 ### Canonical push and hosted CI verified (2026-08-13 22:10 +08:00)
 
 - After `git fetch origin`, canonical `origin/main` was still
