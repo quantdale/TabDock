@@ -1,5 +1,54 @@
 # Agent state
 
+## Current checkpoint — final durable state before handoff (2026-08-13 20:26 +08:00)
+
+Committed-tree verification passed against `f1dc7ab3ac616d6f1517efafdced5eb6418d3462`:
+Release solution build 0/0; diagnostics `84 checks / 0 failures`; OpenSpec
+`15 passed / 0 failed`; canonical
+`.\scripts\validate.ps1 -Configuration Release -Ci -Publish` passed audited
+restore with no vulnerable packages, all builds, doctor, support-bundle
+privacy, OpenSpec, and self-contained publish/version smoke. Version output
+contains the committed SHA. No test processes or repository-local generated
+artifacts remain. The tree is temporarily dirty only for this final durable
+record; `origin/main` remains the original baseline and no push occurred.
+
+Final result: **READY WITH EXTERNAL QUALIFICATION REMAINING**. H1, M1, M3,
+M4, M5, M7, M9, L1, L2, L3, L5, R1, and R2 are RESOLVED; L4 is DISPROVED /
+NOT MATERIAL. M2 is BLOCKED_ENVIRONMENT because no destructive OS shutdown or
+logoff was initiated; M6 is BLOCKED_EXTERNAL because hosted GitHub CI was not
+run and pushing is prohibited; M8 is BLOCKED_ENVIRONMENT because this desktop
+has one 1920x1080 primary monitor at 100% DPI. Chrome-dependent cases remain
+unrun because `chrome.exe` is unavailable. Split-render has 12/13 available
+scenarios passing; `split-third-tab-click-persists` safely fails closed when
+Windows will not prove the exact container foreground. H1 itself is resolved
+by the passing split-focus and dedicated focus/drag scenarios.
+
+Next three actions: commit this durable final record locally; verify clean
+`main`, final SHA/log, no processes/artifacts, and `origin/main` unchanged;
+handoff the exact M2/M8/M6/split-render/Chrome external procedures. A fresh
+session must not redo the audit, completed H1 evidence, or committed-tree
+canonical gate.
+
+## Current checkpoint — post-remediation commit verification (2026-08-13 20:21 +08:00)
+
+The verified remediation candidate was committed locally on `main` as
+`f1dc7ab` (`fix: complete TabDock deep audit remediation`), with starting HEAD
+`d0cea29fd1b8b60008eb3d7021b3c6859951583a`. `origin/main` remains at the
+starting HEAD; no push or remote operation was performed. The tree is
+temporarily dirty only because this post-commit checkpoint must record the
+commit and the final verification that follows.
+
+Pre-commit validation was green: Release builds, diagnostics `84/0`, geometry,
+driver help/list, audited canonical validation, actual ZIP privacy, OpenSpec
+`15/15`, publish smoke, state-file preservation, no test processes, and no
+repository-local generated artifacts. H1 is RESOLVED. M2 and M8 remain
+environment-blocked; M6 remains externally blocked; split-render has one safe
+foreground-activation limitation and Chrome-dependent cases were unavailable.
+
+Next three actions: run canonical Release build/validation/OpenSpec against
+`f1dc7ab`; record the post-commit result and final status in this file and the
+execplan; commit the durable final-state record and verify a clean `main`.
+
 ## Current checkpoint — pre-commit acceptance gate (2026-08-13 20:18 +08:00)
 
 Branch `main`; starting HEAD and `origin/main` remain

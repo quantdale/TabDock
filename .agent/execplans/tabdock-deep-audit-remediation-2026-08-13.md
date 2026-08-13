@@ -6,6 +6,65 @@
 
 ## Final Qualification / Integration Pass
 
+### Final committed-tree verification and disposition (2026-08-13 20:26 +08:00)
+
+- Committed remediation: `f1dc7ab3ac616d6f1517efafdced5eb6418d3462`,
+  `fix: complete TabDock deep audit remediation`; starting HEAD was
+  `d0cea29fd1b8b60008eb3d7021b3c6859951583a`; branch is `main`; `origin/main`
+  remains the starting commit; no push was performed.
+- Post-commit Release solution build passed with 0 warnings/errors; diagnostics
+  self-test passed `84/0`; OpenSpec passed `15/15`; and
+  `.\scripts\validate.ps1 -Configuration Release -Ci -Publish` passed audited
+  restore/no-vulnerability report, all Release builds, geometry, diagnostics,
+  version, doctor, actual support-bundle privacy, OpenSpec, and self-contained
+  publish/version smoke. The committed SHA appeared in version output.
+- Final local disposition is **READY WITH EXTERNAL QUALIFICATION REMAINING**.
+  Resolved: H1, M1, M3, M4, M5, M7, M9, L1, L2, L3, L5, R1, R2. Disproved /
+  not material: L4. Blocked environment: M2 and M8. Blocked external: M6.
+  Chrome-dependent cases are unavailable because `chrome.exe` is not
+  installed. Split-render has 12/13 available scenarios passing; the remaining
+  scenario safely refuses input when Windows will not prove the exact
+  container foreground. H1 is nevertheless resolved by `split-focus` 7/7 and
+  dedicated focus/drag evidence.
+- No test processes or repository-local generated artifacts remain. The final
+  state record is the only pending local change and will receive a separate
+  documentation/state commit after this checkpoint.
+
+#### External qualification procedures
+
+- M2: on a disposable/instrumented Release Windows desktop, capture two
+  GuineaPig windows, create a split, initiate logoff/shutdown, cancel it from a
+  separate controlled application, verify TabDock deliberately exits after
+  releasing guests, verify guests are standalone/alive, relaunch TabDock,
+  confirm no stale journal and coherent persisted groups, and confirm repeated
+  session-ending callbacks cause no duplicate release/prompt. Do not perform
+  this against a live user session without supervised control.
+- M6: run the configured GitHub Actions workflow on the committed tree via an
+  authorized push or equivalent hosted event; this session must not push, so
+  hosted execution is not claimed.
+- M8: repeat the native maximize/restore, minimize/maximize, move, split, and
+  pane/work-area matrix on larger/smaller secondary monitors, negative
+  coordinates, and 100/125/150/200% mixed-DPI displays. Current local doctor
+  saw only primary `1920x1080`, work area `1920x1032`, 96x96 DPI / 100%.
+- Chrome/split-render: install/use a disposable supported Chrome target for
+  the Chrome scenarios; on a supervised interactive desktop rerun
+  `split-third-tab-click-persists` after ensuring Windows can grant exact
+  container foreground. The driver must continue to fail closed on refusal.
+
+### Remediation commit created; post-commit verification pending (2026-08-13 20:21 +08:00)
+
+- The complete verified remediation was committed locally on `main` as
+  `f1dc7ab` (`fix: complete TabDock deep audit remediation`). Starting HEAD
+  was `d0cea29fd1b8b60008eb3d7021b3c6859951583a`; `origin/main` remains at
+  that starting commit and was not pushed.
+- The tree is temporarily dirty only for this post-commit durable checkpoint.
+  Pre-commit acceptance was green: Release builds, diagnostics `84/0`,
+  geometry, driver help/list, audited canonical validation, actual support-ZIP
+  privacy, OpenSpec `15/15`, publish smoke, state preservation, process
+  hygiene, and artifact hygiene.
+- Next action is canonical verification against `f1dc7ab`, followed by the
+  final durable-state commit and clean-tree check.
+
 ### Pre-commit acceptance gate (2026-08-13 20:18 +08:00)
 
 - Release solution, ValidationDriver, and GuineaPig builds passed with 0
