@@ -75,6 +75,8 @@ public sealed class PersistenceSnapshot
     public string JournalPath { get; set; } = "%APPDATA%\\TabDock\\hidden-windows.json";
     public string JournalStatus { get; set; } = "absent";
     public int? JournalEntryCount { get; set; }
+    public string PendingJournalStatus { get; set; } = "absent";
+    public int PendingJournalFileCount { get; set; }
     public bool LogExists { get; set; }
     public string? ErrorCategory { get; set; }
 }

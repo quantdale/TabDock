@@ -40,7 +40,7 @@ public sealed class WinEventMonitor : IDisposable
     /// Raised when a captured window enters its interactive move/size modal
     /// loop (e.g. the user drags a guest by its client-drawn caption — Chrome
     /// hit-tests its tab strip as HTCAPTION, and DefWindowProc's SC_MOVE loop
-    /// works for WS_CHILD windows too).
+    /// works for an independent top-level guest too).
     /// </summary>
     public event EventHandler<WindowEventArgs>? WindowMoveSizeStarted;
 

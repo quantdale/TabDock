@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.Linq;
 using System.Windows.Input;
 using System.Windows.Media;
 using TabDock.Models;
@@ -333,7 +334,12 @@ public sealed class GroupViewModel : ViewModelBase
         // "which tab was active" afterwards.
         TabViewModel? previouslyActive = ActiveTab;
 
-        _manager.ReleaseTab(_group, idx, show);
+        WindowReleaseOutcome releaseOutcome = _manager.ReleaseTab(_group, idx, show);
+        if (releaseOutcome == WindowReleaseOutcome.RecoveryPending)
+        {
+            _log.Log($"Release of tab {idx} retained in group {_group.Id}: native recovery is pending.");
+            return;
+        }
         tab.PopOutRequested -= OnPopOutRequested;
         tab.CloseWindowRequested -= OnCloseWindowRequested;
         Tabs.RemoveAt(idx);
@@ -376,17 +382,31 @@ public sealed class GroupViewModel : ViewModelBase
         }
     }
 
-    public void CloseGroup()
+    public bool CloseGroup()
     {
-        _manager.CloseGroup(_group);
-        foreach (var t in Tabs)
+        bool released = _manager.CloseGroup(_group);
+        foreach (TabViewModel t in Tabs.Where(t => !_group.Members.Contains(t.Model)).ToList())
         {
             t.PopOutRequested -= OnPopOutRequested;
             t.CloseWindowRequested -= OnCloseWindowRequested;
+            Tabs.Remove(t);
         }
+        if (!released)
+        {
+            // A partial close leaves only RecoveryPending members in the
+            // authoritative model. Do not activate one merely to repair a
+            // removed selection: ActiveTab changes drive native positioning,
+            // while the pending guest must not receive a new mutation until
+            // its strong identity probe succeeds on a retry.
+            if (ActiveTab != null && !Tabs.Contains(ActiveTab))
+                ActiveTab = null;
+            return false;
+        }
+
         Tabs.Clear();
         ActiveTab = null;
         CloseRequested?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     /// <summary>

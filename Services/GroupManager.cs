@@ -386,15 +386,25 @@ public sealed class GroupManager
         RequestDurableSave(reason);
     }
 
-    public void ReleaseTab(Group group, int index, bool show = true)
+    public WindowReleaseOutcome ReleaseTab(Group group, int index, bool show = true)
     {
         if (index < 0 || index >= group.Members.Count)
-            return;
+            return WindowReleaseOutcome.TargetGoneOrRecycled;
 
         var cw = group.Members[index];
         int activeIndex = group.ActiveIndex;
+        WindowReleaseOutcome outcome = _shepherd.Release(cw, show);
+        if (outcome == WindowReleaseOutcome.RecoveryPending)
+        {
+            _log.Log($"Release retained tab {index} in group {group.Id}: native recovery is pending and journal evidence was preserved.");
+            DiagnosticRuntime.Record("guest.release", guest: cw.Hwnd, group: group.Id.ToString("N"), action: "release", result: "recovery-pending");
+            return outcome;
+        }
+
+        // WindowShepherdService verifies and completes the native transaction
+        // before this collection mutation. An unverifiable identity therefore
+        // cannot produce a detached logical member with no recovery evidence.
         group.Members.RemoveAt(index);
-        _shepherd.Release(cw, show);
 
         // ActiveIndex is positional, and removing a member does not re-run its
         // setter, so releasing a tab AHEAD of the active one shifts the active
@@ -410,6 +420,7 @@ public sealed class GroupManager
         _log.Log($"Released tab {index} from group {group.Id}");
         DiagnosticRuntime.Record("guest.release", guest: cw.Hwnd, group: group.Id.ToString("N"), action: "release", result: "success");
         RequestDurableSave("tab-released");
+        return outcome;
     }
 
     /// <summary>
@@ -419,29 +430,40 @@ public sealed class GroupManager
     /// <see cref="Group.Members"/> themselves — a lookup that lived in two
     /// different collections across two call paths before this method existed.
     /// </summary>
-    public void ReleaseMember(Group group, CapturedWindow member, bool show = true)
+    public WindowReleaseOutcome ReleaseMember(Group group, CapturedWindow member, bool show = true)
     {
         int index = group.Members.IndexOf(member);
         if (index >= 0)
-            ReleaseTab(group, index, show);
+            return ReleaseTab(group, index, show);
+        return WindowReleaseOutcome.TargetGoneOrRecycled;
     }
 
-    public void CloseGroup(Group group)
+    public bool CloseGroup(Group group)
     {
         // Release in reverse so indices stay stable.
-        while (group.Members.Count > 0)
+        bool allReleased = true;
+        for (int index = group.Members.Count - 1; index >= 0; index--)
         {
-            var cw = group.Members[^1];
-            group.Members.RemoveAt(group.Members.Count - 1);
-            _shepherd.Release(cw, show: true);
+            WindowReleaseOutcome outcome = ReleaseTab(group, index, show: true);
+            if (outcome == WindowReleaseOutcome.RecoveryPending)
+            {
+                allReleased = false;
+                // Keep the pending member in the collection and move on to
+                // older members. One uncertain guest must not prevent safe
+                // cleanup of the others or cause an infinite retry loop.
+            }
         }
 
-        if (Groups.Contains(group))
+        if (allReleased && Groups.Contains(group))
             Groups.Remove(group);
 
-        _log.Log($"Closed group {group.Id}");
-        DiagnosticRuntime.Record("group.close", group: group.Id.ToString("N"), action: "close", result: "success");
-        RequestDurableSave("group-closed");
+        _log.Log(allReleased
+            ? $"Closed group {group.Id}"
+            : $"Close group {group.Id} retained one or more members pending native recovery.");
+        DiagnosticRuntime.Record("group.close", group: group.Id.ToString("N"), action: "close",
+            result: allReleased ? "success" : "recovery-pending");
+        RequestDurableSave(allReleased ? "group-closed" : "group-close-recovery-pending");
+        return allReleased;
     }
 
     public void RemoveGroup(Group group)
@@ -460,11 +482,14 @@ public sealed class GroupManager
         {
             foreach (var group in Groups.ToList())
             {
-                foreach (var cw in group.Members.ToList())
+                for (int i = group.Members.Count - 1; i >= 0; i--)
                 {
+                    CapturedWindow cw = group.Members[i];
                     try
                     {
-                        _shepherd.Release(cw, show: true);
+                        WindowReleaseOutcome outcome = ReleaseTab(group, i, show: true);
+                        if (outcome == WindowReleaseOutcome.RecoveryPending)
+                            _log.Log($"EmergencyReleaseAll retained 0x{cw.Hwnd.ToInt64():X} in group {group.Id}: recovery pending.");
                     }
                     catch (Exception ex)
                     {

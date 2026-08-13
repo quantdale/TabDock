@@ -1,12 +1,82 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using TabDock.Models;
 
 namespace TabDock.Services;
+
+/// <summary>Result of the release transaction owned by WindowShepherdService.</summary>
+public enum WindowReleaseOutcome
+{
+    Released,
+    TargetGoneOrRecycled,
+    RecoveryPending,
+}
+
+/// <summary>Result of a journal-safe hide presentation transaction.</summary>
+public enum WindowHideOutcome
+{
+    Hidden,
+    TargetGoneOrRecycled,
+    RecoveryPending,
+}
+
+/// <summary>
+/// Native seam for the release transaction. Production delegates to USER32/
+/// DWM; deterministic diagnostics inject it so identity failures can prove
+/// that no native mutation was attempted.
+/// </summary>
+internal interface IWindowReleaseNativeApi
+{
+    bool SetWindowPlacement(IntPtr hwnd, ref NativeMethods.WINDOWPLACEMENT placement);
+    bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+    bool ShowWindow(IntPtr hwnd, int command);
+    bool IsWindowVisible(IntPtr hwnd);
+    bool SetForegroundWindow(IntPtr hwnd);
+    IntPtr GetForegroundWindow();
+    int SetTransitionsDisabled(IntPtr hwnd, int value);
+    string DescribeWindow(IntPtr hwnd);
+}
+
+internal sealed class NativeWindowReleaseNativeApi : IWindowReleaseNativeApi
+{
+    public static NativeWindowReleaseNativeApi Instance { get; } = new();
+
+    private NativeWindowReleaseNativeApi() { }
+
+    public bool SetWindowPlacement(IntPtr hwnd, ref NativeMethods.WINDOWPLACEMENT placement)
+        => NativeMethods.SetWindowPlacement(hwnd, ref placement);
+
+    public bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags)
+        => NativeMethods.SetWindowPos(hwnd, insertAfter, x, y, width, height, flags);
+
+    public bool ShowWindow(IntPtr hwnd, int command)
+        => NativeMethods.ShowWindow(hwnd, command);
+
+    public bool IsWindowVisible(IntPtr hwnd)
+        => NativeMethods.IsWindowVisible(hwnd);
+
+    public bool SetForegroundWindow(IntPtr hwnd)
+        => NativeMethods.SetForegroundWindow(hwnd);
+
+    public IntPtr GetForegroundWindow()
+        => NativeMethods.GetForegroundWindow();
+
+    public int SetTransitionsDisabled(IntPtr hwnd, int value)
+        => NativeMethods.DwmSetWindowAttribute(
+            hwnd,
+            NativeMethods.DWMWA_TRANSITIONS_FORCEDISABLED,
+            ref value,
+            sizeof(int));
+
+    public string DescribeWindow(IntPtr hwnd)
+        => NativeMethods.DescribeWindow(hwnd);
+}
 
 /// <summary>
 /// TabDock's only capture backend (docs/internal/deep-audit-2026-07-17.md,
@@ -71,6 +141,7 @@ public sealed class WindowShepherdService
     internal const uint MinTrackProbeTimeoutMilliseconds = 100;
     private readonly Dictionary<CapturedWindow, (int Width, int Height)> _minTrackCache = new();
     private readonly IWindowIdentityNativeApi _identityApi;
+    private readonly IWindowReleaseNativeApi _releaseApi;
     private readonly IMonitorDpiProbe _monitorDpiProbe;
 
     // The native HWND value is not a generation number. Keep the live
@@ -106,7 +177,7 @@ public sealed class WindowShepherdService
     private HiddenWindowJournalFile? _journalCache;
 
     public WindowShepherdService(LoggingService log, string? journalPath = null)
-        : this(log, journalPath, identityApi: null, monitorDpiProbe: null)
+        : this(log, journalPath, identityApi: null, monitorDpiProbe: null, releaseApi: null)
     {
     }
 
@@ -114,10 +185,12 @@ public sealed class WindowShepherdService
         LoggingService log,
         string? journalPath,
         IWindowIdentityNativeApi? identityApi,
-        IMonitorDpiProbe? monitorDpiProbe)
+        IMonitorDpiProbe? monitorDpiProbe,
+        IWindowReleaseNativeApi? releaseApi)
     {
         _log = log;
         _identityApi = identityApi ?? NativeWindowIdentityApi.Instance;
+        _releaseApi = releaseApi ?? NativeWindowReleaseNativeApi.Instance;
         _monitorDpiProbe = monitorDpiProbe ?? NativeMonitorDpiProbe.Instance;
         _journalPath = string.IsNullOrWhiteSpace(journalPath)
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TabDock", "hidden-windows.json")
@@ -377,7 +450,7 @@ public sealed class WindowShepherdService
             return null;
         }
         IntPtr identityTokenValue = new(identityToken);
-        if (_identityApi.GetCaptureIdentityToken(hwnd) != IntPtr.Zero)
+        if (!WindowIdentityGate.IsCaptureTokenAvailable(hwnd, _identityApi))
         {
             error = "Could not establish a same-window identity token.";
             _log.Log($"Shepherd capture blocked: HWND 0x{hwnd.ToInt64():X} already carries a capture identity token.");
@@ -434,8 +507,11 @@ public sealed class WindowShepherdService
                 identityTokenValue)
             || _identityApi.GetCaptureIdentityToken(hwnd) != identityTokenValue)
         {
-            if (_identityApi.GetCaptureIdentityToken(hwnd) == identityTokenValue)
-                NativeMethods.RemoveProp(hwnd, NativeWindowIdentityApi.CaptureIdentityPropertyName);
+            if (_identityApi.GetCaptureIdentityToken(hwnd) == identityTokenValue
+                && !_identityApi.RemoveCaptureIdentityToken(hwnd, identityTokenValue))
+            {
+                _log.Log($"SHEPHERD[identity-token] token installation cleanup failed for 0x{hwnd.ToInt64():X}; future capture remains fail-closed.");
+            }
             bool journalCleared = JournalClear(cw);
             UnregisterCapturedIdentity(cw);
             if (!journalCleared)
@@ -461,17 +537,17 @@ public sealed class WindowShepherdService
         _capturedByHwnd.Unbind(window);
     }
 
+    internal void BindCapturedWindowForTesting(CapturedWindow window)
+    {
+        _capturedByHwnd.Bind(window);
+    }
+
     private void RemoveCaptureIdentityToken(CapturedWindow window)
     {
         if (window.WindowIdentityToken != 0
-            && NativeMethods.GetProp(window.Hwnd, NativeWindowIdentityApi.CaptureIdentityPropertyName)
-                == new IntPtr(window.WindowIdentityToken))
+            && !_identityApi.RemoveCaptureIdentityToken(window.Hwnd, new IntPtr(window.WindowIdentityToken)))
         {
-            if (NativeMethods.RemoveProp(window.Hwnd, NativeWindowIdentityApi.CaptureIdentityPropertyName)
-                != new IntPtr(window.WindowIdentityToken))
-            {
-                _log.Log($"SHEPHERD[identity-token] could not remove the capture token from 0x{window.Hwnd.ToInt64():X}; future capture of this HWND remains fail-closed.");
-            }
+            _log.Log($"SHEPHERD[identity-token] could not remove the capture token from 0x{window.Hwnd.ToInt64():X}; future capture of this HWND remains fail-closed.");
         }
     }
 
@@ -481,14 +557,18 @@ public sealed class WindowShepherdService
         NativeMethods.DwmSetWindowAttribute(hwnd, NativeMethods.DWMWA_TRANSITIONS_FORCEDISABLED, ref value, sizeof(int));
     }
 
-    private static bool RestoreOriginalTransitions(CapturedWindow window)
+    private bool RestoreOriginalTransitions(CapturedWindow window)
     {
         int value = window.HasOriginalTransitionsState && window.OriginalTransitionsDisabled ? 1 : 0;
-        return NativeMethods.DwmSetWindowAttribute(
-            window.Hwnd,
-            NativeMethods.DWMWA_TRANSITIONS_FORCEDISABLED,
-            ref value,
-            sizeof(int)) == 0;
+        try
+        {
+            return _releaseApi.SetTransitionsDisabled(window.Hwnd, value) == 0;
+        }
+        catch (Exception ex)
+        {
+            _log.LogException($"SHEPHERD[release-transitions] 0x{window.Hwnd.ToInt64():X}", ex);
+            return false;
+        }
     }
 
     /// <summary>
@@ -499,21 +579,57 @@ public sealed class WindowShepherdService
     /// deliberately not part of the stable identity because many guests
     /// legitimately change it while captured.
     /// </summary>
-    private bool IsCurrentCapturedWindow(
+    private WindowIdentityResult EvaluateCurrentCapturedWindow(
         CapturedWindow window,
         string operation,
         bool verifyExecutable,
         bool verifyProcessInstance)
     {
-        bool matches = _capturedByHwnd.IsCurrent(window)
-            && WindowIdentityGate.Matches(window, _identityApi, verifyExecutable, verifyProcessInstance);
-
-        if (!matches && _identityFailuresLogged.Add(window.Hwnd.ToInt64()))
+        WindowIdentityResult result;
+        string reason;
+        if (!_capturedByHwnd.IsCurrent(window))
         {
-            _log.Log($"SHEPHERD[identity-blocked] {operation} refused for 0x{window.Hwnd.ToInt64():X}: captured HWND/object/process identity no longer matches.");
+            result = WindowIdentityResult.Mismatch;
+            reason = "captured object is no longer the current HWND binding";
+        }
+        else
+        {
+            result = WindowIdentityGate.Evaluate(
+                window,
+                _identityApi,
+                verifyExecutable,
+                verifyProcessInstance,
+                out reason);
         }
 
-        return matches;
+        if (result != WindowIdentityResult.Match && _identityFailuresLogged.Add(window.Hwnd.ToInt64()))
+        {
+            _log.Log($"SHEPHERD[identity-blocked] {operation} refused for 0x{window.Hwnd.ToInt64():X}: result={result} reason={reason}.");
+        }
+
+        return result;
+    }
+
+    private bool IsCurrentCapturedWindow(
+        CapturedWindow window,
+        string operation,
+        bool verifyExecutable,
+        bool verifyProcessInstance)
+        => EvaluateCurrentCapturedWindow(window, operation, verifyExecutable, verifyProcessInstance)
+            == WindowIdentityResult.Match;
+
+    internal WindowIdentityResult EvaluateCurrentCapturedWindow(
+        CapturedWindow window,
+        bool verifyExecutable,
+        bool verifyProcessInstance)
+        => EvaluateCurrentCapturedWindow(window, "diagnostic", verifyExecutable, verifyProcessInstance);
+
+    private void LogIdentityReleaseOutcome(
+        CapturedWindow window,
+        WindowIdentityResult identityResult,
+        string reason)
+    {
+        _log.Log($"SHEPHERD[release-decision] guest=0x{window.Hwnd.ToInt64():X} identity={identityResult} reason={reason}.");
     }
 
     /// <summary>
@@ -523,14 +639,15 @@ public sealed class WindowShepherdService
     /// per-frame positioning hot path.
     /// </summary>
     public bool IsCurrentCapturedWindow(CapturedWindow window)
-        => IsCurrentCapturedWindow(window, "external", verifyExecutable: true, verifyProcessInstance: true);
+        => EvaluateCurrentCapturedWindow(window, "external", verifyExecutable: true, verifyProcessInstance: true)
+            == WindowIdentityResult.Match;
 
     /// <summary>
     /// Restores an iconic/zoomed captured guest only after the strong slow-path
     /// identity gate. The BOOL returned by ShowWindow reports the previous
-    /// visibility state, so resulting iconic/zoomed state is the success
-    /// criterion. A benign false return therefore cannot consume the native
-    /// positioning-failure suppression slot.
+    /// visibility state, so the required post-state is visible, non-iconic,
+    /// and non-zoomed. A benign false return therefore cannot consume the
+    /// native positioning-failure suppression slot.
     /// </summary>
     public bool RestoreMinimized(CapturedWindow window)
     {
@@ -553,6 +670,7 @@ public sealed class WindowShepherdService
         bool previouslyVisible = NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_RESTORE);
         bool restored = ShowWindowSemantics.RestoreSucceeded(
             previouslyVisible,
+            visibleAfter: NativeMethods.IsWindowVisible(window.Hwnd),
             iconicAfter: NativeMethods.IsIconic(window.Hwnd),
             zoomedAfter: NativeMethods.IsZoomed(window.Hwnd));
         if (!restored)
@@ -987,17 +1105,31 @@ public sealed class WindowShepherdService
     /// window is a documented harmless no-op. See
     /// <see cref="RescueOrphanedWindows"/>.
     /// </summary>
-    public void Hide(CapturedWindow window)
+    public WindowHideOutcome Hide(CapturedWindow window)
     {
-        if (!IsCurrentCapturedWindow(window, "hide", verifyExecutable: true, verifyProcessInstance: true))
-            return;
+        WindowIdentityResult identityResult = EvaluateCurrentCapturedWindow(
+            window,
+            "hide",
+            verifyExecutable: true,
+            verifyProcessInstance: true);
+        if (identityResult == WindowIdentityResult.Mismatch)
+        {
+            bool journalCleared = JournalClear(window);
+            _log.Log($"SHEPHERD[hide-decision] guest=0x{window.Hwnd.ToInt64():X} identity mismatch; journalCleared={journalCleared}.");
+            return WindowHideOutcome.TargetGoneOrRecycled;
+        }
+        if (identityResult == WindowIdentityResult.Unverifiable)
+        {
+            _log.Log($"SHEPHERD[hide-pending] guest=0x{window.Hwnd.ToInt64():X}: identity could not be verified; guest remains represented and journaled.");
+            return WindowHideOutcome.RecoveryPending;
+        }
         if (!JournalHide(window))
         {
             // A hard termination bypasses every in-process shutdown handler.
             // Never create a newly-hidden guest unless its recovery record is
             // known to be durable.
             _log.Log($"SHEPHERD[hide-blocked] guest=0x{window.Hwnd.ToInt64():X}: hidden-window journal could not be committed; leaving guest visible.");
-            return;
+            return WindowHideOutcome.RecoveryPending;
         }
         bool previouslyVisible = NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
         // ShowWindow's return reports prior visibility, not success — calling
@@ -1008,10 +1140,16 @@ public sealed class WindowShepherdService
                 previouslyVisible,
                 visibleAfter: NativeMethods.IsWindowVisible(window.Hwnd),
                 expectedVisible: false))
+        {
             LogPositioningFailureOnce(window.Hwnd, "ShowWindow(SW_HIDE)");
+            DiagnosticRuntime.Record("repair.visibility", guest: window.Hwnd, action: "ShowWindow(SW_HIDE)",
+                result: "failed");
+            return WindowHideOutcome.RecoveryPending;
+        }
         DiagnosticRuntime.Record("repair.visibility", guest: window.Hwnd, action: "ShowWindow(SW_HIDE)",
-            result: NativeMethods.IsWindowVisible(window.Hwnd) ? "failed" : "success");
+            result: "success");
         _log.Log($"SHEPHERD[hide] guest=0x{window.Hwnd.ToInt64():X}");
+        return WindowHideOutcome.Hidden;
     }
 
     /// <summary>
@@ -1111,129 +1249,111 @@ public sealed class WindowShepherdService
     /// (guest-initiated hide / tray-style close) and journaled the same as
     /// <see cref="Hide"/>.
     /// </summary>
-    public void Release(CapturedWindow window, bool show = true)
+    public WindowReleaseOutcome Release(CapturedWindow window, bool show = true)
     {
+        WindowIdentityResult identityResult = EvaluateCurrentCapturedWindow(
+            window,
+            "release",
+            verifyExecutable: true,
+            verifyProcessInstance: true);
+        if (identityResult != WindowIdentityResult.Match)
+        {
+            _minTrackCache.Remove(window);
+            if (identityResult == WindowIdentityResult.Mismatch)
+            {
+                // Positive stale/recycled evidence proves the old captured
+                // object cannot be safely mutated. JournalClear is scoped to
+                // the full old identity tuple, so it cannot erase a newer
+                // same-HWND record.
+                bool journalCleared = JournalClear(window);
+                LogIdentityReleaseOutcome(window, identityResult, journalCleared
+                    ? "positive mismatch; old journal evidence cleared"
+                    : "positive mismatch; old journal evidence retained after clear failure");
+                UnregisterCapturedIdentity(window);
+                return WindowReleaseOutcome.TargetGoneOrRecycled;
+            }
+
+            LogIdentityReleaseOutcome(window, identityResult, "required evidence unavailable; native release and journal clear skipped");
+            return WindowReleaseOutcome.RecoveryPending;
+        }
+
         try
         {
-            if (!IsCurrentCapturedWindow(window, "release", verifyExecutable: true, verifyProcessInstance: true))
-            {
-                _minTrackCache.Remove(window);
-                // The guest is gone or the HWND was recycled. Clearing the journal
-                // entry is safe because it mutates only TabDock's recovery data;
-                // no native operation may touch the replacement window.
-                JournalClear(window);
-                _log.Log($"Shepherd release: window 0x{window.Hwnd.ToInt64():X} gone or identity changed; native release skipped.");
-                return;
-            }
+            WindowReleaseOutcome outcome = show
+                ? ReleaseVisible(window)
+                : ReleaseIntentionalHide(window);
+            if (outcome != WindowReleaseOutcome.RecoveryPending)
+                UnregisterCapturedIdentity(window);
+            return outcome;
+        }
+        catch (Exception ex)
+        {
+            _log.LogException($"SHEPHERD[release] 0x{window.Hwnd.ToInt64():X}; recovery remains pending", ex);
+            return WindowReleaseOutcome.RecoveryPending;
+        }
+    }
 
-            if (!show)
-            {
-                // The guest hid itself (e.g. tray-style close). Commit a durable
-                // no-rescue marker before completing the native transition. The
-                // marker remains authoritative until the final clear, so a hard
-                // kill cannot turn an intentional tray hide into a rescue.
-                if (!JournalMarkIntentionalHide(window))
-                {
-                    // The user intentionally hid the guest, but the durable marker
-                    // could not be committed. Fail closed on visibility rather than
-                    // leave an ambiguous on-disk entry that rescue could show.
-                    bool showPreviousVisibility = NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_SHOW);
-                    if (!ShowWindowSemantics.VisibilitySucceeded(
-                            showPreviousVisibility,
-                            NativeMethods.IsWindowVisible(window.Hwnd),
-                            expectedVisible: true))
-                        LogPositioningFailureOnce(window.Hwnd, "ShowWindow(SW_SHOW) after journal-marker failure");
-                    RestoreOriginalTransitions(window);
-                    _log.Log($"SHEPHERD[release-blocked] guest=0x{window.Hwnd.ToInt64():X}: hidden-window journal marker could not be committed; restored visibility.");
-                    _minTrackCache.Remove(window);
-                    return;
-                }
-                bool hidePreviousVisibility = NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
-                bool hidden = ShowWindowSemantics.VisibilitySucceeded(
-                    hidePreviousVisibility,
-                    visibleAfter: NativeMethods.IsWindowVisible(window.Hwnd),
-                    expectedVisible: false);
-                if (!hidden)
-                    LogPositioningFailureOnce(window.Hwnd, "ShowWindow(SW_HIDE)");
-                bool hideTransitionsRestored = RestoreOriginalTransitions(window);
-                bool journalCleared = hidden && hideTransitionsRestored && JournalClear(window);
-                if (!journalCleared)
-                {
-                    // Keep the guest visible whenever the final durable clear could
-                    // not be proven. The marker is then either still on disk or the
-                    // in-memory retry path retains it, so an abrupt kill remains
-                    // recoverable and cannot resurrect a deliberately hidden app.
-                    bool fallbackShowPreviousVisibility = NativeMethods.ShowWindow(window.Hwnd, NativeMethods.SW_SHOW);
-                    if (!ShowWindowSemantics.VisibilitySucceeded(
-                            fallbackShowPreviousVisibility,
-                            NativeMethods.IsWindowVisible(window.Hwnd),
-                            expectedVisible: true))
-                        LogPositioningFailureOnce(window.Hwnd, "ShowWindow(SW_SHOW) after journal finalization failure");
-                    RestoreOriginalTransitions(window);
-                    _log.Log($"SHEPHERD[release-blocked] guest=0x{window.Hwnd.ToInt64():X}: hidden-window journal finalization failed; restored visibility.");
-                    _minTrackCache.Remove(window);
-                    return;
-                }
-                _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide)");
-                RemoveCaptureIdentityToken(window);
-                _minTrackCache.Remove(window);
-                return;
-            }
+    private WindowReleaseOutcome ReleaseIntentionalHide(CapturedWindow window)
+    {
+        // The marker is committed before the intentional hide. If it cannot
+        // be committed, restore visible presentation and retain ownership.
+        if (!JournalMarkIntentionalHide(window))
+        {
+            bool visible = ShowWindowVerified(window, NativeMethods.SW_SHOW, expectedVisible: true,
+                "ShowWindow(SW_SHOW) after journal-marker failure");
+            bool transitions = RestoreOriginalTransitions(window);
+            _log.Log($"SHEPHERD[release-blocked] guest=0x{window.Hwnd.ToInt64():X}: marker commit failed; visible={visible}, transitions={transitions}.");
+            _minTrackCache.Remove(window);
+            return WindowReleaseOutcome.RecoveryPending;
+        }
 
-            if (!window.HasValidPlacement)
-            {
-                // Capture-time GetWindowPlacement failed, so OriginalPlacement is
-                // zeroed. Restore the capture-time bounds and the captured
-                // visibility explicitly; never clear the journal until the native
-                // state and DWM transition state are both restored.
-                bool boundsRestored = NativeMethods.SetWindowPos(
-                    window.Hwnd,
-                    IntPtr.Zero,
-                    window.OriginalBounds.left,
-                    window.OriginalBounds.top,
-                    window.OriginalBounds.Width,
-                    window.OriginalBounds.Height,
-                    NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
-                if (!boundsRestored)
-                {
-                    LogPositioningFailureOnce(window.Hwnd, "SetWindowPos(release-bounds)");
-                }
-                int showCommand = window.OriginallyVisible ? NativeMethods.SW_SHOW : NativeMethods.SW_HIDE;
-                bool fallbackPreviousVisibility = NativeMethods.ShowWindow(window.Hwnd, showCommand);
-                bool fallbackVisibilityRestored = ShowWindowSemantics.VisibilitySucceeded(
-                    fallbackPreviousVisibility,
-                    visibleAfter: NativeMethods.IsWindowVisible(window.Hwnd),
-                    expectedVisible: window.OriginallyVisible);
-                if (!fallbackVisibilityRestored)
-                    LogPositioningFailureOnce(window.Hwnd, "ShowWindow(release-bounds)");
-                if (window.OriginallyVisible
-                    && !NativeMethods.SetForegroundWindow(window.Hwnd)
-                    && NativeMethods.GetForegroundWindow() != window.Hwnd)
-                {
-                    LogPositioningFailureOnce(window.Hwnd, "SetForegroundWindow(release)");
-                }
-                bool fallbackTransitionsRestored = RestoreOriginalTransitions(window);
-                bool fallbackReleaseComplete = boundsRestored
-                    && fallbackVisibilityRestored
-                    && fallbackTransitionsRestored;
-                bool fallbackJournalCleared = fallbackReleaseComplete && JournalClear(window);
-                if (fallbackJournalCleared)
-                    RemoveCaptureIdentityToken(window);
-                else
-                    _log.Log($"SHEPHERD[release-pending] guest=0x{window.Hwnd.ToInt64():X}: retained recovery journal after incomplete bounds release.");
-                _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) via bounds fallback (no valid capture-time placement); guest={NativeMethods.DescribeWindow(window.Hwnd)}");
-                _minTrackCache.Remove(window);
-                return;
-            }
+        bool hidden = ShowWindowVerified(window, NativeMethods.SW_HIDE, expectedVisible: false, "ShowWindow(SW_HIDE)");
+        bool transitionsRestored = RestoreOriginalTransitions(window);
+        if (hidden && transitionsRestored && JournalClear(window))
+        {
+            _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide)");
+            RemoveCaptureIdentityToken(window);
+            _minTrackCache.Remove(window);
+            return WindowReleaseOutcome.Released;
+        }
 
+        // Never leave an ambiguous hidden guest after finalization failed.
+        bool visibleAfterFailure = ShowWindowVerified(
+            window,
+            NativeMethods.SW_SHOW,
+            expectedVisible: true,
+            "ShowWindow(SW_SHOW) after journal finalization failure");
+        bool transitionsAfterFailure = RestoreOriginalTransitions(window);
+        _log.Log($"SHEPHERD[release-pending] guest=0x{window.Hwnd.ToInt64():X}: intentional-hide finalization failed; visible={visibleAfterFailure}, transitions={transitionsAfterFailure}; journal retained.");
+        _minTrackCache.Remove(window);
+        return WindowReleaseOutcome.RecoveryPending;
+    }
+
+    private WindowReleaseOutcome ReleaseVisible(CapturedWindow window)
+    {
+        bool placementRestored;
+        if (!window.HasValidPlacement)
+        {
+            placementRestored = _releaseApi.SetWindowPos(
+                window.Hwnd,
+                IntPtr.Zero,
+                window.OriginalBounds.left,
+                window.OriginalBounds.top,
+                window.OriginalBounds.Width,
+                window.OriginalBounds.Height,
+                NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
+            if (!placementRestored)
+                LogPositioningFailureOnce(window.Hwnd, "SetWindowPos(release-bounds)");
+        }
+        else
+        {
             NativeMethods.WINDOWPLACEMENT placement = window.OriginalPlacement;
             placement.length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>();
-
-            bool placementRestored = NativeMethods.SetWindowPlacement(window.Hwnd, ref placement);
+            placementRestored = _releaseApi.SetWindowPlacement(window.Hwnd, ref placement);
             if (!placementRestored)
             {
                 _log.Log($"SetWindowPlacement failed for 0x{window.Hwnd.ToInt64():X}: {NativeMethods.FormatLastError()}");
-                placementRestored = NativeMethods.SetWindowPos(
+                placementRestored = _releaseApi.SetWindowPos(
                     window.Hwnd,
                     IntPtr.Zero,
                     window.OriginalBounds.left,
@@ -1242,44 +1362,48 @@ public sealed class WindowShepherdService
                     window.OriginalBounds.Height,
                     NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
                 if (!placementRestored)
-                {
                     LogPositioningFailureOnce(window.Hwnd, "SetWindowPos(release-fallback)");
-                }
             }
-
-            int originalShowCommand = window.OriginallyVisible
-                ? (placement.showCmd == 0 ? NativeMethods.SW_SHOW : (int)placement.showCmd)
-                : NativeMethods.SW_HIDE;
-            bool releasePreviousVisibility = NativeMethods.ShowWindow(window.Hwnd, originalShowCommand);
-            bool visibilityRestored = ShowWindowSemantics.VisibilitySucceeded(
-                releasePreviousVisibility,
-                visibleAfter: NativeMethods.IsWindowVisible(window.Hwnd),
-                expectedVisible: window.OriginallyVisible);
-            if (!visibilityRestored)
-                LogPositioningFailureOnce(window.Hwnd, "ShowWindow(release)");
-            if (window.OriginallyVisible
-                && !NativeMethods.SetForegroundWindow(window.Hwnd)
-                && NativeMethods.GetForegroundWindow() != window.Hwnd)
-            {
-                LogPositioningFailureOnce(window.Hwnd, "SetForegroundWindow(release)");
-            }
-            bool transitionsRestored = RestoreOriginalTransitions(window);
-            bool releaseComplete = placementRestored && visibilityRestored && transitionsRestored;
-            bool releaseJournalCleared = releaseComplete && JournalClear(window);
-            if (releaseJournalCleared)
-                RemoveCaptureIdentityToken(window);
-            else
-                _log.Log($"SHEPHERD[release-pending] guest=0x{window.Hwnd.ToInt64():X}: retained recovery journal after incomplete placement release.");
-
-            _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) guest={NativeMethods.DescribeWindow(window.Hwnd)}");
-            _minTrackCache.Remove(window);
         }
-        finally
+
+        int showCommand = window.OriginallyVisible
+            ? (window.OriginalPlacement.showCmd == 0 ? NativeMethods.SW_SHOW : (int)window.OriginalPlacement.showCmd)
+            : NativeMethods.SW_HIDE;
+        bool visibilityRestored = ShowWindowVerified(
+            window,
+            showCommand,
+            window.OriginallyVisible,
+            "ShowWindow(release)");
+        if (window.OriginallyVisible
+            && !_releaseApi.SetForegroundWindow(window.Hwnd)
+            && _releaseApi.GetForegroundWindow() != window.Hwnd)
         {
-            // The group removes the member before calling Release. Remove only
-            // this object, so a same-HWND replacement cannot be unbound.
-            UnregisterCapturedIdentity(window);
+            LogPositioningFailureOnce(window.Hwnd, "SetForegroundWindow(release)");
         }
+
+        bool transitionsRestored = RestoreOriginalTransitions(window);
+        bool releaseComplete = placementRestored && visibilityRestored && transitionsRestored;
+        if (releaseComplete && JournalClear(window))
+        {
+            RemoveCaptureIdentityToken(window);
+            _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) guest={_releaseApi.DescribeWindow(window.Hwnd)}");
+            _minTrackCache.Remove(window);
+            return WindowReleaseOutcome.Released;
+        }
+
+        _log.Log($"SHEPHERD[release-pending] guest=0x{window.Hwnd.ToInt64():X}: retained recovery journal after incomplete placement/finalization release.");
+        _minTrackCache.Remove(window);
+        return WindowReleaseOutcome.RecoveryPending;
+    }
+
+    private bool ShowWindowVerified(CapturedWindow window, int command, bool expectedVisible, string operation)
+    {
+        bool previouslyVisible = _releaseApi.ShowWindow(window.Hwnd, command);
+        bool visible = _releaseApi.IsWindowVisible(window.Hwnd);
+        bool succeeded = ShowWindowSemantics.VisibilitySucceeded(previouslyVisible, visible, expectedVisible);
+        if (!succeeded)
+            LogPositioningFailureOnce(window.Hwnd, operation);
+        return succeeded;
     }
 
     #region Crash-recovery journal (docs/internal/deep-audit-2026-07-17.md, section 6.5)
@@ -1294,8 +1418,9 @@ public sealed class WindowShepherdService
 
     /// <summary>
     /// Refreshes the durable capture entry immediately before a TabDock-driven
-    /// hide. The entry already exists for a normal capture, but rebuilding it
-    /// also upgrades legacy v1 entries that were loaded before this version.
+    /// hide. The entry already exists for a normal capture. If an older journal
+    /// was loaded, the schema-compatibility gate refuses this write rather
+    /// than silently rewriting tokenless recovery evidence as v3.
     /// </summary>
     private bool JournalHide(CapturedWindow window)
         => UpsertJournalEntry(window, doNotRescue: false, "JournalHide");
@@ -1313,7 +1438,7 @@ public sealed class WindowShepherdService
             HiddenWindowJournalFile file = GetJournalCache();
             HiddenWindowEntry entry = ToJournalEntry(window);
             entry.DoNotRescue = doNotRescue;
-            file.Entries.RemoveAll(e => e.Hwnd == entry.Hwnd);
+            file.Entries.RemoveAll(e => IsSameJournalIdentity(e, entry));
             file.Entries.Add(entry);
             file.Version = HiddenWindowJournalFile.CurrentVersion;
             SaveJournal(file);
@@ -1355,6 +1480,15 @@ public sealed class WindowShepherdService
         };
     }
 
+    private static bool IsSameJournalIdentity(HiddenWindowEntry left, HiddenWindowEntry right)
+        => left.Hwnd == right.Hwnd
+            && left.Pid == right.Pid
+            && left.WindowThreadId == right.WindowThreadId
+            && left.ProcessStartTimeUtcTicks == right.ProcessStartTimeUtcTicks
+            && left.WindowIdentityToken == right.WindowIdentityToken
+            && string.Equals(left.ExePath, right.ExePath, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(left.ClassName, right.ClassName, StringComparison.Ordinal);
+
     /// <summary>Clears a guest's capture-session journal entry synchronously.</summary>
     private bool JournalClear(CapturedWindow window)
     {
@@ -1369,14 +1503,11 @@ public sealed class WindowShepherdService
             if (file.Entries.Count == 0)
                 return true;
 
+            HiddenWindowEntry expected = ToJournalEntry(window);
             for (int i = file.Entries.Count - 1; i >= 0; i--)
             {
                 HiddenWindowEntry entry = file.Entries[i];
-                if (entry.Hwnd == window.Hwnd.ToInt64()
-                    && entry.Pid == window.ProcessId
-                    && entry.WindowThreadId == window.WindowThreadId
-                    && entry.ProcessStartTimeUtcTicks == window.ProcessStartTimeUtcTicks
-                    && entry.WindowIdentityToken == window.WindowIdentityToken)
+                if (IsSameJournalIdentity(entry, expected))
                 {
                     removed.Add(entry);
                     file.Entries.RemoveAt(i);
@@ -1431,18 +1562,37 @@ public sealed class WindowShepherdService
     }
 
     private HiddenWindowJournalFile LoadJournal()
-        => LoadJournal(_journalPath, _log, out _journalLoadFailed);
+    {
+        HiddenWindowJournalFile file = LoadJournal(_journalPath, _log, out _journalLoadFailed, out _);
+        if (!_journalLoadFailed
+            && (file.Version < HiddenWindowJournalFile.CurrentVersion
+                || file.Entries.Any(entry => !HasCurrentJournalIdentity(entry))))
+        {
+            _journalLoadFailed = true;
+            _log.Log($"SHEPHERD[journal] legacy/incomplete recovery evidence remains at '{DiagnosticEnvironmentService.RedactPath(_journalPath)}'; refusing to rewrite it.");
+        }
+        return file;
+    }
 
-    private static HiddenWindowJournalFile LoadJournal(string path, LoggingService log, out bool failed)
+    private static HiddenWindowJournalFile LoadJournal(
+        string path,
+        LoggingService log,
+        out bool failed,
+        out byte[]? rawBytes)
     {
         failed = false;
+        rawBytes = null;
         if (!File.Exists(path))
             return new HiddenWindowJournalFile();
 
         string json;
         try
         {
-            json = File.ReadAllText(path);
+            rawBytes = File.ReadAllBytes(path);
+            json = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+                .GetString(rawBytes);
+            if (json.Length > 0 && json[0] == '\uFEFF')
+                json = json[1..];
         }
         catch (Exception ex)
         {
@@ -1450,18 +1600,23 @@ public sealed class WindowShepherdService
             log.LogException("WindowShepherdService.LoadJournal read", ex);
             return new HiddenWindowJournalFile();
         }
-
         try
         {
             int sourceVersion = 1;
             try
             {
                 using JsonDocument document = JsonDocument.Parse(json);
-                if (document.RootElement.ValueKind == JsonValueKind.Object
-                    && document.RootElement.TryGetProperty("Version", out JsonElement version)
-                    && version.TryGetInt32(out int parsedVersion))
+                if (document.RootElement.ValueKind == JsonValueKind.Object)
                 {
-                    sourceVersion = parsedVersion;
+                    foreach (JsonProperty property in document.RootElement.EnumerateObject())
+                    {
+                        if (string.Equals(property.Name, "Version", StringComparison.OrdinalIgnoreCase)
+                            && property.Value.TryGetInt32(out int parsedVersion))
+                        {
+                            sourceVersion = parsedVersion;
+                            break;
+                        }
+                    }
                 }
             }
             catch (JsonException)
@@ -1482,10 +1637,11 @@ public sealed class WindowShepherdService
                 log.Log($"SHEPHERD[journal] unsupported future journal version {sourceVersion}; preserving '{DiagnosticEnvironmentService.RedactPath(path)}'.");
                 return file;
             }
-            // Version 1 entries contain only HWND/PID/executable. They are
-            // upgraded in memory for schema compatibility, but recovery still
-            // fails closed when process-start or the per-capture HWND token is
-            // unavailable; newly captured entries always contain both.
+            // Version 1 entries contain only HWND/PID/executable. Version 2
+            // adds the full presentation/process-start record but predates the
+            // thread/token generation proof. They remain explicitly legacy;
+            // startup rescue classifies them as pending manual recovery rather
+            // than pretending they are equivalent to v3.
             if (sourceVersion < HiddenWindowJournalFile.CurrentVersion)
             {
                 foreach (HiddenWindowEntry entry in file.Entries)
@@ -1496,7 +1652,6 @@ public sealed class WindowShepherdService
                     entry.OriginalShowCommand = NativeMethods.SW_SHOW;
                 }
             }
-            file.Version = HiddenWindowJournalFile.CurrentVersion;
             return file;
         }
         catch (Exception ex)
@@ -1537,6 +1692,150 @@ public sealed class WindowShepherdService
         return $"{basePath}.{Guid.NewGuid():N}";
     }
 
+    private static bool HasCurrentJournalIdentity(HiddenWindowEntry entry)
+        => entry.WindowThreadId != 0
+            && entry.WindowIdentityToken != 0
+            && entry.ProcessStartTimeUtcTicks != 0
+            && !string.IsNullOrWhiteSpace(entry.ExePath)
+            && !string.IsNullOrWhiteSpace(entry.ClassName);
+
+    private static string GetUniqueJournalPendingPath(string path)
+    {
+        string basePath = path + ".pending";
+        if (!File.Exists(basePath))
+            return basePath;
+
+        for (int i = 1; i < 1000; i++)
+        {
+            string candidate = $"{basePath}.{i:D3}";
+            if (!File.Exists(candidate))
+                return candidate;
+        }
+
+        return $"{basePath}.{Guid.NewGuid():N}";
+    }
+
+    private static bool PreservePendingJournal(
+        string path,
+        byte[]? rawBytes,
+        int version,
+        LoggingService log,
+        string reason)
+    {
+        if (rawBytes == null || rawBytes.Length == 0)
+            return false;
+
+        string pendingPath = GetUniqueJournalPendingPath(path);
+        try
+        {
+            WriteDurableBytes(pendingPath, rawBytes);
+            File.Delete(path);
+            log.Log($"SHEPHERD[journal-pending] preserved recovery journal schema v{version} at '{DiagnosticEnvironmentService.RedactPath(pendingPath)}'; automatic rescue skipped ({reason}). Supervised manual recovery is required before retiring this evidence.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            log.LogException("WindowShepherdService.PreservePendingJournal", ex);
+            try
+            {
+                if (File.Exists(pendingPath))
+                    File.Delete(pendingPath);
+            }
+            catch { }
+            return false;
+        }
+    }
+
+    private static WindowIdentityResult EvaluateRecoveryIdentity(
+        HiddenWindowEntry entry,
+        IntPtr hwnd,
+        IRecoveryNativeApi api,
+        out string reason)
+    {
+        try
+        {
+            if (!api.IsWindow(hwnd))
+            {
+                reason = "HWND no longer exists";
+                return WindowIdentityResult.Mismatch;
+            }
+
+            uint currentPid = api.GetProcessId(hwnd);
+            if (currentPid == 0)
+            {
+                reason = "live PID could not be read";
+                return WindowIdentityResult.Unverifiable;
+            }
+            if (currentPid != entry.Pid)
+            {
+                reason = "PID differs";
+                return WindowIdentityResult.Mismatch;
+            }
+
+            uint currentThread = api.GetWindowThreadId(hwnd);
+            if (currentThread == 0)
+            {
+                reason = "GUI thread identity could not be read";
+                return WindowIdentityResult.Unverifiable;
+            }
+            if (currentThread != entry.WindowThreadId)
+            {
+                reason = "GUI thread identity differs";
+                return WindowIdentityResult.Mismatch;
+            }
+
+            string? currentExe = api.GetProcessImagePath(currentPid);
+            if (string.IsNullOrWhiteSpace(currentExe))
+            {
+                reason = "executable identity could not be read";
+                return WindowIdentityResult.Unverifiable;
+            }
+            if (!string.Equals(currentExe, entry.ExePath, StringComparison.OrdinalIgnoreCase))
+            {
+                reason = "executable identity differs";
+                return WindowIdentityResult.Mismatch;
+            }
+
+            string? currentClass = api.GetClassName(hwnd);
+            if (string.IsNullOrWhiteSpace(currentClass))
+            {
+                reason = "window class identity could not be read";
+                return WindowIdentityResult.Unverifiable;
+            }
+            if (!string.Equals(currentClass, entry.ClassName, StringComparison.Ordinal))
+            {
+                reason = "window class differs";
+                return WindowIdentityResult.Mismatch;
+            }
+
+            long currentStart = api.GetProcessStartTimeUtcTicks(currentPid);
+            if (currentStart == 0)
+            {
+                reason = "process-start identity could not be read";
+                return WindowIdentityResult.Unverifiable;
+            }
+            if (currentStart != entry.ProcessStartTimeUtcTicks)
+            {
+                reason = "process-start identity differs";
+                return WindowIdentityResult.Mismatch;
+            }
+
+            if (api.GetCaptureIdentityToken(hwnd) != new IntPtr(entry.WindowIdentityToken))
+            {
+                reason = "HWND generation token differs";
+                return WindowIdentityResult.Mismatch;
+            }
+
+            reason = "all recovery identity evidence matched";
+            return WindowIdentityResult.Match;
+        }
+        catch (Exception ex)
+        {
+            reason = $"recovery identity probe threw {ex.GetType().Name}";
+            return WindowIdentityResult.Unverifiable;
+        }
+    }
+
     private void SaveJournal(HiddenWindowJournalFile file)
     {
         if (_journalLoadFailed)
@@ -1557,7 +1856,11 @@ public sealed class WindowShepherdService
 
     private static void WriteDurableText(string path, string contents)
     {
-        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(contents);
+        WriteDurableBytes(path, Encoding.UTF8.GetBytes(contents));
+    }
+
+    private static void WriteDurableBytes(string path, byte[] bytes)
+    {
         using var stream = new FileStream(
             path,
             FileMode.Create,
@@ -1581,8 +1884,11 @@ public sealed class WindowShepherdService
     /// same-session recovery aid only (HWNDs don't survive reboots, matching
     /// the existing "layout intent only" persistence philosophy) — the
     /// identity-valid entry is cleared only after the guest is verified visible;
-    /// entries that could not be shown remain for a later retry. Invalid or
-    /// recycled identities are discarded.
+    /// entries that could not be shown or verified remain for a later retry.
+    /// Positive stale/recycled identities are discarded because their old
+    /// object is conclusively gone. Tokenless legacy entries are preserved in
+    /// a `.pending` sidecar for supervised manual recovery and are never
+    /// auto-mutated.
     /// </summary>
     public static void RescueOrphanedWindows(LoggingService log, string? journalPath = null)
         => RescueOrphanedWindows(log, journalPath, NativeRecoveryNativeApi.Instance);
@@ -1594,9 +1900,35 @@ public sealed class WindowShepherdService
             : Path.GetFullPath(journalPath);
         try
         {
-            HiddenWindowJournalFile file = LoadJournal(path, log, out bool loadFailed);
+            HiddenWindowJournalFile file = LoadJournal(path, log, out bool loadFailed, out byte[]? rawBytes);
             if (loadFailed)
                 return;
+            if (file.Version < HiddenWindowJournalFile.CurrentVersion)
+            {
+                if (!PreservePendingJournal(
+                        path,
+                        rawBytes,
+                        file.Version,
+                        log,
+                        "legacy tokenless HWND generation cannot be proven"))
+                {
+                    log.Log("SHEPHERD[journal-pending] could not quarantine legacy evidence; leaving the original journal untouched.");
+                }
+                return;
+            }
+            if (file.Entries.Any(entry => !HasCurrentJournalIdentity(entry)))
+            {
+                if (!PreservePendingJournal(
+                        path,
+                        rawBytes,
+                        file.Version,
+                        log,
+                        "v3 entry is missing required identity evidence"))
+                {
+                    log.Log("SHEPHERD[journal-pending] could not quarantine incomplete v3 evidence; leaving the original journal untouched.");
+                }
+                return;
+            }
             if (file.Entries.Count == 0)
             {
                 // An empty journal file (including one with a null Entries array
@@ -1612,32 +1944,18 @@ public sealed class WindowShepherdService
             foreach (HiddenWindowEntry entry in file.Entries)
             {
                 var hwnd = new IntPtr(entry.Hwnd);
-                if (!api.IsWindow(hwnd))
+                WindowIdentityResult identity = EvaluateRecoveryIdentity(entry, hwnd, api, out string identityReason);
+                if (identity == WindowIdentityResult.Mismatch)
+                {
+                    log.Log($"SHEPHERD[rescue] discarded conclusively stale/recycled entry 0x{hwnd.ToInt64():X}: {identityReason}.");
                     continue;
-
-                uint currentPid = api.GetProcessId(hwnd);
-                if (currentPid != entry.Pid)
+                }
+                if (identity == WindowIdentityResult.Unverifiable)
+                {
+                    retry.Add(entry);
+                    log.Log($"SHEPHERD[rescue-retry] retained 0x{hwnd.ToInt64():X}: identity unverifiable ({identityReason}).");
                     continue;
-
-                if (entry.WindowThreadId != 0
-                    && api.GetWindowThreadId(hwnd) != entry.WindowThreadId)
-                    continue;
-
-                string? currentExe = api.GetProcessImagePath(currentPid);
-                if (!string.Equals(currentExe, entry.ExePath, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                if (!string.IsNullOrWhiteSpace(entry.ClassName)
-                    && !string.Equals(api.GetClassName(hwnd), entry.ClassName, StringComparison.Ordinal))
-                    continue;
-
-                if (entry.ProcessStartTimeUtcTicks == 0
-                    || api.GetProcessStartTimeUtcTicks(currentPid) != entry.ProcessStartTimeUtcTicks)
-                    continue;
-
-                if (entry.WindowIdentityToken == 0
-                    || api.GetCaptureIdentityToken(hwnd) != new IntPtr(entry.WindowIdentityToken))
-                    continue;
+                }
 
                 if (entry.DoNotRescue)
                 {
@@ -1781,7 +2099,7 @@ internal interface IRecoveryNativeApi
     bool RemoveCaptureIdentityToken(IntPtr hwnd, IntPtr expectedToken);
     bool SetWindowPlacement(IntPtr hwnd, ref NativeMethods.WINDOWPLACEMENT placement);
     bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
-    void ShowWindow(IntPtr hwnd, int command);
+    bool ShowWindow(IntPtr hwnd, int command);
     bool IsWindowVisible(IntPtr hwnd);
     int SetTransitionsDisabled(IntPtr hwnd, int value);
 }
@@ -1827,7 +2145,7 @@ internal sealed class NativeRecoveryNativeApi : IRecoveryNativeApi
     public bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags)
         => NativeMethods.SetWindowPos(hwnd, insertAfter, x, y, width, height, flags);
 
-    public void ShowWindow(IntPtr hwnd, int command) => NativeMethods.ShowWindow(hwnd, command);
+    public bool ShowWindow(IntPtr hwnd, int command) => NativeMethods.ShowWindow(hwnd, command);
 
     public bool IsWindowVisible(IntPtr hwnd) => NativeMethods.IsWindowVisible(hwnd);
 

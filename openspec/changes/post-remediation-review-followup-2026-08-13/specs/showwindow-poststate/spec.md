@@ -3,9 +3,9 @@
 ### Requirement: ShowWindow success SHALL be determined from resulting native state
 
 Production code SHALL NOT interpret the BOOL returned by `ShowWindow` as the
-success status of the requested operation. Restore SHALL verify the resulting
-non-iconic/non-zoomed state; hide/show/release SHALL verify resulting
-visibility against the requested state.
+success status of the requested operation. Restore SHALL verify that the
+result is visible, non-iconic, and non-zoomed; hide/show/release SHALL verify
+resulting visibility against the requested state.
 
 #### Scenario: Hidden restore with a benign false return succeeds
 
@@ -18,7 +18,13 @@ visibility against the requested state.
 
 - **WHEN** a minimized guest is restored
 - **THEN** the resulting iconic/zoomed state SHALL be checked before layout
-  re-glue proceeds
+  re-glue proceeds, and the window SHALL also be visible
+
+#### Scenario: A restore that remains hidden fails
+
+- **WHEN** `ShowWindow(SW_RESTORE)` returns but `IsWindowVisible` remains false
+  for an otherwise normal, non-iconic window
+- **THEN** restore SHALL be treated as a genuine failure
 
 #### Scenario: Hide and release verify visibility
 

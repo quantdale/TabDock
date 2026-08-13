@@ -314,22 +314,27 @@ public partial class ContainerWindow : Window
         if (result != MessageBoxResult.OK)
             return;
 
-        // Remove the group from the model and persist immediately so it does not
-        // survive a restart, then pop every member back to a standalone window
-        // (kept running — deleting a group never closes the user's apps). The
-        // final release empties the tab strip and the container closes itself via
-        // the existing EmptiedByPopOut path. The explicit Close() covers the
-        // EMPTY-group delete, where the release loop never runs and
-        // EmptiedByPopOut never fires — without it an orphan container stays
-        // open bound to a Group instance GroupManager has already detached
-        // (adversarial review finding D1: captures into the orphan bypass the
-        // captured-window index and become un-rescuable). It is a no-op when
-        // EmptiedByPopOut already closed the window.
-        _manager.RemoveGroup(Group);
-        _manager.SaveState();
+        // Use the same transaction-first release contract as the ordinary
+        // close path. Removing the group/index before release would detach an
+        // uncertain member from lifecycle ownership and could make a pending
+        // tab loop forever in ReleaseTab. CloseGroup retains the group and its
+        // pending members when any identity/native recovery is uncertain; the
+        // user can retry after the guest becomes verifiable.
+        if (!_viewModel.CloseGroup())
+        {
+            _log.Log($"Delete group {Group.Id} retained because one or more guest releases are pending recovery.");
+            MessageBox.Show(
+                this,
+                "One or more windows could not be safely released yet. The group remains open and recovery evidence was preserved; retry after the windows become verifiable.",
+                "Release pending",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
 
-        while (_viewModel.Tabs.Count > 0)
-            _viewModel.ReleaseTab(_viewModel.Tabs[0]);
+        // CloseGroup removes the fully released group from GroupManager and
+        // clears the view model. This explicit Close also covers an empty-group
+        // delete, where no tab-removal event can close the container.
         Close();
     }
 
@@ -801,7 +806,11 @@ public partial class ContainerWindow : Window
                     .Select(t => t.Model)
                     .Where(w => w.Hwnd != IntPtr.Zero)
                     .ToList();
-                _viewModel.CloseGroup();
+                if (!_viewModel.CloseGroup())
+                {
+                    e.Cancel = true;
+                    break;
+                }
                 foreach (CapturedWindow window in windowsToClose)
                 {
                     if (!_shepherd.IsCurrentCapturedWindow(window))
@@ -812,7 +821,8 @@ public partial class ContainerWindow : Window
                 break;
 
             case MessageBoxResult.No:
-                _viewModel.CloseGroup();
+                if (!_viewModel.CloseGroup())
+                    e.Cancel = true;
                 break;
 
             default:
@@ -941,12 +951,12 @@ public partial class ContainerWindow : Window
             {
                 if (IsSplitActive)
                 {
-                    _shepherd.Hide(_splitLeft!);
-                    _shepherd.Hide(_splitRight!);
+                    LogHidePending(_splitLeft!, _shepherd.Hide(_splitLeft!));
+                    LogHidePending(_splitRight!, _shepherd.Hide(_splitRight!));
                 }
                 else if (_shepherdActiveWindow != null)
                 {
-                    _shepherd.Hide(_shepherdActiveWindow);
+                    LogHidePending(_shepherdActiveWindow, _shepherd.Hide(_shepherdActiveWindow));
                 }
             }
             else
@@ -1839,14 +1849,21 @@ public partial class ContainerWindow : Window
 
     #region Shepherd active-tab sync
 
+    private void LogHidePending(CapturedWindow window, WindowHideOutcome outcome)
+    {
+        if (outcome != WindowHideOutcome.RecoveryPending)
+            return;
+
+        _log.Log($"SHEPHERD[hide-pending] presentation retained guest 0x{window.Hwnd.ToInt64():X}; recovery evidence remains durable.");
+        DiagnosticRuntime.Record("repair.visibility", guest: window.Hwnd,
+            action: "ShowWindow(SW_HIDE)", result: "recovery-pending");
+    }
+
     /// <summary>
-    /// Reacts to an ActiveTab change: positions and shows the newly active
-    /// guest FIRST — on top of the outgoing one, so it visually covers it
-    /// immediately, with no frame where neither is on top and the content
-    /// marker's own background could show through — then hides the
-    /// previously active guest (only if it is still a member of this group —
-    /// if it was just released, WindowShepherdService.Release already
-    /// decided its final visible state and must not be second-guessed here).
+    /// Reacts to an ActiveTab change by hiding the outgoing guest through its
+    /// journal-safe transaction before showing the incoming one. If identity
+    /// or journal durability is uncertain, the logical active tab is rolled
+    /// back so an old visible guest cannot coexist with a new logical guest.
     /// </summary>
     private void SyncShepherdActiveWindow()
     {
@@ -1903,14 +1920,37 @@ public partial class ContainerWindow : Window
             // already hidden, making this a no-op for it.
             if (NativeMethods.IsWindow(newWindow.Hwnd) && NativeMethods.IsWindowVisible(newWindow.Hwnd))
             {
-                _shepherd.Hide(newWindow);
-                _log.Log($"SPLIT[persist] non-member=0x{newWindow.Hwnd.ToInt64():X} was newly visible; hidden (split pair remains the visible set)");
+                WindowHideOutcome hideOutcome = _shepherd.Hide(newWindow);
+                LogHidePending(newWindow, hideOutcome);
+                if (hideOutcome == WindowHideOutcome.Hidden)
+                    _log.Log($"SPLIT[persist] non-member=0x{newWindow.Hwnd.ToInt64():X} was newly visible; hidden (split pair remains the visible set)");
+                else if (hideOutcome == WindowHideOutcome.RecoveryPending)
+                    _log.Log($"SPLIT[persist] non-member=0x{newWindow.Hwnd.ToInt64():X} remains visible while native hide recovery is pending.");
             }
             var focusedTab = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, _splitForeground))
                 ?? _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, _splitLeft));
             if (focusedTab != null)
                 FocusSplitMember(focusedTab);
             return;
+        }
+
+        bool oldWindowHidden = false;
+        if (oldWindow != null
+            && newWindow != null
+            && _viewModel.Tabs.Any(t => t.Model == oldWindow))
+        {
+            WindowHideOutcome hideOutcome = _shepherd.Hide(oldWindow);
+            if (hideOutcome == WindowHideOutcome.RecoveryPending)
+            {
+                _log.Log($"SHEPHERD[active-switch-pending] retained old active guest 0x{oldWindow.Hwnd.ToInt64():X}; incoming guest was not shown.");
+                DiagnosticRuntime.Record("presentation.active-member", _containerHwnd, oldWindow.Hwnd,
+                    group: Group.Id.ToString("N"), action: "active-tab-change", result: "recovery-pending");
+                TabViewModel? oldTab = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, oldWindow));
+                if (oldTab != null)
+                    _viewModel.SetActiveTab(oldTab);
+                return;
+            }
+            oldWindowHidden = true;
         }
 
         _shepherdActiveWindow = newWindow;
@@ -1924,10 +1964,8 @@ public partial class ContainerWindow : Window
             LayoutShepherdActiveWindow();
         }
 
-        if (oldWindow != null && _viewModel.Tabs.Any(t => t.Model == oldWindow))
-        {
-            _shepherd.Hide(oldWindow);
-        }
+        if (oldWindow != null && !oldWindowHidden && _viewModel.Tabs.Any(t => t.Model == oldWindow))
+            LogHidePending(oldWindow, _shepherd.Hide(oldWindow));
     }
 
     /// <summary>
@@ -2482,8 +2520,26 @@ public partial class ContainerWindow : Window
             foreach (var m in new[] { _splitLeft, _splitRight })
             {
                 if (m != null && m != left && m != right && _viewModel.Tabs.Any(t => t.Model == m))
-                    _shepherd.Hide(m);
+                {
+                    WindowHideOutcome hideOutcome = _shepherd.Hide(m);
+                    LogHidePending(m, hideOutcome);
+                    if (hideOutcome == WindowHideOutcome.RecoveryPending)
+                        return;
+                }
             }
+        }
+
+        // Hide the guest that was visible before the split if it is not one of
+        // the new pair before changing split/model state. A pending hide must
+        // leave the old presentation authoritative instead of creating a
+        // third visible guest beside the new pair.
+        if (priorVisible != null && priorVisible != left && priorVisible != right
+            && _viewModel.Tabs.Any(t => t.Model == priorVisible))
+        {
+            WindowHideOutcome hideOutcome = _shepherd.Hide(priorVisible);
+            LogHidePending(priorVisible, hideOutcome);
+            if (hideOutcome == WindowHideOutcome.RecoveryPending)
+                return;
         }
 
         _splitLeft = left;
@@ -2506,15 +2562,6 @@ public partial class ContainerWindow : Window
         var rightTab = _viewModel.Tabs.FirstOrDefault(t => t.Model == right);
         if (leftTab != null && rightTab != null)
             _viewModel.SetSplitComposite(leftTab, rightTab);
-
-        // Hide the guest that was visible before the split if it is not one of
-        // the new pair (e.g. a third tab the user was viewing). Without this it
-        // would remain visible alongside the two panes -> three visible guests.
-        if (priorVisible != null && priorVisible != left && priorVisible != right
-            && _viewModel.Tabs.Any(t => t.Model == priorVisible))
-        {
-            _shepherd.Hide(priorVisible);
-        }
 
         _log.Log($"SPLIT[enter] left=0x{left.Hwnd.ToInt64():X} right=0x{right.Hwnd.ToInt64():X}");
         DiagnosticRuntime.Record("split.enter", _containerHwnd, left.Hwnd,
@@ -2545,6 +2592,21 @@ public partial class ContainerWindow : Window
             ? keepActive
             : (IsSplitMember(_shepherdActiveWindow) ? _shepherdActiveWindow : oldLeft);
 
+        // Complete every departing-member hide while the split model is still
+        // intact. If identity or journal durability is uncertain, keep split
+        // mode authoritative and re-glue the pair rather than leaving a
+        // departed member visible in the new single-pane presentation.
+        foreach (var m in new[] { oldLeft, oldRight })
+        {
+            if (m != null && m != survivor && _viewModel.Tabs.Any(t => t.Model == m))
+            {
+                WindowHideOutcome hideOutcome = _shepherd.Hide(m);
+                LogHidePending(m, hideOutcome);
+                if (hideOutcome == WindowHideOutcome.RecoveryPending)
+                    return;
+            }
+        }
+
         _splitLeft = null;
         _splitRight = null;
         _splitForeground = null;
@@ -2554,12 +2616,6 @@ public partial class ContainerWindow : Window
 
         // Restore the ordinary one-tab-per-member strip.
         _viewModel.ClearSplitComposite();
-
-        foreach (var m in new[] { oldLeft, oldRight })
-        {
-            if (m != null && m != survivor && _viewModel.Tabs.Any(t => t.Model == m))
-                _shepherd.Hide(m);
-        }
 
         _log.Log("SPLIT[exit]");
         DiagnosticRuntime.Record("split.exit", _containerHwnd, survivor?.Hwnd ?? IntPtr.Zero,

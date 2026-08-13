@@ -448,7 +448,10 @@ The final high-risk smoke set also passed fresh supervised runs of
   hidden after relaunch and must not be resurrected.
 - Repeat with two guests in split, rapid tab switching, and a drag in progress.
 - Check `%APPDATA%\TabDock\state.json` and `hidden-windows.json` are valid JSON
-  after the kill; recycled HWND/PID identities must not be touched.
+  after the kill; recycled HWND/PID identities must not be touched. If an
+  upgraded installation finds a legacy tokenless v1/v2 journal, it must leave
+  the original bytes in `hidden-windows.json.pending*`, report
+  `manual-recovery-pending` from `--doctor`, and perform no native rescue.
 - Create a group without capturing a tab, exit, and relaunch: the empty shell
   must not return. Also exercise a picker attempt where every selected target
   fails; the provisional picker-created group must close and must not be saved.
@@ -459,6 +462,28 @@ The journal is versioned and written through before capture/presentation
 mutation. If its directory is unavailable, startup warns and capture is
 disabled; a memory-only log fallback does not weaken this safety gate.
 
+#### Legacy journal recovery
+
+The current crash journal is schema v3. Historical v1 and v2 files are
+intentionally not auto-restored: they have useful PID/thread/class/executable
+and (for v2) process-start evidence, but no per-capture HWND-generation token,
+so a same-process HWND destroy/recycle cannot be ruled out. Startup moves the
+exact original bytes to `%APPDATA%\TabDock\hidden-windows.json.pending` (or a
+unique numbered sibling), emits a `SHEPHERD[journal-pending]` diagnostic, and
+does not retry it on every launch. Do not delete or edit that file before
+recovery is complete.
+
+For supervised manual recovery, first copy the pending file to a disposable
+backup, run `TabDock.exe --doctor` to record the pending count, and inspect the
+stored PID, executable, class, and (v2) process-start fields against a
+read-only HWND enumeration from a trusted recovery tool. Only after an operator
+confirms the live window is the intended guest should that tool show/restore its
+original placement. Preserve the pending file until the guest is visibly
+standalone; then archive it outside `%APPDATA%\TabDock` and relaunch TabDock.
+If the identity cannot be confirmed, leave the pending evidence intact and
+contact support. This path is deliberately supervised because the old schema
+cannot prove HWND generation the way v3 can.
+
 ### 5. Cross-monitor / DPI
 
 - `GetDpiForMonitor` is intentionally not used: Microsoft documents it as
@@ -467,8 +492,9 @@ disabled; a memory-only log fallback does not weaken this safety gate.
   `Services/MonitorDpiService.cs` and `GetDpiForWindow(helper)`; an unaware
   guest's own `GetDpiForWindow` result of 96 is therefore not used as the
   monitor scale.
-- `--selftest-diagnostics` exercises the injectable DPI probe/conversion seam;
-  it does not pretend to qualify physical mixed-DPI hardware.
+- `--selftest-diagnostics` exercises the injectable DPI helper lifecycle and
+  probe/conversion seams; it does not pretend to qualify physical mixed-DPI
+  hardware.
 - Move a container between monitors with different scaling (e.g. 100% and 150%).
 - Verify the content area re-lays out and the active guest fills it.
 - Maximize on a larger secondary monitor (1440p/4K), including negative monitor

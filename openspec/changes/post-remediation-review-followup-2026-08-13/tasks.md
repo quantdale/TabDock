@@ -23,3 +23,17 @@
 
 - [x] 5.1 Run targeted builds/self-tests and the canonical Release/OpenSpec/diff gates.
 - [x] 5.2 Inspect the complete diff, create one coherent commit, push fast-forward to `origin/main`, and verify hosted CI without a state-only follow-up commit.
+
+
+## 6. Post-remediation safety closure
+
+- [x] 6.1 Separate identity match, positive mismatch, and unverifiable probe
+  outcomes; make release transaction ownership preserve members and journals
+  on uncertainty.
+- [x] 6.2 Bump the crash-journal schema to v3, preserve literal historical v1/v2
+  evidence as pending manual-recovery data, and retain future versions.
+- [x] 6.3 Complete visible/non-iconic/non-zoomed SW_RESTORE post-state checks
+  and deterministic failure fixtures.
+- [x] 6.4 Complete the final state-protocol, CI-runtime, R4/R6 review, and
+  canonical validation gate; query hosted CI dynamically after the substantive
+  content commit without a state-only follow-up.

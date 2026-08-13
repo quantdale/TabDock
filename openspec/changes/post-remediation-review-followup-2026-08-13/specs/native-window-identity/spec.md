@@ -6,7 +6,51 @@ Hide, release, foreground handoff, delayed restore, and recovery operations
 SHALL fail closed unless the live HWND still matches the captured PID, window
 thread, class, executable where required, a nonzero captured process-start
 identity, and the per-capture HWND token. A legacy journal entry without a
-process-start identity or token SHALL be ineligible for recovery mutation.
+process-start identity or token SHALL be ineligible for recovery mutation and
+SHALL remain classified as durable pending/manual-recovery evidence.
+
+#### Scenario: Strong identity is required before a destructive operation
+
+- **WHEN** release, hide, foreground handoff, delayed restore, or recovery is
+  attempted for a captured guest
+- **THEN** the operation SHALL require the applicable strong identity evidence
+  and SHALL perform no native mutation when that evidence is unavailable
+
+### Requirement: Identity verification SHALL distinguish mismatch from uncertainty
+
+The identity gate SHALL expose distinct `Match`, `Mismatch`, and
+`Unverifiable` outcomes. Native mutation SHALL be allowed only for `Match`.
+`Mismatch` requires positive stale/recycled evidence; unavailable or throwing
+required probes SHALL be `Unverifiable`, never an implicit mismatch.
+
+#### Scenario: A strong probe is unavailable
+
+- **WHEN** process-start, executable, class, or another required identity probe
+  cannot be read
+- **THEN** the operation SHALL perform no native mutation, SHALL preserve its
+  recovery journal, and SHALL report a retryable recovery-pending outcome
+
+#### Scenario: A positive mismatch is observed
+
+- **WHEN** PID, GUI thread, class, executable, process-start, or capture token
+  positively differs
+- **THEN** the operation SHALL perform no native mutation and MAY clear only
+  recovery evidence whose complete identity tuple matches the stale object
+
+### Requirement: Release SHALL complete the native transaction before detaching the member
+
+Shepherd SHALL verify identity before release mutation and SHALL return a
+structured release outcome. GroupManager SHALL remove a logical member only
+after release succeeds or positive stale identity is established. An
+unverifiable or partially completed release SHALL retain the member binding,
+preserve durable recovery evidence, and remain retryable.
+
+#### Scenario: Pending release does not detach an external guest silently
+
+- **WHEN** release cannot verify identity or cannot prove native finalization
+- **THEN** the guest SHALL not receive a further possibly-wrong native
+  mutation, the member SHALL remain represented or explicitly marked pending,
+  and its journal SHALL remain available for a later retry
 
 #### Scenario: A same-HWND different-PID replacement is refused
 
@@ -38,6 +82,21 @@ process-start identity or token SHALL be ineligible for recovery mutation.
 
 - **WHEN** all captured identity fields and the live object binding match
 - **THEN** the guarded operation SHALL be admitted
+
+### Requirement: Unverifiable hides SHALL not advance logical presentation
+
+Hide SHALL return an explicit outcome. When identity or journal durability is
+unverifiable, the caller SHALL preserve the captured member and durable
+evidence and SHALL not advance an active-tab or split transition that would
+leave the old guest visible beside a newly logical guest.
+
+#### Scenario: Active-tab switch rolls back after an unverifiable hide
+
+- **WHEN** the outgoing active guest cannot be strongly verified before its
+  hide transaction
+- **THEN** the incoming guest SHALL not be presented as the new active guest,
+  and the old active member SHALL remain the logical active member with its
+  journal available for retry
 
 ### Requirement: Hot layout identity checks SHALL remain bounded
 

@@ -75,7 +75,16 @@ public sealed class HiddenWindowEntry
 /// <summary>Root DTO for %APPDATA%\TabDock\hidden-windows.json.</summary>
 public sealed class HiddenWindowJournalFile
 {
-    public const int CurrentVersion = 2;
+    /// <summary>
+    /// v1: original minimal HWND/PID/executable journal with no explicit
+    /// version field. v2: full presentation and process-start journal from
+    /// the deep-audit remediation. v3: v2 plus GUI-thread and per-capture
+    /// HWND-generation identity fields.
+    /// </summary>
+    public const int CurrentVersion = 3;
+
+    public const int LegacyMinimalVersion = 1;
+    public const int PresentationIdentityVersion = 2;
 
     public int Version { get; set; } = CurrentVersion;
     public List<HiddenWindowEntry> Entries { get; set; } = new();

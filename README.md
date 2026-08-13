@@ -223,7 +223,10 @@ Use this checklist to verify a build before considering it ready.
   TabDock (`taskkill /F`) no longer destroys them. The versioned journal records
   the full reversible presentation state before mutation and restores every
   identity-valid guest on the next launch. A guest that intentionally hides
-  itself receives a durable no-rescue marker and remains hidden.
+  itself receives a durable no-rescue marker and remains hidden. A legacy v1/v2
+  journal without the v3 HWND-generation token is preserved as
+  `hidden-windows.json.pending*` for supervised manual recovery rather than
+  being silently discarded; `--doctor` reports that pending state.
 
 ## Diagnostics
 

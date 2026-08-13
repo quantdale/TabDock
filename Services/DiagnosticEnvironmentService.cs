@@ -134,6 +134,24 @@ public static class DiagnosticEnvironmentService
 
         InspectJsonFile(statePath, isState: true, result);
         InspectJsonFile(journalPath, isState: false, result);
+        try
+        {
+            int pendingCount = Directory.Exists(directory)
+                ? Directory.GetFiles(directory, "hidden-windows.json.pending*").Length
+                : 0;
+            result.PendingJournalFileCount = pendingCount;
+            result.PendingJournalStatus = pendingCount == 0
+                ? "absent"
+                : "manual-recovery-pending";
+        }
+        catch (UnauthorizedAccessException)
+        {
+            result.PendingJournalStatus = "unreadable (access-denied)";
+        }
+        catch (IOException)
+        {
+            result.PendingJournalStatus = "unreadable (io-error)";
+        }
         return result;
     }
 

@@ -6,10 +6,14 @@ namespace TabDock.Services;
 /// </summary>
 internal static class ShowWindowSemantics
 {
-    public static bool RestoreSucceeded(bool previouslyVisible, bool iconicAfter, bool zoomedAfter)
+    public static bool RestoreSucceeded(
+        bool previouslyVisible,
+        bool visibleAfter,
+        bool iconicAfter,
+        bool zoomedAfter)
     {
         _ = previouslyVisible;
-        return !iconicAfter && !zoomedAfter;
+        return visibleAfter && !iconicAfter && !zoomedAfter;
     }
 
     public static bool VisibilitySucceeded(bool previouslyVisible, bool visibleAfter, bool expectedVisible)

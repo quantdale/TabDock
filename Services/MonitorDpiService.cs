@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 
 namespace TabDock.Services;
 
@@ -6,6 +7,64 @@ namespace TabDock.Services;
 internal interface IMonitorDpiProbe
 {
     uint GetEffectiveDpi(IntPtr monitor);
+}
+
+/// <summary>Native lifecycle seam for the PMv2 helper-window probe.</summary>
+internal interface IMonitorDpiNativeApi
+{
+    IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    IntPtr GetThreadDpiAwarenessContext();
+    bool AreDpiAwarenessContextsEqual(IntPtr left, IntPtr right);
+    bool GetMonitorInfo(IntPtr monitor, ref NativeMethods.MONITORINFO info);
+    IntPtr CreateWindowEx(uint exStyle, string className, string title, uint style,
+        int x, int y, int width, int height, IntPtr parent, IntPtr menu,
+        IntPtr instance, IntPtr parameter);
+    IntPtr GetWindowDpiAwarenessContext(IntPtr hwnd);
+    IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+    uint GetDpiForWindow(IntPtr hwnd);
+    bool DestroyWindow(IntPtr hwnd);
+    string FormatLastError();
+}
+
+internal sealed class NativeMonitorDpiNativeApi : IMonitorDpiNativeApi
+{
+    public static NativeMonitorDpiNativeApi Instance { get; } = new();
+
+    private NativeMonitorDpiNativeApi() { }
+
+    public IntPtr SetThreadDpiAwarenessContext(IntPtr context)
+        => NativeMethods.SetThreadDpiAwarenessContext(context);
+
+    public IntPtr GetThreadDpiAwarenessContext()
+        => NativeMethods.GetThreadDpiAwarenessContext();
+
+    public bool AreDpiAwarenessContextsEqual(IntPtr left, IntPtr right)
+        => NativeMethods.AreDpiAwarenessContextsEqual(left, right);
+
+    public bool GetMonitorInfo(IntPtr monitor, ref NativeMethods.MONITORINFO info)
+        => NativeMethods.GetMonitorInfo(monitor, ref info);
+
+    public IntPtr CreateWindowEx(uint exStyle, string className, string title, uint style,
+        int x, int y, int width, int height, IntPtr parent, IntPtr menu,
+        IntPtr instance, IntPtr parameter)
+        => NativeMethods.CreateWindowEx(
+            exStyle, className, title, style, x, y, width, height,
+            parent, menu, instance, parameter);
+
+    public IntPtr GetWindowDpiAwarenessContext(IntPtr hwnd)
+        => NativeMethods.GetWindowDpiAwarenessContext(hwnd);
+
+    public IntPtr MonitorFromWindow(IntPtr hwnd, uint flags)
+        => NativeMethods.MonitorFromWindow(hwnd, flags);
+
+    public uint GetDpiForWindow(IntPtr hwnd)
+        => NativeMethods.GetDpiForWindow(hwnd);
+
+    public bool DestroyWindow(IntPtr hwnd)
+        => NativeMethods.DestroyWindow(hwnd);
+
+    public string FormatLastError()
+        => NativeMethods.FormatLastError();
 }
 
 /// <summary>
@@ -16,16 +75,21 @@ internal interface IMonitorDpiProbe
 /// </summary>
 internal sealed class NativeMonitorDpiProbe : IMonitorDpiProbe
 {
-    public static NativeMonitorDpiProbe Instance { get; } = new();
+    public static NativeMonitorDpiProbe Instance { get; } = new(NativeMonitorDpiNativeApi.Instance);
 
-    private NativeMonitorDpiProbe() { }
+    private readonly IMonitorDpiNativeApi _api;
+
+    internal NativeMonitorDpiProbe(IMonitorDpiNativeApi api)
+    {
+        _api = api;
+    }
 
     public uint GetEffectiveDpi(IntPtr monitor)
     {
         if (monitor == IntPtr.Zero)
             return 0;
 
-        IntPtr previousContext = NativeMethods.SetThreadDpiAwarenessContext(
+        IntPtr previousContext = _api.SetThreadDpiAwarenessContext(
             NativeMethods.DpiAwarenessContextPerMonitorV2);
         if (previousContext == IntPtr.Zero)
             return 0;
@@ -33,8 +97,8 @@ internal sealed class NativeMonitorDpiProbe : IMonitorDpiProbe
         IntPtr helper = IntPtr.Zero;
         try
         {
-            if (!NativeMethods.AreDpiAwarenessContextsEqual(
-                    NativeMethods.GetThreadDpiAwarenessContext(),
+            if (!_api.AreDpiAwarenessContextsEqual(
+                    _api.GetThreadDpiAwarenessContext(),
                     NativeMethods.DpiAwarenessContextPerMonitorV2))
                 return 0;
 
@@ -42,12 +106,12 @@ internal sealed class NativeMonitorDpiProbe : IMonitorDpiProbe
             {
                 cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MONITORINFO>(),
             };
-            if (!NativeMethods.GetMonitorInfo(monitor, ref info))
+            if (!_api.GetMonitorInfo(monitor, ref info))
                 return 0;
 
-            int x = info.rcMonitor.left + (info.rcMonitor.Width / 2);
-            int y = info.rcMonitor.top + (info.rcMonitor.Height / 2);
-            helper = NativeMethods.CreateWindowEx(
+            if (!MonitorDpiGeometry.TryGetCenter(in info.rcMonitor, out int x, out int y))
+                return 0;
+            helper = _api.CreateWindowEx(
                 NativeMethods.WS_EX_TOOLWINDOW | NativeMethods.WS_EX_NOACTIVATE,
                 "STATIC",
                 string.Empty,
@@ -63,25 +127,80 @@ internal sealed class NativeMonitorDpiProbe : IMonitorDpiProbe
             if (helper == IntPtr.Zero)
                 return 0;
 
-            if (!NativeMethods.AreDpiAwarenessContextsEqual(
-                    NativeMethods.GetWindowDpiAwarenessContext(helper),
+            if (!_api.AreDpiAwarenessContextsEqual(
+                    _api.GetWindowDpiAwarenessContext(helper),
                     NativeMethods.DpiAwarenessContextPerMonitorV2))
             {
                 return 0;
             }
 
-            if (NativeMethods.MonitorFromWindow(helper, NativeMethods.MONITOR_DEFAULTTONEAREST) != monitor)
+            if (_api.MonitorFromWindow(helper, NativeMethods.MONITOR_DEFAULTTONEAREST) != monitor)
                 return 0;
 
-            uint dpi = NativeMethods.GetDpiForWindow(helper);
+            uint dpi = _api.GetDpiForWindow(helper);
             return dpi == 0 ? 0 : dpi;
         }
         finally
         {
-            if (helper != IntPtr.Zero)
-                NativeMethods.DestroyWindow(helper);
-            NativeMethods.SetThreadDpiAwarenessContext(previousContext);
+            try
+            {
+                if (helper != IntPtr.Zero && !_api.DestroyWindow(helper))
+                {
+                    string error = _api.FormatLastError();
+                    Debug.WriteLine($"TabDock PMv2 DPI helper DestroyWindow failed for 0x{helper.ToInt64():X}: {error}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"TabDock PMv2 DPI helper DestroyWindow threw: {ex.GetType().Name}");
+            }
+            finally
+            {
+                try
+                {
+                    if (_api.SetThreadDpiAwarenessContext(previousContext) == IntPtr.Zero)
+                        Debug.WriteLine("TabDock PMv2 DPI helper could not restore the previous thread DPI context.");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"TabDock PMv2 DPI helper could not restore the previous thread DPI context: {ex.GetType().Name}");
+                }
+            }
         }
+    }
+}
+
+/// <summary>
+/// Overflow-safe monitor-center calculation used before creating the hidden
+/// helper. Win32 monitor coordinates may be negative; malformed or
+/// non-positive rectangles are unavailable rather than passed to USER32.
+/// </summary>
+internal static class MonitorDpiGeometry
+{
+    public static bool TryGetCenter(in NativeMethods.RECT rect, out int x, out int y)
+    {
+        long width = (long)rect.right - rect.left;
+        long height = (long)rect.bottom - rect.top;
+        if (width <= 0 || height <= 0)
+        {
+            x = 0;
+            y = 0;
+            return false;
+        }
+
+        long centerX = (long)rect.left + (width / 2);
+        long centerY = (long)rect.top + (height / 2);
+        if (centerX < int.MinValue || centerX > int.MaxValue
+            || centerY < int.MinValue || centerY > int.MaxValue)
+        {
+            x = 0;
+            y = 0;
+            return false;
+        }
+
+        x = (int)centerX;
+        y = (int)centerY;
+        return true;
     }
 }
 

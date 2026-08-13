@@ -894,3 +894,186 @@ green. Remaining work is supervised session-ending cancellation, multi-monitor
 qualification, unavailable Chrome coverage, and the documented split-render
 desktop activation qualification; these cannot be completed safely or
 honestly on the current desktop.
+
+## Post-remediation safety closure
+
+This section tracks the narrow follow-up against the verified pre-closure
+baseline. Git remains authoritative for live refs and worktree state; the
+embedded baseline is historical evidence only and is not a claim about the
+commit containing this record.
+
+### Initial reconciliation checkpoint
+
+- Verified dynamically after `git fetch origin`: branch `main` was clean and
+  local `HEAD` equaled `origin/main` at the pre-closure baseline
+  `f4f953c962549726c8362b94e93538b9ea85b750`; no remote advancement or
+  unrelated worktree changes were present.
+- Active OpenSpec change
+  `post-remediation-review-followup-2026-08-13` is planning-complete with
+  its prior 11 tasks already checked off; this campaign extends the source
+  safety boundary discovered in independent review rather than reopening the
+  completed audit.
+- R7 confirmed: the strong identity bool currently merges positive mismatch
+  with probe unavailability, and `Release` clears the journal after refusing
+  native work. `GroupManager` removes the logical member before that call.
+- R8 confirmed from Git history: c6b119a/f1dc7ab v2 contains the full
+  presentation/process-start journal but not thread or per-capture token;
+  f4f953c adds those fields without bumping the journal schema.
+- R9 confirmed: `RestoreSucceeded` checks only iconic/zoomed post-state and
+  omits post-restore visibility. R10 remains operationally stale after the
+  prior push. R11 requires current official action-runtime guidance review.
+- R4 token ordering/lifetime and R6 PMv2 helper cleanup are under focused
+  regression review while R7/R8 are implemented; no invariant is being
+  intentionally redesigned.
+
+### Safety-closure design checkpoint
+
+- Identity checks will return explicit `Match`, `Mismatch`, or
+  `Unverifiable`. Exceptions and unavailable executable/process-start/class
+  probes are `Unverifiable`; positive identity differences and a gone HWND
+  are `Mismatch`. Neither non-match permits native mutation.
+- Release will return a structured outcome. It verifies before mutation,
+  clears a journal only for a positive stale/recycled identity or a proven
+  complete restoration, and retains both journal and logical member for an
+  unverifiable/partial release so retry remains possible. Group collections
+  will mutate only after a safe release outcome.
+- Journal schema semantics will be explicit: historical v1 is the minimal
+  no-version HWND/PID/executable journal; historical v2 is the full
+  process-start/presentation journal from c6b119a; v3 is the current
+  thread/token schema. Tokenless v1/v2 and malformed v3 entries will be
+  preserved in named pending evidence without automatic native mutation or
+  unbounded startup retries. Future versions remain untouched.
+
+### Next three actions
+
+1. Implement and self-test the tri-state identity/release transaction,
+   including journal preservation and emergency/close-group behavior.
+2. Implement v3 journal classification/migration with literal historical
+   fixtures, then complete the ShowWindow post-state and R4/R6 reviews.
+3. Run targeted and canonical gates, update the compact state protocol,
+   commit once, push a normal fast-forward to `origin/main`, and verify the
+   hosted workflow for the resulting SHA.
+
+### R7 implementation and validation checkpoint
+
+- Implemented `WindowIdentityResult.Match`, `.Mismatch`, and
+  `.Unverifiable`; strong probe failures now remain uncertainty rather than
+  becoming stale-identity proof. All callers still use the bool wrapper only
+  where a mutation gate needs the `Match` result.
+- `WindowShepherdService.Release` now verifies before mutation and returns a
+  structured outcome. `RecoveryPending` performs no native mutation, clears no
+  journal, and keeps the captured binding. Positive mismatch performs no native
+  mutation, clears only the complete old journal identity tuple, and unbinds
+  the old object. GroupManager mutates its member collection only after a safe
+  release outcome; close/emergency paths continue cleaning independent members.
+- Deterministic R7 coverage includes valid release, PID/thread/token/class/
+  executable/process-start mismatches, unavailable/throwing strong probes,
+  same-HWND replacement journal isolation, hidden/visible pending release,
+  emergency continuation, and later retry. The diagnostic command currently
+  passes 105 checks with 0 failures.
+
+### R8 schema design checkpoint
+
+- Historical source inspection confirms v1 was the original minimal
+  no-explicit-version HWND/PID/executable journal, while c6b119a/f1dc7ab v2
+  added class, process-start, presentation, transition, and no-rescue fields.
+  The new thread ID and capture-generation token therefore require v3.
+- The compatibility policy is conservative: v1/v2 tokenless evidence is
+  classified as legacy/manual-recovery pending, written durably to a unique
+  `.pending` sidecar before the active path is removed, and never auto-mutated.
+  Incomplete v3 entries use the same explicit pending classification. Future
+  v4+ data stays untouched. Current v3 rescue uses tri-state identity and
+  retains unverifiable entries for bounded retry.
+- Literal historical v1/v2 JSON fixtures and v3/future/malformed/mixed-entry
+  cases are implemented; migration/recovery validation is the next checkpoint.
+
+### R8 migration/recovery validation checkpoint
+
+- Schema v3 is implemented with explicit v1/v2/v3 semantics. Legacy v1/v2
+  bytes are durably moved to unique `hidden-windows.json.pending*` evidence
+  for supervised recovery; incomplete v3 entries use the same path, future
+  versions remain untouched, and current v3 uncertainty remains retryable.
+- Literal fixtures cover historical v1, historical v2 without the new fields,
+  valid v3, future v4, malformed JSON, missing-token v3, mixed v3 entries,
+  positive token mismatch, unavailable process-start retry, and a legacy read
+  that cannot be downgraded or overwritten by release cleanup.
+- Exact validation: diagnostics self-test `109 checks / 0 failures`; Release
+  solution build and ValidationDriver build both passed with zero warnings or
+  errors; `openspec validate --all --no-interactive` passed `16/16`.
+- R9 visible/non-iconic/non-zoomed restore semantics and deterministic failure
+  fixtures are implemented. R10 now describes repository-content status and
+  dynamic Git/CI handoff; R11 uses current stable Node-24 action runtimes while
+  retaining the pinned OpenSpec Node >=20.19-compatible CLI runtime. Focused
+  R4/R6 source review found no architecture regression.
+- Next three actions: run the canonical `validate.ps1 -Configuration Release
+  -Ci -Publish` gate and publish/self-test smokes; perform final diff,
+  hygiene, and durable-state checkpoint; commit/push once and verify the exact
+  hosted workflow run.
+
+### R9 and durable-state checkpoint
+
+- R9 is complete: `SW_RESTORE` success requires visible, non-iconic, and
+  non-zoomed post-state; all restore/show/hide/release callers verify observed
+  state, and deterministic fixtures cover benign false returns and genuine
+  hidden/iconic/zoomed failures.
+- The R7 boundary is complete across hide, release, foreground/bring-to-front,
+  delayed restore, min-track, lifecycle, journal cleanup, group release, close,
+  emergency release, session-ending normalization, and WinEvent teardown.
+  Unverifiable hide now returns `RecoveryPending`; active-tab transitions roll
+  back and split transitions retain their prior logical mode.
+- R6/M8 review is complete: the PMv2 helper uses a predefined hidden STATIC
+  popup with `WS_EX_NOACTIVATE`, overflow-safe monitor-center math, monitor
+  identity verification, `GetDpiForWindow`, and `finally` cleanup. The native
+  lifecycle seam covers context/helper cleanup paths; the available runtime
+  smoke reports monitor DPI status `ok` at 96 DPI. No `GetDpiForMonitor` call,
+  guest reparenting, `AttachThreadInput`, or `HWND_BOTTOM` regression exists.
+- R10 is now future-proof: it records repository-content status and conditional
+  Git/CI handoff rules, with no self-SHA or guaranteed-stale post-push command.
+  R11 safely moved checkout/setup-dotnet/setup-node to current Node-24 action
+  runtimes while retaining the pinned OpenSpec CLI's Node >=20.19 contract.
+- Exact latest validation: canonical Release `validate.ps1 -Configuration
+  Release -Ci -Publish` passed; diagnostics `111/0`; OpenSpec `16/16`;
+  solution and ValidationDriver Release builds passed with zero warnings/errors;
+  NuGet audit and support-bundle privacy passed; published version smoke passed.
+- Next three actions (conditional on Git state): inspect complete diff and
+  hygiene; record the final pre-commit checkpoint and mark the closure task
+  complete; create/push one substantive commit only if content is uncommitted,
+  then verify the exact hosted workflow run without a state-only follow-up.
+
+### Pre-commit acceptance checkpoint
+
+- R7 acceptance: explicit `Match`/`Mismatch`/`Unverifiable` outcomes are used;
+  only `Match` permits native mutation; uncertain hide/release retains the
+  captured member and durable journal; positive mismatch cleanup is scoped to
+  the complete old identity tuple; deterministic release, emergency, and
+  retry tests pass. Group close retains a pending member, continues releasing
+  safe members, and does not activate the pending guest while reporting the
+  incomplete transaction.
+- R8 acceptance: current schema is v3; literal historical v1/v2 evidence is
+  preserved as exact-byte pending manual-recovery data; incomplete v3 data is
+  not silently consumed; future versions remain untouched; no legacy read can
+  downgrade a write.
+- R9 acceptance: restore success requires visible, non-iconic, and non-zoomed
+  post-state; restore, split, and delayed-minimize paths use that contract;
+  deterministic benign-return and genuine-failure fixtures pass.
+- R10/R11 acceptance: `.agent/STATE.md` describes repository-content status
+  and dynamic Git/CI handoff; the workflow uses current Node-24 action hosts
+  while the pinned OpenSpec CLI remains Node >=20.19 compatible.
+- R4/R6 acceptance: token ordering/lifetime, exact-token cleanup, hot/slow
+  identity tiers, and PMv2 helper/context cleanup are covered; the available
+  monitor smoke reports a nonzero 96-DPI result; no Shepherd or z-order
+  architecture invariant regressed.
+- Exact latest local validation after the final focused cleanup: Debug app
+  build passed with 0 warnings/errors; diagnostics self-test passed `111/0`;
+  the canonical Release/publish/NuGet/privacy/version/doctor gate passed;
+  OpenSpec passed `16/16`; and `git diff --check` passed. No test processes
+  remain and no generated artifacts or personal state are in the worktree.
+- Repository-content status is complete. The only remaining handoff action is
+  dynamic Git verification, one normal fast-forward substantive commit/push
+  if the content is still uncommitted, and hosted CI inspection for that exact
+  SHA. Do not create a state-only commit afterward.
+- Next 3 concrete actions:
+  1. Inspect the complete staged-equivalent diff and hygiene.
+  2. Create the single coherent substantive commit and push `main` normally.
+  3. Fetch refs and verify the exact hosted workflow run; fix only a real
+     hosted defect, then stop committing once green.

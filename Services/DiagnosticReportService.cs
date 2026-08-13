@@ -126,6 +126,7 @@ public static class DiagnosticReportService
         builder.AppendLine("[persistence]");
         builder.AppendLine($"state={report.Persistence.StateStatus} schemaVersion={report.Persistence.SchemaVersion?.ToString() ?? "unavailable"} groupCount={report.Persistence.GroupCount} persistedMemberMetadataCount={report.Persistence.PersistedMemberMetadataCount}");
         builder.AppendLine($"journal={report.Persistence.JournalStatus} journalEntryCount={report.Persistence.JournalEntryCount?.ToString() ?? "unavailable"} logExists={report.Persistence.LogExists}");
+        builder.AppendLine($"pendingJournal={report.Persistence.PendingJournalStatus} pendingJournalFileCount={report.Persistence.PendingJournalFileCount}");
         builder.AppendLine();
         builder.AppendLine("[tabdock-processes]");
         if (report.TabDockProcesses.Count == 0)

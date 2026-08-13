@@ -370,11 +370,13 @@ placeholders until the user repopulates or deletes them.
 - **Two-tier native window identity.** Hot layout paths check `IsWindow`, PID,
   GUI thread, class, the live `CapturedWindow` binding, and the zero-allocation
   HWND token. Slow/destructive/delayed paths add executable path and native
-  `GetProcessTimes` process-start identity. Crash rescue retains the strict
-  process-start gate and requires/verifies/removes the journaled HWND token;
-  entries without that generation token are skipped. This distinguishes PID
-  reuse and same-process HWND recycling without managed `Process` allocation
-  on layout ticks.
+  `GetProcessTimes` process-start identity. The gate returns explicit
+  `Match`, `Mismatch`, or `Unverifiable` outcomes: only `Match` permits native
+  mutation, while uncertainty preserves recovery evidence. Crash rescue
+  requires/verifies/removes the journaled HWND token; historical tokenless
+  journals are retained as named manual-recovery evidence rather than
+  discarded or auto-mutated. This distinguishes PID reuse and same-process
+  HWND recycling without managed `Process` allocation on layout ticks.
   The hot tier is limited to `PositionAndShow`, `PositionGuest`,
   `PositionGuestsDeferred`, and z-order re-glue. The strong tier is used for
   `Hide`, `Release`, `BringToFront`/foreground handoff, delayed minimized
@@ -481,9 +483,12 @@ across launches.
 ### `hidden-windows.json` — crash-recovery journal
 
 `WindowShepherdService` (`WindowShepherdService.cs`). Entries are a versioned
-capture-session record containing HWND, PID, executable identity, window class,
-process-start identity, original visibility, full `WINDOWPLACEMENT`/show state,
-and the original DWM transition-suppression state. Ordering rules:
+capture-session record containing HWND, PID, GUI-thread identity, executable
+identity, window class, process-start identity, a per-capture HWND-generation
+token, original visibility, full `WINDOWPLACEMENT`/show state, and the original
+DWM transition-suppression state. Current schema v3 is distinct from the
+historical v1 minimal journal and v2 full presentation/process-start journal.
+Ordering rules:
 
 - **Journal before dangerous mutation** — capture writes the complete original
   state synchronously with write-through flushing before DWM suppression,
@@ -493,15 +498,20 @@ and the original DWM transition-suppression state. Ordering rules:
 - **Intentional self-hide is distinct** — a guest-initiated tray-style hide
   receives a durable `DoNotRescue` marker and is not resurrected on the next
   launch. Failed journal writes fail closed and do not hide the guest.
-- **Release clears only after restore** — placement, show state, visibility,
-  and DWM transition state are restored first; the entry is removed only after
-  the required native operations succeed. `FlushJournal` is a synchronous
-  finalization guard, not a debounce timer.
+- **Release clears only after restore** — Shepherd verifies the complete
+  identity before touching the guest, restores placement, show state,
+  visibility, and DWM transition state first, and removes the entry only after
+  the required native operations succeed. A positive mismatch may clear only
+  the exact old identity tuple; an unverifiable probe retains the journal and
+  logical member for retry. `FlushJournal` is a synchronous finalization
+  guard, not a debounce timer.
 - **`RescueOrphanedWindows`** validates HWND, PID, executable path, class, and
   process-start identity before touching a window. It restores the full recorded
   presentation state, verifies visibility where applicable, and retains failed
   identity-valid entries for retry. Recycled HWNDs are never touched; stale or
-  corrupt journal evidence is quarantined/preserved.
+  corrupt journal evidence is quarantined/preserved. Legacy v1/v2 entries and
+  incomplete v3 entries are written to a durable `hidden-windows.json.pending*`
+  sidecar with a manual-recovery diagnostic; they are never silently deleted.
 
 If durable journal storage is unavailable, startup warns the user and capture
 is disabled. Logging can fall back to a bounded in-memory tail and layout
