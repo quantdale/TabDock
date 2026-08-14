@@ -221,7 +221,9 @@ internal static class DiagnosticSelfTest
         Check(DiagnosticEnvironmentService.ClassifyJsonText("{\"Version\":1,\"Groups\":[]}", isState: true) == "valid");
         Check(DiagnosticEnvironmentService.ClassifyJsonText("not-json", isState: true).StartsWith("corrupt", StringComparison.Ordinal));
         Check(ConsoleSessionSelfTest.UsesScopedStreams());
+        Check(ProductMutationLeaseSelfTest.UserScopedNameRules());
         Check(ProductMutationLeaseSelfTest.ExclusiveAndReusable());
+        Check(ProductMutationLeaseSelfTest.DifferentUserScopedLeasesCanCoexist());
         Check(DeferredWindowPositionSelfTest.ChangedHandlesAreChained());
         Check(DeferredWindowPositionSelfTest.FailedDeferAbandonsWithoutEnd());
         Check(DeferredWindowPositionSelfTest.StaleGuestIsNotQueuedAndValidHdwpIsClosed());

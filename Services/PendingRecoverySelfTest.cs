@@ -29,6 +29,7 @@ internal static class PendingRecoverySelfTest
         Check(V1AndV2EvidenceIsDiscovered());
         Check(MultipleFilesAndEntriesAreListed());
         Check(MalformedFutureAndInaccessibleEvidenceIsRetained());
+        Check(MalformedRecoveryLedgerIsRetained());
         Check(HistoricalFieldsMustMatch());
         Check(UserCancellationDoesNotMutate());
         Check(V1RecoveryIsVisibilityOnly());
@@ -36,16 +37,24 @@ internal static class PendingRecoverySelfTest
         Check(RecoveryFailuresRetainEvidence());
         Check(GenerationChangesStopLaterMutations());
         Check(SuccessfulRecoveryRetiresOneEntryOnly());
+        Check(InterruptedSiblingSurvivesSiblingRetirement());
+        Check(InterruptedFirstSiblingSurvivesReverseRetirement());
+        Check(ThreeSiblingIndicesRemainStable());
         Check(DuplicateEntriesDoNotCollapseSiblingEvidence());
+        Check(OldRewrittenLedgerRebindsOnlyWhenUnique());
+        Check(OldRewrittenLedgerWithDuplicateSurvivorsFailsClosed());
         Check(ResolvedEntryRetirementCanBeRetried());
         Check(ExistingTokensRefuseRecovery());
         Check(DoNotRescueNeverResurrectsGuest());
         Check(DoNotRescueWithoutRecordedTransitionStateStillCleansDwm());
         Check(RecoveryTransactionFaultsAreResumable());
+        Check(ResolutionMarkerAndFinalRetirementFaultsAreResumable());
+        Check(CompletedRecoveryIdentityCasesAreDiskOnly());
         Check(InterruptedInteractiveRecoveryResumesAndRetires());
         Check(RetirementFaultPreservesSiblingEvidence());
         Check(RandomRecoveryTokenIsDurableAndNonzero());
         Check(RecoveryTitlesAreTerminalSafe());
+        Check(RecoveryConsoleFieldsAreTerminalSafe());
         return (checks, failures);
     }
 
@@ -147,6 +156,34 @@ internal static class PendingRecoverySelfTest
                 && inaccessible.Error == "unreadable (not-a-directory)"
                 && File.Exists(Path.Combine(root, "hidden-windows.json.pending"))
                 && File.Exists(Path.Combine(root, "hidden-windows.json.pending.001"));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static bool MalformedRecoveryLedgerIsRetained()
+    {
+        string root = CreateRoot();
+        try
+        {
+            string path = Path.Combine(root, "hidden-windows.json.pending");
+            File.WriteAllText(path, JournalJson(2, EntryV2(450, 65, "ledger-corrupt.exe", 6501)));
+            File.WriteAllText(path + ".recovered", "{");
+            var api = new FakePendingApi(Target.For(450, 65, 1065, "ledger-corrupt.exe", "Modern", 6501));
+            PendingRecoveryCatalog catalog = PendingRecoveryService.Discover(root, api);
+            int result = PendingRecoveryService.RunInteractive(
+                new StringReader(string.Empty),
+                new StringWriter(),
+                root,
+                api,
+                Array.Empty<PendingRecoveryCandidate>());
+            return catalog.Files.Single().Status.StartsWith("unreadable (recovery-ledger):", StringComparison.Ordinal)
+                && result == 2
+                && File.Exists(path)
+                && File.Exists(path + ".recovered")
+                && api.MutationCount == 0;
         }
         finally
         {
@@ -367,8 +404,9 @@ internal static class PendingRecoverySelfTest
             PendingRecoveryCatalog after = PendingRecoveryService.Discover(root, api);
             return result == 0
                 && after.Files.Count == 1
-                && after.Files[0].Entries.Count == 1
-                && after.Files[0].Entries[0].Entry.Hwnd == 1101
+                && after.Files[0].Entries.Count == 2
+                && after.Files[0].Entries.Single(entry => entry.Entry.Hwnd == 1100).AlreadyResolved
+                && !after.Files[0].Entries.Single(entry => entry.Entry.Hwnd == 1101).AlreadyResolved
                 && File.Exists(path + ".recovered")
                 && File.ReadAllText(path).Contains("unknown-root-field", StringComparison.Ordinal);
         }
@@ -432,9 +470,176 @@ internal static class PendingRecoverySelfTest
             int result = PendingRecoveryService.RunInteractive(input, output, root, api, new[] { candidate });
             PendingRecoveryCatalog after = PendingRecoveryService.Discover(root, api);
             return result == 0
-                && after.Files.Single().Entries.Count == 1
-                && !after.Files.Single().Entries[0].AlreadyResolved
-                && after.Files.Single().Entries[0].Status == "unverifiable-transaction";
+                && after.Files.Single().Entries.Count == 2
+                && after.Files.Single().Entries.Single(entry => entry.EntryIndex == 0).AlreadyResolved
+                && !after.Files.Single().Entries.Single(entry => entry.EntryIndex == 1).AlreadyResolved
+                && after.Files.Single().Entries.Single(entry => entry.EntryIndex == 1).Status == "potentially-recoverable"
+                && after.Files.Single().Entries.Single(entry => entry.EntryIndex == 1).Transaction == null
+                && File.ReadAllText(path).Contains("unknown-root-field", StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static bool InterruptedSiblingSurvivesSiblingRetirement()
+    {
+        string root = CreateRoot();
+        try
+        {
+            string path = Path.Combine(root, "hidden-windows.json.pending");
+            File.WriteAllText(path, JournalJson(2,
+                EntryV2(1160, 136, "first-sibling.exe", 13601),
+                EntryV2(1161, 137, "interrupted-sibling.exe", 13701)));
+            var api = new FakePendingApi(
+                Target.For(1160, 136, 1136, "first-sibling.exe", "Modern", 13601),
+                Target.For(1161, 137, 1137, "interrupted-sibling.exe", "Modern", 13701));
+            PendingRecoveryEntry interrupted = PendingRecoveryService.Discover(root, api).Files.Single().Entries[1];
+            bool prepared = FaultAfterStage(interrupted, api, "after-setprop", 0x5161);
+            PendingRecoveryEntry first = PendingRecoveryService.Discover(root, api).Files.Single().Entries[0];
+            int result = RunInteractiveFor(first, api, root);
+            PendingRecoveryEntry[] after = PendingRecoveryService.Discover(root, api).Files.Single().Entries.ToArray();
+            PendingRecoveryEntry survivor = after.Single(entry => entry.Entry.Hwnd == 1161);
+            bool supported = prepared
+                && result == 0
+                && File.Exists(path)
+                && survivor.EntryIndex == 1
+                && survivor.Status == "interrupted-transaction"
+                && survivor.Transaction != null
+                && survivor.Transaction.RecoveryToken == new IntPtr(0x5161).ToInt64()
+                && api.Targets[new IntPtr(1161)].RecoveryToken != IntPtr.Zero;
+            int resumed = supported ? RunInteractiveFor(survivor, api, root) : 2;
+            return supported && resumed == 0 && !File.Exists(path);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static bool InterruptedFirstSiblingSurvivesReverseRetirement()
+    {
+        string root = CreateRoot();
+        try
+        {
+            string path = Path.Combine(root, "hidden-windows.json.pending");
+            File.WriteAllText(path, JournalJson(2,
+                EntryV2(1170, 138, "interrupted-first.exe", 13801),
+                EntryV2(1171, 139, "second-sibling.exe", 13901)));
+            var api = new FakePendingApi(
+                Target.For(1170, 138, 1138, "interrupted-first.exe", "Modern", 13801),
+                Target.For(1171, 139, 1139, "second-sibling.exe", "Modern", 13901));
+            PendingRecoveryEntry interrupted = PendingRecoveryService.Discover(root, api).Files.Single().Entries[0];
+            bool prepared = FaultAfterStage(interrupted, api, "after-setprop", 0x5170);
+            PendingRecoveryEntry second = PendingRecoveryService.Discover(root, api).Files.Single().Entries[1];
+            int result = RunInteractiveFor(second, api, root);
+            PendingRecoveryEntry[] after = PendingRecoveryService.Discover(root, api).Files.Single().Entries.ToArray();
+            PendingRecoveryEntry survivor = after.Single(entry => entry.Entry.Hwnd == 1170);
+            bool supported = prepared
+                && result == 0
+                && File.Exists(path)
+                && survivor.EntryIndex == 0
+                && survivor.Status == "interrupted-transaction"
+                && survivor.Transaction != null
+                && survivor.Transaction.RecoveryToken == new IntPtr(0x5170).ToInt64();
+            int resumed = supported ? RunInteractiveFor(survivor, api, root) : 2;
+            return supported && resumed == 0 && !File.Exists(path);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static bool ThreeSiblingIndicesRemainStable()
+    {
+        string root = CreateRoot();
+        try
+        {
+            string path = Path.Combine(root, "hidden-windows.json.pending");
+            File.WriteAllText(path, JournalJson(2,
+                EntryV2(1180, 140, "first-of-three.exe", 14001),
+                EntryV2(1181, 141, "middle-of-three.exe", 14101),
+                EntryV2(1182, 142, "last-of-three.exe", 14201)));
+            string before = File.ReadAllText(path);
+            var api = new FakePendingApi(
+                Target.For(1180, 140, 1140, "first-of-three.exe", "Modern", 14001),
+                Target.For(1181, 141, 1141, "middle-of-three.exe", "Modern", 14101),
+                Target.For(1182, 142, 1142, "last-of-three.exe", "Modern", 14201));
+            PendingRecoveryEntry middle = PendingRecoveryService.Discover(root, api).Files.Single().Entries[1];
+            int result = RunInteractiveFor(middle, api, root);
+            PendingRecoveryEntry[] after = PendingRecoveryService.Discover(root, api).Files.Single().Entries.ToArray();
+            return result == 0
+                && before == File.ReadAllText(path)
+                && after.Length == 3
+                && after.Single(entry => entry.Entry.Hwnd == 1180).EntryIndex == 0
+                && after.Single(entry => entry.Entry.Hwnd == 1181).AlreadyResolved
+                && after.Single(entry => entry.Entry.Hwnd == 1182).EntryIndex == 2;
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static bool OldRewrittenLedgerRebindsOnlyWhenUnique()
+    {
+        string root = CreateRoot();
+        try
+        {
+            string path = Path.Combine(root, "hidden-windows.json.pending");
+            File.WriteAllText(path, JournalJson(2,
+                EntryV2(1190, 143, "removed-before-rebind.exe", 14301),
+                EntryV2(1191, 144, "unique-rebind.exe", 14401),
+                EntryV2(1192, 145, "other-rebind.exe", 14501)));
+            var api = new FakePendingApi(
+                Target.For(1190, 143, 1143, "removed-before-rebind.exe", "Modern", 14301),
+                Target.For(1191, 144, 1144, "unique-rebind.exe", "Modern", 14401),
+                Target.For(1192, 145, 1145, "other-rebind.exe", "Modern", 14501));
+            PendingRecoveryEntry oldEntry = PendingRecoveryService.Discover(root, api).Files.Single().Entries[1];
+            if (!FaultAfterStage(oldEntry, api, "after-setprop", 0x5191))
+                return false;
+            RemoveFirstPendingEntry(path);
+            PendingRecoveryEntry rebound = PendingRecoveryService.Discover(root, api).Files.Single().Entries[0];
+            int result = RunInteractiveFor(rebound, api, root);
+            PendingRecoveryEntry[] after = PendingRecoveryService.Discover(root, api).Files.Single().Entries.ToArray();
+            return rebound.TransactionNeedsRebind
+                && rebound.Status == "interrupted-transaction"
+                && result == 0
+                && File.Exists(path)
+                && File.Exists(path + ".recovered")
+                && after.Single(entry => entry.Entry.Hwnd == 1191).AlreadyResolved
+                && after.Single(entry => entry.Entry.Hwnd == 1192).EntryIndex == 1
+                && api.Targets[new IntPtr(1191)].RecoveryToken == IntPtr.Zero;
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static bool OldRewrittenLedgerWithDuplicateSurvivorsFailsClosed()
+    {
+        string root = CreateRoot();
+        try
+        {
+            string path = Path.Combine(root, "hidden-windows.json.pending");
+            JsonObject duplicate = EntryV2(1201, 146, "duplicate-rebind.exe", 14601);
+            File.WriteAllText(path, JournalJson(2,
+                JsonNode.Parse(duplicate.ToJsonString())!.AsObject(),
+                JsonNode.Parse(duplicate.ToJsonString())!.AsObject(),
+                JsonNode.Parse(duplicate.ToJsonString())!.AsObject()));
+            var api = new FakePendingApi(Target.For(1201, 146, 1146, "duplicate-rebind.exe", "Modern", 14601));
+            PendingRecoveryEntry oldEntry = PendingRecoveryService.Discover(root, api).Files.Single().Entries[0];
+            if (!FaultAfterStage(oldEntry, api, "after-setprop", 0x5201))
+                return false;
+            RemoveFirstPendingEntry(path);
+            PendingRecoveryEntry[] survivors = PendingRecoveryService.Discover(root, api).Files.Single().Entries.ToArray();
+            return survivors.Length == 2
+                && survivors.All(entry => entry.Status == "unverifiable-transaction")
+                && survivors.All(entry => entry.Transaction == null)
+                && api.Targets[new IntPtr(1201)].RecoveryToken == new IntPtr(0x5201);
         }
         finally
         {
@@ -588,6 +793,224 @@ internal static class PendingRecoverySelfTest
             && sanitized.Contains("中文", StringComparison.Ordinal);
     }
 
+    private static bool RecoveryConsoleFieldsAreTerminalSafe()
+    {
+        string root = CreateRoot();
+        try
+        {
+            string path = Path.Combine(root, "hidden-windows.json.pending");
+            string hostileExe = "C:\\Apps\\bad\u001B[31m.exe\r\n";
+            string hostileClass = "Class\u001B]0;spoof\u0007\t\u0085";
+            JsonObject entryJson = EntryV2(1480, 190, hostileExe, 19001);
+            entryJson["ClassName"] = hostileClass;
+            File.WriteAllText(path, JournalJson(2, entryJson));
+            var api = new FakePendingApi(Target.For(1480, 190, 1190, hostileExe, hostileClass, 19001));
+            PendingRecoveryEntry entry = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
+            PendingRecoveryCandidate candidate = new()
+            {
+                CandidateId = "C001",
+                Hwnd = new IntPtr(1480),
+                ProcessId = 190,
+                WindowThreadId = 1190,
+                ExePath = hostileExe,
+                ClassName = hostileClass,
+                ProcessStartTimeUtcTicks = 19001,
+                Title = "title\u001B[2J\u001B]52;c;secret\u0007\r\n\t\u0080\u007F\u2028\u2029 😀 中文",
+            };
+            using var output = new StringWriter();
+            using var input = new StringReader("P01-E001\nC001\nNO\n");
+            int result = PendingRecoveryService.RunInteractive(input, output, root, api, new[] { candidate });
+            string rendered = output.ToString();
+            string displayFields = rendered.Replace("\r\n", string.Empty, StringComparison.Ordinal)
+                .Replace("\r", string.Empty, StringComparison.Ordinal)
+                .Replace("\n", string.Empty, StringComparison.Ordinal);
+            bool safe = displayFields.EnumerateRunes().All(rune =>
+            {
+                int scalar = rune.Value;
+                return scalar > 0x1F
+                    && scalar != 0x7F
+                    && (scalar < 0x80 || scalar > 0x9F)
+                    && scalar != 0x2028
+                    && scalar != 0x2029;
+            });
+            return result == 1
+                && safe
+                && rendered.Contains("😀", StringComparison.Ordinal)
+                && rendered.Contains("中文", StringComparison.Ordinal)
+                && File.Exists(path)
+                && api.MutationCount == 0;
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static bool ResolutionMarkerAndFinalRetirementFaultsAreResumable()
+    {
+        bool marker = RunPostResolutionFaultCase("after-resolution-marker", expectPendingAfterFault: true);
+        bool finalRetirement = RunPostResolutionFaultCase("after-retirement", expectPendingAfterFault: false);
+        return marker && finalRetirement;
+    }
+
+    private static bool RunPostResolutionFaultCase(string stage, bool expectPendingAfterFault)
+    {
+        string root = CreateRoot();
+        try
+        {
+            string path = Path.Combine(root, "hidden-windows.json.pending");
+            File.WriteAllText(path, JournalJson(2, EntryV2(1420, 182, "post-resolution.exe", 18201)));
+            var api = new FakePendingApi(Target.For(1420, 182, 1182, "post-resolution.exe", "Modern", 18201));
+            PendingRecoveryEntry entry = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
+            bool injected = false;
+            try
+            {
+                RunInteractiveForWithFault(entry, api, root, stage);
+            }
+            catch (Exception ex) when (ex.Message.Contains("Injected recovery fault", StringComparison.Ordinal))
+            {
+                injected = true;
+            }
+
+            bool pendingAfterFault = File.Exists(path);
+            int retry = PendingRecoveryService.RunInteractive(
+                new StringReader(string.Empty),
+                new StringWriter(),
+                root,
+                api,
+                Array.Empty<PendingRecoveryCandidate>());
+            return injected
+                && pendingAfterFault == expectPendingAfterFault
+                && retry == 0
+                && !File.Exists(path)
+                && api.PlacementCount == 1
+                && api.ShowCount == 1
+                && api.TransitionCount == 1;
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static void RunInteractiveForWithFault(
+        PendingRecoveryEntry entry,
+        FakePendingApi api,
+        string root,
+        string stage)
+    {
+        PendingRecoveryCandidate candidate = CandidateFor(entry, "C001");
+        using var input = new StringReader($"{entry.SessionId}\n{candidate.CandidateId}\nYES\n");
+        using var output = new StringWriter();
+        PendingRecoveryService.RunInteractive(
+            input,
+            output,
+            root,
+            api,
+            new[] { candidate },
+            faultInjector: value => value == stage);
+    }
+
+    private static bool CompletedRecoveryIdentityCasesAreDiskOnly()
+    {
+        bool exactToken = RunCompletedCleanupCase(
+            1430,
+            target => { },
+            expectedResult: 0,
+            expectedFile: false,
+            expectedRemoveCount: 1);
+        bool exactTokenAlreadyGone = RunCompletedCleanupCase(
+            1431,
+            target => target.RecoveryToken = IntPtr.Zero,
+            expectedResult: 0,
+            expectedFile: false,
+            expectedRemoveCount: 0);
+        bool destroyed = RunCompletedCleanupCase(
+            1432,
+            target => target.Exists = false,
+            expectedResult: 0,
+            expectedFile: false,
+            expectedRemoveCount: 0);
+        bool replacedByPid = RunCompletedCleanupCase(
+            1433,
+            target =>
+            {
+                target.Pid = 2433;
+                target.ThreadId = 3433;
+                target.Exe = "replacement.exe";
+                target.RecoveryToken = new IntPtr(0x7333);
+            },
+            expectedResult: 0,
+            expectedFile: false,
+            expectedRemoveCount: 0,
+            expectedRecoveryToken: new IntPtr(0x7333));
+        bool replacedByProcessStart = RunCompletedCleanupCase(
+            1434,
+            target =>
+            {
+                target.ProcessStartTicks++;
+                target.RecoveryToken = new IntPtr(0x7334);
+            },
+            expectedResult: 0,
+            expectedFile: false,
+            expectedRemoveCount: 0,
+            expectedRecoveryToken: new IntPtr(0x7334));
+        bool unverifiable = RunCompletedCleanupCase(
+            1435,
+            target => target.ProcessStartTicks = 0,
+            expectedResult: 2,
+            expectedFile: true,
+            expectedRemoveCount: 0);
+        return exactToken
+            && exactTokenAlreadyGone
+            && destroyed
+            && replacedByPid
+            && replacedByProcessStart
+            && unverifiable;
+    }
+
+    private static bool RunCompletedCleanupCase(
+        long hwnd,
+        Action<Target> mutate,
+        int expectedResult,
+        bool expectedFile,
+        int expectedRemoveCount,
+        IntPtr? expectedRecoveryToken = null)
+    {
+        string root = CreateRoot();
+        try
+        {
+            string path = Path.Combine(root, "hidden-windows.json.pending");
+            uint pid = (uint)(hwnd - 1000);
+            long start = hwnd + 10000;
+            string exe = "complete-" + hwnd + ".exe";
+            File.WriteAllText(path, JournalJson(2, EntryV2(hwnd, pid, exe, start)));
+            var api = new FakePendingApi(Target.For(hwnd, pid, pid + 1000, exe, "Modern", start));
+            PendingRecoveryEntry entry = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
+            bool interrupted = FaultAfterStage(entry, api, "after-native-complete", 0x7000 + hwnd);
+            Target target = api.Targets[new IntPtr(hwnd)];
+            mutate(target);
+            int result = PendingRecoveryService.RunInteractive(
+                new StringReader(string.Empty),
+                new StringWriter(),
+                root,
+                api,
+                Array.Empty<PendingRecoveryCandidate>());
+            return interrupted
+                && result == expectedResult
+                && File.Exists(path) == expectedFile
+                && api.RemovePropertyCount == expectedRemoveCount
+                && api.PlacementCount == 1
+                && api.ShowCount == 1
+                && api.TransitionCount == 1
+                && (!expectedRecoveryToken.HasValue || target.RecoveryToken == expectedRecoveryToken.Value);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static bool InterruptedInteractiveRecoveryResumesAndRetires()
     {
         string root = CreateRoot();
@@ -664,8 +1087,9 @@ internal static class PendingRecoverySelfTest
             }
             PendingRecoveryCatalog after = PendingRecoveryService.Discover(root, api);
             return injected
-                && after.Files.Single().Entries.Count == 1
-                && after.Files.Single().Entries[0].Entry.Hwnd == 1461
+                && after.Files.Single().Entries.Count == 2
+                && after.Files.Single().Entries.Single(entry => entry.Entry.Hwnd == 1460).AlreadyResolved
+                && after.Files.Single().Entries.Single(entry => entry.Entry.Hwnd == 1461).EntryIndex == 1
                 && File.Exists(path + ".recovered")
                 && File.ReadAllText(path + ".recovered").Contains(entry.EntryFingerprint, StringComparison.Ordinal);
         }
@@ -700,6 +1124,44 @@ internal static class PendingRecoverySelfTest
         {
             DeleteRoot(root);
         }
+    }
+
+    private static bool FaultAfterStage(
+        PendingRecoveryEntry entry,
+        FakePendingApi api,
+        string stage,
+        long token)
+    {
+        try
+        {
+            PendingRecoveryService.ExecuteRecovery(
+                entry,
+                CandidateFor(entry, "C001"),
+                api,
+                out _,
+                tokenFactory: () => new IntPtr(token),
+                faultInjector: value => value == stage);
+            return false;
+        }
+        catch (Exception ex) when (ex.Message.Contains("Injected recovery fault", StringComparison.Ordinal))
+        {
+            return true;
+        }
+    }
+
+    private static int RunInteractiveFor(PendingRecoveryEntry entry, FakePendingApi api, string root)
+    {
+        PendingRecoveryCandidate candidate = CandidateFor(entry, "C001");
+        using var input = new StringReader($"{entry.SessionId}\n{candidate.CandidateId}\nYES\n");
+        using var output = new StringWriter();
+        return PendingRecoveryService.RunInteractive(input, output, root, api, new[] { candidate });
+    }
+
+    private static void RemoveFirstPendingEntry(string path)
+    {
+        JsonObject root = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        root["Entries"]!.AsArray().RemoveAt(0);
+        File.WriteAllText(path, root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
     }
 
     private static string JournalJson(int? version, params JsonObject[] entries)
@@ -807,11 +1269,11 @@ internal static class PendingRecoverySelfTest
     {
         public bool Exists { get; set; } = true;
         public IntPtr Hwnd { get; init; }
-        public uint Pid { get; init; }
-        public uint ThreadId { get; init; }
-        public string Exe { get; init; } = string.Empty;
-        public string ClassName { get; init; } = string.Empty;
-        public long ProcessStartTicks { get; init; }
+        public uint Pid { get; set; }
+        public uint ThreadId { get; set; }
+        public string Exe { get; set; } = string.Empty;
+        public string ClassName { get; set; } = string.Empty;
+        public long ProcessStartTicks { get; set; }
         public IntPtr CaptureToken { get; set; }
         public IntPtr RecoveryToken { get; set; }
         public bool Visible { get; set; }

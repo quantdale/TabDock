@@ -799,24 +799,52 @@ public partial class ContainerWindow : Window
                 if (_viewModel.Tabs.Count == 0)
                     return;
 
-                // Snapshot HWNDs (with their owning PIDs for the recycle guard
-                // below) before CloseGroup clears the view model, then release
-                // windows back to standalone and ask each one to close normally.
-                var windowsToClose = _viewModel.Tabs
-                    .Select(t => t.Model)
-                    .Where(w => w.Hwnd != IntPtr.Zero)
-                    .ToList();
+                // Snapshot independent native identities while the guests are
+                // still captured. CloseGroup deliberately unregisters and
+                // removes each capture token, so a later check against the
+                // live Shepherd registry would be false by design.
+                var windowsToClose = new List<ReleasedWindowCloseTarget>();
+                foreach (CapturedWindow window in _viewModel.Tabs.Select(t => t.Model))
+                {
+                    if (_shepherd.TryCreateReleasedWindowCloseTarget(
+                            window,
+                            out ReleasedWindowCloseTarget target,
+                            out WindowIdentityResult snapshotResult,
+                            out string snapshotReason))
+                    {
+                        windowsToClose.Add(target);
+                        continue;
+                    }
+
+                    if (snapshotResult == WindowIdentityResult.Mismatch)
+                    {
+                        _log.Log($"Close-group: skipped already-gone/recycled HWND 0x{window.Hwnd.ToInt64():X} before release ({snapshotReason}).");
+                        continue;
+                    }
+
+                    _log.Log($"Close-group: released-target snapshot was unverifiable for 0x{window.Hwnd.ToInt64():X} ({snapshotReason}); Yes action cancelled fail-closed.");
+                    e.Cancel = true;
+                    break;
+                }
+                if (e.Cancel)
+                    break;
+
                 if (!_viewModel.CloseGroup())
                 {
                     e.Cancel = true;
                     break;
                 }
-                foreach (CapturedWindow window in windowsToClose)
+                foreach (ReleasedWindowCloseTarget target in windowsToClose)
                 {
-                    if (!_shepherd.IsCurrentCapturedWindow(window))
+                    ReleasedWindowCloseTargetResult verification =
+                        _shepherd.VerifyReleasedWindowCloseTarget(target, out string verificationReason);
+                    if (verification != ReleasedWindowCloseTargetResult.Match)
+                    {
+                        _log.Log($"Close-group: skipped HWND 0x{target.Hwnd.ToInt64():X} after release ({verification}, {verificationReason}).");
                         continue;
-                    if (!NativeMethods.PostMessage(window.Hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero))
-                        _log.Log($"Close-group: PostMessage(WM_CLOSE) to 0x{window.Hwnd.ToInt64():X} failed: {NativeMethods.FormatLastError()}");
+                    }
+                    if (!NativeMethods.PostMessage(target.Hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero))
+                        _log.Log($"Close-group: PostMessage(WM_CLOSE) to 0x{target.Hwnd.ToInt64():X} failed: {NativeMethods.FormatLastError()}");
                 }
                 break;
 

@@ -92,6 +92,8 @@ public sealed class HiddenWindowJournalFile
 
 [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true, WriteIndented = true)]
 [JsonSerializable(typeof(PersistedState))]
+[JsonSerializable(typeof(PersistedGroup))]
+[JsonSerializable(typeof(PersistedTab))]
 [JsonSerializable(typeof(HiddenWindowJournalFile))]
 public partial class TabDockJsonContext : JsonSerializerContext
 {

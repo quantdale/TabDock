@@ -1060,9 +1060,10 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Acquires the global single-instance mutex. Returns false if another
-    /// TabDock process already owns it, in which case this instance must exit
-    /// without touching shared state files.
+    /// Acquires the current-user, cross-session product-mutation lease. Returns
+    /// false if another TabDock process owns it or the user identity cannot be
+    /// proven; either way this instance must exit without touching shared
+    /// state files.
     /// </summary>
     private bool AcquireSingleInstanceMutex()
     {
@@ -1071,7 +1072,7 @@ public partial class App : Application
             _singleInstanceLease = lease;
             return true;
         }
-        _log?.Log("AcquireSingleInstanceMutex: another product-mutating TabDock owner is active.");
+        _log?.Log("AcquireSingleInstanceMutex: product-mutation lease unavailable (another owner or current-user identity could not be proven).");
         return false;
     }
 

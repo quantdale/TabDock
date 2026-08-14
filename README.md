@@ -263,9 +263,12 @@ Use this checklist to verify a build before considering it ready.
   only disposable temp fixtures and exits nonzero on any failure.
 - **Environment fingerprint:** every startup writes `ENV[startup]` (OS, .NET,
   bitness, monitor layout) and `ENV[launcher]` (system DPI); every container
-  logs `ENV[container]` (rects, monitor, DPI, guest). Paste
-  `%APPDATA%\TabDock\logs\TabDock.log` when reporting a geometry issue — it is
-  self-describing.
+  logs `ENV[container]` (rects, monitor, DPI, guest). For support, use the
+  sanitized `--support-bundle` ZIP or `--doctor` output as the primary artifact.
+  The raw `%APPDATA%\TabDock\logs\TabDock.log` is an advanced local diagnostic
+  only: it may contain window titles, executable paths, and other local
+  environment details. Inspect and redact it before sharing; do not paste it
+  publicly by default.
 
 ## Logging
 
@@ -279,4 +282,6 @@ Log rotation keeps the current file under 1 MB; older logs are moved to `TabDock
 
 ## License
 
-This is a reference implementation. Use and modify at your own risk.
+TabDock is open-source software distributed under the MIT License. Review the
+license and your environment before using it; no warranty is provided beyond
+the terms of that license.

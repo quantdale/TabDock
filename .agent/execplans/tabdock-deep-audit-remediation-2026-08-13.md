@@ -1372,3 +1372,48 @@ Release/OpenSpec/publish/privacy/audit gate and review the complete diff.
   NuGet audit, support-bundle privacy, redirected recovery process smoke, and
   self-contained publish/version smoke. Hosted CI and Git refs remain dynamic;
   M2/M8/Chrome/foreground qualification remains external.
+
+### Final production-readiness closure checkpoint — 2026-08-14
+
+The final closure work is tracked in the focused OpenSpec change
+`openspec/changes/final-production-readiness-closure-2026-08-14/`. It supersedes
+the earlier R16 transaction decision where the source array was physically
+rewritten on each retirement.
+
+- Close-group Yes now snapshots a released-window target from the strong
+  captured identity tuple before `GroupManager.CloseGroup` unregisters the
+  live capture token. After release, an explicit Match/Destroyed/Replaced/
+  Unverifiable verifier is the only gate before `WM_CLOSE`.
+- Pending source files remain byte-for-byte immutable while any sibling is
+  unresolved. The `.recovered` ledger carries logical resolution and the
+  source is deleted only as an all-resolved unit. Old rewritten ledgers may
+  rebind only when the current fingerprint is unique and one transaction is
+  provably identified; duplicate ambiguity is retained fail-closed.
+- Native-complete transactions use an explicit target classifier. Exact
+  targets may lose only their exact recovery token; destroyed or positively
+  replaced HWNDs receive disk-only cleanup; unavailable identity retains the
+  evidence. No presentation mutation is repeated after the durable marker.
+- Persistence now classifies `Version`/`Groups` case-insensitively and parses
+  groups and nested tabs independently. Null/malformed records are logged by
+  bounded index, valid siblings are salvaged, active indexes are clamped, and
+  unreadable/corrupt/future overwrite protection remains unchanged.
+- The mutation lease is `Global\\TabDock-<canonical Windows user SID>` and
+  fails closed if the SID cannot be obtained. The dependency-free named
+  mutex boundary is retained; ACL package expansion was assessed and not
+  added.
+- Supervised recovery uses one bounded `Rune`-based terminal display
+  sanitizer for title, executable, class, candidate labels, filenames,
+  statuses, and errors. README support guidance makes sanitized bundle/doctor
+  output primary and labels raw logs sensitive. The HDWP implementation is
+  unchanged; docs now state the ordinary Win32 check-to-commit race rather than
+  claiming atomic identity.
+
+Current local evidence after this checkpoint: Release solution,
+ValidationDriver, and GuineaPig builds; diagnostics self-test (`181/0`);
+`scripts/validate.ps1 -Configuration Release -Ci -Publish`; OpenSpec
+validation (`17/17`); support-bundle privacy; publish/version smoke; and both
+isolated parent-console paths pass. The guarded `closegroupprompt` and
+`exitpopulated` attempts were blocked before input by the verified-foreground
+preflight and cleaned up safely. Remaining work is final diff review, normal
+push, and exact hosted-CI confirmation. Do not add a state-only commit for CI
+evidence.

@@ -31,6 +31,58 @@ internal enum WindowIdentityResult
 }
 
 /// <summary>
+/// Identity outcome for a graceful close request after a guest has been
+/// released from Shepherd ownership. The capture registry and capture token
+/// are intentionally not part of this post-release proof.
+/// </summary>
+internal enum ReleasedWindowCloseTargetResult
+{
+    Match,
+    Destroyed,
+    Replaced,
+    Unverifiable,
+}
+
+/// <summary>
+/// Immutable native identity carried from the captured state across a release
+/// transaction so a later WM_CLOSE cannot rely on a detached CapturedWindow.
+/// </summary>
+internal readonly struct ReleasedWindowCloseTarget
+{
+    public ReleasedWindowCloseTarget(
+        IntPtr hwnd,
+        uint processId,
+        uint windowThreadId,
+        string exePath,
+        string className,
+        long processStartTimeUtcTicks)
+    {
+        Hwnd = hwnd;
+        ProcessId = processId;
+        WindowThreadId = windowThreadId;
+        ExePath = exePath;
+        ClassName = className;
+        ProcessStartTimeUtcTicks = processStartTimeUtcTicks;
+    }
+
+    public IntPtr Hwnd { get; }
+    public uint ProcessId { get; }
+    public uint WindowThreadId { get; }
+    public string ExePath { get; }
+    public string ClassName { get; }
+    public long ProcessStartTimeUtcTicks { get; }
+
+    public static ReleasedWindowCloseTarget FromCaptured(CapturedWindow window)
+        => new(
+            window.Hwnd,
+            window.ProcessId,
+            window.WindowThreadId,
+            window.ExePath,
+            window.OriginalClassName,
+            window.ProcessStartTimeUtcTicks);
+}
+
+/// <summary>
 /// Native identity seam for the Shepherd mutation gate. The deterministic
 /// diagnostics self-test injects this interface; production uses the adapter
 /// below. Process-start probes are deliberately separate from the hot tier.
@@ -282,4 +334,80 @@ internal static class WindowIdentityGate
         bool verifyProcessInstance)
         => Evaluate(captured, api, verifyExecutable, verifyProcessInstance, out _)
             == WindowIdentityResult.Match;
+
+    /// <summary>
+    /// Verifies a target after Shepherd has released it. This deliberately
+    /// does not require the captured-object binding or the per-capture token:
+    /// successful release removes both ownership signals. The process-start
+    /// probe remains mandatory because PID reuse must not authorize WM_CLOSE.
+    /// </summary>
+    public static ReleasedWindowCloseTargetResult VerifyReleasedCloseTarget(
+        ReleasedWindowCloseTarget target,
+        IWindowIdentityNativeApi api,
+        out string reason)
+    {
+        try
+        {
+            if (target.Hwnd == IntPtr.Zero)
+                return Result(ReleasedWindowCloseTargetResult.Destroyed, "released HWND is zero", out reason);
+            if (!api.IsWindow(target.Hwnd))
+                return Result(ReleasedWindowCloseTargetResult.Destroyed, "released HWND no longer exists", out reason);
+            if (target.ProcessId == 0 || target.WindowThreadId == 0
+                || string.IsNullOrWhiteSpace(target.ExePath)
+                || string.IsNullOrWhiteSpace(target.ClassName)
+                || target.ProcessStartTimeUtcTicks == 0)
+            {
+                return Result(ReleasedWindowCloseTargetResult.Unverifiable, "released target identity is incomplete", out reason);
+            }
+
+            // A successfully released guest must no longer carry TabDock's
+            // capture generation marker. A token that remains is ownership or
+            // foreign state we cannot safely interpret as a released target.
+            if (api.GetCaptureIdentityToken(target.Hwnd) != IntPtr.Zero)
+                return Result(ReleasedWindowCloseTargetResult.Unverifiable, "capture token remains after release", out reason);
+
+            WindowProcessIdentity current = api.GetProcessIdentity(target.Hwnd);
+            if (current.ProcessId == 0 || current.ThreadId == 0)
+                return Result(ReleasedWindowCloseTargetResult.Unverifiable, "released target PID/thread could not be read", out reason);
+            if (current.ProcessId != target.ProcessId)
+                return Result(ReleasedWindowCloseTargetResult.Replaced, "released target PID changed", out reason);
+            if (current.ThreadId != target.WindowThreadId)
+                return Result(ReleasedWindowCloseTargetResult.Replaced, "released target GUI thread changed", out reason);
+
+            string? currentClass = api.GetClassName(target.Hwnd);
+            if (string.IsNullOrWhiteSpace(currentClass))
+                return Result(ReleasedWindowCloseTargetResult.Unverifiable, "released target class could not be read", out reason);
+            if (!string.Equals(currentClass, target.ClassName, StringComparison.Ordinal))
+                return Result(ReleasedWindowCloseTargetResult.Replaced, "released target class changed", out reason);
+
+            string? currentExe = api.GetProcessImagePath(current.ProcessId);
+            if (string.IsNullOrWhiteSpace(currentExe))
+                return Result(ReleasedWindowCloseTargetResult.Unverifiable, "released target executable could not be read", out reason);
+            if (!string.Equals(currentExe, target.ExePath, StringComparison.OrdinalIgnoreCase))
+                return Result(ReleasedWindowCloseTargetResult.Replaced, "released target executable changed", out reason);
+
+            long currentStart = api.GetProcessStartTimeUtcTicks(current.ProcessId);
+            if (currentStart == 0)
+                return Result(ReleasedWindowCloseTargetResult.Unverifiable, "released target process-start identity could not be read", out reason);
+            if (currentStart != target.ProcessStartTimeUtcTicks)
+                return Result(ReleasedWindowCloseTargetResult.Replaced, "released target process-start identity changed", out reason);
+
+            reason = "released target identity matched";
+            return ReleasedWindowCloseTargetResult.Match;
+        }
+        catch (Exception ex)
+        {
+            reason = $"released target identity probe threw {ex.GetType().Name}";
+            return ReleasedWindowCloseTargetResult.Unverifiable;
+        }
+
+        static ReleasedWindowCloseTargetResult Result(
+            ReleasedWindowCloseTargetResult result,
+            string message,
+            out string resultReason)
+        {
+            resultReason = message;
+            return result;
+        }
+    }
 }

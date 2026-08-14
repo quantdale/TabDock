@@ -337,7 +337,7 @@ public sealed class PersistenceService
             }
 
             int version = 1;
-            if (document.RootElement.TryGetProperty("Version", out JsonElement versionElement))
+            if (TryGetPropertyIgnoreCase(document.RootElement, "Version", out JsonElement versionElement))
             {
                 if (!versionElement.TryGetInt32(out version))
                 {
@@ -357,18 +357,45 @@ public sealed class PersistenceService
                 return StateReadKind.Corrupt;
             }
 
-            if (!document.RootElement.TryGetProperty("Groups", out JsonElement groups)
+            if (!TryGetPropertyIgnoreCase(document.RootElement, "Groups", out JsonElement groups)
                 || groups.ValueKind != JsonValueKind.Array)
             {
                 reason = "Groups array is missing";
                 return StateReadKind.Corrupt;
             }
 
-            state = JsonSerializer.Deserialize(json, TabDockJsonContext.Default.PersistedState);
-            if (state?.Groups == null)
+            state = new PersistedState
             {
-                reason = "Groups array deserialized as null";
-                return StateReadKind.Corrupt;
+                Version = PersistedState.CurrentVersion,
+                Groups = new List<PersistedGroup>(),
+            };
+            int skippedGroups = 0;
+            int skippedTabs = 0;
+            int groupIndex = 0;
+            foreach (JsonElement groupElement in groups.EnumerateArray())
+            {
+                if (groupElement.ValueKind == JsonValueKind.Null)
+                {
+                    skippedGroups++;
+                    _log.Log($"PersistenceService.Load skipped null group record at index {groupIndex}.");
+                    groupIndex++;
+                    continue;
+                }
+                if (!TryReadPersistedGroup(groupElement, groupIndex, out PersistedGroup? group, out int groupSkippedTabs))
+                {
+                    skippedGroups++;
+                    groupIndex++;
+                    continue;
+                }
+                skippedTabs += groupSkippedTabs;
+                if (group != null)
+                    state.Groups.Add(group);
+                groupIndex++;
+            }
+
+            if (skippedGroups > 0 || skippedTabs > 0)
+            {
+                _log.Log($"PersistenceService.Load salvaged valid records; skipped {skippedGroups} group record(s) and {skippedTabs} nested tab record(s).");
             }
 
             if (version < PersistedState.CurrentVersion)
@@ -383,6 +410,120 @@ public sealed class PersistenceService
             reason = "malformed-json: " + ex.Message;
             return StateReadKind.Corrupt;
         }
+    }
+
+    private bool TryReadPersistedGroup(
+        JsonElement element,
+        int groupIndex,
+        out PersistedGroup? group,
+        out int skippedTabs)
+    {
+        group = null;
+        skippedTabs = 0;
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            _log.Log($"PersistenceService.Load skipped malformed group record at index {groupIndex}.");
+            return false;
+        }
+
+        var restored = new PersistedGroup();
+        if (TryGetPropertyIgnoreCase(element, "Id", out JsonElement idElement)
+            && idElement.ValueKind == JsonValueKind.String)
+        {
+            if (!idElement.TryGetGuid(out Guid id))
+                _log.Log($"PersistenceService.Load ignored malformed group ID at index {groupIndex}.");
+            else
+                restored.Id = id;
+        }
+        if (TryGetPropertyIgnoreCase(element, "Name", out JsonElement nameElement))
+        {
+            if (nameElement.ValueKind == JsonValueKind.String)
+                restored.Name = nameElement.GetString() ?? string.Empty;
+            else if (nameElement.ValueKind != JsonValueKind.Null)
+                _log.Log($"PersistenceService.Load ignored malformed group name at index {groupIndex}.");
+        }
+        if (TryGetPropertyIgnoreCase(element, "AccentColor", out JsonElement accentElement))
+        {
+            if (accentElement.ValueKind == JsonValueKind.String)
+                restored.AccentColor = accentElement.GetString() ?? string.Empty;
+            else if (accentElement.ValueKind != JsonValueKind.Null)
+                _log.Log($"PersistenceService.Load ignored malformed group accent at index {groupIndex}.");
+        }
+        if (TryGetPropertyIgnoreCase(element, "ActiveIndex", out JsonElement activeElement)
+            && activeElement.ValueKind == JsonValueKind.Number
+            && activeElement.TryGetInt32(out int activeIndex))
+        {
+            restored.ActiveIndex = activeIndex;
+        }
+
+        if (!TryGetPropertyIgnoreCase(element, "Tabs", out JsonElement tabsElement)
+            || tabsElement.ValueKind == JsonValueKind.Null)
+        {
+            group = restored;
+            return true;
+        }
+        if (tabsElement.ValueKind != JsonValueKind.Array)
+        {
+            _log.Log($"PersistenceService.Load skipped group {groupIndex} because its Tabs record is malformed.");
+            return false;
+        }
+
+        int tabIndex = 0;
+        foreach (JsonElement tabElement in tabsElement.EnumerateArray())
+        {
+            if (tabElement.ValueKind == JsonValueKind.Null || tabElement.ValueKind != JsonValueKind.Object)
+            {
+                skippedTabs++;
+                _log.Log($"PersistenceService.Load skipped malformed tab record at group {groupIndex}, index {tabIndex}.");
+                tabIndex++;
+                continue;
+            }
+
+            try
+            {
+                PersistedTab? tab = JsonSerializer.Deserialize(
+                    tabElement.GetRawText(),
+                    TabDockJsonContext.Default.PersistedTab);
+                if (tab == null)
+                {
+                    skippedTabs++;
+                    _log.Log($"PersistenceService.Load skipped null tab record at group {groupIndex}, index {tabIndex}.");
+                }
+                else
+                {
+                    restored.Tabs.Add(tab);
+                }
+            }
+            catch (JsonException ex)
+            {
+                skippedTabs++;
+                _log.Log($"PersistenceService.Load skipped malformed tab record at group {groupIndex}, index {tabIndex} ({ex.GetType().Name}).");
+            }
+            tabIndex++;
+        }
+
+        group = restored;
+        return true;
+    }
+
+    private static bool TryGetPropertyIgnoreCase(
+        JsonElement element,
+        string name,
+        out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (JsonProperty property in element.EnumerateObject())
+            {
+                if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+        }
+        value = default;
+        return false;
     }
 
     private List<Group> RestoreGroups(PersistedState state, List<Group> result)
@@ -409,7 +550,7 @@ public sealed class PersistenceService
                 string accent = string.IsNullOrWhiteSpace(pg.AccentColor) ? "#2196F3" : pg.AccentColor;
                 if (!TryParseAccentColor(accent, out _))
                 {
-                    _log.Log($"Invalid AccentColor '{pg.AccentColor}' for group {pg.Id}; falling back to default.");
+                    _log.Log($"PersistenceService.Load found an invalid accent value for group {pg.Id}; falling back to default.");
                     accent = "#2196F3";
                 }
 
@@ -429,22 +570,39 @@ public sealed class PersistenceService
                     Name = string.IsNullOrWhiteSpace(pg.Name) ? "Group" : pg.Name,
                     AccentColor = accent,
                 };
-                foreach (PersistedTab pt in pg.Tabs)
+                foreach (PersistedTab? pt in pg.Tabs)
                 {
-                    group.PersistedTabs.Add(new PersistedTabMetadata
+                    if (pt == null)
                     {
-                        ExePath = pt.ExePath ?? string.Empty,
-                        OriginalTitle = pt.OriginalTitle ?? string.Empty,
-                        CustomLabel = pt.CustomLabel ?? string.Empty,
-                        Left = pt.Left,
-                        Top = pt.Top,
-                        Right = pt.Right,
-                        Bottom = pt.Bottom,
-                        WasMaximized = pt.WasMaximized,
-                    });
+                        _log.Log($"PersistenceService.Load skipped a null nested tab in group {pg.Id}.");
+                        continue;
+                    }
+                    try
+                    {
+                        group.PersistedTabs.Add(new PersistedTabMetadata
+                        {
+                            ExePath = pt.ExePath ?? string.Empty,
+                            OriginalTitle = pt.OriginalTitle ?? string.Empty,
+                            CustomLabel = pt.CustomLabel ?? string.Empty,
+                            Left = pt.Left,
+                            Top = pt.Top,
+                            Right = pt.Right,
+                            Bottom = pt.Bottom,
+                            WasMaximized = pt.WasMaximized,
+                        });
+                    }
+                    catch (Exception tabEx)
+                    {
+                        _log.LogException($"PersistenceService.Load skipped malformed tab in group {pg.Id}", tabEx);
+                    }
                 }
-                group.PersistedActiveIndex = pg.ActiveIndex;
-                group.ActiveIndex = pg.ActiveIndex;
+                int boundedActiveIndex = group.PersistedTabs.Count == 0
+                    ? 0
+                    : Math.Clamp(pg.ActiveIndex, 0, group.PersistedTabs.Count - 1);
+                if (boundedActiveIndex != pg.ActiveIndex)
+                    _log.Log($"PersistenceService.Load bounded active index for group {group.Id} from {pg.ActiveIndex} to {boundedActiveIndex}.");
+                group.PersistedActiveIndex = boundedActiveIndex;
+                group.ActiveIndex = boundedActiveIndex;
                 result.Add(group);
             }
             catch (Exception groupEx)

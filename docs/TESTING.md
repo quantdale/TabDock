@@ -505,8 +505,10 @@ or repositions the guest and only cleans the historically required transition
 state. A hard kill after the durable native-complete phase performs cleanup
 without repeating native presentation work. A failed or unverifiable
 transaction retains the pending evidence. A successful entry gets a durable
-resolution marker and is retired atomically without destroying unresolved
-siblings or unknown JSON fields. Startup never performs tokenless legacy
+resolution marker; the pending source bytes remain immutable while any sibling
+is unresolved, and the sidecar ledger supplies logical retirement. Only an
+all-resolved source is deleted as one unit, preserving sibling fingerprints,
+positions, and unknown JSON fields. Startup never performs tokenless legacy
 recovery.
 
 ### 5. Cross-monitor / DPI

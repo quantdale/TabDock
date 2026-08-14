@@ -811,6 +811,41 @@ public sealed class WindowShepherdService
             == WindowIdentityResult.Match;
 
     /// <summary>
+    /// Captures the independent native identity needed by the close-group Yes
+    /// transaction before release removes the live capture binding and token.
+    /// </summary>
+    internal bool TryCreateReleasedWindowCloseTarget(
+        CapturedWindow window,
+        out ReleasedWindowCloseTarget target,
+        out WindowIdentityResult result,
+        out string reason)
+    {
+        target = default;
+        result = EvaluateCurrentCapturedWindow(
+            window,
+            "close-group-snapshot",
+            verifyExecutable: true,
+            verifyProcessInstance: true);
+        reason = result == WindowIdentityResult.Match
+            ? "captured target identity matched before release"
+            : "captured target identity could not be proven before release";
+        if (result != WindowIdentityResult.Match)
+            return false;
+
+        target = ReleasedWindowCloseTarget.FromCaptured(window);
+        return true;
+    }
+
+    /// <summary>
+    /// Revalidates a released target without consulting the live Shepherd
+    /// registry. Only an exact match is safe for WM_CLOSE.
+    /// </summary>
+    internal ReleasedWindowCloseTargetResult VerifyReleasedWindowCloseTarget(
+        ReleasedWindowCloseTarget target,
+        out string reason)
+        => WindowIdentityGate.VerifyReleasedCloseTarget(target, _identityApi, out reason);
+
+    /// <summary>
     /// Restores an iconic/zoomed captured guest only after the strong slow-path
     /// identity gate. The BOOL returned by ShowWindow reports the previous
     /// visibility state, so the required post-state is visible, non-iconic,

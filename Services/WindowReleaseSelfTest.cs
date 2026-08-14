@@ -49,7 +49,75 @@ internal static class WindowReleaseSelfTest
         Check(ReleaseChangeBetweenPlacementAndVisibilityStops());
         Check(ReleaseChangeBeforeTransitionsStops());
         Check(ReleaseChangeBeforeTokenRemovalStopsCleanup());
+        Check(ReleasedCloseTargetIdentityIsRecycleSafe());
         return (checks, failures);
+    }
+
+    private static bool ReleasedCloseTargetIdentityIsRecycleSafe()
+    {
+        using TestFixture fixture = TestFixture.Create();
+        ReleasedWindowCloseTarget target = ReleasedWindowCloseTarget.FromCaptured(fixture.Captured);
+        fixture.Identity.CaptureToken = IntPtr.Zero;
+
+        bool exactMatch = WindowIdentityGate.VerifyReleasedCloseTarget(
+            target,
+            fixture.Identity,
+            out _) == ReleasedWindowCloseTargetResult.Match;
+
+        fixture.Identity.Identity = new WindowProcessIdentity(99, fixture.Captured.WindowThreadId);
+        bool differentPidRejected = WindowIdentityGate.VerifyReleasedCloseTarget(
+            target,
+            fixture.Identity,
+            out _) == ReleasedWindowCloseTargetResult.Replaced;
+
+        fixture.Identity.Identity = new WindowProcessIdentity(fixture.Captured.ProcessId, 9999);
+        bool differentThreadRejected = WindowIdentityGate.VerifyReleasedCloseTarget(
+            target,
+            fixture.Identity,
+            out _) == ReleasedWindowCloseTargetResult.Replaced;
+
+        fixture.Identity.Identity = new WindowProcessIdentity(fixture.Captured.ProcessId, fixture.Captured.WindowThreadId);
+        fixture.Identity.ExePath = "replacement.exe";
+        bool differentExecutableRejected = WindowIdentityGate.VerifyReleasedCloseTarget(
+            target,
+            fixture.Identity,
+            out _) == ReleasedWindowCloseTargetResult.Replaced;
+
+        fixture.Identity.ExePath = fixture.Captured.ExePath;
+        fixture.Identity.ClassName = "ReplacementClass";
+        bool differentClassRejected = WindowIdentityGate.VerifyReleasedCloseTarget(
+            target,
+            fixture.Identity,
+            out _) == ReleasedWindowCloseTargetResult.Replaced;
+
+        fixture.Identity.ClassName = fixture.Captured.OriginalClassName;
+        fixture.Identity.ProcessStartTicks = fixture.Captured.ProcessStartTimeUtcTicks + 1;
+        bool differentProcessInstanceRejected = WindowIdentityGate.VerifyReleasedCloseTarget(
+            target,
+            fixture.Identity,
+            out _) == ReleasedWindowCloseTargetResult.Replaced;
+
+        fixture.Identity.ProcessStartTicks = 0;
+        bool missingProcessInstanceFailsClosed = WindowIdentityGate.VerifyReleasedCloseTarget(
+            target,
+            fixture.Identity,
+            out _) == ReleasedWindowCloseTargetResult.Unverifiable;
+
+        fixture.Identity.ProcessStartTicks = fixture.Captured.ProcessStartTimeUtcTicks;
+        fixture.Identity.IsWindowAlive = false;
+        bool destroyedIsBenign = WindowIdentityGate.VerifyReleasedCloseTarget(
+            target,
+            fixture.Identity,
+            out _) == ReleasedWindowCloseTargetResult.Destroyed;
+
+        return exactMatch
+            && differentPidRejected
+            && differentThreadRejected
+            && differentExecutableRejected
+            && differentClassRejected
+            && differentProcessInstanceRejected
+            && missingProcessInstanceFailsClosed
+            && destroyedIsBenign;
     }
 
     private static bool ValidStrongIdentityReleases()
@@ -539,6 +607,7 @@ internal static class WindowReleaseSelfTest
         public bool ThrowOnExecutableProbe { get; set; }
         public bool ThrowOnClassProbe { get; set; }
         public bool FailTokenRemoval { get; set; }
+        public bool IsWindowAlive { get; set; } = true;
         public int TokenRemovalCount { get; private set; }
 
         public void ReplaceGeneration()
@@ -562,7 +631,7 @@ internal static class WindowReleaseSelfTest
         public IntPtr GetCaptureIdentityToken(IntPtr hwnd)
             => Find(hwnd).CaptureToken;
 
-        public bool IsWindow(IntPtr hwnd) => FindOrNull(hwnd) != null;
+        public bool IsWindow(IntPtr hwnd) => IsWindowAlive && FindOrNull(hwnd) != null;
 
         public WindowProcessIdentity GetProcessIdentity(IntPtr hwnd)
             => Find(hwnd).Identity;

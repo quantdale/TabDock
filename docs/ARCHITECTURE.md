@@ -62,11 +62,15 @@ the richer live logical snapshot when a session is running.
 attaches `AppDomain.UnhandledException` *before* `InitializeComponent()` so the earliest
 failures are still logged (`App.xaml.cs:49-66`). `Application_Startup` (`App.xaml.cs:68`):
 
-1. **Product-mutation lease** `Global\TabDock` — normal TabDock and supervised
-   `--recover-pending` are mutually exclusive; a second mutating owner exits
-   cleanly without touching shared state (`Services/ProductMutationLease.cs`,
-   `AcquireSingleInstanceMutex` in `App.xaml.cs`). Read-only diagnostics do
-   not acquire the lease.
+1. **Product-mutation lease** `Global\TabDock-<current-user-SID>` — normal
+   TabDock and supervised `--recover-pending` are mutually exclusive across
+   that user's sessions, while independent Windows users retain independent
+   leases. A second same-user mutating owner exits cleanly without touching
+   shared state (`Services/ProductMutationLease.cs`, `AcquireSingleInstanceMutex`
+   in `App.xaml.cs`). Read-only diagnostics do not acquire the lease. SID
+   discovery failure is fail-closed; the implementation intentionally keeps
+   the existing dependency-free named-mutex contract rather than adding a
+   separate ACL package.
 2. **`CleanupStaleTempFiles`** — removes orphaned `state.json.tmp` / `hidden-windows.json.tmp`
    from a prior crashed atomic write (`App.xaml.cs:90`, `App.xaml.cs:642-674`).
 3. **Service construction** (`App.xaml.cs:92-97`): `IconService`, `WindowShepherdService`,
@@ -232,6 +236,13 @@ an in-window panel; the standalone picker remains for the fallback path.
   order (`GetWindow(top, GW_HWNDNEXT) == bottom`) — a strip-initiated focus
   switch (which raises no guest natively) would otherwise wedge the container
   between the panes and occlude the just-focused member.
+
+  Win32 does not provide an atomic operation that combines the per-guest
+  identity validation with the later `EndDeferWindowPos` commit. A guest can
+  therefore be destroyed or recycled in the small check-to-commit interval;
+  the implementation treats that as a bounded residual race, closes/abandons
+  the batch on a known validation failure, and falls back only for native
+  Begin/Defer/End failure. It does not claim impossible atomic HWND identity.
 - **Focused member (one canonical operation)** — `FocusSplitMember(member)`
   is the ONLY path that focuses a member of the active pair: it updates
   `_splitForeground` (z-top) and `_shepherdActiveWindow` (logical active +

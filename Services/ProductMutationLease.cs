@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using System.Security.Principal;
 using System.Threading;
 
 namespace TabDock.Services;
@@ -9,7 +11,8 @@ namespace TabDock.Services;
 /// </summary>
 internal sealed class ProductMutationLease : IDisposable
 {
-    internal const string DefaultName = @"Global\TabDock";
+    internal const string NamePrefix = @"Global\TabDock-";
+    private const int MaximumNameLength = 240;
 
     private readonly Mutex _mutex;
     private bool _ownsMutex;
@@ -27,7 +30,18 @@ internal sealed class ProductMutationLease : IDisposable
         Mutex? mutex = null;
         try
         {
-            mutex = new Mutex(initiallyOwned: false, name ?? DefaultName);
+            string mutexName;
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                if (!TryGetCurrentUserName(out mutexName))
+                    return false;
+            }
+            else
+            {
+                mutexName = name;
+            }
+
+            mutex = new Mutex(initiallyOwned: false, mutexName);
             bool acquired;
             try
             {
@@ -53,6 +67,48 @@ internal sealed class ProductMutationLease : IDisposable
         catch
         {
             mutex?.Dispose();
+            return false;
+        }
+    }
+
+    internal static bool TryGetCurrentUserName(out string name)
+    {
+        name = string.Empty;
+        try
+        {
+            using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+            SecurityIdentifier? sid = identity.User;
+            return sid != null && TryBuildUserScopedName(sid.Value, out name);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static bool TryBuildUserScopedName(string? sidText, out string name)
+    {
+        name = string.Empty;
+        if (string.IsNullOrWhiteSpace(sidText))
+            return false;
+
+        string trimmed = sidText.Trim();
+        if (trimmed.Length > MaximumNameLength - NamePrefix.Length
+            || trimmed.Any(char.IsControl)
+            || trimmed.Contains('\\')
+            || trimmed.Contains('/'))
+        {
+            return false;
+        }
+
+        try
+        {
+            string canonicalSid = new SecurityIdentifier(trimmed).Value;
+            name = NamePrefix + canonicalSid;
+            return name.Length <= MaximumNameLength;
+        }
+        catch
+        {
             return false;
         }
     }

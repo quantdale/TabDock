@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using TabDock.Models;
 
 namespace TabDock.Services;
@@ -182,6 +183,20 @@ internal static class PersistenceSelfTest
             Check(restoredLegacy.Count == 1);
             Check(restoredLegacy[0].Name == "Legacy materialized"
                 && restoredLegacy[0].PersistedTabs.Count == 1);
+
+            // A malformed nested record is salvaged at record granularity.
+            // The root names deliberately vary in case so manual
+            // classification and the source-generated serializer exercise the
+            // same case-insensitive contract.
+            Check(NestedMalformedRecordsAreSalvagedAndSaved(root, log));
+
+            string mixedCaseFuturePath = Path.Combine(root, "mixed-case-future.json");
+            string mixedCaseFuture = "{\"vErSiOn\":3,\"gRoUpS\":[]}";
+            File.WriteAllText(mixedCaseFuturePath, mixedCaseFuture);
+            var mixedCaseFutureService = new PersistenceService(log, mixedCaseFuturePath);
+            Check(mixedCaseFutureService.Load().Count == 0 && mixedCaseFutureService.StateLoadFailed);
+            mixedCaseFutureService.Save(Array.Empty<Group>());
+            Check(File.ReadAllText(mixedCaseFuturePath) == mixedCaseFuture);
         }
         catch
         {
@@ -234,6 +249,103 @@ internal static class PersistenceSelfTest
             });
         }
         return JsonSerializer.Serialize(state, TabDockJsonContext.Default.PersistedState);
+    }
+
+    private static bool NestedMalformedRecordsAreSalvagedAndSaved(string root, LoggingService log)
+    {
+        string path = Path.Combine(root, "nested-malformed.json");
+        Guid firstId = Guid.NewGuid();
+        Guid secondId = Guid.NewGuid();
+        var firstTabs = new JsonArray
+        {
+            new JsonObject
+            {
+                ["eXePaTh"] = "C:/Apps/first-a.exe",
+                ["oRiGiNaLtItLe"] = "first a",
+                ["lEfT"] = 10,
+                ["tOp"] = 20,
+                ["rIgHt"] = 410,
+                ["bOtToM"] = 320,
+            },
+            null,
+            new JsonObject
+            {
+                ["eXePaTh"] = new JsonArray("not", "a", "string"),
+                ["lEfT"] = 30,
+            },
+            new JsonObject
+            {
+                ["eXePaTh"] = "C:/Apps/first-b.exe",
+                ["oRiGiNaLtItLe"] = "first b",
+                ["lEfT"] = 30,
+                ["tOp"] = 40,
+                ["rIgHt"] = 430,
+                ["bOtToM"] = 340,
+            },
+        };
+        var rootNode = new JsonObject
+        {
+            ["version"] = 2,
+            ["GROUPS"] = new JsonArray
+            {
+                null,
+                new JsonObject
+                {
+                    ["iD"] = firstId.ToString(),
+                    ["nAmE"] = "Salvaged first",
+                    ["aCcEnTcOlOr"] = "#2196F3",
+                    ["aCtIvEiNdEx"] = 99,
+                    ["tAbS"] = firstTabs,
+                },
+                new JsonObject
+                {
+                    ["iD"] = secondId.ToString(),
+                    ["nAmE"] = "Valid second",
+                    ["tAbS"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["eXePaTh"] = "C:/Apps/second.exe",
+                            ["oRiGiNaLtItLe"] = "second",
+                            ["lEfT"] = 50,
+                            ["tOp"] = 60,
+                            ["rIgHt"] = 450,
+                            ["bOtToM"] = 360,
+                        },
+                    },
+                },
+                new JsonObject
+                {
+                    ["iD"] = Guid.NewGuid().ToString(),
+                    ["nAmE"] = "Malformed group",
+                    ["tAbS"] = "not-an-array",
+                },
+            },
+        };
+        File.WriteAllText(path, rootNode.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+
+        var persistence = new PersistenceService(log, path);
+        List<Group> restored = persistence.Load();
+        if (persistence.StateLoadFailed
+            || restored.Count != 2
+            || restored[0].Name != "Salvaged first"
+            || restored[0].PersistedTabs.Count != 2
+            || restored[0].PersistedActiveIndex != 1
+            || restored[1].Name != "Valid second"
+            || restored[1].PersistedTabs.Count != 1)
+        {
+            return false;
+        }
+
+        persistence.Save(restored);
+        PersistedState? saved = JsonSerializer.Deserialize(
+            File.ReadAllText(path),
+            TabDockJsonContext.Default.PersistedState);
+        return saved?.Groups.Count == 2
+            && saved.Groups[0].Tabs.Count == 2
+            && saved.Groups[0].ActiveIndex == 1
+            && saved.Groups[1].Tabs.Count == 1
+            && saved.Groups.All(group => group.Tabs.All(tab => tab != null));
     }
 
     private static string StateJsonWithEmptyAndMaterializedGroups()
