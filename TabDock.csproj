@@ -15,6 +15,7 @@
          explicitly overrides this property to true and uses AuditMode=all;
          command-line properties take precedence over this local default. -->
     <NuGetAudit Condition="'$(NuGetAudit)' == ''">false</NuGetAudit>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <!--
       The repository root also contains spike/test projects. Exclude their build artifacts
       and source trees from the main WPF project so the SDK default globs don't pull them in.

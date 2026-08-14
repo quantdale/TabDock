@@ -53,6 +53,7 @@ public partial class CapturePickerWindow : Window
     {
         _viewModel.GroupingRequested -= OnGroupingRequested;
         _viewModel.Canceled -= OnCanceled;
+        _viewModel.Dispose();
         base.OnClosed(e);
     }
 }

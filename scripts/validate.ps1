@@ -2,8 +2,9 @@
 .SYNOPSIS
     One-command validation entry point for TabDock.
 .DESCRIPTION
-    Builds the main app, the Spike, and both ValidationDriver projects, then
-    runs the hermetic diagnostics/geometry/persistence/privacy qualification.
+    Builds the solution once (covering the main app and Spike) plus both
+    ValidationDriver projects, then runs the hermetic
+    diagnostics/geometry/persistence/privacy qualification.
     Real-input ValidationDriver execution is opt-in and remains supervised.
 .PARAMETER Configuration
     Build configuration. Debug is the local default; CI uses Release.
@@ -34,9 +35,10 @@ $RepoRoot       = Split-Path -Parent $PSScriptRoot
 $MainProject    = Join-Path $RepoRoot 'TabDock.csproj'
 $Solution       = Join-Path $RepoRoot 'TabDock.sln'
 $AppExe         = Join-Path $RepoRoot "bin\$Configuration\net8.0-windows\win-x64\TabDock.exe"
-$SpikeProject   = Join-Path $RepoRoot 'Spike\TabDock.Spike\TabDock.Spike.csproj'
 $DriverProject  = Join-Path $RepoRoot 'tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj'
 $PigProject     = Join-Path $RepoRoot 'tests\ValidationDriver\TabDock.GuineaPig\TabDock.GuineaPig.csproj'
+$OpenSpecRoot   = Join-Path $RepoRoot 'tools\openspec'
+$OpenSpecLocal  = Join-Path $OpenSpecRoot 'node_modules\.bin\openspec.cmd'
 $TempRoot       = Join-Path ([IO.Path]::GetTempPath()) "TabDock-validation-$PID-$([Guid]::NewGuid().ToString('N'))"
 
 function Invoke-Step {
@@ -188,7 +190,7 @@ try {
     if ($Ci) {
         foreach ($project in $restoreProjects) {
             Invoke-Step "Restore with NuGet audit: $(Split-Path -Leaf $project)" {
-                dotnet restore $project -p:NuGetAudit=true -p:NuGetAuditMode=all '-warnaserror:NU1900;NU1901;NU1902;NU1903;NU1904' --nologo
+                dotnet restore $project -p:NuGetAudit=true -p:NuGetAuditMode=all -p:RestoreLockedMode=true '-warnaserror:NU1900;NU1901;NU1902;NU1903;NU1904' --nologo
             }
         }
         $noRestore = @('--no-restore')
@@ -205,12 +207,6 @@ try {
 
     Invoke-Step "Build TabDock.sln ($Configuration)" {
         dotnet build $Solution -c $Configuration --nologo @noRestore
-    }
-    Invoke-Step "Build TabDock.csproj ($Configuration)" {
-        dotnet build $MainProject -c $Configuration --nologo @noRestore
-    }
-    Invoke-Step "Build Spike ($Configuration)" {
-        dotnet build $SpikeProject -c $Configuration --nologo @noRestore
     }
     Invoke-Step "Build ValidationDriver ($Configuration)" {
         dotnet build $DriverProject -c $Configuration --nologo @noRestore
@@ -248,19 +244,40 @@ try {
     Write-Host 'Support-bundle ZIP entries and privacy contract: PASS' -ForegroundColor Green
 
     if ($Ci) {
-        $openSpec = Get-Command openspec -ErrorAction SilentlyContinue
-        if ($null -eq $openSpec) {
-            throw 'OpenSpec CLI is required by -Ci but was not found on PATH.'
+        $env:OPENSPEC_NO_UPDATE_CHECK = '1'
+        $env:OPENSPEC_TELEMETRY = '0'
+        if (-not (Test-Path -LiteralPath $OpenSpecLocal -PathType Leaf)) {
+            if ($null -eq (Get-Command npm -ErrorAction SilentlyContinue)) {
+                throw 'Node/npm is required by -Ci to install repository-owned OpenSpec tooling.'
+            }
+            Invoke-Step 'Install repository-owned OpenSpec tooling' {
+                Push-Location $OpenSpecRoot
+                try {
+                    npm ci --ignore-scripts
+                }
+                finally {
+                    Pop-Location
+                }
+            }
+        }
+        if (-not (Test-Path -LiteralPath $OpenSpecLocal -PathType Leaf)) {
+            throw "Repository-owned OpenSpec CLI was not installed: $OpenSpecLocal"
         }
         Invoke-Step 'OpenSpec validation' {
-            & $openSpec.Source validate --all --no-interactive
+            & $OpenSpecLocal validate --all --no-interactive
         }
     }
     else {
-        $openSpec = Get-Command openspec -ErrorAction SilentlyContinue
+        $openSpec = if (Test-Path -LiteralPath $OpenSpecLocal -PathType Leaf) {
+            $OpenSpecLocal
+        }
+        else {
+            $globalOpenSpec = Get-Command openspec -ErrorAction SilentlyContinue
+            if ($null -ne $globalOpenSpec) { $globalOpenSpec.Source } else { $null }
+        }
         if ($null -ne $openSpec) {
             Invoke-Step 'OpenSpec validation' {
-                & $openSpec.Source validate --all --no-interactive
+                & $openSpec validate --all --no-interactive
             }
         }
         else {

@@ -749,7 +749,7 @@ public partial class ContainerWindow : Window
 
         MessageBoxResult result = MessageBoxResult.Cancel;
         _closePromptOpen = true;
-        IntPtr containerHwnd = new WindowInteropHelper(this).Handle;
+        IntPtr containerHwnd = _containerHwnd;
         if (containerHwnd != IntPtr.Zero)
             _shepherd.RaiseContainerForChrome(containerHwnd, useTopmostBand: true);
         ArmClosePromptRaise();
@@ -1042,7 +1042,10 @@ public partial class ContainerWindow : Window
     {
         try
         {
-            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+            // This diagnostic is scheduled from Loaded/StateChanged paths;
+            // reuse the lifecycle-cached HWND rather than asking WPF to resolve
+            // it again during a hot transition.
+            IntPtr hwnd = _containerHwnd;
             if (hwnd == IntPtr.Zero)
                 return;
 
@@ -1546,7 +1549,7 @@ public partial class ContainerWindow : Window
             return;
         _chromePopupActive = true;
         _log.Log("CHROME[raise]");
-        IntPtr hwnd = new WindowInteropHelper(this).Handle;
+        IntPtr hwnd = _containerHwnd;
         if (hwnd != IntPtr.Zero)
             _shepherd.RaiseContainerForChrome(hwnd);
     }
@@ -1722,6 +1725,7 @@ public partial class ContainerWindow : Window
         EndChromePopup();
         _capturePicker.GroupingRequested -= InlineCapture_GroupingRequested;
         _capturePicker.Canceled -= InlineCapture_Canceled;
+        _capturePicker.Dispose();
         _capturePicker = null;
         CapturePanel.DataContext = null;
         CapturePanel.Visibility = Visibility.Collapsed;
@@ -2184,7 +2188,7 @@ public partial class ContainerWindow : Window
         if (NativeMethods.IsIconic(_shepherdActiveWindow.Hwnd))
             return;
 
-        IntPtr containerHwnd = new WindowInteropHelper(this).Handle;
+        IntPtr containerHwnd = _containerHwnd;
         if (containerHwnd == IntPtr.Zero)
             return;
 
@@ -2354,7 +2358,7 @@ public partial class ContainerWindow : Window
         if (_shepherdActiveWindow == null || _shepherdActiveWindow.Hwnd != foregroundHwnd)
             return;
 
-        IntPtr containerHwnd = new WindowInteropHelper(this).Handle;
+        IntPtr containerHwnd = _containerHwnd;
         if (containerHwnd == IntPtr.Zero)
             return;
 
@@ -2441,7 +2445,7 @@ public partial class ContainerWindow : Window
         if (IsContainerChromeInteractionActive())
             return;
 
-        IntPtr containerHwnd = new WindowInteropHelper(this).Handle;
+        IntPtr containerHwnd = _containerHwnd;
         if (containerHwnd == IntPtr.Zero)
             return;
 

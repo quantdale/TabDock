@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -14,10 +15,18 @@ namespace TabDock.Services;
 public sealed class IconService
 {
     private readonly LoggingService _log;
+    private readonly object _cacheGate = new();
+    private readonly Func<string, ImageSource?>? _testExtractor;
 
     public IconService(LoggingService log)
+        : this(log, testExtractor: null)
+    {
+    }
+
+    internal IconService(LoggingService log, Func<string, ImageSource?>? testExtractor)
     {
         _log = log;
+        _testExtractor = testExtractor;
     }
 
     // Keyed by exe path so repeat windows of the same executable (the common
@@ -28,6 +37,7 @@ public sealed class IconService
     // report the same executable with different casing for different processes,
     // which used to miss the cache and re-extract the icon (PERF25-05).
     private readonly Dictionary<string, ImageSource?> _iconCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, TaskCompletionSource<ImageSource?>> _inFlight = new(StringComparer.OrdinalIgnoreCase);
 
     public string? GetProcessImagePath(uint pid)
     {
@@ -56,12 +66,65 @@ public sealed class IconService
         if (string.IsNullOrEmpty(exePath))
             return null;
 
-        if (_iconCache.TryGetValue(exePath, out ImageSource? cached))
-            return cached;
+        TaskCompletionSource<ImageSource?>? waitFor = null;
+        TaskCompletionSource<ImageSource?>? producer = null;
+        lock (_cacheGate)
+        {
+            if (_iconCache.TryGetValue(exePath, out ImageSource? cached))
+                return cached;
 
-        ImageSource? result = ExtractFileIcon(exePath);
-        _iconCache[exePath] = result;
+            if (_inFlight.TryGetValue(exePath, out waitFor))
+            {
+                // Another picker worker is already resolving this executable.
+                // Wait outside the lock so concurrent callers share one native
+                // extraction rather than racing into ExtractIconEx.
+            }
+            else
+            {
+                producer = new TaskCompletionSource<ImageSource?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _inFlight[exePath] = producer;
+            }
+        }
+
+        if (producer == null)
+            return waitFor!.Task.GetAwaiter().GetResult();
+
+        ImageSource? result;
+        try
+        {
+            result = _testExtractor != null ? _testExtractor(exePath) : ExtractFileIcon(exePath);
+        }
+        catch
+        {
+            // Preserve the existing cosmetic-failure behavior and cache the
+            // null result for this process lifetime.
+            result = null;
+        }
+
+        lock (_cacheGate)
+        {
+            _iconCache[exePath] = result;
+            _inFlight.Remove(exePath);
+        }
+        producer.TrySetResult(result);
         return result;
+    }
+
+    /// <summary>
+    /// Returns only a completed cache entry. A miss never performs native icon
+    /// extraction, which lets the capture picker display candidate rows before
+    /// uncached icons are resolved by its bounded worker.
+    /// </summary>
+    internal bool TryGetCachedFileIcon(string exePath, out ImageSource? icon)
+    {
+        if (string.IsNullOrEmpty(exePath))
+        {
+            icon = null;
+            return true;
+        }
+
+        lock (_cacheGate)
+            return _iconCache.TryGetValue(exePath, out icon);
     }
 
     private ImageSource? ExtractFileIcon(string exePath)

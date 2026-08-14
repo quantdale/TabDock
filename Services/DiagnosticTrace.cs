@@ -41,7 +41,7 @@ public sealed class DiagnosticTrace
         if (string.IsNullOrWhiteSpace(kind))
             kind = "unknown";
 
-        var record = new DiagnosticEventRecord
+        var record = new DiagnosticEventRecord(data)
         {
             Sequence = System.Threading.Interlocked.Increment(ref _nextSequence),
             TimestampUtc = DateTimeOffset.UtcNow.ToString("O"),
@@ -52,9 +52,6 @@ public sealed class DiagnosticTrace
             ForegroundHwnd = foregroundHwnd.ToInt64(),
             Action = action,
             Result = result,
-            Data = data == null
-                ? new Dictionary<string, string>(StringComparer.Ordinal)
-                : new Dictionary<string, string>(data, StringComparer.Ordinal),
         };
 
         lock (_gate)
@@ -89,7 +86,7 @@ public sealed class DiagnosticTrace
     }
 
     private static DiagnosticEventRecord Clone(DiagnosticEventRecord source)
-        => new()
+        => new(source.Data)
         {
             Sequence = source.Sequence,
             TimestampUtc = source.TimestampUtc,
@@ -100,7 +97,6 @@ public sealed class DiagnosticTrace
             ForegroundHwnd = source.ForegroundHwnd,
             Action = source.Action,
             Result = source.Result,
-            Data = new Dictionary<string, string>(source.Data, StringComparer.Ordinal),
         };
 }
 

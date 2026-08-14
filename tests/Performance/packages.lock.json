@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0-windows7.0": {
+      "System.Threading.AccessControl": {
+        "type": "Transitive",
+        "resolved": "10.0.11",
+        "contentHash": "GHX/QS0WfddVUHaxZuXGk/VW8NrQl1gPQQTcz5fdIT1CBeiSIi/MhIq50/XPB90qq0loFO7nmzftNeoU2qWwIQ=="
+      },
+      "tabdock": {
+        "type": "Project",
+        "dependencies": {
+          "System.Threading.AccessControl": "[10.0.11, )"
+        }
+      }
+    },
+    "net8.0-windows7.0/win-x64": {
+      "System.Threading.AccessControl": {
+        "type": "Transitive",
+        "resolved": "10.0.11",
+        "contentHash": "GHX/QS0WfddVUHaxZuXGk/VW8NrQl1gPQQTcz5fdIT1CBeiSIi/MhIq50/XPB90qq0loFO7nmzftNeoU2qWwIQ=="
+      }
+    }
+  }
+}

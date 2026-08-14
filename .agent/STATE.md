@@ -7,25 +7,26 @@ Resolve them dynamically at every fresh session. This file never records a
 self-referential current SHA or a hosted-CI result for the commit containing
 this text.
 
-## Current checkpoint — final production-readiness closure
+## Current checkpoint — performance optimization campaign
 
-- Objective: leave TabDock as a source-complete release candidate with only
-  genuine supervised/physical qualification remaining; do not create a
-  GitHub Release in this campaign.
-- Repository-content status: the bounded F23 mutation-lease ACL hardening and
-  F24 legacy `TokenRemoved` transaction convergence are implemented, covered
-  by deterministic diagnostics fixtures, and reconciled in the active
-  OpenSpec/docs. Local source-freeze qualification is complete before handoff;
-  Git commit/push and hosted-CI status are dynamic session evidence, never a
-  persisted claim about the commit containing this file. The guarded
-  close-group/exitpopulated attempts were blocked before input by the
-  environment's verified-foreground preflight.
-- Active plan/spec: `.agent/execplans/tabdock-deep-audit-remediation-2026-08-13.md`
-  plus `openspec/changes/final-production-readiness-closure-2026-08-14/`.
-- Current local evidence: Release diagnostics self-test passes with `188
-  checks / 0 failures`; `openspec validate --all --no-interactive` passes
-  `17 / 17`. The complete Release/build/publish gate is the authoritative
-  local qualification command for this source-freeze pass.
+- Objective: complete the measurement-first performance, efficiency, and
+  maintainability pass without weakening the Shepherd/no-reparent, HWND
+  identity, recovery, persistence, input, DPI, or shutdown contracts.
+- Repository-content status: early desktop-reorder filtering, one-copy
+  diagnostic metadata, post-Loaded HWND reuse, bounded generation-safe picker
+  icon resolution, duplicate-build removal, locked OpenSpec/npm tooling, and
+  NuGet lock mode are implemented. No speculative logger, persistence,
+  min-track, z-order, or large-class refactor was retained.
+- Active plan/spec: `.agent/plans/tabdock-performance-optimization-2026-08-14.md`
+  plus `openspec/changes/performance-optimization-2026-08-14/`.
+- Campaign record: `docs/internal/perf-2026-08-14.md`.
+- Current local evidence: final Release validation passes with `193 checks / 0
+  failures`, OpenSpec `18 passed / 0 failed`, locked audited restores,
+  publish, recovery/support-bundle smoke, and published `--version`. The
+  non-gating performance harness has trace, logger, picker, persistence, and
+  build/tool timing JSON evidence. Commit/push/hosted-CI status remains
+  dynamic and is never persisted as a claim about the commit containing this
+  file.
 
 ## Closure decisions
 
@@ -74,11 +75,11 @@ this text.
 
 ## Resume
 
-1. Read `AGENTS.md`, this file, the active execplan, `docs/ARCHITECTURE.md`,
-   `docs/TESTING.md`, `README.md`, and the active closure OpenSpec artifacts.
+1. Read `AGENTS.md`, this file, the active plan, `docs/ARCHITECTURE.md`,
+   `docs/TESTING.md`, `README.md`, and the performance OpenSpec artifacts.
 2. Resolve Git dynamically and inspect the bounded diff; preserve unrelated
    work and never reset/clean/force-push.
-3. If this repository content is already committed and pushed, do not repeat
-   the push. Query hosted CI for the dynamically resolved exact SHA. If source
-   edits remain, run the required local gates and make one coherent commit;
-   do not create a state-only commit to record post-CI evidence.
+3. If source edits remain, review the final diff, make one coherent commit
+   only because the campaign explicitly requests it, push safely, and query
+   hosted CI for the exact resulting SHA. Do not create a state-only commit
+   merely to record post-CI evidence.

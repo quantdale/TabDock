@@ -1,0 +1,9 @@
+{
+  "name": "tabdock-openspec-tooling",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned OpenSpec CLI used by TabDock validation",
+  "devDependencies": {
+    "@fission-ai/openspec": "1.8.0"
+  }
+}

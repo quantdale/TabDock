@@ -200,6 +200,18 @@ public sealed class LogicalPresentationSnapshot
 /// <summary>One bounded, ordered diagnostic event.</summary>
 public sealed class DiagnosticEventRecord
 {
+    public DiagnosticEventRecord()
+        : this(null)
+    {
+    }
+
+    internal DiagnosticEventRecord(IReadOnlyDictionary<string, string>? data)
+    {
+        Data = data == null
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : new Dictionary<string, string>(data, StringComparer.Ordinal);
+    }
+
     public long Sequence { get; set; }
     public string TimestampUtc { get; set; } = "unavailable";
     public string Kind { get; set; } = "unknown";
@@ -209,7 +221,7 @@ public sealed class DiagnosticEventRecord
     public long ForegroundHwnd { get; set; }
     public string? Action { get; set; }
     public string? Result { get; set; }
-    public Dictionary<string, string> Data { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, string> Data { get; set; }
 }
 
 /// <summary>Complete local report assembled from independent read-only sections.</summary>

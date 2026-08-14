@@ -1,9 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Media;
+using System.Windows.Threading;
+using TabDock.Models;
 using TabDock.ViewModels;
 using TabDock.Views;
 
@@ -217,6 +221,16 @@ internal static class DiagnosticSelfTest
         Check(second == first + 1);
         Check(events.Count == 3 && events[0].Kind == "two" && events[^1].Kind == "four");
         Check(events[0].Sequence < events[^1].Sequence);
+        var callerData = new Dictionary<string, string> { ["key"] = "before" };
+        var defensiveTrace = new DiagnosticTrace(2);
+        defensiveTrace.Record("defensive", data: callerData);
+        callerData["key"] = "after";
+        IReadOnlyList<DiagnosticEventRecord> defensiveSnapshot = defensiveTrace.Snapshot();
+        Check(defensiveSnapshot[0].Data["key"] == "before");
+        defensiveSnapshot[0].Data["key"] = "mutated-snapshot";
+        Check(defensiveTrace.Snapshot()[0].Data["key"] == "before");
+        defensiveTrace.Clear();
+        Check(defensiveTrace.Snapshot().Count == 0);
         Check(DiagnosticEnvironmentService.HashTitle("secret") != "secret");
         Check(DiagnosticEnvironmentService.ClassifyJsonText("{\"Version\":1,\"Groups\":[]}", isState: true) == "valid");
         Check(DiagnosticEnvironmentService.ClassifyJsonText("not-json", isState: true).StartsWith("corrupt", StringComparison.Ordinal));
@@ -239,7 +253,9 @@ internal static class DiagnosticSelfTest
         };
         Check(CapturePickerViewModel.SelectGroupAfterRefresh(pickerOptions, selectedGroupId)?.Id == selectedGroupId);
         Check(CapturePickerViewModel.SelectGroupAfterRefresh(pickerOptions, Guid.NewGuid())?.Id == Guid.Empty);
+        Check(CapturePickerSelfTest.BackgroundIconResolutionIsGenerationSafe());
         Check(WinEventMonitorSelfTest.FailedInstallUnwindsAndFailsClosed());
+        Check(WinEventMonitorSelfTest.DesktopReorderDropsUncapturedAndRejectsStaleDispatch());
         Check(SessionEndingPolicySelfTest.TeardownIsOneWayAndIdempotent());
         Check(MinTrackProbeSelfTest.InitializesEveryField());
         Check(WindowShepherdService.MinTrackProbeTimeoutMilliseconds <= 100);
@@ -364,6 +380,133 @@ internal static class ContainerGeometrySelfTest
     }
 }
 
+internal static class CapturePickerSelfTest
+{
+    public static bool BackgroundIconResolutionIsGenerationSafe()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "TabDock-picker-selftest-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var firstExtractionStarted = new ManualResetEventSlim();
+        var releaseFirstExtraction = new ManualResetEventSlim();
+        int extractionCount = 0;
+        int sourceGeneration = 0;
+        DrawingImage oldIcon = FrozenImage();
+        DrawingImage currentIcon = FrozenImage();
+
+        try
+        {
+            using var log = new LoggingService(Path.Combine(root, "logs"));
+            var shepherd = new WindowShepherdService(log, Path.Combine(root, "hidden-windows.json"));
+            var persistence = new PersistenceService(log, Path.Combine(root, "state.json"));
+            var manager = new GroupManager(shepherd, persistence, log);
+            var icons = new IconService(log, path =>
+            {
+                int call = Interlocked.Increment(ref extractionCount);
+                if (call == 1)
+                {
+                    firstExtractionStarted.Set();
+                    releaseFirstExtraction.Wait(TimeSpan.FromSeconds(2));
+                    return oldIcon;
+                }
+                return currentIcon;
+            });
+
+            IEnumerable<CapturePickerViewModel.WindowInfo> Candidates()
+            {
+                string path = Volatile.Read(ref sourceGeneration) == 0
+                    ? @"C:\Perf\Old.exe"
+                    : @"C:\Perf\Current.exe";
+                return new[]
+                {
+                    new CapturePickerViewModel.WindowInfo(new IntPtr(0x101), 101, "Perf", "First", path),
+                    new CapturePickerViewModel.WindowInfo(new IntPtr(0x102), 102, "Perf", "Second", path),
+                };
+            }
+
+            using var picker = new CapturePickerViewModel(manager, icons, log, Candidates);
+            if (picker.Windows.Count != 2
+                || picker.Windows[0].Title != "First"
+                || picker.Windows[1].Title != "Second"
+                || picker.Windows.Any(row => row.Icon != null)
+                || !firstExtractionStarted.Wait(TimeSpan.FromSeconds(2)))
+            {
+                return false;
+            }
+
+            // Invalidate refresh N while its old executable is still being
+            // extracted. Refresh N+1 has a different path and must win.
+            Volatile.Write(ref sourceGeneration, 1);
+            picker.Refresh();
+            if (!picker.IconResolutionCompletion.Wait(TimeSpan.FromSeconds(2)))
+                return false;
+            if (!PumpUntil(() => picker.Windows.All(row => ReferenceEquals(row.Icon, currentIcon)), 2000))
+                return false;
+
+            releaseFirstExtraction.Set();
+            if (!picker.IconResolutionCompletion.Wait(TimeSpan.FromSeconds(2)))
+                return false;
+
+            int callsAfterColdRefresh = Volatile.Read(ref extractionCount);
+            picker.Refresh();
+            bool cachedRowsAreImmediate = picker.IconResolutionCompletion.IsCompleted
+                && picker.Windows.All(row => ReferenceEquals(row.Icon, currentIcon))
+                && Volatile.Read(ref extractionCount) == callsAfterColdRefresh;
+
+            var failingIcons = new IconService(log, _ => throw new InvalidOperationException("test icon failure"));
+            using var failingPicker = new CapturePickerViewModel(
+                manager,
+                failingIcons,
+                log,
+                () => new[]
+                {
+                    new CapturePickerViewModel.WindowInfo(new IntPtr(0x103), 103, "Perf", "Failure", @"C:\Perf\Failure.exe"),
+                });
+            bool failureDoesNotBreakRefresh = failingPicker.IconResolutionCompletion.Wait(TimeSpan.FromSeconds(2));
+            return cachedRowsAreImmediate && failureDoesNotBreakRefresh;
+        }
+        finally
+        {
+            releaseFirstExtraction.Set();
+            firstExtractionStarted.Dispose();
+            releaseFirstExtraction.Dispose();
+            try
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, recursive: true);
+            }
+            catch { }
+        }
+    }
+
+    private static DrawingImage FrozenImage()
+    {
+        var image = new DrawingImage();
+        image.Freeze();
+        return image;
+    }
+
+    private static bool PumpUntil(Func<bool> condition, int timeoutMilliseconds)
+    {
+        if (condition())
+            return true;
+
+        Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+        var frame = new DispatcherFrame();
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        var timer = new DispatcherTimer(TimeSpan.FromMilliseconds(10), DispatcherPriority.Background, (_, _) =>
+        {
+            if (condition() || stopwatch.ElapsedMilliseconds >= timeoutMilliseconds)
+            {
+                frame.Continue = false;
+            }
+        }, dispatcher);
+        timer.Start();
+        Dispatcher.PushFrame(frame);
+        timer.Stop();
+        return condition();
+    }
+}
+
 internal static class WinEventMonitorSelfTest
 {
     public static bool FailedInstallUnwindsAndFailsClosed()
@@ -390,6 +533,126 @@ internal static class WinEventMonitorSelfTest
             }
             catch { }
         }
+    }
+
+    public static bool DesktopReorderDropsUncapturedAndRejectsStaleDispatch()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "TabDock-winevent-reorder-selftest-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        try
+        {
+            var context = new RecordingContext();
+            SynchronizationContext.SetSynchronizationContext(context);
+            var api = new EventApi();
+            IntPtr desktop = new(0xD); // test-only sentinel, not a native HWND
+            IntPtr foreground = new(0x9999);
+            var members = new Dictionary<IntPtr, CapturedWindow?>();
+            var memberA = new CapturedWindow { Hwnd = foreground };
+            var memberB = new CapturedWindow { Hwnd = foreground };
+
+            using var log = new LoggingService(root);
+            using var monitor = new WinEventMonitor(
+                hwnd => members.TryGetValue(hwnd, out CapturedWindow? member) && member != null,
+                hwnd => members.TryGetValue(hwnd, out CapturedWindow? member) ? member : null,
+                log,
+                api,
+                () => desktop,
+                () => foreground);
+
+            int dispatched = 0;
+            monitor.WindowZOrderChanged += (_, _) => dispatched++;
+            if (!monitor.Start())
+                return false;
+
+            int callbackTraceCount = CountReorderTrace("callback", foreground);
+            api.Raise(desktop, NativeMethods.EVENT_OBJECT_REORDER, NativeMethods.OBJID_CLIENT, NativeMethods.CHILDID_SELF);
+            bool uncapturedDropped = context.PostCount == 0
+                && CountReorderTrace("callback", foreground) == callbackTraceCount;
+
+            members[foreground] = memberA;
+            api.Raise(desktop, NativeMethods.EVENT_OBJECT_REORDER, NativeMethods.OBJID_CLIENT, NativeMethods.CHILDID_SELF);
+            if (context.PostCount != 1)
+                return false;
+            context.DispatchNext();
+            if (dispatched != 1)
+                return false;
+
+            // Release the captured object before the queued UI hop.
+            api.Raise(desktop, NativeMethods.EVENT_OBJECT_REORDER, NativeMethods.OBJID_CLIENT, NativeMethods.CHILDID_SELF);
+            members.Remove(foreground);
+            context.DispatchNext();
+            if (dispatched != 1)
+                return false;
+
+            // Recycle the same numeric HWND to a different CapturedWindow.
+            members[foreground] = memberA;
+            api.Raise(desktop, NativeMethods.EVENT_OBJECT_REORDER, NativeMethods.OBJID_CLIENT, NativeMethods.CHILDID_SELF);
+            members[foreground] = memberB;
+            context.DispatchNext();
+            if (dispatched != 1)
+                return false;
+
+            // The original object still resolves and dispatches normally.
+            members[foreground] = memberA;
+            api.Raise(desktop, NativeMethods.EVENT_OBJECT_REORDER, NativeMethods.OBJID_CLIENT, NativeMethods.CHILDID_SELF);
+            context.DispatchNext();
+            bool relevantTracePreserved = CountReorderTrace("callback", foreground) >= callbackTraceCount + 3
+                && CountReorderTrace("dispatch", foreground) >= 2;
+            return uncapturedDropped && dispatched == 2 && relevantTracePreserved;
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+            try
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, recursive: true);
+            }
+            catch { }
+        }
+    }
+
+    private static int CountReorderTrace(string phase, IntPtr hwnd)
+        => DiagnosticRuntime.Trace.Snapshot().Count(eventRecord =>
+            eventRecord.Kind == "EVENT_OBJECT_REORDER." + phase
+            && eventRecord.GuestHwnd == hwnd.ToInt64());
+
+    private sealed class RecordingContext : SynchronizationContext
+    {
+        private readonly Queue<Action> _pending = new();
+
+        public int PostCount { get; private set; }
+
+        public override void Post(SendOrPostCallback callback, object? state)
+        {
+            PostCount++;
+            _pending.Enqueue(() => callback(state));
+        }
+
+        public void DispatchNext()
+        {
+            if (_pending.Count == 0)
+                throw new InvalidOperationException("Expected a posted WinEvent dispatch.");
+            _pending.Dequeue()();
+        }
+    }
+
+    private sealed class EventApi : IWinEventHookApi
+    {
+        private NativeMethods.WinEventProc? _callback;
+        private int _nextHook;
+
+        public IntPtr Set(uint eventMin, uint eventMax, NativeMethods.WinEventProc callback, uint flags)
+        {
+            _callback = callback;
+            return new IntPtr(++_nextHook);
+        }
+
+        public bool Unhook(IntPtr hook) => true;
+
+        public void Raise(IntPtr hwnd, uint eventType, int idObject, int idChild)
+            => _callback?.Invoke(IntPtr.Zero, eventType, hwnd, idObject, idChild, 0, 1);
     }
 
     private sealed class FakeApi : IWinEventHookApi

@@ -18,6 +18,8 @@ public sealed class WinEventMonitor : IDisposable
     private readonly IWinEventHookApi _api;
     private readonly Func<IntPtr, bool> _isCapturedWindow;
     private readonly Func<IntPtr, CapturedWindow?> _resolveCapturedWindow;
+    private readonly Func<IntPtr> _getDesktopWindow;
+    private readonly Func<IntPtr> _getForegroundWindow;
     private readonly NativeMethods.WinEventProc _callback;
     private SynchronizationContext? _uiContext;
     private IntPtr _hookDestroy;
@@ -75,12 +77,16 @@ public sealed class WinEventMonitor : IDisposable
         Func<IntPtr, bool> isCapturedWindow,
         Func<IntPtr, CapturedWindow?> resolveCapturedWindow,
         LoggingService log,
-        IWinEventHookApi? api)
+        IWinEventHookApi? api,
+        Func<IntPtr>? getDesktopWindow = null,
+        Func<IntPtr>? getForegroundWindow = null)
     {
         _isCapturedWindow = isCapturedWindow;
         _resolveCapturedWindow = resolveCapturedWindow;
         _log = log;
         _api = api ?? NativeWinEventHookApi.Instance;
+        _getDesktopWindow = getDesktopWindow ?? NativeMethods.GetDesktopWindow;
+        _getForegroundWindow = getForegroundWindow ?? NativeMethods.GetForegroundWindow;
         _callback = new NativeMethods.WinEventProc(OnWinEvent);
     }
 
@@ -230,7 +236,7 @@ public sealed class WinEventMonitor : IDisposable
         // guest HWND. This is the bounded signal needed when direct activation
         // raises a guest but the foreground notification is coalesced or late.
         bool desktopReorder = eventType == NativeMethods.EVENT_OBJECT_REORDER
-            && hwnd == NativeMethods.GetDesktopWindow()
+            && hwnd == _getDesktopWindow()
             && idObject == NativeMethods.OBJID_CLIENT
             && idChild == NativeMethods.CHILDID_SELF;
         if (desktopReorder)
@@ -239,7 +245,17 @@ public sealed class WinEventMonitor : IDisposable
             // window. Capture the foreground at callback time so the posted
             // UI handler cannot accidentally pair a different window if a
             // later activation is queued before this event is dispatched.
-            IntPtr foreground = NativeMethods.GetForegroundWindow();
+            IntPtr foreground = _getForegroundWindow();
+            CapturedWindow? desktopCapturedMember = _resolveCapturedWindow(foreground);
+            // The desktop-wide reorder hook is intentionally retained because
+            // it is the earliest reliable z-order signal, but the desktop is
+            // also the event source for every unrelated reorder. Resolve the
+            // callback-time foreground before doing any diagnostic allocation
+            // or dispatcher work. A null result is the complete fail-closed
+            // membership proof for the production GroupManager index.
+            if (desktopCapturedMember == null)
+                return;
+
             if (traceEvent)
             {
                 DiagnosticRuntime.Record($"{EventName(eventType)}.callback", guest: foreground, foreground: foreground,
@@ -249,7 +265,7 @@ public sealed class WinEventMonitor : IDisposable
                         ["eventTime"] = dwmsEventTime.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     });
             }
-            Post(new WindowEventArgs(hwnd, eventType, foreground, _resolveCapturedWindow(foreground)));
+            Post(new WindowEventArgs(hwnd, eventType, foreground, desktopCapturedMember));
             return;
         }
 
@@ -270,7 +286,7 @@ public sealed class WinEventMonitor : IDisposable
         if (traceEvent)
         {
             DiagnosticRuntime.Record($"{EventName(eventType)}.callback", guest: hwnd,
-                foreground: NativeMethods.GetForegroundWindow(), action: "observe",
+                foreground: _getForegroundWindow(), action: "observe",
                 data: new Dictionary<string, string>
                 {
                     ["eventTime"] = dwmsEventTime.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -311,7 +327,7 @@ public sealed class WinEventMonitor : IDisposable
         if (traceEvent)
         {
             DiagnosticRuntime.Record($"{EventName(args.EventType)}.dispatch", guest: traceGuest,
-                foreground: NativeMethods.GetForegroundWindow(), action: "dispatch");
+                foreground: _getForegroundWindow(), action: "dispatch");
         }
 
         // A posted dispatch can outlive Stop() (its guard drops it here), and
@@ -323,7 +339,7 @@ public sealed class WinEventMonitor : IDisposable
             return;
 
         bool desktopReorder = args.EventType == NativeMethods.EVENT_OBJECT_REORDER
-            && args.Hwnd == NativeMethods.GetDesktopWindow();
+            && args.Hwnd == _getDesktopWindow();
         if (desktopReorder)
         {
             // The foreground snapshot may have changed before dispatch. If
