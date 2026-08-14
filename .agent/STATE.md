@@ -15,7 +15,8 @@ this text.
 - Repository-content status: early desktop-reorder filtering, one-copy
   diagnostic metadata, post-Loaded HWND reuse, bounded generation-safe picker
   icon resolution, duplicate-build removal, locked OpenSpec/npm tooling, and
-  NuGet lock mode are implemented. No speculative logger, persistence,
+  NuGet lock mode was evaluated but not retained because hosted SDK-generated
+  package versions differ. No speculative logger, persistence,
   min-track, z-order, or large-class refactor was retained.
 - Active plan/spec: `.agent/plans/tabdock-performance-optimization-2026-08-14.md`
   plus `openspec/changes/performance-optimization-2026-08-14/`.

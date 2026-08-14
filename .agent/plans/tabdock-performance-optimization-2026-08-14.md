@@ -23,7 +23,8 @@ and existing validation contracts.
    post-Loaded container HWND reuse. [complete]
 3. Phase C — remove proven duplicate builds and make OpenSpec installation
    repository-owned, exact, lifecycle-disabled, and npm-cacheable. Evaluate
-   NuGet lock mode without forcing fragile restore behavior. [complete]
+   NuGet lock mode without forcing fragile restore behavior. [complete: NuGet
+   lock mode intentionally not retained after hosted SDK mismatch]
 4. Phases D/E — compare picker cold/warm icon cost and other proxies; retain
    asynchronous or policy changes only when repeated measurements justify them.
    [complete: picker retained; logger/persistence/min-track/z-order changes
@@ -48,8 +49,9 @@ canonical OpenSpec change/spec source; generated mirrors are not hand-edited.
   and build matrix measurements captured.
 - Runtime changes: low-risk changes and bounded asynchronous picker icon
   resolution implemented with deterministic self-tests.
-- CI/tooling changes: solution duplicate builds removed; locked OpenSpec/npm
-  tooling and NuGet lock mode implemented.
+- CI/tooling changes: solution duplicate builds removed and locked
+  OpenSpec/npm tooling implemented; NuGet lock mode was evaluated and
+  intentionally not retained after hosted SDK mismatch.
 - Validation: final canonical Release qualification passed; hosted-CI evidence
   remains pending the explicit commit/push step.
 - Blockers: none known.

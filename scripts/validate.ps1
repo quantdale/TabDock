@@ -190,7 +190,7 @@ try {
     if ($Ci) {
         foreach ($project in $restoreProjects) {
             Invoke-Step "Restore with NuGet audit: $(Split-Path -Leaf $project)" {
-                dotnet restore $project -p:NuGetAudit=true -p:NuGetAuditMode=all -p:RestoreLockedMode=true '-warnaserror:NU1900;NU1901;NU1902;NU1903;NU1904' --nologo
+            dotnet restore $project -p:NuGetAudit=true -p:NuGetAuditMode=all '-warnaserror:NU1900;NU1901;NU1902;NU1903;NU1904' --nologo
             }
         }
         $noRestore = @('--no-restore')

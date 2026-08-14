@@ -22,8 +22,9 @@
 - [x] Remove solution-contained duplicate builds from `scripts/validate.ps1`.
 - [x] Add locked repository-owned OpenSpec tooling and use it in local/hosted
   validation with npm cache and lifecycle scripts disabled.
-- [x] Evaluate NuGet lock mode and either adopt it with clean RID validation or
-  document why it remains intentionally out of scope.
+- [x] Evaluate NuGet lock mode; do not retain it because the SDK-generated
+  `Microsoft.NET.ILLink.Tasks` version differs between local and hosted SDK
+  restores, and document the reproducibility tradeoff.
 
 ## Phases D/E — evidence-dependent runtime work
 

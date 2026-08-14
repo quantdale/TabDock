@@ -66,7 +66,7 @@ try {
         )
         foreach ($restoreProject in $restoreProjects) {
             $buildMeasurements += Measure-CommandDuration $restoreProject.name {
-                dotnet restore $restoreProject.path -p:RestoreLockedMode=true --nologo | Out-Host
+                dotnet restore $restoreProject.path --nologo | Out-Host
             }
         }
         $buildMeasurements += Measure-CommandDuration "build-solution-$Configuration" {
