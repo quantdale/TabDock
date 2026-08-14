@@ -42,7 +42,11 @@ internal static class PendingRecoverySelfTest
         Check(ThreeSiblingIndicesRemainStable());
         Check(DuplicateEntriesDoNotCollapseSiblingEvidence());
         Check(OldRewrittenLedgerRebindsOnlyWhenUnique());
+        Check(OldRewrittenTokenRemovedRebindConvergesAndRetires());
+        Check(OldRewrittenNativeRecoveryCompleteRebindConverges());
         Check(OldRewrittenLedgerWithDuplicateSurvivorsFailsClosed());
+        Check(OldRewrittenLedgerWithMultipleCandidatesFailsClosed());
+        Check(OldRewrittenForeignTokenFailsClosed());
         Check(ResolvedEntryRetirementCanBeRetried());
         Check(ExistingTokensRefuseRecovery());
         Check(DoNotRescueNeverResurrectsGuest());
@@ -604,6 +608,12 @@ internal static class PendingRecoverySelfTest
             PendingRecoveryEntry rebound = PendingRecoveryService.Discover(root, api).Files.Single().Entries[0];
             int result = RunInteractiveFor(rebound, api, root);
             PendingRecoveryEntry[] after = PendingRecoveryService.Discover(root, api).Files.Single().Entries.ToArray();
+            bool ledgerConverged = LedgerHasSingleRetiredCurrentTransaction(
+                path + ".recovered",
+                rebound.SourceFileSha256,
+                rebound.EntryIndex,
+                rebound.EntryFingerprint,
+                new IntPtr(0x5191).ToInt64());
             return rebound.TransactionNeedsRebind
                 && rebound.Status == "interrupted-transaction"
                 && result == 0
@@ -611,7 +621,122 @@ internal static class PendingRecoverySelfTest
                 && File.Exists(path + ".recovered")
                 && after.Single(entry => entry.Entry.Hwnd == 1191).AlreadyResolved
                 && after.Single(entry => entry.Entry.Hwnd == 1192).EntryIndex == 1
-                && api.Targets[new IntPtr(1191)].RecoveryToken == IntPtr.Zero;
+                && api.Targets[new IntPtr(1191)].RecoveryToken == IntPtr.Zero
+                && ledgerConverged;
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static bool OldRewrittenTokenRemovedRebindConvergesAndRetires()
+    {
+        string root = CreateRoot();
+        try
+        {
+            string path = Path.Combine(root, "hidden-windows.json.pending");
+            File.WriteAllText(path, JournalJson(2,
+                EntryV2(1210, 147, "removed-before-token-removed.exe", 14701),
+                EntryV2(1211, 148, "token-removed-rebind.exe", 14801)));
+            var api = new FakePendingApi(
+                Target.For(1210, 147, 1147, "removed-before-token-removed.exe", "Modern", 14701),
+                Target.For(1211, 148, 1148, "token-removed-rebind.exe", "Modern", 14801));
+            PendingRecoveryEntry oldEntry = PendingRecoveryService.Discover(root, api).Files.Single().Entries[1];
+            const long recoveryToken = 0x5301;
+            if (!FaultAfterStage(oldEntry, api, "after-native-complete", recoveryToken))
+                return false;
+
+            // The old implementation had already removed the native token;
+            // preserve that exact durable boundary while rewriting the source
+            // in the same way the legacy implementation removed a sibling.
+            api.Targets[new IntPtr(1211)].RecoveryToken = IntPtr.Zero;
+            int placementBefore = api.PlacementCount;
+            int showBefore = api.ShowCount;
+            int transitionBefore = api.TransitionCount;
+            RemoveFirstPendingEntry(path);
+            if (!SetLedgerTransactionPhase(path + ".recovered", PendingRecoveryService.RecoveryPhase.TokenRemoved))
+                return false;
+
+            PendingRecoveryEntry rebound = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
+            bool literalFixture = rebound.TransactionNeedsRebind
+                && rebound.Transaction?.Phase == PendingRecoveryService.RecoveryPhase.TokenRemoved
+                && rebound.EntryIndex == 0
+                && oldEntry.EntryIndex == 1
+                && !string.Equals(oldEntry.SourceFileSha256, rebound.SourceFileSha256, StringComparison.OrdinalIgnoreCase);
+            int result = RunInteractiveFor(rebound, api, root);
+            bool noNativeRepeat = api.PlacementCount == placementBefore
+                && api.ShowCount == showBefore
+                && api.TransitionCount == transitionBefore
+                && api.RemovePropertyCount == 0
+                && api.Targets[new IntPtr(1211)].RecoveryToken == IntPtr.Zero;
+            bool ledgerConverged = LedgerHasSingleRetiredCurrentTransaction(
+                path + ".recovered",
+                rebound.SourceFileSha256,
+                rebound.EntryIndex,
+                rebound.EntryFingerprint,
+                recoveryToken);
+            int repeated = PendingRecoveryService.RunInteractive(
+                new StringReader(string.Empty),
+                new StringWriter(),
+                root,
+                api,
+                Array.Empty<PendingRecoveryCandidate>());
+            return literalFixture
+                && result == 0
+                && noNativeRepeat
+                && ledgerConverged
+                && !File.Exists(path)
+                && repeated == 0
+                && PendingRecoveryService.Discover(root, api).Files.Count == 0;
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static bool OldRewrittenNativeRecoveryCompleteRebindConverges()
+    {
+        string root = CreateRoot();
+        try
+        {
+            string path = Path.Combine(root, "hidden-windows.json.pending");
+            File.WriteAllText(path, JournalJson(2,
+                EntryV2(1220, 149, "removed-before-native-complete.exe", 14901),
+                EntryV2(1221, 150, "native-complete-rebind.exe", 15001)));
+            var api = new FakePendingApi(
+                Target.For(1220, 149, 1149, "removed-before-native-complete.exe", "Modern", 14901),
+                Target.For(1221, 150, 1150, "native-complete-rebind.exe", "Modern", 15001));
+            PendingRecoveryEntry oldEntry = PendingRecoveryService.Discover(root, api).Files.Single().Entries[1];
+            const long recoveryToken = 0x5302;
+            if (!FaultAfterStage(oldEntry, api, "after-native-complete", recoveryToken))
+                return false;
+            int placementBefore = api.PlacementCount;
+            int showBefore = api.ShowCount;
+            int transitionBefore = api.TransitionCount;
+            RemoveFirstPendingEntry(path);
+            PendingRecoveryEntry rebound = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
+            bool sourceChanged = rebound.TransactionNeedsRebind
+                && rebound.Transaction?.Phase == PendingRecoveryService.RecoveryPhase.NativeRecoveryComplete
+                && !string.Equals(oldEntry.SourceFileSha256, rebound.SourceFileSha256, StringComparison.OrdinalIgnoreCase);
+            int result = RunInteractiveFor(rebound, api, root);
+            bool nativeOnlyCleanup = api.PlacementCount == placementBefore
+                && api.ShowCount == showBefore
+                && api.TransitionCount == transitionBefore
+                && api.RemovePropertyCount == 1
+                && api.Targets[new IntPtr(1221)].RecoveryToken == IntPtr.Zero;
+            bool ledgerConverged = LedgerHasSingleRetiredCurrentTransaction(
+                path + ".recovered",
+                rebound.SourceFileSha256,
+                rebound.EntryIndex,
+                rebound.EntryFingerprint,
+                recoveryToken);
+            return sourceChanged
+                && result == 0
+                && nativeOnlyCleanup
+                && ledgerConverged
+                && !File.Exists(path);
         }
         finally
         {
@@ -640,6 +765,83 @@ internal static class PendingRecoverySelfTest
                 && survivors.All(entry => entry.Status == "unverifiable-transaction")
                 && survivors.All(entry => entry.Transaction == null)
                 && api.Targets[new IntPtr(1201)].RecoveryToken == new IntPtr(0x5201);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static bool OldRewrittenLedgerWithMultipleCandidatesFailsClosed()
+    {
+        string root = CreateRoot();
+        try
+        {
+            string path = Path.Combine(root, "hidden-windows.json.pending");
+            File.WriteAllText(path, JournalJson(2, EntryV2(1230, 151, "multiple-legacy-candidates.exe", 15101)));
+            var api = new FakePendingApi(Target.For(1230, 151, 1151, "multiple-legacy-candidates.exe", "Modern", 15101));
+            PendingRecoveryEntry oldEntry = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
+            const long recoveryToken = 0x5303;
+            if (!FaultAfterStage(oldEntry, api, "after-setprop", recoveryToken)
+                || !DuplicateLedgerTransaction(path + ".recovered", "legacy-second-sha", 7))
+                return false;
+            RewritePendingSource(path);
+            PendingRecoveryEntry ambiguous = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
+            int result = RunInteractiveFor(ambiguous, api, root);
+            JsonObject ledger = JsonNode.Parse(File.ReadAllText(path + ".recovered"))!.AsObject();
+            int transactionCount = ledger["Transactions"]?.AsArray().Count ?? 0;
+            return ambiguous.TransactionAmbiguous
+                && ambiguous.Transaction == null
+                && ambiguous.Status == "unverifiable-transaction"
+                && result == 2
+                && transactionCount == 2
+                && api.PlacementCount == 0
+                && api.ShowCount == 0
+                && api.TransitionCount == 0
+                && api.Targets[new IntPtr(1230)].RecoveryToken == new IntPtr(recoveryToken);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static bool OldRewrittenForeignTokenFailsClosed()
+    {
+        string root = CreateRoot();
+        try
+        {
+            string path = Path.Combine(root, "hidden-windows.json.pending");
+            File.WriteAllText(path, JournalJson(2, EntryV2(1240, 152, "foreign-recovery-token.exe", 15201)));
+            var api = new FakePendingApi(Target.For(1240, 152, 1152, "foreign-recovery-token.exe", "Modern", 15201));
+            PendingRecoveryEntry oldEntry = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
+            const long recoveryToken = 0x5304;
+            if (!FaultAfterStage(oldEntry, api, "after-native-complete", recoveryToken))
+                return false;
+            string oldSourceSha = oldEntry.SourceFileSha256;
+            if (!SetLedgerTransactionPhase(path + ".recovered", PendingRecoveryService.RecoveryPhase.TokenRemoved))
+                return false;
+            api.Targets[new IntPtr(1240)].RecoveryToken = new IntPtr(0x5BAD);
+            RewritePendingSource(path);
+            PendingRecoveryEntry rebound = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
+            int result = PendingRecoveryService.RunInteractive(
+                new StringReader(string.Empty),
+                new StringWriter(),
+                root,
+                api,
+                Array.Empty<PendingRecoveryCandidate>());
+            JsonObject ledger = JsonNode.Parse(File.ReadAllText(path + ".recovered"))!.AsObject();
+            JsonObject transaction = ledger["Transactions"]!.AsArray().Single()!.AsObject();
+            return rebound.TransactionNeedsRebind
+                && result == 2
+                && api.Targets[new IntPtr(1240)].RecoveryToken == new IntPtr(0x5BAD)
+                && api.RemovePropertyCount == 0
+                && api.PlacementCount == 1
+                && api.ShowCount == 1
+                && api.TransitionCount == 1
+                && string.Equals(transaction["SourceFileSha256"]?.GetValue<string>(), oldSourceSha, StringComparison.OrdinalIgnoreCase)
+                && transaction["Phase"]?.GetValue<string>() == PendingRecoveryService.RecoveryPhase.TokenRemoved
+                && File.Exists(path);
         }
         finally
         {
@@ -1162,6 +1364,95 @@ internal static class PendingRecoverySelfTest
         JsonObject root = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
         root["Entries"]!.AsArray().RemoveAt(0);
         File.WriteAllText(path, root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private static void RewritePendingSource(string path)
+    {
+        JsonObject root = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        root["unknown-root-field"] = "rewritten-source";
+        File.WriteAllText(path, root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private static bool SetLedgerTransactionPhase(string path, string phase)
+    {
+        try
+        {
+            JsonObject root = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+            if (root["Transactions"] is not JsonArray transactions
+                || transactions.Count != 1
+                || transactions[0] is not JsonObject transaction)
+            {
+                return false;
+            }
+
+            transaction["Phase"] = phase;
+            File.WriteAllText(path, root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool DuplicateLedgerTransaction(string path, string secondSourceSha, int secondEntryIndex)
+    {
+        try
+        {
+            JsonObject root = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+            if (root["Transactions"] is not JsonArray transactions
+                || transactions.Count != 1
+                || transactions[0] is not JsonObject first)
+            {
+                return false;
+            }
+
+            JsonObject second = JsonNode.Parse(first.ToJsonString())!.AsObject();
+            second["SourceFileSha256"] = secondSourceSha;
+            second["EntryIndex"] = secondEntryIndex;
+            transactions.Add(second);
+            File.WriteAllText(path, root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool LedgerHasSingleRetiredCurrentTransaction(
+        string path,
+        string sourceSha256,
+        int entryIndex,
+        string entryFingerprint,
+        long recoveryToken)
+    {
+        try
+        {
+            JsonObject root = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+            if (root["Transactions"] is not JsonArray transactions
+                || transactions.Count != 1
+                || transactions[0] is not JsonObject transaction)
+            {
+                return false;
+            }
+
+            return transaction["Phase"]?.GetValue<string>() == PendingRecoveryService.RecoveryPhase.Retired
+                && string.Equals(
+                    transaction["SourceFileSha256"]?.GetValue<string>(),
+                    sourceSha256,
+                    StringComparison.OrdinalIgnoreCase)
+                && transaction["EntryIndex"]?.GetValue<int>() == entryIndex
+                && string.Equals(
+                    transaction["EntryFingerprint"]?.GetValue<string>(),
+                    entryFingerprint,
+                    StringComparison.OrdinalIgnoreCase)
+                && transaction["RecoveryToken"]?.GetValue<long>() == recoveryToken;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static string JournalJson(int? version, params JsonObject[] entries)

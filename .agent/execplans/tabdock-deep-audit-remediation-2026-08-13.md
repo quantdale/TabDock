@@ -1388,7 +1388,9 @@ rewritten on each retirement.
   unresolved. The `.recovered` ledger carries logical resolution and the
   source is deleted only as an all-resolved unit. Old rewritten ledgers may
   rebind only when the current fingerprint is unique and one transaction is
-  provably identified; duplicate ambiguity is retained fail-closed.
+  provably identified; the existing transaction record is updated even at
+  `TokenRemoved`, so one recovery token cannot strand a parallel old binding.
+  Duplicate ambiguity and foreign tokens remain retained fail-closed.
 - Native-complete transactions use an explicit target classifier. Exact
   targets may lose only their exact recovery token; destroyed or positively
   replaced HWNDs receive disk-only cleanup; unavailable identity retains the
@@ -1398,9 +1400,12 @@ rewritten on each retirement.
   bounded index, valid siblings are salvaged, active indexes are clamped, and
   unreadable/corrupt/future overwrite protection remains unchanged.
 - The mutation lease is `Global\\TabDock-<canonical Windows user SID>` and
-  fails closed if the SID cannot be obtained. The dependency-free named
-  mutex boundary is retained; ACL package expansion was assessed and not
-  added.
+  fails closed if the SID, protected DACL, or expected existing-object
+  security cannot be proven. Stable Microsoft `System.Threading.AccessControl`
+  `10.0.11` supplies `MutexAcl`; the protected DACL grants only the current
+  SID `Synchronize | Modify | ReadPermissions`, with no broad principal or
+  inherited grant. The `Global` namespace and abandoned-owner semantics remain
+  unchanged.
 - Supervised recovery uses one bounded `Rune`-based terminal display
   sanitizer for title, executable, class, candidate labels, filenames,
   statuses, and errors. README support guidance makes sanitized bundle/doctor
@@ -1408,12 +1413,12 @@ rewritten on each retirement.
   unchanged; docs now state the ordinary Win32 check-to-commit race rather than
   claiming atomic identity.
 
-Current local evidence after this checkpoint: Release solution,
-ValidationDriver, and GuineaPig builds; diagnostics self-test (`181/0`);
+Current repository-content evidence after this checkpoint: Release solution,
+ValidationDriver, and GuineaPig builds; diagnostics self-test (`188/0`);
 `scripts/validate.ps1 -Configuration Release -Ci -Publish`; OpenSpec
-validation (`17/17`); support-bundle privacy; publish/version smoke; and both
-isolated parent-console paths pass. The guarded `closegroupprompt` and
-`exitpopulated` attempts were blocked before input by the verified-foreground
-preflight and cleaned up safely. Remaining work is final diff review, normal
-push, and exact hosted-CI confirmation. Do not add a state-only commit for CI
-evidence.
+validation (`17/17`); NuGet vulnerability audit; support-bundle privacy;
+publish/version smoke; and the focused TokenRemoved/ACL fixtures all pass.
+The guarded `closegroupprompt` and `exitpopulated` attempts were blocked before
+input by the verified-foreground preflight and cleaned up safely. Git refs and
+hosted-CI results are dynamic session handoff evidence and are not recorded as
+post-CI plan state; do not add a state-only commit for them.

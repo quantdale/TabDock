@@ -26,8 +26,9 @@ per-user Windows desktop product.
   preserve overwrite protection, bound restored active indexes, and make manual
   root-property classification case-insensitive like deserialization.
 - Scope the product mutation mutex to the current Windows user SID in the
-  `Global` namespace, fail closed if the SID cannot be established, and retain
-  same-user cross-session and abandoned-owner semantics.
+  `Global` namespace, apply an explicit least-privilege Windows DACL, fail
+  closed if identity/security cannot be established, and retain same-user
+  cross-session and abandoned-owner semantics.
 - Apply one bounded terminal-display sanitizer to every externally derived
   supervised-recovery field, preserving ordinary Unicode while neutralizing
   terminal controls and line separators.
@@ -69,7 +70,9 @@ Affected code includes `Views/ContainerWindow.xaml.cs`,
 `Services/PendingRecoveryService.cs` and its self-tests,
 `Services/PersistenceService.cs` and its self-tests,
 `Services/ProductMutationLease.cs` and its self-tests, models, diagnostics,
-README/docs, and the new OpenSpec delta artifacts. No third-party runtime
-dependency or native reparenting mechanism is introduced; the existing
+README/docs, and the new OpenSpec delta artifacts. One stable,
+Microsoft-maintained `System.Threading.AccessControl` package is used solely
+for the Windows ACL-backed mutation mutex; no preview package, private
+namespace, or native reparenting mechanism is introduced. The existing
 Shepherd, journal, support-privacy, and validation architecture remains in
 force.

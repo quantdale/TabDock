@@ -9,7 +9,7 @@ This is the detailed, progressively-loaded reference for AI coding agents workin
 
 ## Project overview
 
-TabDock is a Windows desktop utility that merges multiple independent application windows (browser, terminal, editor, etc.) into a single container window with a browser-style tab strip. It is implemented as a C# / .NET 8 / WPF application and uses only P/Invoke for native interop — no third-party NuGet packages.
+TabDock is a Windows desktop utility that merges multiple independent application windows (browser, terminal, editor, etc.) into a single container window with a browser-style tab strip. It is implemented as a C# / .NET 8 / WPF application and uses P/Invoke for native interop plus the stable Microsoft-maintained `System.Threading.AccessControl` package for the secured product-mutation mutex; it has no unrelated third-party NuGet packages.
 
 A captured window is never reparented: TabDock positions it over the container's content area and z-orders it in place (the "Shepherd" model — see `WindowShepherdService` in the Services table below), so it remains, from Windows' point of view, an ordinary independent top-level window the whole time it's captured.
 
@@ -263,7 +263,7 @@ The `openspec/` directory holds an OpenSpec workflow (`schema: spec-driven` in `
 
 - **Elevation:** TabDock ships as a standard-user application. It detects elevated target processes and rejects the capture with a clear message rather than auto-elevating itself.
 - **UIPI:** Capturing a window owned by a higher-integrity process is blocked by OS-level checks; a non-elevated TabDock cannot position or foreground such a window either.
-- **No external dependencies:** The project does not reference third-party NuGet packages, minimizing supply-chain surface area. Local builds default to offline-friendly NuGet audit settings; CI Release qualification enables full vulnerability auditing and fails on audit warnings.
+- **Dependency surface:** The project uses only the Microsoft-maintained `System.Threading.AccessControl` package for the ACL-backed product-mutation mutex; no unrelated third-party NuGet packages are used. Local builds default to offline-friendly NuGet audit settings; CI Release qualification enables full vulnerability auditing and fails on audit warnings.
 - **Persistence:** Only metadata is written to `%APPDATA%\TabDock\state.json`; the separate versioned crash journal contains identity and reversible presentation state needed for rescue. No application content or credentials are persisted. Future or unreadable state is preserved rather than overwritten.
 - **Logs:** Diagnostic logs are written to `%APPDATA%\TabDock\logs\TabDock.log` and rotated at 1 MB. If the directory is unavailable, logging degrades to a bounded in-memory tail with a visible startup warning; capture still requires durable journal storage.
 

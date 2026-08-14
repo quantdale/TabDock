@@ -26,7 +26,8 @@ titles are hashes/lengths, paths are redacted, and no full personal files are
 collected. `--pending-recovery` is also read-only and uses stable session entry
 IDs; it does not rewrite or mutate pending evidence. `--recover-pending` is a
 separate intentionally mutating workflow and must be run only under supervised
-operator control: it acquires the same product-mutation lease as normal
+operator control: it acquires the same SID-scoped, ACL-protected
+product-mutation lease as normal
 TabDock, requires selecting the entry, selecting the exact live top-level
 candidate, and typing `YES`. Never use an automatic recover-all command or a
 raw Win32 tool for legacy evidence.

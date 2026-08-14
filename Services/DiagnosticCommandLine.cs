@@ -222,7 +222,10 @@ internal static class DiagnosticSelfTest
         Check(DiagnosticEnvironmentService.ClassifyJsonText("not-json", isState: true).StartsWith("corrupt", StringComparison.Ordinal));
         Check(ConsoleSessionSelfTest.UsesScopedStreams());
         Check(ProductMutationLeaseSelfTest.UserScopedNameRules());
+        Check(ProductMutationLeaseSelfTest.AccessControlRulesAreUserScoped());
         Check(ProductMutationLeaseSelfTest.ExclusiveAndReusable());
+        Check(ProductMutationLeaseSelfTest.AccessDeniedAndConstructionFailuresFailClosed());
+        Check(ProductMutationLeaseSelfTest.DiagnosticCommandsRemainLeaseIndependent());
         Check(ProductMutationLeaseSelfTest.DifferentUserScopedLeasesCanCoexist());
         Check(DeferredWindowPositionSelfTest.ChangedHandlesAreChained());
         Check(DeferredWindowPositionSelfTest.FailedDeferAbandonsWithoutEnd());

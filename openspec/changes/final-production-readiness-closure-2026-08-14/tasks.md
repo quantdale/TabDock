@@ -19,8 +19,8 @@
 
 ## 4. Per-user mutation lease
 
-- [x] 4.1 Derive a canonical `Global\\TabDock-<SID>` lease name from `WindowsIdentity.User`, reject unsafe/missing identity, and preserve same-user cross-session/abandoned-owner behavior.
-- [x] 4.2 Update lease documentation/spec references and add seam tests for same/different SID names, unsafe values, exclusivity, release/reacquisition, abandoned ownership, and read-only independence.
+- [x] 4.1 Derive a canonical `Global\\TabDock-<SID>` lease name from `WindowsIdentity.User`, apply a protected current-user DACL with required wait/release/read-permissions rights, reject unsafe/missing identity/security, and preserve same-user cross-session/abandoned-owner behavior.
+- [x] 4.2 Update lease documentation/spec references and add deterministic ACL, pre-existing-object, failure-cleanup, same/different SID, unsafe-value, exclusivity, release/reacquisition, abandoned-ownership, and read-only-independence tests.
 
 ## 5. Privacy and terminal safety
 
@@ -37,4 +37,8 @@
 
 - [x] 7.1 Run targeted self-tests and affected Release builds, including supported close-group/exitpopulated real-input scenarios and isolated console qualification. (The guarded close-group scenarios were attempted but the environment blocked both at verified-foreground preflight before input.)
 - [x] 7.2 Run the complete Release CI/publish/OpenSpec/NuGet/privacy/diff gates and explicit ValidationDriver/GuineaPig builds.
-- [ ] 7.3 Review the complete diff and forbidden architectural calls, commit coherent closure content, fetch/push `main` normally, and verify the exact final GitHub Actions run until green without creating a release.
+- [x] 7.3 Review the complete diff and forbidden architectural calls, complete repository-content qualification, and prepare one coherent source-freeze commit without creating a release.
+
+Normal `main` push and exact-SHA hosted-CI confirmation are dynamic session
+handoff evidence governed by `AGENTS.md`; they are not persisted as a
+post-CI checkbox or a state-only follow-up commit.

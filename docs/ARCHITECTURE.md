@@ -3,8 +3,11 @@
 A compact system map for agents and developers working on TabDock: a C#/.NET 8 WPF utility
 that merges independent top-level windows into a tabbed container under the **Shepherd**
 model — guests are positioned, z-ordered, shown and hidden over the container's content
-area, but *never reparented or restyled* (`Services/WindowShepherdService.cs:11-41`). No
-third-party NuGet dependencies; all native interop goes through `NativeMethods.cs`. Every
+area, but *never reparented or restyled* (`Services/WindowShepherdService.cs:11-41`). The
+only added package is the stable Microsoft-maintained
+`System.Threading.AccessControl` ACL surface used by the product mutation
+lease; no unrelated third-party NuGet dependencies are used, and all native
+interop goes through `NativeMethods.cs`. Every
 claim below was verified against current source; citations use `path.cs:line`.
 
 ---
@@ -68,9 +71,12 @@ failures are still logged (`App.xaml.cs:49-66`). `Application_Startup` (`App.xam
    leases. A second same-user mutating owner exits cleanly without touching
    shared state (`Services/ProductMutationLease.cs`, `AcquireSingleInstanceMutex`
    in `App.xaml.cs`). Read-only diagnostics do not acquire the lease. SID
-   discovery failure is fail-closed; the implementation intentionally keeps
-   the existing dependency-free named-mutex contract rather than adding a
-   separate ACL package.
+   discovery or ACL/security verification failure is fail-closed. The lease
+   is created/opened through `MutexAcl` with a protected DACL owned by the
+   current SID and only `Synchronize | Modify | ReadPermissions`; it grants no
+   Everyone/World/inherited/unrelated-user access. The `Global` namespace is
+   intentional for same-user cross-session coordination, and an unexpected or
+   denied pre-existing object is not weakened or replaced.
 2. **`CleanupStaleTempFiles`** — removes orphaned `state.json.tmp` / `hidden-windows.json.tmp`
    from a prior crashed atomic write (`App.xaml.cs:90`, `App.xaml.cs:642-674`).
 3. **Service construction** (`App.xaml.cs:92-97`): `IconService`, `WindowShepherdService`,

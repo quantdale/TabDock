@@ -13,8 +13,7 @@
     <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
     <!-- Local/offline development may opt out of the network-backed audit. CI
          explicitly overrides this property to true and uses AuditMode=all;
-         command-line properties take precedence over this local default. The
-         repository currently has no third-party package references. -->
+         command-line properties take precedence over this local default. -->
     <NuGetAudit Condition="'$(NuGetAudit)' == ''">false</NuGetAudit>
     <!--
       The repository root also contains spike/test projects. Exclude their build artifacts
@@ -43,6 +42,13 @@
     <AssemblyMetadata Include="RuntimeIdentifier" Value="$(RuntimeIdentifier)" />
     <AssemblyMetadata Include="SelfContained" Value="$(SelfContained)" />
     <AssemblyMetadata Include="SourceRevisionId" Value="$(SourceRevisionId)" Condition="'$(SourceRevisionId)' != ''" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Stable .NET 8 ACL support for the secured Global product-mutation
+         mutex. This package is Microsoft-maintained and has no net8.0
+         transitive dependencies. -->
+    <PackageReference Include="System.Threading.AccessControl" Version="10.0.11" />
   </ItemGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">

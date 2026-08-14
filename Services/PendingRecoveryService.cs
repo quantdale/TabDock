@@ -616,6 +616,12 @@ internal static class PendingRecoveryService
             }
         }
 
+        if (entry.TransactionNeedsRebind
+            && !PersistTransaction(entry, transaction, out error))
+        {
+            return false;
+        }
+
         if (PhaseRank(transaction.Phase) < PhaseRank(RecoveryPhase.TokenRemoved)
             && !PersistTransactionPhase(entry, transaction, RecoveryPhase.TokenRemoved, out error))
             return false;
@@ -1258,8 +1264,8 @@ internal static class PendingRecoveryService
                     // Keep the durable old record available for the fallback
                     // lookup in PersistTransaction, while presenting the
                     // transaction to the execution path under the current
-                    // source binding. The rebind is committed on the next
-                    // phase transition only after the unique match above.
+                    // source binding. The unique rebind is committed by the
+                    // next durable phase write or completed-cleanup pass.
                     transaction = RebindTransaction(transaction, fileName, sourceSha256, fingerprint, entryIndex);
                 }
                 bool transactionSourceMatches = transaction != null

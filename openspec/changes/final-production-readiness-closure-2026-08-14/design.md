@@ -5,9 +5,9 @@ durable recovery phases, atomic JSON writes, and deterministic self-test seams.
 The remaining defects occur at boundaries where those protections are currently
 discarded: the close prompt retains a live capture object after release,
 pending-entry retirement rewrites sibling indexes, nested persistence errors
-escape at group scope, the product mutex has no user scope, completed recovery
-does not distinguish replacement from uncertainty, and supervised output
-sanitizes only titles.
+escape at group scope, the product mutex lacks an explicit user-scoped DACL,
+completed recovery does not distinguish replacement from uncertainty, and
+supervised output sanitizes only titles.
 
 ## Goals / Non-Goals
 
@@ -21,8 +21,9 @@ sanitizes only titles.
 - Salvage valid persistence intent around malformed nested records without
   weakening unreadable, syntactically corrupt, or future-schema overwrite
   protection.
-- Establish a canonical SID-derived `Global` lease name and fail closed when
-  Windows user identity is unavailable.
+- Establish a canonical SID-derived `Global` lease name with a protected
+  current-user-only Windows DACL, and fail closed when identity, ACL
+  construction, or secured object access is unavailable.
 - Keep native-complete cleanup disk-only for destroyed/positively replaced
   targets, and terminal output bounded and control-free.
 
@@ -34,9 +35,9 @@ sanitizes only titles.
   verification across the Win32 check-to-commit interval.
 - Automatic recovery of ambiguous legacy evidence or removal of foreign native
   properties.
-- A new third-party runtime dependency for mutex ACLs; the implementation will
-  assess the .NET 8 ACL surface and keep the existing dependency-free product
-  unless a framework-supported, proportionate option is available.
+- A preview/RC dependency, a private namespace, or a broad local-user ACL for
+  mutexes. The stable Microsoft ACL package is limited to the product lease
+  and is audited with the existing Release dependency gates.
 
 ## Decisions
 
@@ -73,7 +74,8 @@ For prior rewritten-source evidence, discovery first tries the exact binding.
 If the SHA changed, it may rebind one non-retired transaction when exactly one
 current entry has the fingerprint and exactly one ledger transaction can own
 that fingerprint for the source file. The transaction is updated to the
-current SHA/index on the next durable phase write. Multiple candidate entries,
+current SHA/index on the next durable phase write or completed-cleanup pass.
+Multiple candidate entries,
 multiple unresolved transactions, or a foreign source/file identity produce an
 explicit unverifiable status. Legacy resolution markers with no source binding
 may use the existing unique-fingerprint compatibility rule; non-empty old-SHA
@@ -103,19 +105,24 @@ therefore writes a coherent state containing all known-valid intent, while the
 existing unreadable/future/corrupt-primary gates still prevent an empty
 overwrite.
 
-### The lease uses canonical SID scope without adding an unreviewed package
+### The lease uses canonical SID scope and an explicit protected DACL
 
 Read the current `WindowsIdentity.User` SID, canonicalize it through
 `SecurityIdentifier`, and construct `Global\\TabDock-<sid>`. Same-user
 processes across sessions therefore share one name, while different SIDs do
-not. Missing or malformed identity returns acquisition failure. The .NET 8
-reference surface does not include the newer `MutexAcl` helper without an
-additional package; introducing that dependency solely for ACL construction
-would expand the product dependency/audit surface. The closure therefore uses
-SID scoping as the required boundary, documents that Windows default named
-object ACL behavior remains an OS-level consideration, and tests unsafe-name
-rejection and user isolation. The existing normal WaitOne/abandoned-owner
-semantics remain unchanged.
+not. A stable `System.Threading.AccessControl` package supplies
+`MutexAcl.Create`/`TryOpenExisting` for the `net8.0-windows` target. Creation
+uses a protected DACL owned by the current SID with only
+`Synchronize | Modify | ReadPermissions`; no Everyone, World,
+Authenticated Users, inherited, or unrelated local-user allow rule is added.
+The object owner is verified before waiting, and an existing object with an
+unexpected owner/DACL or denied access fails closed. The code never falls
+back to the default `Mutex` constructor. The `Global` prefix and ordinary
+WaitOne/abandoned-owner semantics remain unchanged, so normal startup and
+`--recover-pending` continue to share the same secured lease while read-only
+commands remain independent. LocalSystem is not granted an explicit ACE
+because TabDock has no service-mode mutation owner; privileged Windows
+security overrides remain an OS boundary rather than a product grant.
 
 ### One sanitizer owns supervised terminal display
 
@@ -149,19 +156,24 @@ than introducing an unsupported cancellation or visible split tearing.
   siblings are retained, the condition is logged, the old primary is copied as
   the next-save backup, and unreadable/future/syntax-corrupt files remain
   fail-closed.
-- **[Risk]** SID-derived names reduce but do not replace a full ACL boundary.
-  → **Mitigation:** no raw username fallback is allowed; the decision and
-  official .NET mutex contract are documented, and a future ACL package can be
-  evaluated independently without changing the lease semantics.
+- **[Risk]** A hostile local process can pre-create the exact named object and
+  deny TabDock access before it creates its secured object. → **Mitigation:**
+  access denial and any unexpected security descriptor fail closed; TabDock
+  never weakens, replaces, or destroys a foreign kernel object. This remains a
+  bounded named-object denial-of-service limitation.
+- **[Risk]** ACL APIs or security-descriptor inspection can fail on a damaged
+  or incompatible Windows object. → **Mitigation:** all construction, open,
+  verification, wait, and cleanup paths fail closed, and the stable package is
+  covered by audited build/publish validation.
 
 ## Migration Plan
 
 1. Existing v1/v2/v3 pending journals continue through the current discovery
    and supervised flows; new resolutions stop rewriting unresolved source
    arrays.
-2. On an old rewritten file, unique transaction evidence is rebound only at a
-   durable transaction phase; ambiguous records remain visible for supervised
-   handling.
+2. On an old rewritten file, unique transaction evidence is rebound at a
+   durable transaction phase or completed-cleanup pass; ambiguous records
+   remain visible for supervised handling.
 3. After all entries in a source are logically resolved, the source is deleted
    as one unit and the sidecar ledger is retained for audit/retry evidence.
 4. No release tag or binary artifact is created by this change. The next
