@@ -23,10 +23,10 @@ internal static partial class Scenarios
     //                          puts initiating=LEFT, chosen=RIGHT.
     //   * When split is active the menu also offers "Exit split screen" -> returns
     //     to single-visible-guest, hides the departing member, releases nothing.
-    //   * Clicking a split member keeps split; clicking a non-paired tab also
-    //     keeps split (the pair is the persistent selected unit — split exits
-    //     only via the explicit "Exit split screen" item, a Split Screen
-    //     replacement, or a structural member removal).
+    //   * Clicking either split member keeps the pair active. Hover/right-click
+    //     on an unrelated tab also leaves it untouched, but an ordinary LEFT
+    //     click on a non-member is an explicit presentation switch: split exits
+    //     and the clicked tab becomes the full-width active guest.
     // The app logs SPLIT[enter] / SPLIT[exit] / SPLIT[replace] / SPLIT[member-gone]
     // (all present in committed source).
     //
@@ -290,6 +290,10 @@ internal static partial class Scenarios
         long off = EnterSplitTwo(ctx, container, pigA);
         ctx.Check(TabDockLog.WaitForLogLine(off, "SPLIT[enter]", 3000), "SPLIT[enter] logged");
         AssertSplitPanes(ctx, host, pigA, pigB, "split-two-auto");
+        ctx.Check(TabDockLog.WaitForLogLine(off, "SPLIT[settled]", 3000),
+            "post-popup split presentation settle logged");
+        ctx.Check(Util.WaitUntil(() => NativeMethods.GetForegroundWindow() == pigA.Hwnd, 3000),
+            "split creation settles the initiating LEFT member as real foreground");
         ctx.Check(TabCount(container) == 1, "pair renders as ONE composite tab item (both captured, none released)");
     }
 
@@ -309,6 +313,10 @@ internal static partial class Scenarios
         ClickTabSubmenuItem(ctx, container, pigA.Title, "Split screen", pigC.Title);
         ctx.Check(TabDockLog.WaitForLogLine(off, "SPLIT[enter]", 3000), "SPLIT[enter] logged");
         AssertSplitPanes(ctx, host, pigA, pigC, "split-select-partner");
+        ctx.Check(TabDockLog.WaitForLogLine(off, "SPLIT[settled]", 3000),
+            "submenu split receives the post-popup presentation settle");
+        ctx.Check(Util.WaitUntil(() => NativeMethods.GetForegroundWindow() == pigA.Hwnd, 3000),
+            "submenu split settles the initiating LEFT member as real foreground");
         ctx.Check(IsReleasedAndHidden(pigB.Hwnd), $"'{pigB.Title}' hidden (non-member of the split pair)");
     }
 
@@ -701,11 +709,10 @@ internal static partial class Scenarios
     }
 
     // -------------------------------------------------------------------------
-    // split-click-third: clicking a NON-paired tab (C) while A/B are split must
-    // leave the pair untouched — split stays active, A and B stay glued and
-    // visible, C stays hidden, no SPLIT[exit], no member released. (Split
-    // persistence contract: the pair is the selected tab-strip unit; only an
-    // explicit Split Screen operation or a structural member removal ends it.)
+    // split-click-third: regression for the user-reported three-tab defect.
+    // With A/B split, an ordinary LEFT click on C is an explicit presentation
+    // switch: the split exits, A/B remain captured but hidden, C becomes the
+    // full-width active guest, and the ordinary three-tab strip is restored.
     // -------------------------------------------------------------------------
     private static void SplitClickThird(Ctx ctx, Options opt)
     {
@@ -720,48 +727,41 @@ internal static partial class Scenarios
         ctx.Check(TabDockLog.WaitForLogLine(enterOff, "SPLIT[enter]", 3000), "split entered (A/B, C present)");
         AssertSplitPanes(ctx, host, pigA, pigB, "split-click-third enter");
         ctx.Check(!NativeMethods.IsWindowVisible(pigC.Hwnd), "non-member C hidden during split");
-        // EnterSplit activates the LEFT member, so the last "Switched group ...
-        // to tab N" line names the pair's index; any later switch to a
-        // different index after clicking C would mean C became the active tab.
-        int pairIndex = LastSwitchedTabIndex(enterOff);
-        if (pairIndex < 0)
-            throw new InvalidOperationException("No 'Switched group' line after split entry — cannot derive the pair's tab index.");
 
-        // Plain click on C's tab header (a non-paired tab) -> split persists.
-        if (!Input.ForceForeground(container))
-            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
         AutomationElement? tabC = FindTabText(container, pigC.Title, out int count);
         if (tabC == null || count != 1)
             throw new InvalidOperationException($"Tab for '{pigC.Title}' not found uniquely (count={count}).");
         (int tx, int ty) = Uia.Center(tabC);
+        if (!EnsureClickable(container, tx, ty))
+            throw new InvalidOperationException("Could not bring the third tab to a safe clickable state.");
+
         long clickOff = TabDockLog.RecordLogLength();
         Input.ClickAt(tx, ty);
 
-        ctx.Check(TabDockLog.CountNewLines(clickOff, "SPLIT[exit]") == 0,
-            "clicking the third tab keeps split active (no SPLIT[exit])");
+        ctx.Check(TabDockLog.WaitForLogLine(clickOff, "SPLIT[exit]", 3000),
+            "clicking the third tab exits split");
+        ctx.Check(Util.WaitUntil(() => IsDocked(pigC.Hwnd, host), 5000),
+            "clicked third tab C becomes the full-width docked guest");
+        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindowVisible(pigA.Hwnd)
+            && !NativeMethods.IsWindowVisible(pigB.Hwnd), 3000),
+            "former split members A and B are hidden after the switch");
+        ctx.Check(TabCount(container) == 3, "ordinary three-tab strip restored after split exit");
         ctx.Check(TabDockLog.CountNewLines(clickOff, "SPLIT[member-gone]") == 0,
-            "clicking the third tab removes no member");
-        // The click is intercepted by the split guard (no selection change at
-        // all) or, on the funnel path, reverted to the focused member — so the
-        // SETTLED final index must either be absent (last == -1, the plain
-        // interception path) or name the pair's member (C must never become the
-        // active tab).
-        Thread.Sleep(300); // settle past the 120ms reassert before log reads
-        int settled = LastSwitchedTabIndex(clickOff);
-        ctx.Check(settled < 0 || settled == pairIndex,
-            $"clicking the third tab leaves the pair's member as the active tab (settled index {settled}, pair {pairIndex})");
-        ctx.Check(Util.WaitUntil(() => IsInPane(pigA.Hwnd, host, true) && IsInPane(pigB.Hwnd, host, false), 3000),
-            "A and B remain glued to their panes after clicking C");
-        ctx.Check(NativeMethods.IsWindowVisible(pigA.Hwnd) && NativeMethods.IsWindowVisible(pigB.Hwnd)
-            && !NativeMethods.IsWindowVisible(pigC.Hwnd),
-            "visible set unchanged: A and B visible, C hidden");
-        ctx.Check(TabCount(container) == 2, "pair still ONE composite item after clicking the third tab");
-        // Release shows the guest at its own placement and logs
-        // "Released tab ... from group ..."; in split mode members legitimately
-        // cover half-panes (never the full host), so assert the app's release
-        // log rather than a full-host dock shape.
+            "third-tab switch removes no split member");
         ctx.Check(TabDockLog.CountNewLines(clickOff, "Released tab") == 0,
-            "no member released by clicking C (no 'Released tab' log)");
+            "third-tab switch releases no captured window");
+
+        AutomationElement? tabA = FindTabText(container, pigA.Title, out int aCount);
+        if (tabA == null || aCount != 1)
+            throw new InvalidOperationException($"Tab for '{pigA.Title}' not found uniquely after split exit (count={aCount}).");
+        (int ax, int ay) = Uia.Center(tabA);
+        if (!EnsureClickable(container, ax, ay))
+            throw new InvalidOperationException("Could not bring the restored ordinary tab strip to a safe clickable state.");
+        Input.ClickAt(ax, ay);
+        ctx.Check(Util.WaitUntil(() => IsDocked(pigA.Hwnd, host), 5000),
+            "ordinary tab switching works after leaving split");
+        ctx.Check(!NativeMethods.IsWindowVisible(pigB.Hwnd) && !NativeMethods.IsWindowVisible(pigC.Hwnd),
+            "normal single-visible-tab semantics restored after the switch");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines");
     }
 
@@ -838,12 +838,10 @@ internal static partial class Scenarios
     }
 
     // -------------------------------------------------------------------------
-    // split-third-tab-click-persists (goal §11): clicking an unrelated third
-    // tab C while A+B are split must NOT destroy the pair or make C the active
-    // single guest. Sequence per cycle: click C, click LEFT half, click C,
-    // click RIGHT half, click C, right-click C and dismiss. After every step:
-    // pair identity A+B, both panes glued and visible, C hidden, no SPLIT[exit],
-    // no member released, no switch to C.
+    // Historical CLI alias: this scenario originally asserted that a third-tab
+    // click persisted the pair. The corrected contract is the opposite. Keep
+    // the registered name to avoid unnecessary shard/CLI churn, but repeatedly
+    // prove enter-split -> click-third -> ordinary-tab recovery instead.
     // -------------------------------------------------------------------------
     private static void SplitThirdTabClickPersists(Ctx ctx, Options opt)
     {
@@ -853,126 +851,55 @@ internal static partial class Scenarios
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB, pigC);
         ctx.Check(TabCount(container) == 3, "3 tabs after capture");
 
-        long enterOff = TabDockLog.RecordLogLength();
-        ClickTabSubmenuItem(ctx, container, pigA.Title, "Split screen", pigB.Title);
-        ctx.Check(TabDockLog.WaitForLogLine(enterOff, "SPLIT[enter]", 3000), "SPLIT[enter] logged (A left, B right)");
-        AssertSplitPanes(ctx, host, pigA, pigB, "third-tab-click enter");
-        ctx.Check(!NativeMethods.IsWindowVisible(pigC.Hwnd), "non-member C hidden during split");
-        int pairIndex = LastSwitchedTabIndex(enterOff);
-        if (pairIndex < 0)
-            throw new InvalidOperationException("No 'Switched group' line after split entry — cannot derive the pair's tab index.");
-
-        AutomationElement? tabC = FindTabText(container, pigC.Title, out int cCount);
-        AutomationElement? leftText = FindTabText(container, pigA.Title, out int leftCount);
-        AutomationElement? rightText = FindTabText(container, pigB.Title, out int rightCount);
-        if (tabC == null || cCount != 1 || leftText == null || leftCount != 1 || rightText == null || rightCount != 1)
-            throw new InvalidOperationException($"Tabs not found uniquely (C={cCount}, L={leftCount}, R={rightCount}).");
-        (int cx, int cy) = Uia.Center(tabC);
-        (int lx, int ly) = Uia.Center(leftText);
-        (int rx, int ry) = Uia.Center(rightText);
-
-        NativeMethods.RECT hostRect = Discover.GetClientScreenRect(host);
-        int leftPaneCx = hostRect.left + hostRect.Width / 4;
-        int rightPaneCx = hostRect.left + 3 * hostRect.Width / 4;
-        int cyMid = hostRect.top + hostRect.Height / 2;
-
-        int cycles = Math.Max(10, opt.Cycles ?? 10);
+        int cycles = Math.Max(5, opt.Cycles ?? 5);
         for (int i = 1; i <= cycles; i++)
         {
-            long cycleOff = TabDockLog.RecordLogLength();
+            long enterOff = TabDockLog.RecordLogLength();
+            ClickTabSubmenuItem(ctx, container, pigA.Title, "Split screen", pigB.Title);
+            ctx.Check(TabDockLog.WaitForLogLine(enterOff, "SPLIT[enter]", 3000),
+                $"cycle {i}: split entered");
+            AssertSplitPanes(ctx, host, pigA, pigB, $"cycle {i}: split enter");
+            ctx.Check(!NativeMethods.IsWindowVisible(pigC.Hwnd), $"cycle {i}: C hidden while pair is active");
 
-            // (1) click C: the pair must persist; C must not become the active
-            // single guest. The click's activation can re-sync the pair's index
-            // via the 120ms reassert, so assert the SETTLED final index (the
-            // focused member's) rather than an absence of switch lines — the
-            // funnel legitimately re-logs the member's index during the revert.
-            long off1 = TabDockLog.RecordLogLength();
+            AutomationElement? tabC = FindTabText(container, pigC.Title, out int cCount);
+            if (tabC == null || cCount != 1)
+                throw new InvalidOperationException($"cycle {i}: tab C not found uniquely (count={cCount}).");
+            (int cx, int cy) = Uia.Center(tabC);
+            if (!EnsureClickable(container, cx, cy))
+                throw new InvalidOperationException($"cycle {i}: third tab is obscured — refusing to click blind.");
+
+            long clickOff = TabDockLog.RecordLogLength();
             Input.ClickAt(cx, cy);
-            Thread.Sleep(300); // settle past the 120ms reassert before log reads
-            ctx.Check(TabDockLog.CountNewLines(off1, "SPLIT[exit]") == 0,
-                $"cycle {i}: click-C keeps split active (no SPLIT[exit])");
-            int settled1 = LastSwitchedTabIndex(off1);
-            ctx.Check(settled1 < 0 || settled1 == pairIndex,
-                $"cycle {i}: click-C leaves the pair's member as the active tab (settled index {settled1}, pair {pairIndex})");
-            ctx.Check(Util.WaitUntil(() => IsInPane(pigA.Hwnd, host, true) && IsInPane(pigB.Hwnd, host, false), 3000),
-                $"cycle {i}: A/B still glued after click-C");
+            ctx.Check(TabDockLog.WaitForLogLine(clickOff, "SPLIT[exit]", 3000),
+                $"cycle {i}: third-tab click exits split");
+            ctx.Check(Util.WaitUntil(() => IsDocked(pigC.Hwnd, host), 5000),
+                $"cycle {i}: C becomes the full-width active guest");
+            ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindowVisible(pigA.Hwnd)
+                && !NativeMethods.IsWindowVisible(pigB.Hwnd), 3000),
+                $"cycle {i}: A/B hidden after third-tab switch");
+            ctx.Check(TabCount(container) == 3, $"cycle {i}: ordinary three-tab strip restored");
+            ctx.Check(TabDockLog.CountNewLines(clickOff, "SPLIT[member-gone]") == 0,
+                $"cycle {i}: no structural member removal");
+            ctx.Check(TabDockLog.CountNewLines(clickOff, "Released tab") == 0,
+                $"cycle {i}: no captured window released");
 
-            // (2) click the LEFT half: A focused, both panes stay, split stays.
-            long offA = TabDockLog.RecordLogLength();
-            Input.ClickAt(lx, ly);
-            ctx.Check(Util.WaitUntil(() => NativeMethods.GetForegroundWindow() == pigA.Hwnd, 3000),
-                $"cycle {i}: LEFT half click foregrounds A");
-            ctx.Check(TabDockLog.CountNewLines(offA, "SPLIT[exit]") == 0, $"cycle {i}: LEFT half keeps split active");
-
-            // (3) click C again — same persistence contract (focused member A).
-            long off3 = TabDockLog.RecordLogLength();
-            Input.ClickAt(cx, cy);
-            Thread.Sleep(300);
-            ctx.Check(TabDockLog.CountNewLines(off3, "SPLIT[exit]") == 0,
-                $"cycle {i}: second click-C keeps split active (no SPLIT[exit])");
-            int settled3 = LastSwitchedTabIndex(off3);
-            ctx.Check(settled3 < 0 || settled3 == pairIndex,
-                $"cycle {i}: second click-C leaves the pair's member as the active tab (settled index {settled3}, pair {pairIndex})");
-
-            // (4) click the RIGHT half: B focused (member-scoped SPLIT[focus]),
-            // both panes stay, split stays. The half-click's switch log gives us
-            // the partner's tab index for the step-(5) assertion.
-            long offB = TabDockLog.RecordLogLength();
-            Input.ClickAt(rx, ry);
-            ctx.Check(WaitForSplitFocus(offB, pigB, 3000),
-                $"cycle {i}: RIGHT half click focuses B (SPLIT[focus] member=B)");
-            ctx.Check(Util.WaitUntil(() => NativeMethods.GetForegroundWindow() == pigB.Hwnd, 3000),
-                $"cycle {i}: B is foreground after RIGHT half click");
-            ctx.Check(TabDockLog.CountNewLines(offB, "SPLIT[exit]") == 0, $"cycle {i}: RIGHT half keeps split active");
-            int partnerIndex = LastSwitchedTabIndex(offB);
-            ctx.Check(partnerIndex >= 0, $"cycle {i}: RIGHT half click re-synced the active index (log)");
-
-            // (5) click C again — the focused member is now B, so the settled
-            // final index must be B's.
-            long off5 = TabDockLog.RecordLogLength();
-            Input.ClickAt(cx, cy);
-            Thread.Sleep(300);
-            ctx.Check(TabDockLog.CountNewLines(off5, "SPLIT[exit]") == 0,
-                $"cycle {i}: third click-C keeps split active (no SPLIT[exit])");
-            int settled5 = LastSwitchedTabIndex(off5);
-            ctx.Check(settled5 < 0 || settled5 == partnerIndex,
-                $"cycle {i}: third click-C leaves the focused member B as the active tab (settled index {settled5}, partner {partnerIndex})");
-
-            // (6) right-click C and dismiss the menu: context-menu open/close is
-            // not a split-changing operation (DismissTabContextMenu throws if the
-            // menu fails to appear).
-            long offMenu = TabDockLog.RecordLogLength();
-            DismissTabContextMenu(ctx, container, pigC.Title);
-            ctx.Check(TabDockLog.CountNewLines(offMenu, "SPLIT[exit]") == 0,
-                $"cycle {i}: right-click C + dismiss keeps split active");
-
-            // (7) Ctrl+Tab while split cycles ONLY between the pair's members:
-            // with B focused, one Ctrl+Tab must focus A and leave the pair intact.
-            long offCT = TabDockLog.RecordLogLength();
-            if (!Input.SendCtrlTabTo(container))
-                throw new InvalidOperationException("Could not bring the container to the foreground for Ctrl+Tab — refusing to continue.");
-            ctx.Check(WaitForSplitFocus(offCT, pigA, 3000),
-                $"cycle {i}: Ctrl+Tab cycles to the other split member (SPLIT[focus] member=A)");
-            ctx.Check(TabDockLog.CountNewLines(offCT, "SPLIT[exit]") == 0, $"cycle {i}: Ctrl+Tab keeps split active");
-
-            // (8) full state battery.
-            ctx.Check(Util.WaitUntil(() => IsInPane(pigA.Hwnd, host, true) && IsInPane(pigB.Hwnd, host, false), 3000),
-                $"cycle {i}: pair glued at end of cycle");
-            ctx.Check(NativeMethods.IsWindowVisible(pigA.Hwnd) && NativeMethods.IsWindowVisible(pigB.Hwnd),
-                $"cycle {i}: both members visible");
-            ctx.Check(!NativeMethods.IsWindowVisible(pigC.Hwnd), $"cycle {i}: C never became the active single guest");
-            ctx.Check(TabCount(container) == 2, $"cycle {i}: pair still ONE composite item");
-            ctx.Check(TabDockLog.CountNewLines(cycleOff, "SPLIT[member-gone]") == 0, $"cycle {i}: no member gone");
-            ctx.Check(TabDockLog.CountNewLines(cycleOff, "Released tab") == 0, $"cycle {i}: no member released");
-            ctx.Check(Util.WaitUntil(() => TopWindowPidAt(leftPaneCx, cyMid) == pigA.Pid
-                && TopWindowPidAt(rightPaneCx, cyMid) == pigB.Pid, 3000),
-                $"cycle {i}: pane centers resolve to their guests (neither covered)");
-            ctx.Check(TabDockLog.CountNewLines(cycleOff, "EXCEPTION") == 0, $"cycle {i}: no EXCEPTION");
+            AutomationElement? tabA = FindTabText(container, pigA.Title, out int aCount);
+            if (tabA == null || aCount != 1)
+                throw new InvalidOperationException($"cycle {i}: tab A not found uniquely after exit (count={aCount}).");
+            (int ax, int ay) = Uia.Center(tabA);
+            if (!EnsureClickable(container, ax, ay))
+                throw new InvalidOperationException($"cycle {i}: ordinary tab A is obscured — refusing to click blind.");
+            Input.ClickAt(ax, ay);
+            ctx.Check(Util.WaitUntil(() => IsDocked(pigA.Hwnd, host), 5000),
+                $"cycle {i}: normal tab A can be activated after split exit");
+            ctx.Check(!NativeMethods.IsWindowVisible(pigB.Hwnd) && !NativeMethods.IsWindowVisible(pigC.Hwnd),
+                $"cycle {i}: single-visible-tab semantics restored");
+            ctx.Check(TabDockLog.CountNewLines(clickOff, "EXCEPTION") == 0,
+                $"cycle {i}: no EXCEPTION");
         }
 
-        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines");
         ctx.Check(pigA.Proc != null && !pigA.Proc.HasExited && pigB.Proc != null && !pigB.Proc.HasExited
-            && pigC.Proc != null && !pigC.Proc.HasExited, "all three pigs alive after the click cycles");
+            && pigC.Proc != null && !pigC.Proc.HasExited, "all three pigs alive after the switching cycles");
     }
 
     // -------------------------------------------------------------------------
@@ -1619,9 +1546,8 @@ internal static partial class Scenarios
     // -------------------------------------------------------------------------
     // split-composite: the split pair renders as ONE composite tab item; clicking
     // either half focuses that member WITHOUT hiding the partner; clicking a
-    // non-member tab keeps the pair active (persistence contract); per-half × and
-    // middle-click pop the specific member out and end the split; "Exit split
-    // screen" restores the ordinary per-tab strip.
+    // non-member tab exits the split and restores the ordinary per-tab strip;
+    // per-half × and middle-click pop the specific member out and end the split.
     // -------------------------------------------------------------------------
     private static void SplitComposite(Ctx ctx, Options opt)
     {
@@ -1670,32 +1596,25 @@ internal static partial class Scenarios
         ctx.Check(TabDockLog.CountNewLines(click2Off, "SPLIT[exit]") == 0 && TabDockLog.CountNewLines(click2Off, "SPLIT[member-gone]") == 0,
             "clicking LEFT half keeps split active");
 
-        // Clicking a NON-member tab leaves the split pair untouched: no exit,
-        // no activation of C, no visibility change (split persistence contract).
-        long persistOff = TabDockLog.RecordLogLength();
+        // Clicking the non-member C is an explicit presentation switch. The
+        // split exits, C becomes full-width, and all three ordinary tabs return.
+        long switchOff = TabDockLog.RecordLogLength();
         AutomationElement? cText = FindTabText(container, pigC.Title, out int cCount);
         if (cText == null || cCount != 1)
             throw new InvalidOperationException($"Tab '{pigC.Title}' not found uniquely (count={cCount}).");
         (int cx, int cy) = Uia.Center(cText);
         Input.ClickAt(cx, cy);
-        ctx.Check(TabDockLog.CountNewLines(persistOff, "SPLIT[exit]") == 0,
-            "clicking a non-member tab keeps split active (no SPLIT[exit])");
-        ctx.Check(Util.WaitUntil(() => IsInPane(pigA.Hwnd, host, true) && IsInPane(pigB.Hwnd, host, false), 3000),
-            "A and B remain glued to their panes after clicking C");
-        ctx.Check(NativeMethods.IsWindowVisible(pigA.Hwnd) && NativeMethods.IsWindowVisible(pigB.Hwnd)
-            && !NativeMethods.IsWindowVisible(pigC.Hwnd),
-            "visible set unchanged: A and B visible, C hidden");
-        ctx.Check(TabCount(container) == 2, "pair still ONE composite item after clicking C");
-
-        // Leave split explicitly via the composite member menu, then re-enter
-        // with a different pair (B LEFT, C RIGHT) and pop the RIGHT member via
-        // its half ×. (During split, B has no ordinary tab — its title lives in
-        // the composite RIGHT half, whose right-click menu carries the
-        // split-aware items incl. "Exit split screen".)
-        long exitOff = TabDockLog.RecordLogLength();
-        ClickTabMenuItem(ctx, container, pigA.Title, "Exit split screen");
-        ctx.Check(TabDockLog.WaitForLogLine(exitOff, "SPLIT[exit]", 3000), "explicit 'Exit split screen' exits split");
-        ctx.Check(Util.WaitUntil(() => TabCount(container) == 3, 3000), "ordinary per-tab strip restored after split exit");
+        ctx.Check(TabDockLog.WaitForLogLine(switchOff, "SPLIT[exit]", 3000),
+            "clicking a non-member tab exits split");
+        ctx.Check(Util.WaitUntil(() => IsDocked(pigC.Hwnd, host), 5000),
+            "non-member C becomes the full-width active guest");
+        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindowVisible(pigA.Hwnd)
+            && !NativeMethods.IsWindowVisible(pigB.Hwnd), 3000),
+            "former pair members are hidden after the presentation switch");
+        ctx.Check(TabCount(container) == 3, "ordinary three-tab strip restored after clicking C");
+        ctx.Check(TabDockLog.CountNewLines(switchOff, "SPLIT[member-gone]") == 0
+            && TabDockLog.CountNewLines(switchOff, "Released tab") == 0,
+            "presentation switch does not remove or release a member");
 
         // Re-enter split (B LEFT, C RIGHT) and pop the RIGHT member via its half ×.
         long enter2Off = TabDockLog.RecordLogLength();
