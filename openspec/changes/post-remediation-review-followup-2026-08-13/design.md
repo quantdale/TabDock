@@ -126,16 +126,17 @@ reviews executable name/title/PID/class/visibility, and types an exact `YES`
 confirmation. The selected candidate must match every historical field that
 exists; v1 is visibly marked weaker because it has only HWND/PID/executable.
 
-After confirmation, the workflow refuses a pre-existing recovery or normal
-capture token, installs a distinct non-managed ephemeral recovery property,
-verifies it, and revalidates the selected generation before every presentation
-write and before removing the temporary token. V1 performs only `SW_SHOW` and
-verifies visibility. V2 restores its recorded placement, visibility, and DWM
-transition state when those fields exist. Any failure retains the pending entry.
-Successful recovery writes an auditable resolution sidecar before atomically
-removing exactly one entry from the pending JSON; sibling entries and unknown
-JSON fields remain intact. If cleanup fails, the resolution marker prevents a
-second native recovery and the evidence remains available for cleanup retry.
+After confirmation, the workflow durably prepares an ownership transaction
+before installing a distinct non-managed ephemeral recovery property, verifies
+it, and revalidates the selected generation before every presentation write
+and before removing the temporary token. An exact matching property/transaction
+is resumable; an unmatched property remains foreign and untouched. V1 performs
+only `SW_SHOW` and verifies visibility. V2 restores its recorded placement,
+visibility, and DWM transition state when those fields exist, except
+`DoNotRescue=true`, which performs intentional-hide cleanup without showing or
+repositioning. Native completion is durable before token cleanup, so cleanup
+failure prevents repeated native recovery. Sibling entries and unknown JSON
+fields remain intact.
 
 ### DPI contract
 
@@ -155,3 +156,70 @@ opt-in shell-completion hint and is skipped in CI; it is not needed by
 package with `npm install --global --ignore-scripts`. This narrows lifecycle
 execution without globally approving scripts or suppressing stderr, and local
 validation must run under that installation mode.
+
+## R16–R22 recovery/concurrency closure
+
+### Durable supervised transaction
+
+The existing `<pending-file>.recovered` sidecar remains the one recovery ledger.
+It keeps the historical `Resolutions` array and adds versioned transaction
+records keyed by source-file ID + source SHA-256 + entry fingerprint. A record
+contains the selected HWND/PID/GUI thread/executable/class/process-start
+identity, the random nonzero recovery token, mode, phase, and diagnostic
+timestamps. The phase sequence is `Prepared`, `TokenInstalled`,
+`PlacementComplete`, `VisibilityComplete`, `NativeRecoveryComplete`,
+`TokenRemoved`, and `Retired`.
+
+`Prepared` is atomically durable before the external recovery property is
+installed. Every native presentation boundary is idempotent and advances its
+phase durably. `NativeRecoveryComplete` is committed while the exact token and
+transaction identity still exist, before token removal. A later invocation
+recognizes an exact stranded token as its own interrupted transaction and
+requires explicit confirmation before resuming pre-completion native work. A
+transaction at or after native completion performs only exact token cleanup,
+resolution-ledger reconciliation, and entry-scoped disk retirement. A token
+without an exact durable transaction is foreign and remains untouched.
+
+The recovery modes are:
+
+- `v1-visible`: show and verify visibility only; v1 has no presentation data.
+- `v2-presentation`: restore recorded placement, visibility, and DWM state.
+- `v2-intentional-hide`: preserve the historical `DoNotRescue` contract; do
+  not restore placement or visibility, restore only recorded DWM state, and
+  consume the marker after exact cleanup.
+
+### Ownership and console
+
+`Global\\TabDock` is represented by one reusable disposable mutation lease. The
+normal WPF process holds it for its full lifetime; `--recover-pending` acquires
+it before discovery and holds it through confirmation, native work, and disk
+retirement. Read-only diagnostics remain lease-free. An abandoned Windows
+mutex is recoverable by the next owner under normal `WaitOne` semantics.
+
+The WinExe recovery command uses one `ConsoleSession`. Redirected standard
+handles are used directly. Otherwise the session attaches once to the parent
+console, rebinds .NET streams, flushes prompts, and frees only a console it
+attached. Missing console/stdio fails without a blocking read. Unit tests
+exercise the abstraction; Release validation launches the actual executable
+with redirected stdin/stdout and isolated `APPDATA`.
+
+### HDWP boundary
+
+The official Win32 documentation says a `NULL` result from `DeferWindowPos`
+means abandon the operation and do not call `EndDeferWindowPos`; the valid
+HDWP is committed by `EndDeferWindowPos`, and Microsoft documents no separate
+cancellation API for a still-valid HDWP. The helper therefore validates each
+guest immediately before its queue call after the valid HDWP is allocated. If
+a later validation fails, it ends the valid batch containing only
+already-validated entries and skips stale fallback work. It never silently
+abandons a valid HDWP merely because a final validator changed.
+
+### Journal and terminal contract
+
+The authoritative journal contract is synchronous: capture/hide/intentional
+hide writes and actual-entry clears are durable before returning; a clear with
+no matching entry returns without a disk write; `FlushJournal` remains an
+idempotent lifecycle boundary and there is no debounce timer. Local supervised
+titles are normalized to one bounded line with terminal control characters
+removed or replaced; support-bundle/doctor title hashing and path redaction are
+unchanged.

@@ -6,7 +6,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Threading;
 using TabDock.Models;
 
 namespace TabDock.Services;
@@ -19,7 +18,26 @@ internal static class PendingRecoveryService
 {
     internal const string TemporaryRecoveryPropertyName = "TabDock.PendingRecoveryToken";
     private const string PendingFilePrefix = "hidden-windows.json.pending";
-    private static long _nextRecoveryToken;
+    internal const int RecoveryTransactionSchemaVersion = 1;
+
+    internal static class RecoveryPhase
+    {
+        public const string Prepared = "Prepared";
+        public const string TokenInstalled = "TokenInstalled";
+        public const string PlacementComplete = "PlacementComplete";
+        public const string VisibilityComplete = "VisibilityComplete";
+        public const string NativeRecoveryComplete = "NativeRecoveryComplete";
+        public const string TokenRemoved = "TokenRemoved";
+        public const string Retired = "Retired";
+    }
+
+    private sealed class RecoveryFaultException : Exception
+    {
+        public RecoveryFaultException(string stage)
+            : base("Injected recovery fault at " + stage)
+        {
+        }
+    }
 
     internal static PendingRecoveryCatalog Discover(
         string? directory = null,
@@ -100,6 +118,7 @@ internal static class PendingRecoveryService
             foreach (PendingRecoveryEntry entry in file.Entries)
             {
                 builder.AppendLine($"  id={entry.SessionId} schema=v{entry.Version} status={entry.Status} fields={entry.AvailableFields} recordedHwnd={FormatHwnd(entry.Entry.Hwnd)}");
+                builder.AppendLine($"    recoveryMode={entry.RecoveryMode}");
             }
         }
         builder.AppendLine("next: run TabDock.exe --recover-pending from a supervised terminal to select and confirm one live target");
@@ -107,22 +126,68 @@ internal static class PendingRecoveryService
     }
 
     internal static int RunInteractive(
-        TextReader? input = null,
-        TextWriter? output = null,
+        TextReader input,
+        TextWriter output,
         string? directory = null,
         IPendingRecoveryNativeApi? api = null,
-        IReadOnlyList<PendingRecoveryCandidate>? candidates = null)
+        IReadOnlyList<PendingRecoveryCandidate>? candidates = null,
+        Func<string, bool>? faultInjector = null)
     {
-        input ??= Console.In;
-        output ??= Console.Out;
+        IPendingRecoveryNativeApi native = api ?? NativePendingRecoveryNativeApi.Instance;
         PendingRecoveryCatalog catalog = Discover(directory, api);
         output.WriteLine("TabDock supervised pending recovery");
         output.WriteLine("This command is user-initiated. Startup never performs tokenless legacy recovery.");
+        output.Flush();
         if (catalog.Error != null)
         {
             output.WriteLine($"Pending evidence is {catalog.Error}; no mutation was attempted.");
             return 2;
         }
+
+        // A transaction that already durably completed native recovery is a
+        // disk-cleanup job, not a new supervised native operation. This is the
+        // crash boundary after NativeRecoveryComplete, including the case in
+        // which the exact token was removed before the process died.
+        PendingRecoveryEntry[] completedEntries = catalog.Files
+            .SelectMany(file => file.Entries)
+            .Where(entry => entry.AlreadyResolved
+                || (entry.Transaction != null
+                    && IsSupportedTransaction(entry, entry.Transaction)
+                    && IsNativeRecoveryComplete(entry.Transaction.Phase)))
+            .ToArray();
+        bool cleanupFailure = false;
+        foreach (PendingRecoveryEntry completedEntry in completedEntries)
+        {
+            if (!completedEntry.AlreadyResolved
+                && !ReconcileCompletedTransaction(completedEntry, native, out string reconciliationError))
+            {
+                cleanupFailure = true;
+                output.WriteLine($"Interrupted transaction {completedEntry.SessionId} needs supervised cleanup: {reconciliationError}. Evidence was retained.");
+                continue;
+            }
+
+            if (!completedEntry.AlreadyResolved
+                && !MarkResolved(completedEntry, out string completedMarkerError))
+            {
+                cleanupFailure = true;
+                output.WriteLine($"Native recovery is complete for {completedEntry.SessionId}, but its durable resolution marker could not be written: {completedMarkerError}. Evidence was retained.");
+                continue;
+            }
+
+            if (!RetireEntry(completedEntry, out string completedRetirementError, faultInjector))
+            {
+                cleanupFailure = true;
+                output.WriteLine($"Resolved entry {completedEntry.SessionId} still needs disk-only retirement: {completedRetirementError}. Evidence was retained.");
+            }
+        }
+        if (cleanupFailure)
+            return 2;
+
+        // Re-read after disk-only cleanup so a selected sibling carries the
+        // current source SHA and cannot be rejected merely because an earlier
+        // completed transaction was retired in this invocation.
+        if (completedEntries.Length > 0)
+            catalog = Discover(directory, api);
 
         List<PendingRecoveryEntry> entries = catalog.Files
             .SelectMany(file => file.Entries)
@@ -130,27 +195,9 @@ internal static class PendingRecoveryService
             .ToList();
         if (entries.Count == 0)
         {
-            PendingRecoveryEntry[] resolvedEntries = catalog.Files
-                .SelectMany(file => file.Entries)
-                .Where(entry => entry.AlreadyResolved)
-                .ToArray();
-            bool retirementFailed = false;
-            foreach (PendingRecoveryEntry resolvedEntry in resolvedEntries)
-            {
-                if (RetireEntry(resolvedEntry, out string retirementError))
-                    continue;
-
-                retirementFailed = true;
-                output.WriteLine($"Resolved entry {resolvedEntry.SessionId} still needs disk-only retirement: {retirementError}. Evidence was retained.");
-            }
-            if (retirementFailed)
-                return 2;
-            if (resolvedEntries.Length > 0)
-            {
-                output.WriteLine("Resolved pending entries were retired; no unresolved pending recovery entries were found.");
-                return 0;
-            }
-            output.WriteLine("No unresolved pending recovery entries were found.");
+            output.WriteLine(completedEntries.Length > 0
+                ? "Resolved pending entries were retired; no unresolved pending recovery entries were found."
+                : "No unresolved pending recovery entries were found.");
             return 0;
         }
 
@@ -163,11 +210,17 @@ internal static class PendingRecoveryService
         PendingRecoveryEntry? selectedEntry = SelectEntry(entries, input, output);
         if (selectedEntry == null)
             return 1;
-        if (selectedEntry.Status is not ("potentially-recoverable" or "unverifiable"))
+        bool interruptedTransaction = selectedEntry.Transaction != null
+            && IsSupportedTransaction(selectedEntry, selectedEntry.Transaction)
+            && !IsNativeRecoveryComplete(selectedEntry.Transaction.Phase);
+        if (selectedEntry.Status is not ("potentially-recoverable" or "unverifiable")
+            && !interruptedTransaction)
         {
             output.WriteLine($"Entry {selectedEntry.SessionId} is not eligible for a live recovery transaction ({selectedEntry.Status}). Evidence was retained.");
             return 2;
         }
+        if (interruptedTransaction)
+            output.WriteLine($"Entry {selectedEntry.SessionId} is an interrupted recovery transaction at phase {selectedEntry.Transaction!.Phase}; review the exact live target before resuming.");
 
         IReadOnlyList<PendingRecoveryCandidate> liveCandidates = candidates ?? EnumerateCandidates();
         output.WriteLine($"Live top-level candidates: {liveCandidates.Count}");
@@ -197,8 +250,13 @@ internal static class PendingRecoveryService
             return 2;
         }
 
+        if (selectedEntry.RecoveryMode == "v2-intentional-hide")
+        {
+            output.WriteLine("This entry says the guest intentionally hid itself. TabDock will keep it hidden and only clean interrupted TabDock presentation state.");
+        }
         output.WriteLine($"Selected {selectedEntry.SessionId} -> {selectedCandidate.CandidateId} ({Path.GetFileName(selectedCandidate.ExePath)}, PID {selectedCandidate.ProcessId}, title=\"{SanitizeConsoleTitle(selectedCandidate.Title)}\").");
         output.Write("Type YES to confirm this exact live target, or anything else to cancel: ");
+        output.Flush();
         string? confirmation = input.ReadLine();
         if (!string.Equals(confirmation, "YES", StringComparison.Ordinal))
         {
@@ -206,8 +264,7 @@ internal static class PendingRecoveryService
             return 1;
         }
 
-        IPendingRecoveryNativeApi native = api ?? NativePendingRecoveryNativeApi.Instance;
-        if (!ExecuteRecovery(selectedEntry, selectedCandidate, native, out string result))
+        if (!ExecuteRecovery(selectedEntry, selectedCandidate, native, out string result, faultInjector: faultInjector))
         {
             output.WriteLine("Recovery failed: " + result);
             output.WriteLine("The pending evidence was retained.");
@@ -220,7 +277,7 @@ internal static class PendingRecoveryService
             output.WriteLine("The pending evidence remains and must be cleaned up by a later supervised invocation; native recovery will not be repeated when the marker is available.");
             return 2;
         }
-        if (!RetireEntry(selectedEntry, out string retireError))
+        if (!RetireEntry(selectedEntry, out string retireError, faultInjector))
         {
             output.WriteLine("The guest was recovered and marked resolved, but pending-entry retirement needs a later retry: " + retireError);
             return 2;
@@ -255,7 +312,9 @@ internal static class PendingRecoveryService
         PendingRecoveryEntry entry,
         PendingRecoveryCandidate candidate,
         IPendingRecoveryNativeApi api,
-        out string error)
+        out string error,
+        Func<IntPtr>? tokenFactory = null,
+        Func<string, bool>? faultInjector = null)
     {
         error = string.Empty;
         if (!MatchesHistoricalEvidence(entry, candidate))
@@ -275,134 +334,525 @@ internal static class PendingRecoveryService
             error = "the selected HWND already carries a live TabDock capture token";
             return false;
         }
-        if (api.GetProperty(hwnd, TemporaryRecoveryPropertyName) != IntPtr.Zero)
+
+        IntPtr currentRecoveryToken = api.GetProperty(hwnd, TemporaryRecoveryPropertyName);
+        PendingRecoveryTransaction? transaction = entry.Transaction;
+        if (transaction != null && !IsSupportedTransaction(entry, transaction))
         {
-            error = "the selected HWND already carries a pending-recovery token";
+            error = "the durable recovery transaction is unsupported or cannot prove ownership";
+            return false;
+        }
+        if (transaction == null)
+        {
+            if (currentRecoveryToken != IntPtr.Zero)
+            {
+                error = "foreign/unverifiable recovery token is present; it was not removed";
+                return false;
+            }
+            WindowIdentityResult selectedIdentity = EvaluateRecoveryTarget(entry, candidate, api, out string selectedReason);
+            if (selectedIdentity != WindowIdentityResult.Match)
+            {
+                error = selectedReason;
+                return false;
+            }
+
+            IntPtr generatedToken = tokenFactory?.Invoke() ?? AllocateRecoveryToken();
+            if (generatedToken == IntPtr.Zero)
+            {
+                error = "could not allocate a nonzero cryptographically random temporary recovery token";
+                return false;
+            }
+            transaction = CreateTransaction(entry, candidate, generatedToken);
+            if (!PersistTransaction(entry, transaction, out error))
+                return false;
+            entry.Transaction = transaction;
+            InjectFault(faultInjector, "after-prepared");
+        }
+        else
+        {
+            if (!TransactionMatchesCandidate(entry, transaction, candidate))
+            {
+                error = "the selected target does not match the durable interrupted-transaction identity";
+                return false;
+            }
+            WindowIdentityResult selectedIdentity = EvaluateRecoveryTarget(entry, candidate, api, out string selectedReason);
+            if (selectedIdentity != WindowIdentityResult.Match)
+            {
+                error = selectedReason;
+                return false;
+            }
+            if (IsNativeRecoveryComplete(transaction.Phase))
+            {
+                return ReconcileCompletedTransaction(entry, api, out error);
+            }
+        }
+
+        IntPtr token = new(transaction.RecoveryToken);
+        if (token == IntPtr.Zero)
+        {
+            error = "the durable recovery transaction contained a zero token";
             return false;
         }
 
-        WindowIdentityResult selectedIdentity = EvaluateRecoveryTarget(entry, candidate, api, out string selectedReason);
-        if (selectedIdentity != WindowIdentityResult.Match)
+        IntPtr existingRecoveryToken = api.GetProperty(hwnd, TemporaryRecoveryPropertyName);
+        if (existingRecoveryToken != IntPtr.Zero && existingRecoveryToken != token)
         {
-            error = selectedReason;
-            return false;
-        }
-
-        long tokenNumber = Interlocked.Increment(ref _nextRecoveryToken);
-        if (tokenNumber == 0)
-        {
-            error = "could not allocate a temporary recovery token";
-            return false;
-        }
-        IntPtr token = new(tokenNumber);
-        if (!api.SetProperty(hwnd, TemporaryRecoveryPropertyName, token)
-            || api.GetProperty(hwnd, TemporaryRecoveryPropertyName) != token)
-        {
-            if (api.GetProperty(hwnd, TemporaryRecoveryPropertyName) == token)
-                api.RemoveProperty(hwnd, TemporaryRecoveryPropertyName, token);
-            error = "temporary recovery token installation could not be verified";
+            error = "foreign/unverifiable recovery token is present; it was not removed";
             return false;
         }
 
         bool success = false;
+        bool injectedFault = false;
         try
         {
-            if (!entry.IsV1)
+            if (existingRecoveryToken == IntPtr.Zero)
             {
-                if (entry.Entry.HasOriginalPlacement)
+                // The transaction is already durable. Revalidate immediately
+                // before the external property write and never overwrite a
+                // property belonging to another recovery generation.
+                if (!TryPreTokenBoundary(entry, candidate, api, out error))
+                    return false;
+                if (!api.SetProperty(hwnd, TemporaryRecoveryPropertyName, token)
+                    || api.GetProperty(hwnd, TemporaryRecoveryPropertyName) != token)
+                {
+                    error = "temporary recovery token installation could not be verified";
+                    return false;
+                }
+                InjectFault(faultInjector, "after-setprop");
+            }
+
+            if (PhaseRank(transaction.Phase) < PhaseRank(RecoveryPhase.TokenInstalled)
+                && !PersistTransactionPhase(entry, transaction, RecoveryPhase.TokenInstalled, out error))
+                return false;
+
+            if (entry.RecoveryMode == "v2-intentional-hide")
+            {
+                if (PhaseRank(transaction.Phase) < PhaseRank(RecoveryPhase.NativeRecoveryComplete))
                 {
                     if (!TryGenerationBoundary(entry, candidate, token, api, out error))
                         return false;
-                    NativeMethods.WINDOWPLACEMENT placement = new()
+                    if (RestoreTransitions(entry, hwnd, api, out error, restoreWhenUnrecorded: true))
+                        InjectFault(faultInjector, "after-dwm");
+                    else
+                        return false;
+                    if (!PersistTransactionPhase(entry, transaction, RecoveryPhase.NativeRecoveryComplete, out error))
+                        return false;
+                    InjectFault(faultInjector, "after-native-complete");
+                }
+            }
+            else
+            {
+                if (!entry.IsV1
+                    && PhaseRank(transaction.Phase) < PhaseRank(RecoveryPhase.PlacementComplete))
+                {
+                    if (entry.Entry.HasOriginalPlacement)
                     {
-                        length = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>(),
-                        flags = entry.Entry.OriginalPlacementFlags,
-                        showCmd = unchecked((uint)entry.Entry.OriginalShowCommand),
-                        ptMinPosition = new NativeMethods.POINT { x = entry.Entry.OriginalMinPositionX, y = entry.Entry.OriginalMinPositionY },
-                        ptMaxPosition = new NativeMethods.POINT { x = entry.Entry.OriginalMaxPositionX, y = entry.Entry.OriginalMaxPositionY },
-                        rcNormalPosition = new NativeMethods.RECT
+                        if (!TryGenerationBoundary(entry, candidate, token, api, out error))
+                            return false;
+                        NativeMethods.WINDOWPLACEMENT placement = CreatePlacement(entry.Entry);
+                        if (!api.SetWindowPlacement(hwnd, ref placement))
                         {
-                            left = entry.Entry.OriginalNormalLeft,
-                            top = entry.Entry.OriginalNormalTop,
-                            right = entry.Entry.OriginalNormalRight,
-                            bottom = entry.Entry.OriginalNormalBottom,
-                        },
-                    };
-                    if (!api.SetWindowPlacement(hwnd, ref placement))
-                    {
-                        error = "placement restoration failed";
-                        return false;
+                            error = "placement restoration failed";
+                            return false;
+                        }
                     }
+                    else if (entry.Entry.OriginalNormalRight > entry.Entry.OriginalNormalLeft
+                        && entry.Entry.OriginalNormalBottom > entry.Entry.OriginalNormalTop)
+                    {
+                        if (!TryGenerationBoundary(entry, candidate, token, api, out error))
+                            return false;
+                        if (!api.SetWindowPos(
+                                hwnd,
+                                IntPtr.Zero,
+                                entry.Entry.OriginalNormalLeft,
+                                entry.Entry.OriginalNormalTop,
+                                entry.Entry.OriginalNormalRight - entry.Entry.OriginalNormalLeft,
+                                entry.Entry.OriginalNormalBottom - entry.Entry.OriginalNormalTop,
+                                NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE))
+                        {
+                            error = "bounds restoration failed";
+                            return false;
+                        }
+                    }
+                    InjectFault(faultInjector, "after-placement");
+                    if (!PersistTransactionPhase(entry, transaction, RecoveryPhase.PlacementComplete, out error))
+                        return false;
                 }
-                else if (entry.Entry.OriginalNormalRight > entry.Entry.OriginalNormalLeft
-                    && entry.Entry.OriginalNormalBottom > entry.Entry.OriginalNormalTop)
+
+                if (PhaseRank(transaction.Phase) < PhaseRank(RecoveryPhase.VisibilityComplete))
                 {
                     if (!TryGenerationBoundary(entry, candidate, token, api, out error))
                         return false;
-                    if (!api.SetWindowPos(
-                            hwnd,
-                            IntPtr.Zero,
-                            entry.Entry.OriginalNormalLeft,
-                            entry.Entry.OriginalNormalTop,
-                            entry.Entry.OriginalNormalRight - entry.Entry.OriginalNormalLeft,
-                            entry.Entry.OriginalNormalBottom - entry.Entry.OriginalNormalTop,
-                            NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE))
+                    int showCommand = entry.IsV1
+                        ? NativeMethods.SW_SHOW
+                        : entry.Entry.OriginallyVisible
+                            ? (entry.Entry.OriginalShowCommand == 0 ? NativeMethods.SW_SHOW : entry.Entry.OriginalShowCommand)
+                            : NativeMethods.SW_HIDE;
+                    api.ShowWindow(hwnd, showCommand);
+                    if (!TryGenerationBoundary(entry, candidate, token, api, out error))
+                        return false;
+                    if (api.IsWindowVisible(hwnd) != (entry.IsV1 || entry.Entry.OriginallyVisible))
                     {
-                        error = "bounds restoration failed";
+                        error = "visibility post-state did not match the historical contract";
                         return false;
                     }
+                    InjectFault(faultInjector, "after-visibility");
+                    if (!PersistTransactionPhase(entry, transaction, RecoveryPhase.VisibilityComplete, out error))
+                        return false;
                 }
-            }
 
-            if (!TryGenerationBoundary(entry, candidate, token, api, out error))
-                return false;
-            int showCommand = entry.IsV1
-                ? NativeMethods.SW_SHOW
-                : entry.Entry.OriginallyVisible
-                    ? (entry.Entry.OriginalShowCommand == 0 ? NativeMethods.SW_SHOW : entry.Entry.OriginalShowCommand)
-                    : NativeMethods.SW_HIDE;
-            api.ShowWindow(hwnd, showCommand);
-            if (!TryGenerationBoundary(entry, candidate, token, api, out error))
-                return false;
-            if (api.IsWindowVisible(hwnd) != (entry.IsV1 || entry.Entry.OriginallyVisible))
-            {
-                error = "visibility post-state did not match the historical contract";
-                return false;
-            }
-
-            if (!entry.IsV1 && entry.Entry.HasOriginalTransitionsState)
-            {
-                if (!TryGenerationBoundary(entry, candidate, token, api, out error))
-                    return false;
-                int transitionValue = entry.Entry.OriginalTransitionsDisabled ? 1 : 0;
-                if (api.SetTransitionsDisabled(hwnd, transitionValue) != 0)
+                if (PhaseRank(transaction.Phase) < PhaseRank(RecoveryPhase.NativeRecoveryComplete))
                 {
-                    error = "DWM transition restoration failed";
-                    return false;
+                    if (!TryGenerationBoundary(entry, candidate, token, api, out error))
+                        return false;
+                    if (!RestoreTransitions(entry, hwnd, api, out error))
+                        return false;
+                    InjectFault(faultInjector, "after-dwm");
+                    if (!PersistTransactionPhase(entry, transaction, RecoveryPhase.NativeRecoveryComplete, out error))
+                        return false;
+                    InjectFault(faultInjector, "after-native-complete");
                 }
             }
 
-            if (!TryGenerationBoundary(entry, candidate, token, api, out error))
+            if (!RemoveExactRecoveryToken(hwnd, token, api, out error))
                 return false;
-            if (!api.RemoveProperty(hwnd, TemporaryRecoveryPropertyName, token))
-            {
-                error = "temporary recovery token removal failed";
+            InjectFault(faultInjector, "after-remove-property");
+            if (PhaseRank(transaction.Phase) < PhaseRank(RecoveryPhase.TokenRemoved)
+                && !PersistTransactionPhase(entry, transaction, RecoveryPhase.TokenRemoved, out error))
                 return false;
-            }
             success = true;
             return true;
         }
+        catch (RecoveryFaultException)
+        {
+            injectedFault = true;
+            throw;
+        }
         finally
         {
-            if (!success)
+            if (!success && !injectedFault)
             {
                 // Cleanup is itself generation-scoped. If the target changed,
                 // leave the exact property untouched rather than mutating a
                 // replacement HWND; the property dies with that HWND.
                 if (TryGenerationBoundary(entry, candidate, token, api, out _))
-                    api.RemoveProperty(hwnd, TemporaryRecoveryPropertyName, token);
+                    RemoveExactRecoveryToken(hwnd, token, api, out _);
             }
         }
+    }
+
+    private static bool ReconcileCompletedTransaction(
+        PendingRecoveryEntry entry,
+        IPendingRecoveryNativeApi api,
+        out string error)
+    {
+        error = string.Empty;
+        PendingRecoveryTransaction? transaction = entry.Transaction;
+        if (transaction == null || !IsNativeRecoveryComplete(transaction.Phase))
+        {
+            error = "native recovery is not durably complete";
+            return false;
+        }
+
+        IntPtr hwnd = new(transaction.CandidateHwnd);
+        IntPtr token = new(transaction.RecoveryToken);
+        if (token == IntPtr.Zero)
+        {
+            error = "the durable recovery transaction contained a zero token";
+            return false;
+        }
+
+        // If the guest itself disappeared, its HWND property disappeared with
+        // it. The native work is already durable and disk cleanup is safe.
+        if (api.IsWindow(hwnd))
+        {
+            if (!MatchesLiveTransactionTarget(transaction, api, out error))
+                return false;
+            if (api.GetProperty(hwnd, NativeWindowIdentityApi.CaptureIdentityPropertyName) != IntPtr.Zero)
+            {
+                error = "a live TabDock capture token appeared on the completed target";
+                return false;
+            }
+
+            IntPtr current = api.GetProperty(hwnd, TemporaryRecoveryPropertyName);
+            if (current != IntPtr.Zero && current != token)
+            {
+                error = "foreign/unverifiable recovery token is present; it was not removed";
+                return false;
+            }
+            if (current == token && !api.RemoveProperty(hwnd, TemporaryRecoveryPropertyName, token))
+            {
+                error = "the exact completed recovery token could not be removed";
+                return false;
+            }
+        }
+
+        if (PhaseRank(transaction.Phase) < PhaseRank(RecoveryPhase.TokenRemoved)
+            && !PersistTransactionPhase(entry, transaction, RecoveryPhase.TokenRemoved, out error))
+            return false;
+        return true;
+    }
+
+    private static bool MatchesLiveTransactionTarget(
+        PendingRecoveryTransaction transaction,
+        IPendingRecoveryNativeApi api,
+        out string error)
+    {
+        IntPtr hwnd = new(transaction.CandidateHwnd);
+        uint pid = api.GetProcessId(hwnd);
+        if (pid == 0)
+        {
+            error = "completed target PID could not be read";
+            return false;
+        }
+        if (pid != transaction.CandidatePid)
+        {
+            error = "completed target PID changed; recovery token was not removed";
+            return false;
+        }
+        uint thread = api.GetWindowThreadId(hwnd);
+        if (thread == 0 || thread != transaction.CandidateWindowThreadId)
+        {
+            error = "completed target GUI thread changed; recovery token was not removed";
+            return false;
+        }
+        string? exe = api.GetProcessImagePath(pid);
+        if (string.IsNullOrWhiteSpace(exe)
+            || !string.Equals(exe, transaction.CandidateExePath, StringComparison.OrdinalIgnoreCase))
+        {
+            error = "completed target executable identity changed; recovery token was not removed";
+            return false;
+        }
+        string? className = api.GetClassName(hwnd);
+        if (string.IsNullOrWhiteSpace(className)
+            || !string.Equals(className, transaction.CandidateClassName, StringComparison.Ordinal))
+        {
+            error = "completed target window class changed; recovery token was not removed";
+            return false;
+        }
+        if (transaction.CandidateProcessStartTimeUtcTicks != 0)
+        {
+            long start = api.GetProcessStartTimeUtcTicks(pid);
+            if (start == 0 || start != transaction.CandidateProcessStartTimeUtcTicks)
+            {
+                error = "completed target process-start identity changed; recovery token was not removed";
+                return false;
+            }
+        }
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TransactionMatchesCandidate(
+        PendingRecoveryEntry entry,
+        PendingRecoveryTransaction transaction,
+        PendingRecoveryCandidate candidate)
+        => string.Equals(transaction.SourceFileId, entry.FileName, StringComparison.Ordinal)
+            && string.Equals(transaction.SourceFileSha256, entry.SourceFileSha256, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(transaction.EntryFingerprint, entry.EntryFingerprint, StringComparison.OrdinalIgnoreCase)
+            && transaction.EntryIndex == entry.EntryIndex
+            && transaction.CandidateHwnd == candidate.Hwnd.ToInt64()
+            && transaction.CandidatePid == candidate.ProcessId
+            && transaction.CandidateWindowThreadId == candidate.WindowThreadId
+            && string.Equals(transaction.CandidateExePath, candidate.ExePath, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(transaction.CandidateClassName, candidate.ClassName, StringComparison.Ordinal)
+            && (transaction.CandidateProcessStartTimeUtcTicks == 0
+                || transaction.CandidateProcessStartTimeUtcTicks == candidate.ProcessStartTimeUtcTicks);
+
+    private static bool IsSupportedTransaction(
+        PendingRecoveryEntry entry,
+        PendingRecoveryTransaction transaction)
+        => transaction.SchemaVersion == RecoveryTransactionSchemaVersion
+            && string.Equals(transaction.SourceFileId, entry.FileName, StringComparison.Ordinal)
+            && string.Equals(transaction.SourceFileSha256, entry.SourceFileSha256, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(transaction.EntryFingerprint, entry.EntryFingerprint, StringComparison.OrdinalIgnoreCase)
+            && transaction.EntryIndex == entry.EntryIndex
+            && transaction.CandidateHwnd != 0
+            && transaction.CandidatePid != 0
+            && transaction.CandidateWindowThreadId != 0
+            && !string.IsNullOrWhiteSpace(transaction.CandidateExePath)
+            && !string.IsNullOrWhiteSpace(transaction.CandidateClassName)
+            && transaction.RecoveryToken != 0
+            && transaction.RecoveryMode == entry.RecoveryMode
+            && PhaseRank(transaction.Phase) >= PhaseRank(RecoveryPhase.Prepared);
+
+    private static PendingRecoveryTransaction CreateTransaction(
+        PendingRecoveryEntry entry,
+        PendingRecoveryCandidate candidate,
+        IntPtr token)
+        => new()
+        {
+            SchemaVersion = RecoveryTransactionSchemaVersion,
+            SourceFileId = entry.FileName,
+            SourceFileSha256 = entry.SourceFileSha256,
+            EntryFingerprint = entry.EntryFingerprint,
+            EntryIndex = entry.EntryIndex,
+            CandidateHwnd = candidate.Hwnd.ToInt64(),
+            CandidatePid = candidate.ProcessId,
+            CandidateWindowThreadId = candidate.WindowThreadId,
+            CandidateExePath = candidate.ExePath,
+            CandidateClassName = candidate.ClassName,
+            CandidateProcessStartTimeUtcTicks = candidate.ProcessStartTimeUtcTicks,
+            RecoveryToken = token.ToInt64(),
+            RecoveryMode = entry.RecoveryMode,
+            Phase = RecoveryPhase.Prepared,
+            PreparedUtc = DateTimeOffset.UtcNow,
+            UpdatedUtc = DateTimeOffset.UtcNow,
+        };
+
+    private static IntPtr AllocateRecoveryToken()
+    {
+        Span<byte> bytes = stackalloc byte[IntPtr.Size];
+        do
+        {
+            RandomNumberGenerator.Fill(bytes);
+            long value = IntPtr.Size == sizeof(long)
+                ? BitConverter.ToInt64(bytes)
+                : BitConverter.ToInt32(bytes);
+            value &= long.MaxValue;
+            if (value != 0)
+                return new IntPtr(value);
+        }
+        while (true);
+    }
+
+    private static bool PersistTransaction(
+        PendingRecoveryEntry entry,
+        PendingRecoveryTransaction transaction,
+        out string error)
+    {
+        error = string.Empty;
+        string path = entry.FullPath + ".recovered";
+        if (!TryReadLedger(path, out ResolutionLedger ledger, out error))
+            return false;
+        ledger.Transactions ??= new List<PendingRecoveryTransaction>();
+        PendingRecoveryTransaction? existing = ledger.Transactions.FirstOrDefault(item =>
+            string.Equals(item.SourceFileId, transaction.SourceFileId, StringComparison.Ordinal)
+            && string.Equals(item.SourceFileSha256, transaction.SourceFileSha256, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(item.EntryFingerprint, transaction.EntryFingerprint, StringComparison.OrdinalIgnoreCase)
+            && item.EntryIndex == transaction.EntryIndex);
+        if (existing != null && existing.RecoveryToken != transaction.RecoveryToken)
+        {
+            error = "a different durable recovery transaction already owns this entry";
+            return false;
+        }
+        if (existing == null)
+            ledger.Transactions.Add(transaction);
+        else
+        {
+            existing.SchemaVersion = transaction.SchemaVersion;
+            existing.EntryIndex = transaction.EntryIndex;
+            existing.CandidateHwnd = transaction.CandidateHwnd;
+            existing.CandidatePid = transaction.CandidatePid;
+            existing.CandidateWindowThreadId = transaction.CandidateWindowThreadId;
+            existing.CandidateExePath = transaction.CandidateExePath;
+            existing.CandidateClassName = transaction.CandidateClassName;
+            existing.CandidateProcessStartTimeUtcTicks = transaction.CandidateProcessStartTimeUtcTicks;
+            existing.RecoveryMode = transaction.RecoveryMode;
+            existing.Phase = transaction.Phase;
+            existing.RecoveryToken = transaction.RecoveryToken;
+            existing.PreparedUtc = transaction.PreparedUtc;
+            existing.UpdatedUtc = transaction.UpdatedUtc;
+        }
+        try
+        {
+            WriteDurableJson(path, ledger);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.GetType().Name;
+            return false;
+        }
+    }
+
+    private static bool PersistTransactionPhase(
+        PendingRecoveryEntry entry,
+        PendingRecoveryTransaction transaction,
+        string phase,
+        out string error)
+    {
+        transaction.Phase = phase;
+        transaction.UpdatedUtc = DateTimeOffset.UtcNow;
+        return PersistTransaction(entry, transaction, out error);
+    }
+
+    private static int PhaseRank(string? phase)
+        => phase switch
+        {
+            RecoveryPhase.Prepared => 0,
+            RecoveryPhase.TokenInstalled => 1,
+            RecoveryPhase.PlacementComplete => 2,
+            RecoveryPhase.VisibilityComplete => 3,
+            RecoveryPhase.NativeRecoveryComplete => 4,
+            RecoveryPhase.TokenRemoved => 5,
+            RecoveryPhase.Retired => 6,
+            _ => -1,
+        };
+
+    private static bool IsNativeRecoveryComplete(string? phase)
+        => PhaseRank(phase) >= PhaseRank(RecoveryPhase.NativeRecoveryComplete);
+
+    private static bool RestoreTransitions(
+        PendingRecoveryEntry entry,
+        IntPtr hwnd,
+        IPendingRecoveryNativeApi api,
+        out string error,
+        bool restoreWhenUnrecorded = false)
+    {
+        error = string.Empty;
+        if (entry.IsV1 || (!entry.Entry.HasOriginalTransitionsState && !restoreWhenUnrecorded))
+            return true;
+        int value = entry.Entry.OriginalTransitionsDisabled ? 1 : 0;
+        if (api.SetTransitionsDisabled(hwnd, value) != 0)
+        {
+            error = "DWM transition restoration failed";
+            return false;
+        }
+        return true;
+    }
+
+    private static NativeMethods.WINDOWPLACEMENT CreatePlacement(HiddenWindowEntry entry)
+        => new()
+        {
+            length = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>(),
+            flags = entry.OriginalPlacementFlags,
+            showCmd = unchecked((uint)entry.OriginalShowCommand),
+            ptMinPosition = new NativeMethods.POINT { x = entry.OriginalMinPositionX, y = entry.OriginalMinPositionY },
+            ptMaxPosition = new NativeMethods.POINT { x = entry.OriginalMaxPositionX, y = entry.OriginalMaxPositionY },
+            rcNormalPosition = new NativeMethods.RECT
+            {
+                left = entry.OriginalNormalLeft,
+                top = entry.OriginalNormalTop,
+                right = entry.OriginalNormalRight,
+                bottom = entry.OriginalNormalBottom,
+            },
+        };
+
+    private static bool RemoveExactRecoveryToken(
+        IntPtr hwnd,
+        IntPtr token,
+        IPendingRecoveryNativeApi api,
+        out string error)
+    {
+        if (api.GetProperty(hwnd, TemporaryRecoveryPropertyName) != token)
+        {
+            error = "temporary recovery token disappeared or changed before cleanup";
+            return false;
+        }
+        if (!api.RemoveProperty(hwnd, TemporaryRecoveryPropertyName, token))
+        {
+            error = "temporary recovery token removal failed";
+            return false;
+        }
+        error = string.Empty;
+        return true;
+    }
+
+    private static void InjectFault(Func<string, bool>? faultInjector, string stage)
+    {
+        if (faultInjector?.Invoke(stage) == true)
+            throw new RecoveryFaultException(stage);
     }
 
     private static WindowIdentityResult EvaluateRecoveryTarget(
@@ -464,6 +914,27 @@ internal static class PendingRecoveryService
         return result == WindowIdentityResult.Match;
     }
 
+    private static bool TryPreTokenBoundary(
+        PendingRecoveryEntry entry,
+        PendingRecoveryCandidate candidate,
+        IPendingRecoveryNativeApi api,
+        out string error)
+    {
+        if (EvaluateRecoveryTarget(entry, candidate, api, out error) != WindowIdentityResult.Match)
+            return false;
+        if (api.GetProperty(candidate.Hwnd, NativeWindowIdentityApi.CaptureIdentityPropertyName) != IntPtr.Zero)
+        {
+            error = "normal capture token appeared before recovery token installation";
+            return false;
+        }
+        if (api.GetProperty(candidate.Hwnd, TemporaryRecoveryPropertyName) != IntPtr.Zero)
+        {
+            error = "foreign/unverifiable recovery token appeared before installation";
+            return false;
+        }
+        return true;
+    }
+
     private static WindowIdentityResult EvaluateRecoveryGeneration(
         PendingRecoveryEntry entry,
         PendingRecoveryCandidate candidate,
@@ -507,6 +978,15 @@ internal static class PendingRecoveryService
                 if (start != entry.Entry.ProcessStartTimeUtcTicks)
                     return Result(WindowIdentityResult.Mismatch, "process-start identity differs", out reason);
             }
+            else if (entry.Transaction?.CandidateProcessStartTimeUtcTicks is long transactionStart
+                && transactionStart != 0)
+            {
+                long start = api.GetProcessStartTimeUtcTicks(pid);
+                if (start == 0)
+                    return Result(WindowIdentityResult.Unverifiable, "selected process-start identity could not be read", out reason);
+                if (start != transactionStart)
+                    return Result(WindowIdentityResult.Mismatch, "selected process-start identity differs", out reason);
+            }
             reason = "temporary recovery generation matched";
             return WindowIdentityResult.Match;
         }
@@ -529,6 +1009,7 @@ internal static class PendingRecoveryService
         TextWriter output)
     {
         output.Write("Select pending entry ID (or q): ");
+        output.Flush();
         string? value = input.ReadLine();
         if (string.IsNullOrWhiteSpace(value) || value.Equals("q", StringComparison.OrdinalIgnoreCase))
             return null;
@@ -541,6 +1022,7 @@ internal static class PendingRecoveryService
         TextWriter output)
     {
         output.Write("Select live candidate ID (or q): ");
+        output.Flush();
         string? value = input.ReadLine();
         if (string.IsNullOrWhiteSpace(value) || value.Equals("q", StringComparison.OrdinalIgnoreCase))
             return null;
@@ -626,7 +1108,18 @@ internal static class PendingRecoveryService
                 Status = version > HiddenWindowJournalFile.CurrentVersion ? "future-schema" : "pending",
                 SourceFileSha256 = Sha256(rawBytes),
             };
-            List<PendingResolution> resolutions = ReadResolutions(path);
+            string sourceSha256 = Sha256(rawBytes);
+            TryReadLedger(path + ".recovered", out ResolutionLedger ledger, out _);
+            ledger.Resolutions ??= new List<PendingResolution>();
+            ledger.Transactions ??= new List<PendingRecoveryTransaction>();
+            var fingerprintCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (JsonElement rawEntry in entriesElement.EnumerateArray())
+            {
+                string fingerprint = Fingerprint(rawEntry);
+                fingerprintCounts[fingerprint] = fingerprintCounts.TryGetValue(fingerprint, out int count)
+                    ? count + 1
+                    : 1;
+            }
             int entryIndex = 0;
             foreach (JsonElement rawEntry in entriesElement.EnumerateArray())
             {
@@ -642,7 +1135,26 @@ internal static class PendingRecoveryService
                 }
                 string fingerprint = Fingerprint(rawEntry);
                 PendingRecoveryFields fields = PendingRecoveryFields.FromJson(rawEntry, version);
-                PendingResolution? resolved = resolutions.FirstOrDefault(item => item.EntryFingerprint == fingerprint);
+                PendingResolution? resolved = ledger.Resolutions.FirstOrDefault(item =>
+                    string.Equals(item.EntryFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase)
+                    && ((string.Equals(item.SourceFileId, fileName, StringComparison.Ordinal)
+                        && string.Equals(item.SourceFileSha256, sourceSha256, StringComparison.OrdinalIgnoreCase)
+                        && item.EntryIndex == entryIndex)
+                        || (string.IsNullOrEmpty(item.SourceFileId)
+                            && string.IsNullOrEmpty(item.SourceFileSha256)
+                            && fingerprintCounts[fingerprint] == 1)));
+                PendingRecoveryTransaction? transaction = ledger.Transactions.FirstOrDefault(item =>
+                    string.Equals(item.SourceFileId, fileName, StringComparison.Ordinal)
+                    && string.Equals(item.SourceFileSha256, sourceSha256, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(item.EntryFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase)
+                    && item.EntryIndex == entryIndex);
+                transaction ??= ledger.Transactions.FirstOrDefault(item =>
+                    string.Equals(item.SourceFileId, fileName, StringComparison.Ordinal)
+                    && string.Equals(item.EntryFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase)
+                    && item.EntryIndex == entryIndex);
+                bool transactionSourceMatches = transaction != null
+                    && string.Equals(transaction.SourceFileId, fileName, StringComparison.Ordinal)
+                    && string.Equals(transaction.SourceFileSha256, sourceSha256, StringComparison.OrdinalIgnoreCase);
                 var pendingEntry = new PendingRecoveryEntry
                 {
                     SessionId = $"P{fileIndex:D2}-E{entryIndex + 1:D3}",
@@ -653,14 +1165,23 @@ internal static class PendingRecoveryService
                     Entry = entry,
                     Fields = fields,
                     EntryFingerprint = fingerprint,
-                    SourceFileSha256 = Sha256(rawBytes),
-                    AlreadyResolved = resolved != null,
+                    SourceFileSha256 = sourceSha256,
+                    Transaction = transaction,
+                    AlreadyResolved = resolved != null || (transactionSourceMatches && transaction?.Phase == RecoveryPhase.Retired),
                     Status = resolved != null
                         ? "already-resolved"
+                        : transactionSourceMatches && transaction?.Phase == RecoveryPhase.Retired
+                            ? "already-resolved"
                         : version > HiddenWindowJournalFile.CurrentVersion
                             ? "future-schema"
+                            : transaction != null && !IsNativeRecoveryComplete(transaction.Phase)
+                                ? "interrupted-transaction"
+                            : transaction != null
+                                ? "native-recovery-complete"
                             : probe.Classify(entry, fields),
                 };
+                if (transaction != null && !IsSupportedTransaction(pendingEntry, transaction))
+                    pendingEntry.Status = "unverifiable-transaction";
                 file.Entries.Add(pendingEntry);
                 entryIndex++;
             }
@@ -712,29 +1233,54 @@ internal static class PendingRecoveryService
     private static string FormatHwnd(long hwnd)
         => hwnd == 0 ? "0x0" : $"0x{hwnd:X}";
 
-    private static string SanitizeConsoleTitle(string title)
+    internal static string SanitizeConsoleTitle(string title)
     {
-        string singleLine = title.Replace('\r', ' ').Replace('\n', ' ');
-        return singleLine.Length <= 96 ? singleLine : singleLine[..96] + "…";
+        const int maxLength = 96;
+        bool truncated = title.Length > maxLength;
+        int limit = truncated ? maxLength - 1 : maxLength;
+        var builder = new StringBuilder(Math.Min(title.Length, 96));
+        foreach (char character in title)
+        {
+            char safe = character switch
+            {
+                '\r' or '\n' or '\t' or '\u2028' or '\u2029' => ' ',
+                _ when character == '\u007F' => '�',
+                _ when character <= '\u001F' || (character >= '\u0080' && character <= '\u009F') => '�',
+                _ => character,
+            };
+            builder.Append(safe);
+            if (builder.Length >= limit)
+            {
+                if (char.IsHighSurrogate(safe))
+                    builder.Length--;
+                break;
+            }
+        }
+        string sanitized = builder.ToString();
+        return truncated ? sanitized + "…" : sanitized;
     }
 
     private static string Sha256(byte[] bytes)
         => Convert.ToHexString(SHA256.HashData(bytes));
 
-    private static List<PendingResolution> ReadResolutions(string pendingPath)
+    private static bool TryReadLedger(string path, out ResolutionLedger ledger, out string error)
     {
-        string path = pendingPath + ".recovered";
+        ledger = new ResolutionLedger();
+        error = string.Empty;
         if (!File.Exists(path))
-            return new List<PendingResolution>();
+            return true;
         try
         {
-            ResolutionLedger ledger = JsonSerializer.Deserialize<ResolutionLedger>(File.ReadAllText(path))
+            ledger = JsonSerializer.Deserialize<ResolutionLedger>(File.ReadAllText(path))
                 ?? new ResolutionLedger();
-            return ledger.Resolutions ?? new List<PendingResolution>();
+            ledger.Resolutions ??= new List<PendingResolution>();
+            ledger.Transactions ??= new List<PendingRecoveryTransaction>();
+            return true;
         }
-        catch
+        catch (Exception ex)
         {
-            return new List<PendingResolution>();
+            error = ex.GetType().Name;
+            return false;
         }
     }
 
@@ -744,19 +1290,42 @@ internal static class PendingRecoveryService
         string path = entry.FullPath + ".recovered";
         try
         {
-            ResolutionLedger ledger = new()
-            {
-                Resolutions = ReadResolutions(entry.FullPath),
-            };
-            if (!ledger.Resolutions.Any(item => item.EntryFingerprint == entry.EntryFingerprint))
+            if (!TryReadLedger(path, out ResolutionLedger ledger, out error))
+                return false;
+            ledger.Resolutions ??= new List<PendingResolution>();
+            ledger.Transactions ??= new List<PendingRecoveryTransaction>();
+            if (!ledger.Resolutions.Any(item =>
+                    string.Equals(item.SourceFileId, entry.FileName, StringComparison.Ordinal)
+                    && string.Equals(item.SourceFileSha256, entry.SourceFileSha256, StringComparison.OrdinalIgnoreCase)
+                    && item.EntryIndex == entry.EntryIndex
+                    && string.Equals(item.EntryFingerprint, entry.EntryFingerprint, StringComparison.OrdinalIgnoreCase)))
             {
                 ledger.Resolutions.Add(new PendingResolution
                 {
+                    SourceFileId = entry.FileName,
+                    SourceFileSha256 = entry.SourceFileSha256,
                     EntryFingerprint = entry.EntryFingerprint,
+                    EntryIndex = entry.EntryIndex,
                     SchemaVersion = entry.Version,
                     ResolvedUtc = DateTimeOffset.UtcNow,
-                    Result = "presentation-restored",
+                    Result = entry.RecoveryMode == "v2-intentional-hide"
+                        ? "intentional-hide-cleanup"
+                        : "presentation-restored",
                 });
+            }
+            if (entry.Transaction != null)
+            {
+                entry.Transaction.Phase = RecoveryPhase.Retired;
+                entry.Transaction.UpdatedUtc = DateTimeOffset.UtcNow;
+                PendingRecoveryTransaction? persisted = ledger.Transactions.FirstOrDefault(item =>
+                    string.Equals(item.SourceFileId, entry.FileName, StringComparison.Ordinal)
+                    && item.EntryIndex == entry.EntryIndex
+                    && string.Equals(item.EntryFingerprint, entry.EntryFingerprint, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(item.SourceFileSha256, entry.SourceFileSha256, StringComparison.OrdinalIgnoreCase));
+                if (persisted == null)
+                    ledger.Transactions.Add(entry.Transaction);
+                else
+                    persisted.Phase = RecoveryPhase.Retired;
             }
             WriteDurableJson(path, ledger);
             return true;
@@ -768,7 +1337,10 @@ internal static class PendingRecoveryService
         }
     }
 
-    private static bool RetireEntry(PendingRecoveryEntry entry, out string error)
+    private static bool RetireEntry(
+        PendingRecoveryEntry entry,
+        out string error,
+        Func<string, bool>? faultInjector = null)
     {
         error = string.Empty;
         try
@@ -787,29 +1359,34 @@ internal static class PendingRecoveryService
                 return false;
             }
             int removeIndex = -1;
-            for (int i = 0; i < entries.Count; i++)
+            if (entry.EntryIndex >= 0
+                && entry.EntryIndex < entries.Count
+                && entries[entry.EntryIndex] is JsonNode node
+                && string.Equals(
+                    Sha256(Encoding.UTF8.GetBytes(node.ToJsonString())),
+                    entry.EntryFingerprint,
+                    StringComparison.OrdinalIgnoreCase))
             {
-                if (entries[i] is JsonNode node
-                    && string.Equals(
-                        Sha256(Encoding.UTF8.GetBytes(node.ToJsonString())),
-                        entry.EntryFingerprint,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    removeIndex = i;
-                    break;
-                }
+                removeIndex = entry.EntryIndex;
             }
             if (removeIndex < 0)
             {
                 // A previous cleanup attempt may already have retired the
                 // entry after the resolution marker was committed.
+                if (entries.Count == 0)
+                    File.Delete(entry.FullPath);
                 return true;
             }
             entries.RemoveAt(removeIndex);
             WriteDurableJson(entry.FullPath, rootObject);
+            InjectFault(faultInjector, "during-retirement");
             if (entries.Count == 0)
                 File.Delete(entry.FullPath);
             return true;
+        }
+        catch (RecoveryFaultException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -843,11 +1420,15 @@ internal static class PendingRecoveryService
     private sealed class ResolutionLedger
     {
         public List<PendingResolution> Resolutions { get; set; } = new();
+        public List<PendingRecoveryTransaction> Transactions { get; set; } = new();
     }
 
     private sealed class PendingResolution
     {
+        public string SourceFileId { get; set; } = string.Empty;
+        public string SourceFileSha256 { get; set; } = string.Empty;
         public string EntryFingerprint { get; set; } = string.Empty;
+        public int EntryIndex { get; set; }
         public int SchemaVersion { get; set; }
         public DateTimeOffset ResolvedUtc { get; set; }
         public string Result { get; set; } = string.Empty;
@@ -898,10 +1479,37 @@ internal sealed class PendingRecoveryEntry
     public PendingRecoveryFields Fields { get; init; }
     public string EntryFingerprint { get; init; } = string.Empty;
     public string SourceFileSha256 { get; init; } = string.Empty;
-    public string Status { get; init; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
     public bool AlreadyResolved { get; init; }
+    public PendingRecoveryTransaction? Transaction { get; set; }
     public bool IsV1 => Version == HiddenWindowJournalFile.LegacyMinimalVersion;
+    public string RecoveryMode
+        => IsV1
+            ? "v1-visible"
+            : Entry.DoNotRescue
+                ? "v2-intentional-hide"
+                : "v2-presentation";
     public string AvailableFields => Fields.ToDisplayString();
+}
+
+internal sealed class PendingRecoveryTransaction
+{
+    public int SchemaVersion { get; set; }
+    public string SourceFileId { get; set; } = string.Empty;
+    public string SourceFileSha256 { get; set; } = string.Empty;
+    public string EntryFingerprint { get; set; } = string.Empty;
+    public int EntryIndex { get; set; }
+    public long CandidateHwnd { get; set; }
+    public uint CandidatePid { get; set; }
+    public uint CandidateWindowThreadId { get; set; }
+    public string CandidateExePath { get; set; } = string.Empty;
+    public string CandidateClassName { get; set; } = string.Empty;
+    public long CandidateProcessStartTimeUtcTicks { get; set; }
+    public long RecoveryToken { get; set; }
+    public string RecoveryMode { get; set; } = string.Empty;
+    public string Phase { get; set; } = PendingRecoveryService.RecoveryPhase.Prepared;
+    public DateTimeOffset PreparedUtc { get; set; }
+    public DateTimeOffset UpdatedUtc { get; set; }
 }
 
 internal readonly struct PendingRecoveryFields

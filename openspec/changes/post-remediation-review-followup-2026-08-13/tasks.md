@@ -56,3 +56,26 @@
 - [x] 7.5 Run the complete canonical qualification suite, review every changed
   file and invariant, commit one coherent substantive unit, push main, and
   verify/fix the exact hosted CI run.
+
+## 8. R16–R22 recovery/concurrency closure
+
+- [x] 8.1 Add the durable supervised-recovery transaction ledger, random token
+  ownership proof, resumable phase machine, exact cleanup, and deterministic
+  fault-injection/state-matrix tests.
+- [x] 8.2 Share the normal product mutation mutex with supervised recovery;
+  add deterministic lease race, release, and abandoned-owner tests, and make
+  normal capture refuse pending-recovery properties.
+- [x] 8.3 Implement the scoped WinExe console session and real executable
+  redirected-process smoke using isolated application data.
+- [x] 8.4 Preserve historical v2 `DoNotRescue` intentional-hide semantics in
+  supervised recovery and add literal fixture coverage for true and false.
+- [x] 8.5 Add the documented-safe deferred HDWP generation boundaries and
+  deterministic validator/End/fallback lifecycle tests.
+- [x] 8.6 Reconcile canonical synchronous journal requirements and update all
+  R16–R22 active/canonical OpenSpec requirements and diagnostics wording.
+- [x] 8.7 Add terminal-safe bounded title sanitization and control-character
+  tests without changing support-bundle privacy behavior.
+- [x] 8.8 Complete targeted/canonical Release qualification, review the
+  complete diff, and perform the authorized normal Git handoff; hosted CI is
+  queried dynamically for the final pushed SHA, with repository content frozen
+  once the hosted result is green.

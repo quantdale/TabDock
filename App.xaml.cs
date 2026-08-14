@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using System.Windows;
 using Microsoft.Win32;
 using TabDock.Models;
@@ -30,7 +29,7 @@ public partial class App : Application
     private WinEventMonitor _events = null!;
     private GuestLifecycleService _guestLifecycle = null!;
     private HotkeyService _hotkey = null!;
-    private Mutex? _singleInstanceMutex;
+    private ProductMutationLease? _singleInstanceLease;
     private MainWindow? _mainWindow;
     private MainViewModel? _mainViewModel;
     private readonly Dictionary<Guid, ContainerWindow> _containers = new();
@@ -371,8 +370,7 @@ public partial class App : Application
             _events?.Dispose();
             _winEventMonitorDisposed = true;
             _hotkey?.Dispose();
-            _singleInstanceMutex?.ReleaseMutex();
-            _singleInstanceMutex?.Dispose();
+            _singleInstanceLease?.Dispose();
             DiagnosticRuntime.LogicalSnapshotProvider = null;
             _log?.Dispose();
         }
@@ -1068,23 +1066,13 @@ public partial class App : Application
     /// </summary>
     private bool AcquireSingleInstanceMutex()
     {
-        try
+        if (ProductMutationLease.TryAcquire(out ProductMutationLease? lease))
         {
-            bool createdNew;
-            _singleInstanceMutex = new Mutex(initiallyOwned: true, name: @"Global\TabDock", createdNew: out createdNew);
-            if (!createdNew)
-            {
-                _singleInstanceMutex.Dispose();
-                _singleInstanceMutex = null;
-                return false;
-            }
+            _singleInstanceLease = lease;
             return true;
         }
-        catch (Exception ex)
-        {
-            _log?.LogException("AcquireSingleInstanceMutex", ex);
-            return false;
-        }
+        _log?.Log("AcquireSingleInstanceMutex: another product-mutating TabDock owner is active.");
+        return false;
     }
 
     /// <summary>

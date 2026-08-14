@@ -127,7 +127,22 @@ public static class DiagnosticCommandLine
                     }
                     return 0;
                 case DiagnosticCommandKind.RecoverPending:
-                    return PendingRecoveryService.RunInteractive();
+                    if (!ProductMutationLease.TryAcquire(out ProductMutationLease? recoveryLease))
+                    {
+                        Write("Supervised recovery refused: another TabDock mutation owner is running. Exit the running TabDock instance before supervised recovery.");
+                        return 3;
+                    }
+                    using (recoveryLease!)
+                    {
+                        if (!ConsoleSession.TryCreate(out ConsoleSession? session, out string? consoleError))
+                        {
+                            Write("Supervised recovery requires a console or redirected standard input/output: " + consoleError);
+                            return 2;
+                        }
+                        ConsoleSession interactiveSession = session!;
+                        using (interactiveSession)
+                            return PendingRecoveryService.RunInteractive(interactiveSession.Input, interactiveSession.Output);
+                    }
                 default:
                     return 0;
             }
@@ -205,8 +220,12 @@ internal static class DiagnosticSelfTest
         Check(DiagnosticEnvironmentService.HashTitle("secret") != "secret");
         Check(DiagnosticEnvironmentService.ClassifyJsonText("{\"Version\":1,\"Groups\":[]}", isState: true) == "valid");
         Check(DiagnosticEnvironmentService.ClassifyJsonText("not-json", isState: true).StartsWith("corrupt", StringComparison.Ordinal));
+        Check(ConsoleSessionSelfTest.UsesScopedStreams());
+        Check(ProductMutationLeaseSelfTest.ExclusiveAndReusable());
         Check(DeferredWindowPositionSelfTest.ChangedHandlesAreChained());
         Check(DeferredWindowPositionSelfTest.FailedDeferAbandonsWithoutEnd());
+        Check(DeferredWindowPositionSelfTest.StaleGuestIsNotQueuedAndValidHdwpIsClosed());
+        Check(DeferredWindowPositionSelfTest.ValidatorRunsBeforeEachQueue());
         Guid selectedGroupId = Guid.NewGuid();
         var pickerOptions = new[]
         {
@@ -423,6 +442,36 @@ internal static class DeferredWindowPositionSelfTest
             && api.DeferInputs[0] == new IntPtr(0x11)
             && api.DeferInputs[1] == new IntPtr(0x22)
             && api.EndInput == IntPtr.Zero;
+    }
+
+    public static bool StaleGuestIsNotQueuedAndValidHdwpIsClosed()
+    {
+        var api = new FakeApi(new[] { new IntPtr(0x22), new IntPtr(0x33), new IntPtr(0x44) });
+        DeferredWindowPositionResult result = DeferredWindowPositionBatch.Apply(
+            api,
+            Entries(),
+            beforeDefer: index => index != 0);
+        return result == DeferredWindowPositionResult.ValidationFailed
+            && api.DeferInputs.Count == 0
+            && api.EndInput == new IntPtr(0x11);
+    }
+
+    public static bool ValidatorRunsBeforeEachQueue()
+    {
+        var api = new FakeApi(new[] { new IntPtr(0x22), new IntPtr(0x33), new IntPtr(0x44) });
+        var calls = new List<int>();
+        DeferredWindowPositionResult result = DeferredWindowPositionBatch.Apply(
+            api,
+            Entries(),
+            beforeDefer: index =>
+            {
+                calls.Add(index);
+                return index != 1;
+            });
+        return result == DeferredWindowPositionResult.ValidationFailed
+            && calls.SequenceEqual(new[] { 0, 1 })
+            && api.DeferInputs.Count == 1
+            && api.EndInput == new IntPtr(0x22);
     }
 
     private static IReadOnlyList<DeferredWindowPositionEntry> Entries()

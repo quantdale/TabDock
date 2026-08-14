@@ -39,9 +39,12 @@ The resulting single executable is at:
 ### Support diagnostics
 
 Every build carries its semantic version, source commit, build configuration,
-runtime identifier, and informational version. The diagnostic commands run
-without opening the main WPF UI, acquiring the TabDock mutex, installing
-WinEvent hooks, or loading/saving product state:
+runtime identifier, and informational version. The read-only diagnostic
+commands run without opening the main WPF UI, acquiring the TabDock
+mutation lease, installing WinEvent hooks, or loading/saving product state.
+`--recover-pending` is the exception: it is an explicitly mutating,
+supervised command and acquires that lease for its full interactive
+transaction:
 
 ```powershell
 .\TabDock.exe --version
@@ -237,10 +240,14 @@ Use this checklist to verify a build before considering it ready.
   supervised terminal, run `TabDock.exe --recover-pending`, select one pending
   entry, select the exact live top-level window from the local candidate list,
   and type `YES` to confirm. The workflow validates every historical field
-  present in that entry and installs a temporary generation guard before
-  changing presentation. v1 evidence restores visibility only; v2 evidence
-  may restore its recorded presentation state. A rejected, ambiguous, failed,
-  or unverifiable recovery retains the evidence. Resolving one entry preserves
+  present in that entry, durably records a resumable transaction, and installs
+  a cryptographically random temporary generation guard before changing
+  presentation. v1 evidence restores visibility only; v2 evidence restores
+  its recorded presentation state unless `DoNotRescue=true`, which preserves
+  intentional-hide semantics and never shows or repositions the guest. A
+  rejected, ambiguous, failed, or unverifiable recovery retains the evidence;
+  an interrupted transaction resumes by phase and does not repeat native work
+  after its durable native-complete marker. Resolving one entry preserves
   unresolved siblings, and startup never performs tokenless legacy recovery.
 
 ## Diagnostics

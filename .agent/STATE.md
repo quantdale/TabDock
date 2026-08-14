@@ -19,15 +19,17 @@ a state-only commit to record the preceding push or its CI result; report the
 final pushed SHA and CI result in the session output and let the next session
 verify them independently.
 
-## Current checkpoint — R12–R15 final source-hardening pass
+## Current checkpoint — R16–R22 recovery/concurrency closure
 
-- Objective: close only the independently identified R12 HWND mutation-boundary,
-  R13 legacy pending-recovery, R14 DPI-contract drift, and R15 npm lifecycle
-  warning findings; do not repeat the completed deep audit.
-- Status: R12–R15 implementation, canonical local qualification, and final
-  source review are complete; the worktree is intentionally staged pending the
-  substantive commit, fast-forward push, and hosted CI inspection. Git refs
-  remain dynamically authoritative.
+- Objective: close only the independently identified R16 crash-consistent
+  supervised recovery, R17 product-mutation ownership, R18 real WinExe console,
+  R19 legacy `DoNotRescue`, R20 HDWP generation boundary, R21 canonical journal
+  and state drift, and R22 terminal-safety findings. Do not repeat the completed
+  deep audit or redesign Shepherd.
+- Repository-content status: R16–R22 source implementation, deterministic
+  tests, redirected real-WinExe smoke, canonical OpenSpec, documentation, and
+  durable-state updates are complete. Local Release qualification is green;
+  Git refs and hosted CI remain dynamically authoritative.
 - Active plan/spec records:
   `.agent/execplans/tabdock-deep-audit-remediation-2026-08-13.md` and
   `openspec/changes/post-remediation-review-followup-2026-08-13/`.
@@ -48,14 +50,28 @@ verify them independently.
   qualification caveats; unknown awareness remains fail-closed. R15's exact
   Node 24/npm 11 `--ignore-scripts` install and OpenSpec validation passed.
 
+## R16–R22 recovery/concurrency closure
+
+- Current-source findings and the crash-state/Win32 design decision are recorded
+  in the active execplan. Historical v2 inspection confirms `DoNotRescue=true`
+  means intentional-hide cleanup only: no placement or visibility resurrection.
+- The durable recovery transaction extends the existing `.recovered` ledger;
+  its ownership proof is source SHA + entry fingerprint + target identity + a
+  cryptographically random token, with explicit resumable phases. Foreign
+  recovery properties remain untouched.
+- The normal TabDock instance and `--recover-pending` share one
+  `Global\\TabDock` mutation lease. Read-only diagnostics remain independent.
+- Microsoft’s official HDWP contract was reviewed: failed `DeferWindowPos` is
+  abandoned without `EndDeferWindowPos`; no documented cancellation exists for
+  a valid HDWP, so no unsupported final-check/abandon path will be added.
+
 ## Resume protocol
 
 Repository-content status:
-R7 tri-state/release safety, R8 versioned journal compatibility, R9 restore
-post-state semantics, R10 state protocol, R11 workflow runtime review, and
-focused R4/R6 reviews are implemented and deterministically validated. The
-canonical Release gate is green; Git refs and hosted CI remain dynamically
-owned by Git/the hosting service.
+R7–R15 implementation and canonical qualification are historical completed
+content. R16–R22 implementation and local qualification are complete content;
+the active OpenSpec campaign and this file describe repository content, not
+staging, pushing, or a guaranteed hosted-CI result.
 
 Handoff rule:
 On resume, inspect Git dynamically. If this content is already committed and
@@ -109,12 +125,13 @@ probing; and ValidationDriver safety guards.
 
 ## Validation and remaining work
 
-- Focused and canonical validation: Debug/Release app and ValidationDriver
-  builds passed with 0 warnings/errors; diagnostics self-test passed `153/0`;
-  OpenSpec passed `16/16`; NuGet audit and support-bundle privacy passed;
-  pending-recovery discovery and self-contained publish smokes passed. Exact
-  Node 24/npm 11 pinned OpenSpec installation with `--ignore-scripts` passed
-  version and validation. Commit, push, and hosted CI remain.
+- Historical R12–R15 validation passed Release builds, diagnostics `153/0`,
+  OpenSpec `16/16`, NuGet/privacy, pending discovery, and publish smokes.
+- Current R16–R22 local validation passes Release build, diagnostics `166/0`,
+  redirected real-WinExe recovery process smoke with isolated `APPDATA`,
+  OpenSpec `16/16`, NuGet audit, support-bundle privacy, and self-contained
+  publish/version smoke. These are local facts; hosted CI and Git refs remain
+  dynamic.
 - Remaining product qualification: M2 supervised session-ending cancellation;
   physical M8 mixed-DPI/multi-monitor matrix; unavailable Chrome scenarios;
   and the foreground-policy-limited split case.
@@ -133,9 +150,11 @@ evidence only and is not the current Git state. The previous state file had
 grown into a self-referential checkpoint chain; its durable campaign detail is
 retained in the execplan rather than repeated here.
 
-## Next actions
+## Resume
 
-1. Create the one coherent substantive commit from the reviewed staged tree.
-2. Push `main` with an ordinary fast-forward and verify local/main ref parity.
-3. Inspect hosted CI for the exact final SHA; fix only a real hosted defect and
-   stop committing once green.
+1. Resolve branch, `HEAD`, `origin/main`, and worktree status dynamically.
+2. If this content is not yet committed, review the complete diff and perform
+   the authorized normal fast-forward commit/push; do not infer Git state from
+   this file.
+3. Query hosted CI for the exact pushed SHA. Fix only a genuine hosted defect;
+   stop repository modifications once final hosted CI is green.

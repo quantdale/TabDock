@@ -89,19 +89,25 @@ internal enum DeferredWindowPositionResult
     Applied,
     BeginFailed,
     DeferFailed,
+    ValidationFailed,
     EndFailed,
 }
 
 /// <summary>
 /// Applies an HDWP transaction while preserving the handle returned by each
-/// <c>DeferWindowPos</c> call. A failed Defer abandons the transaction and
-/// deliberately does not call <c>EndDeferWindowPos</c>, as required by Win32.
+/// <c>DeferWindowPos</c> call. The validator runs immediately before every
+/// guest is queued. A failed Defer abandons the transaction and deliberately
+/// does not call <c>EndDeferWindowPos</c>, as required by Win32. There is no
+/// documented cancellation API for a valid HDWP, so a generation failure
+/// after Begin/after earlier queues closes the valid batch with End and never
+/// falls back to touching the stale guest.
 /// </summary>
 internal static class DeferredWindowPositionBatch
 {
     public static DeferredWindowPositionResult Apply(
         IDeferredWindowPositionApi api,
-        IReadOnlyList<DeferredWindowPositionEntry> entries)
+        IReadOnlyList<DeferredWindowPositionEntry> entries,
+        Func<int, bool>? beforeDefer = null)
     {
         if (entries.Count == 0)
             return DeferredWindowPositionResult.BeginFailed;
@@ -112,6 +118,15 @@ internal static class DeferredWindowPositionBatch
 
         for (int i = 0; i < entries.Count; i++)
         {
+            if (beforeDefer != null && !beforeDefer(i))
+            {
+                // BeginDeferWindowPos succeeded, so End is the documented
+                // lifecycle close for this valid HDWP. Any earlier entries
+                // were independently generation-validated before queuing.
+                // The caller must not run a stale-guest fallback afterwards.
+                api.End(hdwp);
+                return DeferredWindowPositionResult.ValidationFailed;
+            }
             DeferredWindowPositionEntry entry = entries[i];
             IntPtr updated = api.Defer(
                 hdwp,

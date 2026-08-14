@@ -58,6 +58,7 @@ internal interface IWindowReleaseNativeApi
 internal interface IWindowCaptureNativeApi
 {
     IntPtr GetCaptureIdentityToken(IntPtr hwnd);
+    IntPtr GetPendingRecoveryToken(IntPtr hwnd);
     bool SetCaptureIdentityToken(IntPtr hwnd, IntPtr token);
     int SetTransitionsDisabled(IntPtr hwnd, int value);
 }
@@ -105,6 +106,9 @@ internal sealed class NativeWindowCaptureNativeApi : IWindowCaptureNativeApi
 
     public IntPtr GetCaptureIdentityToken(IntPtr hwnd)
         => NativeMethods.GetProp(hwnd, NativeWindowIdentityApi.CaptureIdentityPropertyName);
+
+    public IntPtr GetPendingRecoveryToken(IntPtr hwnd)
+        => NativeMethods.GetProp(hwnd, PendingRecoveryService.TemporaryRecoveryPropertyName);
 
     public bool SetCaptureIdentityToken(IntPtr hwnd, IntPtr token)
         => NativeMethods.SetProp(hwnd, NativeWindowIdentityApi.CaptureIdentityPropertyName, token);
@@ -285,6 +289,12 @@ public sealed class WindowShepherdService
             reason = "a capture token appeared before token installation";
             return false;
         }
+        if (_captureApi.GetPendingRecoveryToken(window.Hwnd) != IntPtr.Zero)
+        {
+            failure = WindowIdentityResult.Mismatch;
+            reason = "a pending-recovery token appeared before capture token installation";
+            return false;
+        }
 
         if (!_captureApi.SetCaptureIdentityToken(window.Hwnd, expectedToken))
         {
@@ -388,6 +398,12 @@ public sealed class WindowShepherdService
         if (!NativeMethods.IsWindow(hwnd))
         {
             error = "The window no longer exists.";
+            return null;
+        }
+        if (_captureApi.GetPendingRecoveryToken(hwnd) != IntPtr.Zero)
+        {
+            error = "Cannot capture a window carrying a pending-recovery transaction token.";
+            _log.Log($"SHEPHERD[capture-blocked] HWND 0x{hwnd.ToInt64():X}: pending-recovery token is present.");
             return null;
         }
 
@@ -1103,15 +1119,28 @@ public sealed class WindowShepherdService
                     bottomRect.left, bottomRect.top, bottomRect.Width, bottomRect.Height, guestFlags),
                 new DeferredWindowPositionEntry(containerHwnd, bottom.Hwnd,
                     0, 0, 0, 0, containerFlags),
+            },
+            beforeDefer: index => index switch
+            {
+                0 => IsCurrentMutationGeneration(top, "position-split-before-top-defer"),
+                1 => IsCurrentMutationGeneration(bottom, "position-split-before-bottom-defer"),
+                _ => NativeMethods.IsWindow(containerHwnd),
             });
 
         if (result != DeferredWindowPositionResult.Applied)
         {
-            // A failed deferred batch is abandoned before EndDeferWindowPos
-            // when any entry fails. The panes may remain at their old rects
-            // until this fallback runs, but they cannot be committed from an
-            // obsolete HDWP. The per-guest path preserves the same rects and
-            // local z-order semantics, and self-heals on the next tick.
+            // A generation failure is deliberately not sent through the
+            // fallback: End closed the valid HDWP and may have committed only
+            // earlier, independently validated entries. Fallback would erase
+            // the safety boundary by touching the known-stale guest again.
+            if (result == DeferredWindowPositionResult.ValidationFailed)
+            {
+                LogPositioningFailureOnce(top.Hwnd, "DeferWindowPos(batch:validation)");
+                return;
+            }
+            // A failed Defer is abandoned before EndDeferWindowPos per the
+            // Win32 contract. The existing fallback remains generation-gated
+            // and preserves recovery when the native API itself fails.
             if (result != DeferredWindowPositionResult.BeginFailed)
                 LogPositioningFailureOnce(top.Hwnd, $"DeferWindowPos(batch:{result})");
             FallbackPosition(top, topRect, bottom, bottomRect, containerHwnd);

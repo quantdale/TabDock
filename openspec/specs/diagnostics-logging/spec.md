@@ -25,3 +25,17 @@ When a rotation `File.Move` fails (e.g. the file is held open by another tool), 
 #### Scenario: A crash path racing normal shutdown does not throw from Dispose
 - **WHEN** `Dispose` is invoked from two threads concurrently (normal exit and a crash path)
 - **THEN** exactly one caller performs the teardown, the other returns cleanly, and no `InvalidOperationException` escapes
+
+### Requirement: Supervised recovery titles are terminal-safe
+The local candidate list used by supervised pending recovery SHALL normalize
+untrusted external window titles to one bounded line. C0/C1 controls, ESC,
+DEL, and Unicode line/paragraph separators SHALL be removed or replaced before
+the title reaches the interactive writer. This local display contract SHALL
+not weaken the existing title hashing/redaction contract for doctor reports or
+support bundles.
+
+#### Scenario: Control-bearing title cannot alter the terminal
+- **WHEN** a candidate title contains ANSI/OSC controls, C0/C1 characters,
+  line separators, and ordinary Unicode
+- **THEN** no raw terminal control or line break is emitted, the title remains
+  bounded, and ordinary Unicode remains readable

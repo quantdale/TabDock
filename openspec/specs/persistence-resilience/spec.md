@@ -47,9 +47,22 @@ When a restored group's `AccentColor` string cannot be parsed by `ColorConverter
 - **WHEN** `state.json` contains a group with `"AccentColor": "not-a-color"`
 - **THEN** the restored group uses the default accent color and its container renders and hit-tests normally
 
-### Requirement: Only one TabDock instance runs at a time
-`App.OnStartup` SHALL acquire a named `Global\TabDock` mutex; a second instance SHALL log the contention and exit gracefully instead of sharing `state.json` / `hidden-windows.json` with the first (last-writer-wins temp-file replacement would silently discard one instance's groups and can double-rescue journaled windows).
+### Requirement: Only one product-mutating TabDock owner runs at a time
+Normal `App.OnStartup` and the mutating `--recover-pending` command SHALL
+acquire the same named `Global\TabDock` product-mutation lease. A second
+normal or recovery process SHALL log the contention and exit gracefully
+instead of sharing `state.json` / `hidden-windows.json` with the first
+(last-writer-wins temp-file replacement would silently discard one instance's
+groups, double-rescue journaled windows, or race pending-entry retirement).
+Read-only diagnostic commands SHALL remain usable without this lease.
 
-#### Scenario: A second instance exits without touching shared state
-- **WHEN** TabDock is already running and a second instance is launched
-- **THEN** the second instance logs the contention and exits without reading or writing `state.json` or `hidden-windows.json`, and the first instance is unaffected
+#### Scenario: A second mutating owner exits without touching shared state
+- **WHEN** TabDock or supervised recovery already owns the product-mutation
+  lease and another normal or recovery process is launched
+- **THEN** the second process logs the contention and exits without reading or
+  writing shared state or pending evidence, and the first owner is unaffected
+
+#### Scenario: Read-only diagnostics remain independent
+- **WHEN** TabDock or supervised recovery owns the product-mutation lease
+- **THEN** `--version`, `--doctor`, `--pending-recovery`, and
+  `--support-bundle` can still perform their existing read-only contract

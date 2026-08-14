@@ -44,6 +44,20 @@ During split the local stack SHALL be `focused guest → partner guest → conta
 - **WHEN** the user clicks the partner's composite half while both panes are glued
 - **THEN** the partner ends up on top of the stack, visible and receiving input — the container SHALL NOT be wedged between the panes
 
+### Requirement: Deferred split positioning respects HDWP generation boundaries
+The split positioning batch SHALL validate each guest's cheap capture
+generation immediately before its `DeferWindowPos` queue operation. A failed
+native `DeferWindowPos` SHALL be abandoned without `EndDeferWindowPos` as
+required by Win32. If a later generation check fails while a valid HDWP exists,
+the valid batch SHALL be closed with `EndDeferWindowPos` and the stale-guest
+fallback SHALL not run. The final check-to-commit race that Win32 does not
+expose as an atomic cancellation boundary SHALL remain explicit.
+
+#### Scenario: A stale split guest is not queued
+- **WHEN** a split guest generation changes before its deferred queue operation
+- **THEN** that guest is not passed to `DeferWindowPos`, the valid HDWP
+  lifecycle is closed safely, and no fallback mutation targets the stale guest
+
 ### Requirement: Window-state transitions reconcile against the final content rect
 For every supported transition (Normal→Maximized, Maximized→Normal,
 Normal→Minimized→Normal, Maximized→Minimized→Maximized) the visible guest(s)

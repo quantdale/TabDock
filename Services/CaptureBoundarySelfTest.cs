@@ -27,6 +27,7 @@ internal static class CaptureBoundarySelfTest
         Check(ThreadChangeAfterJournalNeverGetsSetProp());
         Check(ProcessStartChangeAfterJournalNeverGetsSetProp());
         Check(TokenChangeBeforeDwmStopsDwmMutation());
+        Check(PendingRecoveryTokenBlocksCapture());
         return (checks, failures);
     }
 
@@ -70,6 +71,14 @@ internal static class CaptureBoundarySelfTest
             && result.SetPropertyCount == 1
             && result.DwmMutationCount == 0
             && result.CaptureToken == new IntPtr(2002);
+    }
+
+    private static bool PendingRecoveryTokenBlocksCapture()
+    {
+        CaptureCaseResult result = RunCase(api => api.PendingRecoveryToken = new IntPtr(3003));
+        return !result.Completed
+            && result.SetPropertyCount == 0
+            && result.DwmMutationCount == 0;
     }
 
     private static CaptureCaseResult RunCase(
@@ -131,6 +140,7 @@ internal static class CaptureBoundarySelfTest
     {
         public WindowProcessIdentity Identity { get; set; } = new(10, 20);
         public IntPtr CaptureToken { get; set; }
+        public IntPtr PendingRecoveryToken { get; set; }
         public string ExePath { get; set; } = "guest.exe";
         public string ClassName { get; set; } = "GuestWindow";
         public long ProcessStartTicks { get; set; } = 101;
@@ -139,6 +149,7 @@ internal static class CaptureBoundarySelfTest
         public int DwmMutationCount { get; private set; }
 
         public IntPtr GetCaptureIdentityToken(IntPtr hwnd) => CaptureToken;
+        public IntPtr GetPendingRecoveryToken(IntPtr hwnd) => PendingRecoveryToken;
         public bool IsWindow(IntPtr hwnd) => IsWindowAlive;
         public WindowProcessIdentity GetProcessIdentity(IntPtr hwnd) => Identity;
         public string? GetProcessImagePath(uint pid) => ExePath;

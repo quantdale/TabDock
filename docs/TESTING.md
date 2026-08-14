@@ -26,9 +26,16 @@ titles are hashes/lengths, paths are redacted, and no full personal files are
 collected. `--pending-recovery` is also read-only and uses stable session entry
 IDs; it does not rewrite or mutate pending evidence. `--recover-pending` is a
 separate intentionally mutating workflow and must be run only under supervised
-operator control: it requires selecting the entry, selecting the exact live
-top-level candidate, and typing `YES`. Never use an automatic recover-all
-command or a raw Win32 tool for legacy evidence.
+operator control: it acquires the same product-mutation lease as normal
+TabDock, requires selecting the entry, selecting the exact live top-level
+candidate, and typing `YES`. Never use an automatic recover-all command or a
+raw Win32 tool for legacy evidence.
+
+The Release validation script also launches the actual WinExe with isolated
+`APPDATA`, redirected stdin/stdout/stderr, and EOF input. That hosted/process
+smoke proves the no-pending command lifecycle without touching the user's
+journal. A real PowerShell/cmd parent-console attach is a separate local
+Windows-console qualification; it is not implied by the redirected smoke.
 
 ---
 
@@ -489,13 +496,18 @@ titles. If an entry may be recoverable, run `TabDock.exe --recover-pending`
 from a supervised terminal. Select one entry, select the exact live top-level
 window from the local candidate list, and type `YES`; a rejection or mismatch
 performs no native mutation. Recovery validates every historical field present,
-refuses existing capture/recovery tokens, installs a new temporary generation
+refuses existing capture/recovery tokens, writes a durable prepared record
+before the external recovery property, installs a new temporary generation
 guard, and revalidates it immediately before each presentation mutation. v1
-restores visibility only; v2 may restore its recorded placement, visibility,
-and DWM transition state. A failed or unverifiable transaction retains the
-pending evidence. A successful entry gets a durable resolution marker and is
-retired atomically without destroying unresolved siblings or unknown JSON
-fields. Startup never performs tokenless legacy recovery.
+restores visibility only; v2 restores its recorded placement, visibility, and
+DWM transition state unless `DoNotRescue=true`, in which case it never shows
+or repositions the guest and only cleans the historically required transition
+state. A hard kill after the durable native-complete phase performs cleanup
+without repeating native presentation work. A failed or unverifiable
+transaction retains the pending evidence. A successful entry gets a durable
+resolution marker and is retired atomically without destroying unresolved
+siblings or unknown JSON fields. Startup never performs tokenless legacy
+recovery.
 
 ### 5. Cross-monitor / DPI
 

@@ -1,7 +1,8 @@
 # hidden-window-journal
 
 ## Purpose
-Captures the in-memory caching and write-durability semantics of `WindowShepherdService`'s hidden-window journal (`hidden-windows.json`), balancing crash-safety for hides against write-amplification for clears.
+Captures the in-memory caching and synchronous write-durability semantics of
+`WindowShepherdService`'s hidden-window journal (`hidden-windows.json`).
 
 ## Requirements
 
@@ -38,37 +39,38 @@ When capture-time `GetWindowPlacement` failed (leaving no valid `showCmd`), `Win
 - **WHEN** a guest whose `GetWindowPlacement` failed at capture time is released (pop out or tab close with show)
 - **THEN** the guest window is restored to its capture-time bounds and shown with `SW_SHOW`, never hidden
 
-### Requirement: A journal clear for a guest that ends up visible is debounced
-When `JournalClear` is invoked for a guest that ends up genuinely visible (the `PositionAndShow` and `Release(show: true)` call sites), `WindowShepherdService` SHALL coalesce rapid calls into a single debounced disk write (~300ms after the last call in a burst), mirroring `GroupManager.RequestSave`'s existing `DispatcherTimer`-based coalescing pattern (`Services/GroupManager.cs:54-67`), instead of writing synchronously on every call. This is safe specifically because the guest is genuinely visible at the moment of the call — see the following requirement for the one call site where that does not hold.
+### Requirement: Journal clear semantics are synchronous and idempotent
+`WindowShepherdService.JournalClear` SHALL synchronously remove a matching
+entry from the durable journal. It SHALL perform no disk write when no matching
+entry exists. The actual-entry clear used by visible guests and the
+intentional-hide cleanup used by `Release(show: false)` SHALL therefore have
+the same synchronous durability boundary; there is no pending 300ms clear
+timer. `FlushJournal` SHALL remain an idempotent synchronous lifecycle/safety
+boundary for the cached journal.
 
-#### Scenario: Rapid tab switching produces at most one clear-write per burst
-- **WHEN** the user switches between tabs several times within the debounce window (e.g. three switches within 500ms), each switch clearing the newly-active tab's journal entry via `PositionAndShow`
-- **THEN** the in-memory journal reflects every clear in order, but `hidden-windows.json` on disk is written at most once for the whole burst of clears, after the debounce interval elapses with no further activity
+#### Scenario: An actual clear is written once
+- **WHEN** `JournalClear` finds the exact cached guest entry
+- **THEN** it removes that entry and performs one durable journal write before
+  returning
 
-#### Scenario: A force-kill mid-debounce causes at most a harmless redundant rescue, never a missed one
-- **WHEN** a guest's journal entry was cleared via `PositionAndShow` or `Release(show: true)` (the guest became/stayed visible) but the process is hard-killed before the debounce interval elapses, leaving the stale "hidden" entry on disk
-- **THEN** the next startup's rescue re-shows that guest's window even though it was already visible — a harmless no-op — and no guest that should have been rescued is ever skipped as a result of this debounce
+#### Scenario: A missing clear does not write
+- **WHEN** `JournalClear` is called for a guest with no matching journal entry
+- **THEN** it returns without changing the journal and without performing a
+  disk write
 
-### Requirement: A journal clear for a guest that ends up intentionally hidden is synchronous, never debounced
-`WindowShepherdService.Release`'s guest-initiated-hide path (`show: false` — tray-style close) SHALL clear the guest's journal entry synchronously, immediately (`JournalClear(hwnd, immediate: true)`), bypassing the debounce entirely. This call site is NOT safe to debounce: unlike `PositionAndShow`/`Release(show: true)`, the guest ends up intentionally hidden, not visible, so a stale "hidden" entry surviving a crash would be indistinguishable from a real orphan and would cause `RescueOrphanedWindows` to incorrectly un-hide a window the user deliberately hid — not a harmless no-op.
+#### Scenario: Intentional hide cleanup is durable before return
+- **WHEN** a guest performs the intentional `Release(show: false)` path
+- **THEN** the matching journal entry is synchronously cleared before the
+  release transaction completes, so a later rescue cannot resurrect it
 
-#### Scenario: A guest that hides itself is never resurrected by a later rescue, even under a worst-case race
-- **WHEN** a guest was previously journaled as hidden (an earlier inactive-tab hide), is switched back to active (its clear now debounced-pending), and then hides itself (guest-initiated, tray-style close) before that debounced clear has fired, and the process is force-killed immediately after the self-hide completes
-- **THEN** the on-disk journal has no entry for that guest by the time of the kill (the self-hide's immediate clear flushed the current in-memory state synchronously, superseding whatever debounce was pending), so the next startup's rescue does not act on it at all, and the guest's window remains hidden after the relaunch
-
-### Requirement: Crash and exit paths force an immediate flush of any pending clear
-`WindowShepherdService` SHALL expose a synchronous flush operation that stops any pending debounce timer and writes the current in-memory journal state to disk immediately. All five exit/crash paths in `App.xaml.cs` (`Application_Exit`, `Application_DispatcherUnhandledException`, `CurrentDomain_UnhandledException`, `Application_SessionEnding`, and the early-startup-failure path) SHALL call this flush operation. This exists to keep graceful exits and managed exceptions tidy (no lingering stale-but-harmless clear pending across a restart) — it is not what makes the force-kill case safe, since `JournalHide` never leaves anything pending for it to rescue in the first place.
-
-#### Scenario: A designated exit path flushes a pending clear before the process ends
-- **WHEN** a designated crash/exit handler runs while a `JournalClear` write is still pending in its debounce window
-- **THEN** the flush completes synchronously before that handler returns, so `hidden-windows.json` on disk reflects the latest clear even though the debounce timer never fired on its own
-
-#### Scenario: Flush is a no-op when nothing is pending
-- **WHEN** a designated crash/exit handler runs and no journal mutation is pending
-- **THEN** the flush operation completes without performing an additional disk write
+#### Scenario: Lifecycle flush is an idempotent boundary
+- **WHEN** an exit or crash handler calls `FlushJournal` after journal
+  mutations have already been synchronously committed
+- **THEN** the flush completes safely and does not invent a debounce timer or
+  require another delayed write
 
 ### Requirement: On-disk journal format remains stable and rescue is fail-safe and retryable
-Neither the in-memory caching nor the `JournalClear` debounce SHALL alter the
+Neither the in-memory caching nor synchronous `JournalClear` SHALL alter the
 `HiddenWindowJournalFile`/`HiddenWindowEntry` on-disk shape, the `.tmp`-then-
 `File.Move(overwrite:true)` atomic-write pattern, or `LoadJournal`'s
 corrupt-file recovery behavior. `RescueOrphanedWindows` SHALL validate each
@@ -118,11 +120,18 @@ Startup SHALL never mutate a v1 or v2 tokenless journal entry. The application
 SHALL provide a read-only pending-evidence discovery command and a separate
 user-initiated recovery command that requires entry selection, live top-level
 window selection, validation of every historical field available, and explicit
-confirmation. Recovery SHALL establish a new ephemeral generation token and
-revalidate it before each placement, visibility, DWM, and token-removal
-operation. v1 recovery SHALL restore visibility only; v2 MAY restore recorded
-presentation state. Failed or unresolved recovery SHALL retain the evidence,
-and retiring one entry SHALL preserve unresolved siblings and unknown fields.
+confirmation. Before installing its external recovery property or performing
+native work, recovery SHALL durably persist a versioned transaction containing
+the source SHA/fingerprint, exact target identity, recovery mode, and a
+cryptographically random nonzero token. Recovery SHALL revalidate its exact
+generation before each placement, visibility, DWM, and token-removal operation
+and SHALL resume interrupted transactions without repeating native work after a
+durable native-complete marker. v1 recovery SHALL restore visibility only; v2
+MAY restore recorded presentation state; v2 `DoNotRescue=true` SHALL preserve
+intentional-hide semantics and SHALL NOT show or reposition the guest. Failed
+or unresolved recovery SHALL retain the evidence, foreign recovery properties
+SHALL never be removed, and retiring one entry SHALL preserve unresolved
+siblings and unknown fields.
 
 #### Scenario: Pending legacy evidence is not auto-mutated
 - **WHEN** startup finds v1 or v2 journal bytes without the v3 per-HWND token
@@ -133,3 +142,16 @@ and retiring one entry SHALL preserve unresolved siblings and unknown fields.
 - **WHEN** one entry in a multi-entry pending file is successfully recovered
 - **THEN** only that entry SHALL be durably marked and retired; unresolved
   sibling entries and unknown JSON fields SHALL remain available
+
+#### Scenario: Interrupted supervised recovery resumes by phase
+- **WHEN** a supervised recovery process is killed after its durable prepared,
+  token, or partial-presentation phase
+- **THEN** the next supervised invocation recognizes only an exact matching
+  transaction/token, requires explicit confirmation, resumes the missing safe
+  phase, and retains evidence if identity cannot be revalidated
+
+#### Scenario: Intentional-hide evidence is never resurrected
+- **WHEN** a selected historical v2 entry contains `DoNotRescue=true`
+- **THEN** supervised recovery does not call `ShowWindow` or restore placement;
+  it only cleans the historically required presentation transition state and
+  retires the entry after successful identity validation

@@ -62,8 +62,11 @@ the richer live logical snapshot when a session is running.
 attaches `AppDomain.UnhandledException` *before* `InitializeComponent()` so the earliest
 failures are still logged (`App.xaml.cs:49-66`). `Application_Startup` (`App.xaml.cs:68`):
 
-1. **Single-instance mutex** `Global\TabDock` — a second instance exits cleanly without
-   touching shared state (`App.xaml.cs:80-85`, `AcquireSingleInstanceMutex` at `App.xaml.cs:615`).
+1. **Product-mutation lease** `Global\TabDock` — normal TabDock and supervised
+   `--recover-pending` are mutually exclusive; a second mutating owner exits
+   cleanly without touching shared state (`Services/ProductMutationLease.cs`,
+   `AcquireSingleInstanceMutex` in `App.xaml.cs`). Read-only diagnostics do
+   not acquire the lease.
 2. **`CleanupStaleTempFiles`** — removes orphaned `state.json.tmp` / `hidden-windows.json.tmp`
    from a prior crashed atomic write (`App.xaml.cs:90`, `App.xaml.cs:642-674`).
 3. **Service construction** (`App.xaml.cs:92-97`): `IconService`, `WindowShepherdService`,
@@ -219,8 +222,10 @@ an in-window panel; the standalone picker remains for the fallback path.
   is per-pane; when a re-glue is needed both panes plus the container pin are
   written in ONE compositor transaction (`PositionGuestsDeferred`:
   `BeginDeferWindowPos`/`DeferWindowPos`/`EndDeferWindowPos`, chaining every
-  returned `HDWP` and calling `EndDeferWindowPos` only for a still-valid batch;
-  a failed batch falls back per guest) so the panes never visibly separate
+  returned `HDWP` and validating each guest immediately before it is queued;
+  a failed native Defer follows Win32's no-End path, while a stale generation
+  closes a valid batch and skips the stale-guest fallback) so the panes never
+  visibly separate
   mid-write. The container is paired below the partner
   without being pushed behind unrelated desktop windows. When both panes are
   already glued, the cheap pin runs ONLY after verifying the pair's actual
@@ -518,8 +523,9 @@ Ordering rules:
   visibility, and DWM transition state first, and removes the entry only after
   the required native operations succeed. A positive mismatch may clear only
   the exact old identity tuple; an unverifiable probe retains the journal and
-  logical member for retry. `FlushJournal` is a synchronous finalization
-  guard, not a debounce timer.
+  logical member for retry. `JournalClear` is synchronous when an actual entry
+  matches and returns without a disk write when none matches; `FlushJournal` is
+  a synchronous finalization guard, not a debounce timer.
 - **`RescueOrphanedWindows`** validates HWND, PID, executable path, class, and
   process-start identity before touching a window. It restores the full recorded
   presentation state, verifies visibility where applicable, and retains failed

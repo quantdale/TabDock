@@ -267,6 +267,15 @@ public static partial class NativeMethods
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern bool FreeConsole();
 
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern uint GetFileType(IntPtr hFile);
+
     public delegate bool MONITORENUMPROC(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);
 
     /// <summary>MONITORINFOF_PRIMARY — the monitor is the primary display.</summary>
@@ -602,6 +611,14 @@ public static partial class NativeMethods
     public const uint VK_MENU = 0x12;
     public const int ASFW_ANY = -1;
     public const uint ATTACH_PARENT_PROCESS = 0xFFFFFFFF;
+
+    public const int STD_INPUT_HANDLE = -10;
+    public const int STD_OUTPUT_HANDLE = -11;
+    public const int STD_ERROR_HANDLE = -12;
+    public const uint FILE_TYPE_UNKNOWN = 0;
+    public const uint FILE_TYPE_DISK = 1;
+    public const uint FILE_TYPE_CHAR = 2;
+    public const uint FILE_TYPE_PIPE = 3;
 
     public const uint PW_CLIENTONLY = 0x00000001;
     public const uint PW_RENDERFULLCONTENT = 0x00000002;

@@ -75,6 +75,51 @@ function Invoke-Executable {
     }
 }
 
+function Invoke-RecoveryProcessSmoke {
+    param([string]$Path, [string]$IsolatedAppData)
+
+    Write-Host ''
+    Write-Host '==> Supervised recovery redirected-process smoke' -ForegroundColor Cyan
+    $psi = [Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $Path
+    $psi.ArgumentList.Add('--recover-pending')
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.WorkingDirectory = $RepoRoot
+    $psi.Environment['APPDATA'] = $IsolatedAppData
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $psi
+    try {
+        if (-not $process.Start()) {
+            throw 'Could not start the recovery executable.'
+        }
+        # EOF is intentional: the isolated directory is empty, so the real
+        # WinExe must print its no-pending result and exit without WPF startup
+        # or an interactive ReadLine hang.
+        $process.StandardInput.Close()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(30000)) {
+            $process.Kill()
+            throw 'Recovery process did not exit within 30 seconds.'
+        }
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) {
+            throw "Recovery process exited with code $($process.ExitCode). stderr=$stderr"
+        }
+        if ($stdout -notmatch '(?i)no unresolved pending recovery entries') {
+            throw "Recovery process did not emit the expected no-pending result. stdout=$stdout"
+        }
+        Write-Host 'Redirected WinExe lifecycle, isolated APPDATA, EOF input, output, and exit code: PASS' -ForegroundColor Green
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
 function Assert-SupportBundlePrivacy {
     param([string]$BundlePath)
 
@@ -189,6 +234,10 @@ try {
     if (-not (Test-Path -LiteralPath $pendingRecoveryPath -PathType Leaf)) {
         throw 'Pending-recovery discovery did not create its requested output file.'
     }
+
+    $isolatedAppData = Join-Path $TempRoot 'isolated-appdata\Roaming'
+    New-Item -ItemType Directory -Path $isolatedAppData -Force | Out-Null
+    Invoke-RecoveryProcessSmoke $AppExe $isolatedAppData
 
     $bundlePath = Join-Path $TempRoot 'support-bundle.zip'
     Invoke-Executable "Support-bundle privacy smoke ($Configuration)" $AppExe @('--support-bundle', '--output', $bundlePath)

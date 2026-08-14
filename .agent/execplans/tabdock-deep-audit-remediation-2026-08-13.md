@@ -1228,3 +1228,147 @@ commit containing this record.
 - Next three actions: create the substantive commit; push `main` normally and
   verify local/origin parity; inspect the exact hosted workflow run and repair
   only a real CI defect before stopping repository modifications.
+
+## R16–R22 recovery/concurrency closure
+
+### Reconciliation
+
+The supplied review baseline was independently verified after `git fetch
+origin`: branch `main`, local `HEAD`, and `origin/main` all resolve to
+`f76e5ac332bef7c408254f3709eb35ef13856808`, with a clean worktree. The current
+source confirms that supervised recovery installs
+`TabDock.PendingRecoveryToken` from a process-local counter before any durable
+recovery-transaction record, refuses every pre-existing recovery token, runs
+outside the normal product mutex, defaults directly to `Console.In`/`Console.Out`,
+and has no resumable native-progress marker. Current split positioning validates
+both guests before constructing an HDWP but does not revalidate each guest at
+its `DeferWindowPos` boundary. `DoNotRescue` is honored by automatic v3 rescue
+but not by supervised v2 recovery. `JournalClear` is synchronous in production;
+the canonical hidden-window-journal spec still contains the obsolete debounce
+requirements. Console title output only normalizes CR/LF.
+
+Historical v2 source at `c6b119a028cc83c3a955b15a488f609976404f6e` confirms that
+`DoNotRescue` is written before the intentional `SW_HIDE` transition. Its rescue
+branch performs `RestoreJournaledTransitions`, never shows or repositions the
+guest, and only then consumes the journal marker. The current supervised v2
+path will use that exact intentional-hide meaning.
+
+### R16 transaction decision
+
+The existing `<pending-file>.recovered` sidecar remains the single recovery
+ledger. It will retain old `Resolutions` records and gain versioned transaction
+records keyed by safe source-file ID + source SHA-256 + entry fingerprint.
+Each transaction stores the selected HWND, PID, GUI thread, executable, class,
+historical process-start identity when available, random nonzero recovery
+token, recovery mode (`v1-visible`, `v2-presentation`, or
+`v2-intentional-hide`), phase, and timestamps. Phases are `Prepared`,
+`TokenInstalled`, `PlacementComplete`, `VisibilityComplete`,
+`NativeRecoveryComplete`, `TokenRemoved`, and `Retired`.
+
+The durable order is:
+
+1. Acquire product mutation ownership and explicitly select/confirm entry and
+   target.
+2. Write `Prepared` with the complete ownership proof and cryptographically
+   random token before `SetProp`.
+3. Revalidate identity, install/verify the exact token, and record progress
+   after each idempotent native presentation boundary.
+4. Record `NativeRecoveryComplete` before removing the token. A hard kill at
+   any earlier boundary leaves the token/evidence and permits explicit
+   same-transaction resume; a hard kill after this marker skips presentation
+   work and performs cleanup only.
+5. Remove only the exact owned token, write the existing resolution marker, and
+   atomically retire only the matching pending entry. Siblings and unknown JSON
+   fields remain intact; every disk step is retryable.
+
+Unknown recovery properties are never removed. A prepared transaction with no
+property may be re-confirmed and restarted; an exact property with a matching
+transaction is an interrupted transaction; a property without an exact durable
+transaction is foreign/unverifiable and fails closed.
+
+The deterministic resume matrix is:
+
+| Durable phase | External token | Native state | Pending JSON | Next supervised behavior |
+| --- | --- | --- | --- | --- |
+| Before `Prepared` | none | unchanged | unresolved | normal explicit recovery may prepare a new transaction |
+| `Prepared` | none | unchanged | unresolved | revalidate and reconfirm, then install the owned token |
+| `Prepared`/`TokenInstalled` | exact or none | unchanged | unresolved | recognize only the exact transaction; resume after confirmation |
+| `TokenInstalled` | exact | unchanged | unresolved | resume presentation from the first missing phase |
+| `PlacementComplete` | exact | placement partial | unresolved | resume visibility/DWM without assuming retirement |
+| `VisibilityComplete` | exact | visibility partial | unresolved | resume DWM, then durably mark native complete |
+| `NativeRecoveryComplete` | exact | restored | unresolved | cleanup-only: remove the exact token, mark resolved, retire disk evidence |
+| `NativeRecoveryComplete`/`TokenRemoved` | none | restored | unresolved | disk-only marker/retirement; never repeat native presentation |
+| `Retired` | none | restored | absent or changed | no-op when exact; changed-source evidence is unverifiable and retained |
+| foreign token | other | unknown | unresolved | refuse and leave the property and evidence untouched |
+| changed target | exact/unknown | unknown | unresolved | refuse identity mutation and retain evidence |
+
+### R17/R18 ownership and console decision
+
+Normal TabDock and supervised recovery will share one reusable
+`Global\\TabDock` product-mutation lease held for the entire process lifetime
+or interactive recovery transaction. Read-only diagnostics do not acquire it.
+The WinExe recovery command will use one scoped console session: redirected
+stdio is used as-is; otherwise it attaches once to `ATTACH_PARENT_PROCESS`,
+rebinds .NET streams, flushes prompts, and calls `FreeConsole` only when this
+scope attached it. No console/stdio returns a clear nonzero error without
+blocking. The Release validation script will launch the actual WinExe with
+isolated `APPDATA`, redirected stdio, EOF input, and a no-pending state.
+
+### R20 Win32 decision
+
+Microsoft Learn's current [`BeginDeferWindowPos`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-begindeferwindowpos), [`DeferWindowPos`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-deferwindowpos), and
+[`EndDeferWindowPos`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enddeferwindowpos)
+`EndDeferWindowPos` documentation was reviewed. `BeginDeferWindowPos` allocates
+an internal structure; `DeferWindowPos` only queues updates and returns the
+next HDWP; if it returns `NULL`, the documented action is to abandon the
+operation and not call `EndDeferWindowPos`; `EndDeferWindowPos` sends the
+window-position messages and performs the commit. The documentation does not
+define a cancellation/disposal API for a still-valid HDWP. Therefore the
+implementation will not add a final validator followed by an unsupported
+silent abandon. After `BeginDeferWindowPos` allocates the valid HDWP, it will
+validate each guest immediately before its `DeferWindowPos`. If a later guest
+fails validation, `EndDeferWindowPos` closes the valid batch containing only
+the already-validated earlier entries, and the service will not run the
+stale-guest fallback. A failed native `DeferWindowPos` still follows the
+documented no-`End` path. The remaining race between the final check/call and
+the compositor commit is ordinary Win32 behavior and is explicitly not claimed
+to be atomic.
+
+### R21/R22 decision
+
+History shows the debounce wording came from the earlier performance audit;
+the current synchronous implementation was deliberately introduced in
+`f4f953c` as the crash-safety contract. `JournalHide`, intentional-hide writes,
+and actual-entry `JournalClear` are synchronous; an empty clear returns before
+scanning/writing, so normal frame positioning does not create per-frame disk
+writes. The canonical spec will remove all pending-300ms requirements and
+state this modern contract. Supervised titles will use a dedicated single-line,
+bounded sanitizer that removes/neutralizes C0, DEL, C1, ESC, and Unicode line
+separators while preserving ordinary Unicode; diagnostic/support privacy
+redaction remains unchanged.
+
+### Targeted validation plan
+
+Add deterministic transaction fault points for every native/disk boundary,
+foreign-token refusal, normal-capture refusal, random-token injection,
+DoNotRescue true/false behavior, lease races, console stream/no-console
+behavior, HDWP validation order, and terminal controls. Add a real WinExe
+redirected-process smoke under isolated `APPDATA`, then run the canonical
+Release/OpenSpec/publish/privacy/audit gate and review the complete diff.
+
+### R16–R22 local implementation checkpoint — 2026-08-14
+
+- Implemented the `.recovered` transaction ledger, cryptographically random
+  nonzero token seam, phase-aware resume/cleanup, exact foreign-token refusal,
+  normal-capture pending-token refusal, and deterministic fault/state tests.
+- Unified normal startup and supervised recovery under `Global\\TabDock`,
+  added abandoned-owner/exclusivity tests, and added one scoped WinExe console
+  session with redirected process qualification under isolated `APPDATA`.
+- Implemented historical v2 `DoNotRescue` intentional-hide cleanup, safe HDWP
+  per-guest queue validation per the Microsoft contract above, terminal-safe
+  local title sanitization, and canonical synchronous journal requirements.
+- Local targeted diagnostics pass: `166 checks / 0 failures`; OpenSpec pass:
+  `16 passed / 0 failed`. The Release `-Ci -Publish` gate passed including
+  NuGet audit, support-bundle privacy, redirected recovery process smoke, and
+  self-contained publish/version smoke. Hosted CI and Git refs remain dynamic;
+  M2/M8/Chrome/foreground qualification remains external.

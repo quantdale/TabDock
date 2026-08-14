@@ -35,6 +35,16 @@ commit/CI self-reference loop.
   mixed-DPI qualification.
 - Install the pinned OpenSpec CLI in hosted CI with lifecycle scripts disabled
   after verifying that its postinstall is only an opt-in completion hint.
+- Make supervised pending recovery a durable, resumable transaction: persist
+  ownership before installing the external recovery property, record native
+  completion before token cleanup, and retry disk retirement without repeating
+  native presentation work.
+- Make mutating recovery exclusive with the normal TabDock product lease and
+  provide a scoped real-console WinExe input/output contract with an isolated
+  process smoke.
+- Preserve historical v2 `DoNotRescue` intentional-hide semantics in supervised
+  recovery, add safe HDWP generation boundaries, reconcile the synchronous
+  journal contract, and sanitize untrusted local titles for terminals.
 
 ## Capabilities
 
@@ -49,9 +59,11 @@ commit/CI self-reference loop.
 
 ### Modified Capabilities
 
-None. The existing Shepherd, recovery, DPI-unaware acceptance, and lifecycle
+The existing Shepherd, recovery, DPI-unaware acceptance, and lifecycle
 capabilities retain their externally visible architecture and safety policy;
-these new contracts close their native identity/API seams.
+these new contracts close the supervised-recovery transaction, ownership,
+console, legacy-intent, deferred-positioning, journal-documentation, and local
+terminal seams.
 
 ## Impact
 
