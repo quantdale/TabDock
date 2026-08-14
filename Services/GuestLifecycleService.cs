@@ -88,11 +88,13 @@ public sealed class GuestLifecycleService
         //
         // In SPLIT mode both members are visible, so a hide of EITHER split
         // member is guest-initiated (a self-hide), not a tab-switch hide —
-        // neither is ever hidden by TabDock's own tab logic. TabDock's own
-        // split-exit/replace hides are evaluated after the split state has
-        // already cleared (the member leaves the pair before the queued event
-        // is dispatched), so IsInSplit correctly returns false for them and
-        // they stay rejected by the active-tab check below.
+        // neither is ever hidden by TabDock's ordinary tab logic. During a
+        // pair -> single-guest suspension, TabDock hides both members while
+        // IsInSplit is still true, so those queued hides are recognized as
+        // intentional presentation work. Split exit/replacement and
+        // dormant-member removal clear the relationship before any later hide
+        // event is dispatched; IsInSplit is then false and the active-tab check
+        // below rejects the stale intentional hide.
         bool inSplit = false;
         ContainerWindow? container = null;
         if (_containers.TryGetValue(group.Id, out var c))

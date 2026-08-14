@@ -42,15 +42,16 @@ public partial class ContainerWindow : Window
     // container's entire sync loop for the active tab.
     private CapturedWindow? _shepherdActiveWindow;
 
-    // Vertical split-screen state. When split is active exactly two guests are
-    // visible: _splitLeft in the left pane, _splitRight in the right pane.
-    // Identity is by CapturedWindow reference (never positional index) so the
-    // pair survives tab reordering, and _shepherdActiveWindow (the logical
-    // active/focused member) is always one of the two during split. The split
-    // layout is owned here — see the split region below — and is runtime-only
-    // (never persisted; the relationship is tied to live attached guests).
+    // Vertical split-screen state. _splitLeft/_splitRight define a runtime-only
+    // relationship; _splitPairPresented separately records whether those two
+    // guests currently occupy the panes. A dormant relationship may coexist
+    // with a non-member full-width _shepherdActiveWindow. Identity is by
+    // CapturedWindow reference (never positional index), so LEFT/RIGHT survive
+    // tab reordering and ordinary non-member selection.
     private CapturedWindow? _splitLeft;
     private CapturedWindow? _splitRight;
+    private bool _splitPairPresented;
+    private long _splitPresentationGeneration;
     // The member currently on top of the z-order (the one the user last
     // focused). Can differ from _shepherdActiveWindow after the user clicks a
     // guest directly (which foregrounds it without a tab-strip selection).
@@ -197,7 +198,8 @@ public partial class ContainerWindow : Window
             Maximized = WindowState == WindowState.Maximized,
             ActiveMemberKey = _shepherdActiveWindow == null ? null : DiagnosticMemberKey(_shepherdActiveWindow),
             ActiveGuestHwnd = _shepherdActiveWindow?.Hwnd.ToInt64() ?? 0,
-            SplitActive = IsSplitActive,
+            SplitActive = IsSplitRelationshipDefined,
+            SplitPresented = IsSplitPresented,
             SplitLeftMemberKey = _splitLeft == null ? null : DiagnosticMemberKey(_splitLeft),
             SplitLeftHwnd = _splitLeft?.Hwnd.ToInt64() ?? 0,
             SplitRightMemberKey = _splitRight == null ? null : DiagnosticMemberKey(_splitRight),
@@ -214,7 +216,7 @@ public partial class ContainerWindow : Window
         if (content.Width > 0 && content.Height > 0)
         {
             (left, right) = SplitRect(content);
-            if (IsSplitActive)
+            if (IsSplitPresented)
             {
                 snapshot.ExpectedPaneRects.Add(DiagnosticRect.From(left));
                 snapshot.ExpectedPaneRects.Add(DiagnosticRect.From(right));
@@ -234,11 +236,11 @@ public partial class ContainerWindow : Window
                 Iconic = NativeMethods.IsWindow(member.Hwnd) && NativeMethods.IsIconic(member.Hwnd),
                 Zoomed = NativeMethods.IsWindow(member.Hwnd) && NativeMethods.IsZoomed(member.Hwnd),
             };
-            if (IsSplitActive && ReferenceEquals(member, _splitLeft))
+            if (IsSplitPresented && ReferenceEquals(member, _splitLeft))
                 memberSnapshot.ExpectedPaneRect = DiagnosticRect.From(left);
-            else if (IsSplitActive && ReferenceEquals(member, _splitRight))
+            else if (IsSplitPresented && ReferenceEquals(member, _splitRight))
                 memberSnapshot.ExpectedPaneRect = DiagnosticRect.From(right);
-            else if (!IsSplitActive && ReferenceEquals(member, _shepherdActiveWindow) && content.Width > 0 && content.Height > 0)
+            else if (!IsSplitPresented && ReferenceEquals(member, _shepherdActiveWindow) && content.Width > 0 && content.Height > 0)
                 memberSnapshot.ExpectedPaneRect = DiagnosticRect.From(content);
             snapshot.Members.Add(memberSnapshot);
         }
@@ -428,7 +430,7 @@ public partial class ContainerWindow : Window
                         && NativeMethods.IsWindowVisible(activeWindow.Hwnd)
                         && !_inNativeMoveLoop && !_isDragging && !IsContainerChromeInteractionActive())
                     {
-                        if (IsSplitActive && IsSplitMember(activeWindow))
+                        if (IsSplitPresented && IsSplitMember(activeWindow))
                         {
                             // Re-assert both panes and foreground the active
                             // member without disturbing the pair's z-order.
@@ -623,7 +625,7 @@ public partial class ContainerWindow : Window
                 refreshTimer.Stop();
                 return;
             }
-            bool hasVisible = IsSplitActive
+            bool hasVisible = IsSplitPresented
                 || (_shepherdActiveWindow != null && NativeMethods.IsWindowVisible(_shepherdActiveWindow.Hwnd));
             if (hasVisible)
             {
@@ -646,7 +648,7 @@ public partial class ContainerWindow : Window
     /// </summary>
     private void RelayoutGuests()
     {
-        if (IsSplitActive)
+        if (IsSplitPresented)
             LayoutSplitPanes();
         else
             LayoutShepherdActiveWindow();
@@ -703,7 +705,7 @@ public partial class ContainerWindow : Window
         if (count <= 1)
             return;
 
-        if (IsSplitActive)
+        if (IsSplitPresented)
         {
             // The split pair is the selected tab-strip unit: Ctrl+Tab cycles
             // between the two members only. A non-member tab is never reached
@@ -735,7 +737,7 @@ public partial class ContainerWindow : Window
         // The strip is bound to DisplayTabs, which during split mode contains a
         // composite item that does not correspond one-to-one with Tabs indices —
         // only sync the ListBox selection when both collections line up.
-        if (!IsSplitActive)
+        if (!IsSplitPresented)
             TabsListBox.SelectedIndex = next;
         e.Handled = true;
     }
@@ -778,7 +780,7 @@ public partial class ContainerWindow : Window
                 _shepherd.RestoreContainerFromChrome(_containerHwnd);
                 if (_viewModel.Tabs.Count == 0)
                     return;
-                if (IsSplitActive)
+                if (IsSplitPresented)
                     LayoutSplitPanes();
                 else
                     LayoutShepherdActiveWindow(forceZOrder: true);
@@ -945,6 +947,8 @@ public partial class ContainerWindow : Window
         _splitLeft = null;
         _splitRight = null;
         _splitForeground = null;
+        _splitPairPresented = false;
+        _splitPresentationGeneration++;
         _activateReassertTimer?.Stop();
         _stateSettledTimer?.Stop();
         _restoreMinimizedTimer?.Stop();
@@ -968,7 +972,7 @@ public partial class ContainerWindow : Window
     {
         MaximizeButton.Content = WindowState == WindowState.Maximized ? "" : "";
 
-        if (_shepherdActiveWindow != null || IsSplitActive)
+        if (_shepherdActiveWindow != null || IsSplitPresented)
         {
             // A minimized container has no visible content area to overlay;
             // hide the docked guest(s) along with it. Restoring re-positions and
@@ -977,7 +981,7 @@ public partial class ContainerWindow : Window
             // must return on restore.
             if (WindowState == WindowState.Minimized)
             {
-                if (IsSplitActive)
+                if (IsSplitPresented)
                 {
                     LogHidePending(_splitLeft!, _shepherd.Hide(_splitLeft!));
                     LogHidePending(_splitRight!, _shepherd.Hide(_splitRight!));
@@ -1140,6 +1144,8 @@ public partial class ContainerWindow : Window
         _splitLeft = null;
         _splitRight = null;
         _splitForeground = null;
+        _splitPairPresented = false;
+        _splitPresentationGeneration++;
         _activateReassertTimer?.Stop();
         _stateSettledTimer?.Stop();
         _restoreMinimizedTimer?.Stop();
@@ -1271,7 +1277,8 @@ public partial class ContainerWindow : Window
             return;
         }
 
-        if (tabCount == 2)
+        bool isCurrentSplitMember = initiatingTab != null && IsSplitMember(initiatingTab.Model);
+        if (!isCurrentSplitMember && tabCount == 2)
         {
             // Exactly two tabs: direct action (auto-selects the sole other tab).
             var action = new MenuItem { Header = "Split screen", Tag = "SPLIT-ACTION", DataContext = initiatingTab };
@@ -1279,7 +1286,7 @@ public partial class ContainerWindow : Window
             action.Click += SplitScreenMenuItem_Click;
             menu.Items.Insert(insertIndex++, action);
         }
-        else
+        else if (!isCurrentSplitMember)
         {
             // Three or more tabs: submenu of candidate partners (excluding the
             // initiating tab). Selecting one puts initiating -> LEFT, candidate -> RIGHT.
@@ -1301,8 +1308,11 @@ public partial class ContainerWindow : Window
             menu.Items.Insert(insertIndex++, submenu);
         }
 
-        // When split is active, offer a way out from the split members' menus.
-        if (IsSplitActive)
+        // When a split relationship is defined, offer a way out from the split
+        // members' menus. The initiating member deliberately omitted the
+        // reconfiguration entry above; Exit remains available in both the
+        // presented and dormant states.
+        if (IsSplitRelationshipDefined)
         {
             var exitItem = new MenuItem { Header = "Exit split screen", Tag = "SPLIT-EXIT" };
             System.Windows.Automation.AutomationProperties.SetAutomationId(exitItem, "ExitSplitScreen");
@@ -1566,7 +1576,7 @@ public partial class ContainerWindow : Window
         {
             if (_chromePopupActive || IsCapturePanelOpen || _containerHwnd == IntPtr.Zero)
                 return;
-            if (IsSplitActive)
+            if (IsSplitPresented)
                 LayoutSplitPanes();
             else
                 LayoutShepherdActiveWindow(forceZOrder: true);
@@ -1912,7 +1922,16 @@ public partial class ContainerWindow : Window
                 ["newGuest"] = DiagnosticEnvironmentService.FormatHwnd(newWindow?.Hwnd ?? IntPtr.Zero),
             });
 
-        if (IsSplitActive)
+        if (IsSplitRelationshipDefined && !IsSplitPresented
+            && newWindow != null && IsSplitMember(newWindow))
+        {
+            TabViewModel? memberTab = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, newWindow));
+            if (memberTab != null)
+                ResumeSplitPair(memberTab);
+            return;
+        }
+
+        if (IsSplitPresented)
         {
             if (newWindow != null && IsSplitMember(newWindow))
             {
@@ -2018,8 +2037,13 @@ public partial class ContainerWindow : Window
     /// </summary>
     private void FocusSplitMember(TabViewModel member)
     {
-        if (member == null || !IsSplitActive || !IsSplitMember(member.Model))
+        if (member == null || !IsSplitRelationshipDefined || !IsSplitMember(member.Model))
             return;
+        if (!IsSplitPresented)
+        {
+            ResumeSplitPair(member);
+            return;
+        }
 
         bool changed = !ReferenceEquals(_splitForeground, member.Model)
             || !ReferenceEquals(_shepherdActiveWindow, member.Model);
@@ -2062,7 +2086,7 @@ public partial class ContainerWindow : Window
 
         // Determine the visible guest set and which minima map to LEFT/RIGHT.
         CapturedWindow? left = null, right = null;
-        if (IsSplitActive)
+        if (IsSplitPresented)
         {
             left = _splitLeft;
             right = _splitRight;
@@ -2110,7 +2134,7 @@ public partial class ContainerWindow : Window
         if (content.Width <= 0 || content.Height <= 0)
             return false;
 
-        bool split = IsSplitActive;
+        bool split = IsSplitPresented;
         int contentMinW = SplitGeometry.MinContentWidth(split, _constraintMinLeftW, _constraintMinRightW);
         int contentMinH = SplitGeometry.MinContentHeight(split, _constraintMinLeftH, _constraintMinRightH);
         if (contentMinW <= 0 && contentMinH <= 0)
@@ -2333,7 +2357,7 @@ public partial class ContainerWindow : Window
         if (IsContainerChromeInteractionActive())
             return;
 
-        if (IsSplitActive)
+        if (IsSplitPresented)
         {
             // A split member became the system foreground (e.g. the user clicked
             // it directly). Keep the container paired below BOTH guests: pin it
@@ -2369,8 +2393,17 @@ public partial class ContainerWindow : Window
 
     #region Split screen
 
-    /// <summary>True while exactly two shepherded guests occupy the left/right panes.</summary>
-    private bool IsSplitActive => _splitLeft != null && _splitRight != null;
+    /// <summary>True while the runtime split relationship has two valid members.</summary>
+    private bool IsSplitRelationshipDefined => _splitLeft != null && _splitRight != null;
+
+    /// <summary>True while the defined pair is the current two-pane presentation.</summary>
+    private bool IsSplitPresented => IsSplitRelationshipDefined && _splitPairPresented;
+
+    private void InvalidateSplitPresentationSettle()
+    {
+        _splitPresentationGeneration++;
+        DisarmSplitPresentationSettle();
+    }
 
     private bool IsSplitMember(CapturedWindow? window)
         => window != null && (ReferenceEquals(window, _splitLeft) || ReferenceEquals(window, _splitRight));
@@ -2382,7 +2415,8 @@ public partial class ContainerWindow : Window
     /// members are visible, so a hide of either is a self-hide, not a
     /// TabDock tab-switch hide).
     /// </summary>
-    public bool IsInSplit(CapturedWindow window) => IsSplitMember(window);
+    public bool IsInSplit(CapturedWindow window)
+        => IsSplitPresented && IsSplitMember(window);
 
     /// <summary>
     /// Splits the full content rect into LEFT/RIGHT pane rects in physical
@@ -2435,7 +2469,7 @@ public partial class ContainerWindow : Window
     /// </summary>
     private void LayoutSplitPanes()
     {
-        if (!IsSplitActive)
+        if (!IsSplitPresented)
             return;
         if (WindowState == WindowState.Minimized)
             return;
@@ -2546,7 +2580,7 @@ public partial class ContainerWindow : Window
 
         // Transition from a previous split pair, if any: hide members leaving
         // the pair through the journal-safe path.
-        if (IsSplitActive)
+        if (IsSplitRelationshipDefined)
         {
             _log.Log("SPLIT[replace]");
             foreach (var m in new[] { _splitLeft, _splitRight })
@@ -2574,8 +2608,10 @@ public partial class ContainerWindow : Window
                 return;
         }
 
+        InvalidateSplitPresentationSettle();
         _splitLeft = left;
         _splitRight = right;
+        _splitPairPresented = true;
         _splitForeground = left;
         // The visible set changed: recompute the container's minimum size from
         // the new pair's native minima, and clear refusals (fresh panes).
@@ -2604,6 +2640,111 @@ public partial class ContainerWindow : Window
     }
 
     /// <summary>
+    /// Hides both pair members and presents one non-member without clearing the
+    /// relationship. The pair fields and composite remain authoritative until
+    /// both journal-safe hides complete.
+    /// </summary>
+    private void SuspendSplitPairForGuest(CapturedWindow guest)
+    {
+        if (!IsSplitPresented || !NativeMethods.IsWindow(guest.Hwnd))
+            return;
+
+        foreach (CapturedWindow member in new[] { _splitLeft!, _splitRight! })
+        {
+            WindowHideOutcome outcome = _shepherd.Hide(member);
+            LogHidePending(member, outcome);
+            if (outcome == WindowHideOutcome.RecoveryPending)
+            {
+                // The relationship is still presented and authoritative. A
+                // partially-hidden pair is repaired before input resumes.
+                LayoutSplitPanes();
+                return;
+            }
+        }
+
+        _splitPairPresented = false;
+        _splitPresentationGeneration++;
+        DisarmSplitPresentationSettle();
+        _constraintDirty = true;
+        _refusedPaneByHwnd.Clear();
+        _log.Log($"SPLIT[suspend] guest=0x{guest.Hwnd.ToInt64():X}");
+        DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
+            group: Group.Id.ToString("N"), action: "pair-to-single", result: "pair-retained");
+
+        TabViewModel? guestTab = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, guest));
+        if (guestTab == null)
+            return;
+
+        if (ReferenceEquals(_viewModel.ActiveTab, guestTab))
+        {
+            // A direct state-machine caller may have selected C before this
+            // transition reached the UI thread. Keep the active guest field in
+            // sync without forcing a redundant ActiveTab notification.
+            _shepherdActiveWindow = guest;
+            LayoutShepherdActiveWindow();
+        }
+        else
+        {
+            // SetActiveTab updates ActiveIndex before the ordinary single-guest
+            // sync hides/re-presents the incoming guest.
+            _viewModel.SetActiveTab(guestTab);
+        }
+        // The tab-strip click foregrounded TabDock rather than the newly
+        // presented guest. Use the existing identity-checked Shepherd path so
+        // the single guest receives the same activation/repaint opportunity as
+        // a normal focused-tab transition, without synthetic guest input.
+        _shepherd.SetForeground(guest);
+        _log.Log($"SPLIT[single] guest=0x{guest.Hwnd.ToInt64():X} pair=dormant");
+    }
+
+    /// <summary>Restores the unchanged pair and focuses the requested member.</summary>
+    private void ResumeSplitPair(TabViewModel focusedTab)
+    {
+        CapturedWindow focused = focusedTab.Model;
+        if (!IsSplitRelationshipDefined || !IsSplitMember(focused))
+            return;
+
+        CapturedWindow? current = _shepherdActiveWindow;
+        if (current != null && !IsSplitMember(current)
+            && NativeMethods.IsWindowVisible(current.Hwnd))
+        {
+            WindowHideOutcome outcome = _shepherd.Hide(current);
+            LogHidePending(current, outcome);
+            if (outcome == WindowHideOutcome.RecoveryPending)
+            {
+                // The ListBox selection has already moved to the requested
+                // member by the time ActiveTab change reaches this method.
+                // Keep the dormant single-guest presentation authoritative
+                // until the current guest can be journal-safely hidden; do not
+                // leave the logical member selected over a still-visible C.
+                TabViewModel? currentTab = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, current));
+                if (currentTab != null && !ReferenceEquals(_viewModel.ActiveTab, currentTab))
+                    _viewModel.SetActiveTab(currentTab);
+                DiagnosticRuntime.Record("split.resume", _containerHwnd, current.Hwnd,
+                    group: Group.Id.ToString("N"), action: "single-to-pair", result: "recovery-pending");
+                return;
+            }
+        }
+
+        _splitPairPresented = true;
+        _splitPresentationGeneration++;
+        DisarmSplitPresentationSettle();
+        _splitForeground = focused;
+        _shepherdActiveWindow = focused;
+        _constraintDirty = true;
+        _refusedPaneByHwnd.Clear();
+        _viewModel.SetActiveTab(focusedTab);
+        LayoutSplitPanes();
+        // Resuming from a composite-half click does not pass through the
+        // presented-pair FocusSplitMember branch, so explicitly perform the
+        // same identity-checked foreground request after both panes are back.
+        _shepherd.SetForeground(focused);
+        _log.Log($"SPLIT[resume] left=0x{_splitLeft!.Hwnd.ToInt64():X} right=0x{_splitRight!.Hwnd.ToInt64():X} focused=0x{focused.Hwnd.ToInt64():X}");
+        DiagnosticRuntime.Record("split.resume", _containerHwnd, focused.Hwnd,
+            group: Group.Id.ToString("N"), action: "single-to-pair", result: "pair-restored");
+    }
+
+    /// <summary>
     /// Leaves split mode and returns to normal one-visible-guest behavior. The
     /// surviving member (<paramref name="keepActive"/>, or the current active
     /// member if it is part of the pair, else the left member) becomes the
@@ -2613,11 +2754,48 @@ public partial class ContainerWindow : Window
     /// </summary>
     private void ExitSplit(CapturedWindow? keepActive = null)
     {
-        if (!IsSplitActive)
+        if (!IsSplitRelationshipDefined)
             return;
 
         var oldLeft = _splitLeft;
         var oldRight = _splitRight;
+
+        // A dormant relationship has an unrelated active guest. Clearing it
+        // must not promote either former member or hide the current guest.
+        if (!IsSplitPresented)
+        {
+            CapturedWindow? current = _shepherdActiveWindow;
+            foreach (CapturedWindow? member in new[] { oldLeft, oldRight })
+            {
+                if (member == null || !NativeMethods.IsWindow(member.Hwnd)
+                    || !NativeMethods.IsWindowVisible(member.Hwnd))
+                    continue;
+                WindowHideOutcome hideOutcome = _shepherd.Hide(member);
+                LogHidePending(member, hideOutcome);
+                if (hideOutcome == WindowHideOutcome.RecoveryPending)
+                {
+                    // Preserve the dormant relationship and current guest until
+                    // the visible former member can be hidden safely. This is
+                    // the same fail-closed rule used by presented-pair exit.
+                    LayoutShepherdActiveWindow();
+                    return;
+                }
+            }
+            _splitLeft = null;
+            _splitRight = null;
+            _splitForeground = null;
+            _splitPairPresented = false;
+            InvalidateSplitPresentationSettle();
+            _constraintDirty = true;
+            _refusedPaneByHwnd.Clear();
+            _viewModel.ClearSplitComposite();
+            _log.Log("SPLIT[exit] dormant pair cleared");
+            DiagnosticRuntime.Record("split.exit", _containerHwnd, current?.Hwnd ?? IntPtr.Zero,
+                group: Group.Id.ToString("N"), action: "exit-dormant", result: "single-guest-retained");
+            if (current != null && _viewModel.Tabs.Any(t => ReferenceEquals(t.Model, current)))
+                LayoutShepherdActiveWindow();
+            return;
+        }
 
         // Decide the survivor against the still-intact pair, BEFORE clearing it.
         CapturedWindow? survivor = (keepActive != null && _viewModel.Tabs.Any(t => t.Model == keepActive))
@@ -2642,6 +2820,8 @@ public partial class ContainerWindow : Window
         _splitLeft = null;
         _splitRight = null;
         _splitForeground = null;
+        _splitPairPresented = false;
+        InvalidateSplitPresentationSettle();
         // Back to single-guest mode: refresh the constraint and clear refusals.
         _constraintDirty = true;
         _refusedPaneByHwnd.Clear();
@@ -2699,19 +2879,33 @@ public partial class ContainerWindow : Window
     /// </summary>
     private void HandleSplitMemberRemoved(CapturedWindow removed)
     {
-        if (!IsSplitActive)
+        if (!IsSplitRelationshipDefined)
             return;
+        bool wasPresented = IsSplitPresented;
+        CapturedWindow? current = _shepherdActiveWindow;
         _log.Log($"SPLIT[member-gone] member=0x{removed.Hwnd.ToInt64():X} left split");
         CapturedWindow? survivor = ReferenceEquals(removed, _splitLeft) ? _splitRight : _splitLeft;
         _splitLeft = null;
         _splitRight = null;
         _splitForeground = null;
+        _splitPairPresented = false;
+        InvalidateSplitPresentationSettle();
         // Back to single-guest mode: refresh the constraint and clear refusals.
         _constraintDirty = true;
         _refusedPaneByHwnd.Clear();
 
         // Restore the ordinary one-tab-per-member strip.
         _viewModel.ClearSplitComposite();
+
+        if (!wasPresented)
+        {
+            if (current != null && _viewModel.Tabs.Any(t => ReferenceEquals(t.Model, current)))
+            {
+                _shepherdActiveWindow = current;
+                LayoutShepherdActiveWindow();
+            }
+            return;
+        }
 
         if (survivor != null && _viewModel.Tabs.Any(t => t.Model == survivor))
         {
@@ -2730,7 +2924,7 @@ public partial class ContainerWindow : Window
         // by container close / group teardown, not here.
         if (e.Action != System.Collections.Specialized.NotifyCollectionChangedAction.Remove)
             return;
-        if (IsSplitActive)
+        if (IsSplitRelationshipDefined)
         {
             foreach (var item in e.OldItems!)
             {
@@ -2754,7 +2948,7 @@ public partial class ContainerWindow : Window
     {
         // In split mode either visible member may be restored inside its pane;
         // otherwise only the active tab is restored eagerly.
-        if (IsSplitActive)
+        if (IsSplitPresented)
         {
             if (!IsSplitMember(window))
                 return;
@@ -2795,7 +2989,7 @@ public partial class ContainerWindow : Window
             // undoes it. The active-tab check alone is not enough: a closed
             // container keeps its view model intact, so also require the shepherd
             // sync to still own this guest (ContainerWindow_Closed nulls it).
-            if (IsSplitActive)
+            if (IsSplitPresented)
             {
                 if (!IsSplitMember(window))
                     return;
@@ -2810,7 +3004,7 @@ public partial class ContainerWindow : Window
 
             if (!_shepherd.RestoreMinimized(window))
                 return;
-            if (IsSplitActive)
+            if (IsSplitPresented)
                 LayoutSplitPanes();
             else
                 LayoutShepherdActiveWindow();
@@ -2837,7 +3031,7 @@ public partial class ContainerWindow : Window
         }
         // In split mode either visible member may be dragged out by its own real
         // title bar; otherwise only the active tab is tracked.
-        if (IsSplitActive)
+        if (IsSplitPresented)
         {
             if (!IsSplitMember(window))
                 return;
@@ -2852,14 +3046,14 @@ public partial class ContainerWindow : Window
 
         // Measure against the member's OWN pane rect in split mode so the
         // re-glue path is deterministic even when the other pane is foreground.
-        NativeMethods.RECT docked = IsSplitActive ? SplitPaneRect(window) : GetContentAreaScreenRect();
+        NativeMethods.RECT docked = IsSplitPresented ? SplitPaneRect(window) : GetContentAreaScreenRect();
         NativeMethods.GetWindowRect(window.Hwnd, out NativeMethods.RECT guest);
         bool moved = guest.left != docked.left || guest.top != docked.top
             || guest.right != docked.right || guest.bottom != docked.bottom;
         if (moved)
             _log.Log($"SHEPHERD[re-glue] guest=0x{window.Hwnd.ToInt64():X} native move/size ended outside assigned pane; restoring.");
 
-        if (IsSplitActive)
+        if (IsSplitPresented)
             LayoutSplitPanes();
         else
             LayoutShepherdActiveWindow(forceZOrder: true);
@@ -2923,9 +3117,10 @@ public partial class ContainerWindow : Window
         // one-to-one to Tabs indices, so disable strip dragging (reorder /
         // drag-out) for the duration of the split to avoid index mismatches
         // (documented in the goal: the composite is not draggable as a unit in
-        // this pass). The composite halves handle their own clicks/middle-clicks,
-        // and clicking a non-member tab still selects it normally.
-        if (IsSplitActive)
+        // this pass). The composite halves handle their own clicks/middle-clicks;
+        // the window-level split interaction hook owns non-member presentation
+        // switches while the pair is presented.
+        if (IsSplitPresented)
         {
             // A NON-member tab's ordinary left-click must NOT select it while
             // the split pair is the selected tab-strip unit: selection would

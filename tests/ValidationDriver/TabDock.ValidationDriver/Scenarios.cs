@@ -105,6 +105,12 @@ internal static partial class Scenarios
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe"),
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe"),
     }, "msedge.exe");
+    private static readonly string BraveExe = FindExe(new[]
+    {
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+    }, "brave.exe");
     // Firefox is not exercised on the dev machine (see docs/internal/TEST_PLAN.md
     // section 4 and KNOWN_ISSUES.md) — the case exists so the code path is
     // written and reviewable, but it cannot be run/verified there.
@@ -161,6 +167,20 @@ internal static partial class Scenarios
         return exeName;
     }
 
+    private static bool IsExecutableAvailable(string executable)
+    {
+        if (string.IsNullOrWhiteSpace(executable))
+            return false;
+        if (Path.IsPathRooted(executable))
+            return File.Exists(executable);
+        string? pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrEmpty(pathEnv))
+            return false;
+        return pathEnv
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Any(dir => File.Exists(Path.Combine(dir, executable)));
+    }
+
     private static readonly Random Rng = new Random();
 
     // Keep each real-input process comfortably below the fixed 10-minute
@@ -179,6 +199,10 @@ internal static partial class Scenarios
         "split-selfclose", "split-native-move-reassert", "split-native-resize-reassert",
         "split-contextmenu-render-stability", "split-closebutton-left", "split-closebutton-right",
         "split-click-third", "split-third-tab-hover-persists", "split-third-tab-click-persists",
+        "split-four-tab-nonmember-switching",
+        "split-three-app-client-settle",
+        "split-diagnostic-snapshot",
+        "split-dormant-member-removal",
         "split-drag-release-render-stability", "drag-release-render-stability",
         "split-guest-does-not-overflow-pane", "split-narrow-container-constraints",
     };
@@ -221,6 +245,10 @@ internal static partial class Scenarios
         "split-native-resize-reassert", "split-contextmenu-render-stability", "split-closebutton-left",
         "split-closebutton-right", "split-click-third",
         "split-third-tab-hover-persists", "split-third-tab-click-persists",
+        "split-four-tab-nonmember-switching",
+        "split-three-app-client-settle",
+        "split-diagnostic-snapshot",
+        "split-dormant-member-removal",
         "split-drag-release-render-stability", "drag-release-render-stability",
         "split-directclick", "split-repeat-cycles", "contextmenu-render-stability",
         "chrome-click-render-stability", "tab-closebutton-popout", "tab-middleclick-popout",
@@ -268,8 +296,9 @@ internal static partial class Scenarios
     public static readonly string[] BrowserOnlyScenarios =
     {
         "browser-lifecycle", "browser-tabswitch-hidesafety", "browser-dragreorder", "browser-soak",
+        "browser-split-persistent-render",
     };
-    public static readonly string[] BrowserGuestKinds = { "chrome-normal", "edge-normal", "firefox-normal" };
+    public static readonly string[] BrowserGuestKinds = { "chrome-normal", "edge-normal", "brave-normal", "firefox-normal" };
 
     /// <summary>
     /// Scenarios that read `RunScenario`'s switch fine but were left off of
@@ -526,6 +555,10 @@ internal static partial class Scenarios
             "split-click-third" => SplitClickThird,
             "split-third-tab-hover-persists" => SplitThirdTabHoverPersists,
             "split-third-tab-click-persists" => SplitThirdTabClickPersists,
+            "split-four-tab-nonmember-switching" => SplitFourTabNonmemberSwitching,
+            "split-three-app-client-settle" => SplitThreeAppClientSettle,
+            "split-diagnostic-snapshot" => SplitDiagnosticSnapshot,
+            "split-dormant-member-removal" => SplitDormantMemberRemoval,
             "split-drag-release-render-stability" => SplitDragReleaseRenderStability,
             "drag-release-render-stability" => DragReleaseRenderStability,
             "split-directclick" => SplitDirectClick,
@@ -560,6 +593,7 @@ internal static partial class Scenarios
             "browser-dragreorder" => BrowserDragReorder,
             "browser-multi" => BrowserMulti,
             "browser-soak" => BrowserSoak,
+            "browser-split-persistent-render" => BrowserSplitPersistentRender,
             "contentinput" => ContentInput,
             "chromeinput" => ChromeInput,
             "alttabinput" => AltTabInput,
@@ -1109,6 +1143,10 @@ internal static partial class Scenarios
                 return WithStableTabMatchKey(SpawnClassGuest(ctx, EdgeExe,
                     $"--user-data-dir=\"{FreshProfileDir("TabDockEdgeProfileNormal")}\" --no-first-run --no-default-browser-check --disable-session-crashed-bubble https://time.is",
                     "Chrome_WidgetWin_1", useShellExecute: true), "Microsoft");
+            case "brave-normal":
+                return WithStableTabMatchKey(SpawnClassGuest(ctx, BraveExe,
+                    $"--user-data-dir=\"{FreshProfileDir("TabDockBraveProfileNormal")}\" --no-first-run --no-default-browser-check --disable-session-crashed-bubble https://time.is",
+                    "Chrome_WidgetWin_1", useShellExecute: true), "Brave");
             case "firefox-normal":
                 // Gecko engine, different window class. NOT installed on this dev
                 // machine (docs/internal/TEST_PLAN.md section 4) — this case is
@@ -1126,7 +1164,7 @@ internal static partial class Scenarios
             case "chatgptclassic":
                 return AttachExistingRealApp(ctx, "ChatGPT Classic", null, exactTitle: "ChatGPT Classic");
             default:
-                throw new ArgumentException($"Unknown --guest kind '{kind}' (expected pig|wt|chrome-nogpu|chrome-gpu|chrome-normal|edge-normal|firefox-normal|codex|chatgptclassic).");
+                throw new ArgumentException($"Unknown --guest kind '{kind}' (expected pig|wt|chrome-nogpu|chrome-gpu|chrome-normal|edge-normal|brave-normal|firefox-normal|codex|chatgptclassic).");
         }
     }
 
@@ -1630,6 +1668,15 @@ internal static partial class Scenarios
         if (list == null)
             return null;
         return Uia.FindDescendantByName(list, ControlType.Text, null, guestTitle, out count);
+    }
+
+    private static AutomationElement? FindSplitComposite(IntPtr container, out int count)
+    {
+        count = 0;
+        AutomationElement? list = GetTabList(container);
+        if (list == null)
+            return null;
+        return Uia.FindDescendantByAutomationId(list, "SplitCompositeItem", out count);
     }
 
     /// <summary>Right-clicks a tab (by guest title) and real-clicks the named context-menu item.</summary>

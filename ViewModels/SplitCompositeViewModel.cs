@@ -30,9 +30,18 @@ public sealed class SplitCompositeViewModel : ViewModelBase
 
     /// <summary>
     /// The tab-strip item container style binds IsSelected TwoWay to IsActive on
-    /// every item. The composite has no single active member (each half's
-    /// highlight is driven by its own member's IsActive), so expose a settable
-    /// no-op here purely so that binding does not fail on composite items.
+    /// every item. The composite is selected whenever either member is the
+    /// logical active guest; the individual half highlights still come from the
+    /// members' own IsActive values.
     /// </summary>
-    public bool IsActive { get; set; }
+    private bool _isActive;
+
+    public bool IsActive
+    {
+        get => _isActive;
+        set => SetProperty(ref _isActive, value);
+    }
+
+    internal void RefreshActiveState()
+        => IsActive = Left.IsActive || Right.IsActive;
 }

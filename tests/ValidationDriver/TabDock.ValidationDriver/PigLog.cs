@@ -40,6 +40,17 @@ internal static class PigLog
         return false;
     }
 
+    public static int CountLines(uint pid, string substring)
+    {
+        int count = 0;
+        foreach (string line in ReadLines(pid))
+        {
+            if (line.IndexOf(substring, StringComparison.OrdinalIgnoreCase) >= 0)
+                count++;
+        }
+        return count;
+    }
+
     public static bool WaitForPigLine(uint pid, string substring, int timeoutMs)
     {
         return Util.WaitUntil(() => ContainsLine(pid, substring), timeoutMs, 150);

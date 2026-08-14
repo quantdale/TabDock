@@ -185,6 +185,7 @@ public sealed class LogicalPresentationSnapshot
     public string? ActiveMemberKey { get; set; }
     public long ActiveGuestHwnd { get; set; }
     public bool SplitActive { get; set; }
+    public bool SplitPresented { get; set; }
     public string? SplitLeftMemberKey { get; set; }
     public long SplitLeftHwnd { get; set; }
     public string? SplitRightMemberKey { get; set; }

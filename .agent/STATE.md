@@ -7,37 +7,39 @@ Resolve them dynamically at every fresh session. This file never records a
 self-referential current SHA or a hosted-CI result for the commit containing
 this text.
 
-## Current checkpoint — user-reported split interaction closure
+## Current checkpoint — persistent split relationship and rendering qualification
 
 - Objective: close the real-world three-tab split activation defect and the
   initial split presentation-settle defect without weakening the
   Shepherd/no-reparent, HWND identity, recovery, persistence, input, DPI, or
   shutdown contracts.
-- Ordinary LEFT-click on a captured non-member tab while a pair is split is an
-  explicit presentation switch: both split members are journal-safely hidden,
-  split mode ends, the clicked tab becomes the ordinary active full-width
-  guest, and no captured member is released. Hover/right-click on a non-member
-  remains presentation-only and leaves the pair intact; Ctrl+Tab remains
-  pair-scoped while split is active.
-- The third-tab switch fails closed if hiding a split member becomes
-  recovery-pending. The third tab is not selected and the authoritative pair is
-  re-presented through the existing split layout path so a partial hide cannot
-  leave a blank pane.
+- `_splitLeft`/`_splitRight` define a runtime-only relationship independently
+  from `_splitPairPresented`. A non-member click journal-safely suspends the
+  pair, presents that guest full-width, and retains the composite; either
+  composite half resumes the exact LEFT/RIGHT pair and focuses the clicked
+  member. Explicit exit/reconfiguration or structural invalidation is required
+  to clear the relationship.
+- Suspend/resume and explicit dormant exit use the existing Shepherd journal
+  and recovery guards. If a required hide becomes recovery-pending, the old
+  presentation remains authoritative and the transition fails closed.
 - Split creation from TabDock chrome now receives one bounded post-popup settle:
   after TabDock-owned chrome is no longer active, the existing split layout is
   re-run and the focused split member receives a real foreground request through
   the existing identity-checked Shepherd API. No synthetic `WM_SIZE`, guest
   style mutation, reparenting, `AttachThreadInput`, or browser-specific native
   workaround is used.
-- Regression coverage is encoded in the existing ValidationDriver split
-  scenarios: `split-click-third` now requires the clicked third tab to open,
-  the historical `split-third-tab-click-persists` CLI alias repeatedly exercises
-  split -> third-tab -> normal-tab recovery, `split-composite` uses the corrected
-  contract, split entry asserts `SPLIT[settled]` plus real foreground, and the
-  hover-persistence regression remains unchanged.
+- Regression coverage is encoded in the ValidationDriver split scenarios:
+  `split-click-third` and `split-third-tab-click-persists` require repeated
+  suspend/resume without `SPLIT[exit]`, `split-four-tab-nonmember-switching`
+  covers C/D, `split-composite` covers presented/dormant member menus and
+  dormant exit, `split-diagnostic-snapshot` checks serialized dormant logical
+  state, and the controlled client-settle scenario compares two versus three
+  captured GuineaPig windows without corrective guest clicks.
 - Canonical and change-level OpenSpec sources describe the corrected behavior in
-  `openspec/specs/ui-ux-hardening/spec.md` and
-  `openspec/changes/split-tab-switch-and-settle-fix-2026-08-14/`.
+  `openspec/specs/ui-ux-hardening/` and
+  `openspec/changes/persistent-split-pair-presentation-2026-08-14/`.
+  The superseded third-tab-exit change is retained under
+  `openspec/changes/archive/` for historical context.
 - The completed performance optimization campaign remains the retained baseline:
   early desktop-reorder filtering, lower diagnostic allocation, bounded
   generation-safe picker icons, compile-qualified non-gating performance
@@ -90,15 +92,24 @@ this text.
   is not persisted here.
 - Because the two defects were observed in real interactive browser use, final
   qualification also requires an interactive Windows re-test of: three captured
-  apps -> split two -> click the third -> normal switching, and split creation
-  with a Chromium-family guest without a corrective first pane click.
+  apps -> split two -> click the third -> pair restoration, and split creation
+  with a Chromium-family guest without a corrective first pane click. Browser
+  client evidence must use viewport/title or resize-message observations rather
+  than outer HWND geometry alone.
 - Do not automate shutdown/logoff. Do not claim mixed-DPI hardware,
   unavailable-browser, or foreground-policy qualification without evidence.
+- The guarded interactive attempt stopped at capture preflight because the
+  discovered TabDock root HWND was outside the driver's verified identity
+  scope; the Computer Use native pipe was unavailable too. No input-safety
+  guard was bypassed. Treat real-input and browser viewport evidence as
+  remaining external qualification until a verified interactive desktop is
+  available.
 
 ## Resume
 
 1. Read `AGENTS.md`, this file, `docs/ARCHITECTURE.md`, `docs/TESTING.md`, the
-   canonical `ui-ux-hardening` spec, and the active split-fix OpenSpec change.
+  canonical `ui-ux-hardening` spec, and the active persistent-split OpenSpec
+  change.
 2. Resolve Git and hosted CI dynamically. Preserve unrelated work and never
    reset/clean/force-push published `main`.
 3. If the focused real-input split qualification exposes another concrete

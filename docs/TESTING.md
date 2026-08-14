@@ -169,15 +169,23 @@ Split-persistence / drag-end stabilization scenarios (2026-08-11 Round 4,
   hidden, no `SPLIT[exit]`/`SPLIT[member-gone]`, no `SHEPHERD[hide]`, no
   release, no switch away from the pair, and both pane centers resolve to their
   guests (`WindowFromPoint` — a covered-but-correctly-sized pane fails).
-- `split-third-tab-click-persists` — per cycle: click C, click LEFT half, click
-  C, click RIGHT half, click C, right-click C + dismiss, Ctrl+Tab; the pair
-  stays A+B the whole time, C never becomes the active single guest (asserted
-  via the SETTLED `Switched group … to tab N` final index — the funnel
-  transiently logs C's index before reverting, so the assertion is on the final
-  index, never on "no switch lines"), no `SPLIT[exit]`, no release.
-- `split-click-third` (rewritten for the persistence contract) — a single
-  click on C leaves the pair untouched; previously it asserted the old
-  exit-on-click contract.
+- `split-third-tab-click-persists` — per cycle: click C, assert C is the only
+  full-width guest while A/B remains a dormant composite, click LEFT or RIGHT
+  to restore the unchanged pair, then repeat; no `SPLIT[exit]` or member
+  release occurs.
+- `split-click-third` — a single click on C suspends pair presentation without
+  clearing the relationship; C is usable full-width and either composite half
+  restores A/B. It replaces the old exit-on-click contract.
+- `split-four-tab-nonmember-switching` — with A/B paired, C and D switch as
+  ordinary full-width guests for repeated C→D→C cycles while the same composite
+  relationship remains dormant and resumes with A LEFT/B RIGHT.
+- `split-three-app-client-settle` — compares two- versus three-guest unsplit,
+  split, dormant, and resumed presentations using GuineaPig post-`WM_SIZE` /
+  `WM_SHOWWINDOW` client logs; no corrective guest click is allowed.
+- `split-diagnostic-snapshot` — exports a guarded support bundle while the pair
+  is dormant and asserts `splitActive=true`, `splitPresented=false`, retained
+  LEFT/RIGHT metadata, no expected pane rectangles, and one expected
+  full-width guest.
 - `drag-release-render-stability` — ONE captured guest; drag the CONTAINER
   caption through a multi-segment trajectory (right/down/left/up/diagonal/
   return via `Input.DragPolyline`, many intermediate `WM_WINDOWPOSCHANGED`

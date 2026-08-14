@@ -18,6 +18,7 @@ internal static class Input
     public const ushort VK_TAB = 0x09;
     public const ushort VK_DELETE = 0x2E;
     public const ushort VK_A = 0x41;
+    public const ushort VK_D = 0x44;
     public const ushort VK_G = 0x47;
     public const ushort VK_L = 0x4C;
     public const ushort VK_RETURN = 0x0D;
@@ -638,6 +639,42 @@ internal static class Input
                 SendVk(VK_CONTROL, up: true, allowUnverifiedCleanup: true);
         }
         Thread.Sleep(50);
+    }
+
+    /// <summary>Ctrl+Alt+Shift+D: request TabDock's diagnostic support bundle.</summary>
+    public static void SendHotkeyCtrlAltShiftD()
+    {
+        bool ctrlDown = false;
+        bool altDown = false;
+        bool shiftDown = false;
+        bool dDown = false;
+        try
+        {
+            SendVk(VK_CONTROL, up: false);
+            ctrlDown = true;
+            Thread.Sleep(15);
+            SendVk(VK_MENU, up: false);
+            altDown = true;
+            Thread.Sleep(15);
+            SendVk(VK_SHIFT, up: false);
+            shiftDown = true;
+            Thread.Sleep(15);
+            SendVk(VK_D, up: false);
+            dDown = true;
+            Thread.Sleep(20);
+        }
+        finally
+        {
+            if (dDown)
+                SendVk(VK_D, up: true, allowUnverifiedCleanup: true);
+            if (shiftDown)
+                SendVk(VK_SHIFT, up: true, allowUnverifiedCleanup: true);
+            if (altDown)
+                SendVk(VK_MENU, up: true, allowUnverifiedCleanup: true);
+            if (ctrlDown)
+                SendVk(VK_CONTROL, up: true, allowUnverifiedCleanup: true);
+        }
+        Thread.Sleep(80);
     }
 
     private static void SendButtonClick(uint downFlags, uint upFlags, int downDurationMs)

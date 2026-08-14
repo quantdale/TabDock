@@ -122,29 +122,39 @@ SHALL be logged per frame.
 - **WHEN** the application starts on a customer machine
 - **THEN** the log contains `ENV[startup]` with OS/.NET/bitness and the full monitor layout, and each open container logs `ENV[container]` — sufficient to diagnose machine-specific geometry failures without further queries
 
-### Requirement: The split pair SHALL persist until an explicit presentation switch or structural teardown
-Once a split pair `{LEFT, RIGHT}` is active it SHALL remain the selected
-composite unit while the user interacts with either split member and while a
-non-member tab is merely hovered or right-clicked. An ordinary **left-click**
-on a non-member tab SHALL instead be treated as an explicit presentation switch:
-TabDock SHALL journal-safely hide both split members, clear the split composite,
-make the clicked tab the ordinary active tab, and present it full-width without
-releasing any captured member.
+### Requirement: The split relationship SHALL persist across ordinary non-member selection
+Once a split relationship `{LEFT, RIGHT}` is defined it SHALL remain defined
+until explicit exit, explicit split reconfiguration, or structural invalidation
+of a member. The relationship and its presentation SHALL be separate states.
+
+While the pair is presented, exactly LEFT and RIGHT SHALL be visible in their
+original panes and the focused member SHALL be the logical active member.
+
+When a user selects a non-member C, TabDock SHALL journal-safely hide LEFT and
+RIGHT, retain the relationship and composite projection, present C as the only
+visible full-width guest, and make C the logical active guest. This is a
+dormant-pair state, not a relationship exit. Selecting either composite half
+SHALL journal-safely hide C, restore the exact same LEFT/RIGHT pair, preserve
+pane identity, and focus the clicked member.
 
 If either split-member hide cannot complete safely and returns recovery-pending,
 TabDock SHALL fail closed: the split remains authoritative, the clicked
 non-member SHALL NOT become selected/active, and the existing pair SHALL be
 re-presented so a partially completed hide cannot leave one blank pane.
 
-A newly captured window added while split is active SHALL continue to be hidden
-journal-safely so the visible set remains the pair. Ctrl+Tab while split is
-active SHALL continue to cycle only between the two split members. Split-member
-focus, direct guest click, hover, and non-member context-menu open/close SHALL
-not by themselves change split membership.
+A newly captured window added while the pair is presented SHALL continue to be
+hidden journal-safely so the visible set remains the pair. Ctrl+Tab while the
+pair is presented SHALL continue to cycle only between its members. While the
+pair is dormant, ordinary navigation among non-members SHALL remain available;
+selecting a split member resumes the pair.
 
-#### Scenario: Clicking a third tab exits split and opens that tab
+#### Scenario: Pair to third tab suspends without teardown
 - **WHEN** a split `{A, B}` is active with a third captured tab C and the user left-clicks C's ordinary tab
-- **THEN** a normal split exit occurs, A and B are hidden but remain captured, C becomes the single active full-width guest, the ordinary three-tab strip is restored, and no member is released
+- **THEN** `{A, B}` remains the defined relationship, C is full-width and usable, A and B are hidden, the composite remains represented, and no relationship `SPLIT[exit]` occurs
+
+#### Scenario: Third tab resumes the unchanged pair
+- **WHEN** C is full-width with dormant relationship `{A, B}` and the user clicks either composite half
+- **THEN** C is hidden, A remains LEFT, B remains RIGHT, both panes are presented immediately, and the clicked member becomes foreground
 
 #### Scenario: An uncertain split hide fails the third-tab switch closed
 - **WHEN** the user left-clicks C while `{A, B}` is split and hiding either A or B becomes recovery-pending
@@ -157,6 +167,41 @@ not by themselves change split membership.
 #### Scenario: Right-clicking a third tab leaves the pair untouched
 - **WHEN** a split `{A, B}` is active with a third tab C and the user opens and dismisses C's context menu
 - **THEN** the pair remains active and visible and C remains a captured hidden non-member
+
+### Requirement: Current split members SHALL not offer redundant split initiation
+When a tab is a current member of the defined split relationship, its context
+menu SHALL omit `Split screen` and SHALL retain `Exit split screen`, whether the
+pair is presented or dormant. Non-member menu behavior SHALL remain unchanged
+except for explicit reconfiguration operations.
+
+#### Scenario: Paired member context menu
+- **WHEN** the user right-clicks either member of `{A, B}` in presented or dormant state
+- **THEN** `Split screen` is absent and `Exit split screen` remains present
+
+### Requirement: Dormant relationship exit and invalidation preserve the active guest
+Explicitly exiting a dormant `{A, B}` relationship SHALL clear the relationship,
+restore ordinary tabs, and leave current non-member C visible and active.
+Removing a member from a dormant relationship SHALL dissolve the composite while
+leaving C visible and the surviving former member hidden. Removing a member from
+a presented pair SHALL retain the existing survivor-promotion semantics.
+
+#### Scenario: Dormant exit leaves the non-member visible
+- **WHEN** C is full-width with dormant relationship `{A, B}` and the user explicitly chooses Exit split screen
+- **THEN** `{A, B}` is cleared, C remains the full-width active guest, and A/B return as ordinary hidden captured tabs
+
+#### Scenario: Dormant member removal leaves the non-member visible
+- **WHEN** A is structurally removed while dormant `{A, B}` is presenting C
+- **THEN** the composite is dissolved, C remains visible and active, and B remains a hidden ordinary captured tab
+
+### Requirement: Split diagnostics distinguish relationship from presentation
+Logical diagnostics SHALL report relationship-defined and pair-presented state
+separately. Expected pane rectangles SHALL be populated only while the pair is
+presented; dormant diagnostics SHALL identify the current full-width guest while
+retaining LEFT/RIGHT relationship metadata.
+
+#### Scenario: Dormant diagnostics expose relationship without pane expectations
+- **WHEN** `{A, B}` is dormant while C is full-width
+- **THEN** diagnostics report the pair relationship as defined, pair presentation as false, C as the active full-width guest, and no expected A/B pane rectangles
 
 ### Requirement: Split creation SHALL settle presentation after TabDock chrome closes
 A split created from a TabDock context menu SHALL receive one bounded
@@ -174,6 +219,22 @@ or bypass foreground/identity guards.
 #### Scenario: TabDock chrome is never preempted by the settle
 - **WHEN** another TabDock-owned popup/chrome interaction is still active while a split settle is pending
 - **THEN** the settle remains pending and does not foreground a guest until the chrome interaction has ended
+
+### Requirement: Rendering qualification SHALL measure client response, not only HWND geometry
+Three-application qualification SHALL compare two versus three captured apps,
+unsplit versus split, presented versus dormant, controlled windows versus any
+available isolated Chromium-family windows, and repeated pair/non-member
+transitions. A pass SHALL require client-observable resize/presentation state to
+update before any corrective click inside the guest; outer HWND geometry alone
+is insufficient. Missing browser installations SHALL be reported explicitly.
+
+#### Scenario: Three-app client presentation settles without a guest click
+- **WHEN** the harness compares unsplit, split, dormant, and resumed presentations for two and three controlled guests
+- **THEN** each guest's post-message client evidence is recorded immediately after the transition and no first corrective guest click is required
+
+#### Scenario: Isolated browser viewport evidence is explicit
+- **WHEN** available Chromium-family browsers are driven through pair/non-member transitions using isolated profiles
+- **THEN** the harness records client-reported viewport dimensions and resize counters, or reports missing browser coverage as BLOCKED_ENVIRONMENT
 
 ### Requirement: Native move/size completion SHALL reconcile against final geometry AND local z-order
 When the container's own native move/size loop ends (`WM_EXITSIZEMOVE`), the

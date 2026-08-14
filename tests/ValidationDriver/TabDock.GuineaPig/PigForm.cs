@@ -111,6 +111,10 @@ public sealed class PigOptions
     public bool CloseButton;
     public bool ClickCounterButton;
     public bool TextBox;
+    // Emit post-WndProc client dimensions for deterministic presentation/render
+    // qualification. This is opt-in so ordinary lifecycle scenarios keep their
+    // original stable titles and log volume.
+    public bool ResizeProbe;
     // Native minimum track size (physical pixels) enforced via WM_GETMINMAXINFO,
     // so the harness can reproduce the browser/explorer "refuses to shrink"
     // containment defect deterministically.
@@ -153,6 +157,7 @@ public sealed class PigForm : Form
     private readonly Color _pulseColor;
     private bool _pulseOn;
     private TextBox? _textBox;
+    private int _resizeProbeCount;
 
     public PigForm(PigOptions opts)
     {
@@ -283,6 +288,7 @@ public sealed class PigForm : Form
         Log($"LIFECYCLE Created title='{opts.Title}' pid={Environment.ProcessId} color={_baseColor} " +
             $"pulse={opts.Pulse} hideOnClose={opts.HideOnClose} minThenHide={opts.MinimizeThenHideOnClose} " +
             $"selfClose={opts.SelfCloseAfterSeconds} selfMin={opts.SelfMinimizeAfterSeconds} closeButton={opts.CloseButton} textBox={opts.TextBox} " +
+            $"resizeProbe={opts.ResizeProbe} " +
             $"dpiMode={opts.DpiMode} minTrack={_opts.MinWidth}x{_opts.MinHeight}");
     }
 
@@ -355,6 +361,13 @@ public sealed class PigForm : Form
         }
 
         base.WndProc(ref m);
+
+        if (_opts.ResizeProbe && (m.Msg == MsgSize || m.Msg == MsgShowWindow))
+        {
+            if (m.Msg == MsgSize)
+                _resizeProbeCount++;
+            Log($"CLIENT_PRESENT msg={(m.Msg == MsgSize ? "WM_SIZE" : "WM_SHOWWINDOW")} visible={Visible} client={ClientSize.Width}x{ClientSize.Height} resizeCount={_resizeProbeCount}");
+        }
 
         // When reparented as a WS_CHILD, WinForms does not always forward focus to
         // ActiveControl on show/tab-switch. Force the editable control focused so

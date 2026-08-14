@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
@@ -329,6 +331,239 @@ internal static partial class Scenarios
         ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
     }
 
+    // -------------------------------------------------------------------------
+    // browser-split-persistent-render: isolated Chromium-family qualification.
+    // Each browser receives a unique local page whose title reports
+    // TDTEST-token-innerWidthxinnerHeight-resizeCount. The title is read
+    // immediately after presentation transitions; no corrective click inside a
+    // browser is used.
+    // -------------------------------------------------------------------------
+    private static void BrowserSplitPersistentRender(Ctx ctx, Options opt)
+    {
+        var requested = new[]
+        {
+            (Kind: "chrome-normal", Token: "CHR"),
+            (Kind: "edge-normal", Token: "EDG"),
+            (Kind: "brave-normal", Token: "BRV"),
+        };
+        var available = requested
+            .Where(item => IsExecutableAvailable(item.Kind switch
+            {
+                "chrome-normal" => ChromeExe,
+                "edge-normal" => EdgeExe,
+                "brave-normal" => BraveExe,
+                _ => string.Empty,
+            }))
+            .ToArray();
+
+        if (available.Length < 2)
+        {
+            GuardedProc.Log($"BLOCKED_ENVIRONMENT browser-split-persistent-render requires at least two isolated Chromium browsers; available={string.Join(",", available.Select(item => item.Kind))}.");
+            ctx.Check(false, "BLOCKED_ENVIRONMENT: fewer than two supported Chromium-family browsers are installed");
+            return;
+        }
+
+        int browserCount = Math.Min(3, available.Length);
+        var browsers = new List<GuestInfo>();
+        var tokens = new Dictionary<GuestInfo, string>();
+        for (int i = 0; i < browserCount; i++)
+        {
+            GuestInfo browser = SpawnGuest(ctx, available[i].Kind);
+            browsers.Add(browser);
+            tokens[browser] = available[i].Token;
+        }
+
+        GuestInfo third;
+        if (browsers.Count >= 3)
+        {
+            third = browsers[2];
+        }
+        else
+        {
+            GuardedProc.Log("BLOCKED_ENVIRONMENT Brave/third Chromium coverage unavailable; using a resize-probed GuineaPig as the controlled third guest.");
+            third = SpawnPig(ctx, "BROWSER-THIRD", "--color", "green", "--resize-probe");
+        }
+
+        GuestInfo left = browsers[0];
+        GuestInfo right = browsers[1];
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, left, right, third);
+
+        // Navigate each real browser to the isolated local probe while it is a
+        // normal full-width guest. This setup uses guarded tab/keyboard input;
+        // all subsequent presentation observations are passive.
+        foreach (GuestInfo browser in browsers)
+        {
+            string token = tokens[browser];
+            AutomationElement? tab = FindTabText(container, browser.EffectiveTabMatchKey, out int count);
+            if (tab == null || count != 1)
+                throw new InvalidOperationException($"Browser setup: '{browser.EffectiveTabMatchKey}' tab not found uniquely (count={count}).");
+            (int x, int y) = Uia.Center(tab);
+            if (!EnsureClickable(container, x, y))
+                throw new InvalidOperationException($"Browser setup: '{browser.EffectiveTabMatchKey}' tab was obscured.");
+            Input.ClickAt(x, y);
+            ctx.Check(Util.WaitUntil(() => IsDocked(browser.Hwnd, host), 4000),
+                $"browser setup: '{browser.EffectiveTabMatchKey}' is full-width before navigation");
+            if (!Input.ForceForeground(browser.Hwnd))
+                throw new InvalidOperationException($"Browser setup: could not foreground '{browser.EffectiveTabMatchKey}' safely.");
+            Input.SendCtrlL();
+            Thread.Sleep(180);
+            string pageUrl = new Uri(CreateBrowserResizeTestPage(token)).AbsoluteUri;
+            Input.TypeText(pageUrl);
+            Input.SendKey(Input.VK_RETURN);
+            string observed = WaitForBrowserResizeTitle(container, token, null, 8000, "setup");
+            ctx.Check(observed.Length > 0, $"browser setup: '{token}' reports client viewport in its title");
+        }
+
+        // BROWSER-1: unsplit browser switching, recording outer and client state.
+        foreach (GuestInfo browser in browsers)
+        {
+            string token = tokens[browser];
+            AutomationElement? tab = FindTabText(container, token, out int count);
+            if (tab == null || count != 1)
+                throw new InvalidOperationException($"BROWSER-1: '{token}' tab not found uniquely (count={count}).");
+            string before = tab.Current.Name ?? string.Empty;
+            (int x, int y) = Uia.Center(tab);
+            if (!EnsureClickable(container, x, y))
+                throw new InvalidOperationException($"BROWSER-1: '{token}' tab was obscured.");
+            Input.ClickAt(x, y);
+            ctx.Check(Util.WaitUntil(() => IsDocked(browser.Hwnd, host), 4000),
+                $"BROWSER-1: '{token}' unsplit full-width");
+            LogBrowserState(browser, "BROWSER-1 unsplit");
+            string after = WaitForBrowserResizeTitle(container, token, null, 1500, "BROWSER-1");
+            ctx.Check(after.Length > 0 && (after == before || after.Contains(token, StringComparison.Ordinal)),
+                $"BROWSER-1: '{token}' title remains client-observable after unsplit switch");
+        }
+
+        // BROWSER-2: split the first two browsers and inspect immediately.
+        string leftToken = tokens[left];
+        string rightToken = tokens[right];
+        string leftBeforeSplit = ReadTabName(container, leftToken);
+        string rightBeforeSplit = ReadTabName(container, rightToken);
+        long enterOff = TabDockLog.RecordLogLength();
+        ClickTabSubmenuItem(ctx, container, leftToken, "Split screen", rightToken);
+        ctx.Check(TabDockLog.WaitForLogLine(enterOff, "SPLIT[enter]", 3000), "BROWSER-2: browser pair entered split");
+        AssertSplitPanes(ctx, host, left, right, "BROWSER-2 immediate split");
+        string leftAfterSplit = WaitForBrowserResizeTitle(container, leftToken, leftBeforeSplit, 5000, "BROWSER-2 LEFT");
+        string rightAfterSplit = WaitForBrowserResizeTitle(container, rightToken, rightBeforeSplit, 5000, "BROWSER-2 RIGHT");
+        ctx.Check(leftAfterSplit.Length > 0 && rightAfterSplit.Length > 0,
+            "BROWSER-2: both browser client titles changed for split panes before any pane click");
+        LogBrowserState(left, "BROWSER-2 split LEFT");
+        LogBrowserState(right, "BROWSER-2 split RIGHT");
+        ctx.Check(!NativeMethods.IsWindowVisible(third.Hwnd), "BROWSER-2: third guest hidden during browser pair");
+
+        // BROWSER-3/4/5: pair -> third -> pair with no guest click between
+        // transitions. Repeat enough cycles to expose stale settle/presentation.
+        int cycles = Math.Max(10, opt.Cycles ?? 10);
+        for (int i = 1; i <= cycles; i++)
+        {
+            string thirdKey = third == browsers.ElementAtOrDefault(2)
+                ? tokens[third]
+                : third.Title;
+            int thirdPigBefore = third.IsPig ? PigLog.CountLines(third.Pid, "CLIENT_PRESENT") : 0;
+            AutomationElement? thirdTab = FindTabText(container, thirdKey, out int thirdCount);
+            if (thirdTab == null || thirdCount != 1)
+                throw new InvalidOperationException($"BROWSER-3 cycle {i}: third guest tab not found uniquely (count={thirdCount}).");
+            (int tx, int ty) = Uia.Center(thirdTab);
+            if (!EnsureClickable(container, tx, ty))
+                throw new InvalidOperationException($"BROWSER-3 cycle {i}: third guest tab was obscured.");
+            long suspendOff = TabDockLog.RecordLogLength();
+            Input.ClickAt(tx, ty);
+            ctx.Check(TabDockLog.WaitForLogLine(suspendOff, "SPLIT[suspend]", 3000),
+                $"BROWSER-3 cycle {i}: third guest suspends browser pair");
+            ctx.Check(Util.WaitUntil(() => IsDocked(third.Hwnd, host)
+                && !NativeMethods.IsWindowVisible(left.Hwnd)
+                && !NativeMethods.IsWindowVisible(right.Hwnd), 5000),
+                $"BROWSER-3 cycle {i}: third guest is full-width and pair is hidden");
+            if (third.IsPig)
+            {
+                ctx.Check(WaitForNewClientPresentation(third, thirdPigBefore, 3000, $"BROWSER-3 cycle {i} controlled third"),
+                    $"BROWSER-3 cycle {i}: controlled third client processed presentation without guest click");
+            }
+            else
+            {
+                string thirdAfter = WaitForBrowserResizeTitle(container, thirdKey, null, 1500, $"BROWSER-3 cycle {i} third");
+                ctx.Check(thirdAfter.Length > 0 && thirdAfter.Contains(thirdKey, StringComparison.Ordinal),
+                    $"BROWSER-3 cycle {i}: third browser client remains observable without corrective click");
+            }
+            LogBrowserState(third, $"BROWSER-3 cycle {i} third");
+            ctx.Check(TabDockLog.CountNewLines(suspendOff, "SPLIT[exit]") == 0,
+                $"BROWSER-3 cycle {i}: pair relationship retained");
+
+            string restoreKey = i % 2 == 0 ? rightToken : leftToken;
+            string leftBeforeResume = ReadTabName(container, leftToken);
+            string rightBeforeResume = ReadTabName(container, rightToken);
+            AutomationElement? restoreTab = FindTabText(container, restoreKey, out int restoreCount);
+            if (restoreTab == null || restoreCount != 1)
+                throw new InvalidOperationException($"BROWSER-4 cycle {i}: '{restoreKey}' composite half not found uniquely (count={restoreCount}).");
+            (int rx, int ry) = Uia.Center(restoreTab);
+            if (!EnsureClickable(container, rx, ry))
+                throw new InvalidOperationException($"BROWSER-4 cycle {i}: composite half was obscured.");
+            long resumeOff = TabDockLog.RecordLogLength();
+            Input.ClickAt(rx, ry);
+            ctx.Check(TabDockLog.WaitForLogLine(resumeOff, "SPLIT[resume]", 3000),
+                $"BROWSER-4 cycle {i}: {restoreKey} resumes browser pair");
+            AssertSplitPanes(ctx, host, left, right, $"BROWSER-4 cycle {i} restored pair");
+            string restoredLeft = WaitForBrowserResizeTitle(container, leftToken, leftBeforeResume, 5000, $"BROWSER-4 cycle {i} LEFT");
+            string restoredRight = WaitForBrowserResizeTitle(container, rightToken, rightBeforeResume, 5000, $"BROWSER-4 cycle {i} RIGHT");
+            ctx.Check(restoredLeft.Length > 0 && restoredRight.Length > 0,
+                $"BROWSER-4 cycle {i}: both browser clients report restored pane state without guest click");
+            ctx.Check(!NativeMethods.IsWindowVisible(third.Hwnd),
+                $"BROWSER-4 cycle {i}: third guest hidden after pair restore");
+            LogBrowserState(left, $"BROWSER-4 cycle {i} LEFT");
+            LogBrowserState(right, $"BROWSER-4 cycle {i} RIGHT");
+            ctx.Check(TabDockLog.CountNewLines(resumeOff, "SPLIT[exit]") == 0,
+                $"BROWSER-4 cycle {i}: resume does not tear down relationship");
+        }
+
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0,
+            "browser split rendering produced no EXCEPTION lines");
+    }
+
+    private static string ReadTabName(IntPtr container, string token)
+    {
+        AutomationElement? tab = FindTabText(container, token, out int count);
+        if (tab == null || count != 1)
+            throw new InvalidOperationException($"Tab token '{token}' not found uniquely (count={count}).");
+        return tab.Current.Name ?? string.Empty;
+    }
+
+    private static string WaitForBrowserResizeTitle(
+        IntPtr container,
+        string token,
+        string? differentFrom,
+        int timeoutMs,
+        string phase)
+    {
+        string observed = string.Empty;
+        bool found = Util.WaitUntil(() =>
+        {
+            AutomationElement? tab = FindTabText(container, token, out int count);
+            if (tab == null || count != 1)
+                return false;
+            try
+            {
+                observed = tab.Current.Name ?? string.Empty;
+            }
+            catch
+            {
+                return false;
+            }
+            return observed.Contains("TDTEST-", StringComparison.Ordinal)
+                && (differentFrom == null || !string.Equals(observed, differentFrom, StringComparison.Ordinal));
+        }, timeoutMs);
+        GuardedProc.Log($"  browser-client {phase} token={token} changed={found} title='{observed}'");
+        return found ? observed : string.Empty;
+    }
+
+    private static void LogBrowserState(GuestInfo browser, string phase)
+    {
+        NativeMethods.GetWindowRect(browser.Hwnd, out NativeMethods.RECT outer);
+        string version = string.Empty;
+        try { version = browser.Proc?.MainModule?.FileVersionInfo.FileVersion ?? string.Empty; }
+        catch { }
+        GuardedProc.Log($"  browser-state {phase} title='{browser.Title}' version='{version}' hwnd=0x{browser.Hwnd.ToInt64():X} outer={Util.FormatRect(outer)} visible={NativeMethods.IsWindowVisible(browser.Hwnd)} foreground={NativeMethods.GetForegroundWindow() == browser.Hwnd}");
+    }
+
     /// <summary>
     /// Deterministic local page for the H4 Chromium live-render check: a white
     /// page with a black square that blinks on a 500ms cycle. Brightness stays
@@ -353,6 +588,37 @@ setInterval(function() {
     var el = document.getElementById('blink');
     el.style.opacity = el.style.opacity === '0' ? '1' : '0';
 }, 500);
+</script>
+</body>
+</html>");
+        return path;
+    }
+
+    private static string CreateBrowserResizeTestPage(string token)
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "TabDock-Validation");
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, $"browser-resize-probe-{token}.html");
+        File.WriteAllText(path, $@"<!DOCTYPE html>
+<html>
+<head><meta charset='utf-8'><style>
+html, body {{ margin: 0; width: 100vw; height: 100vh; overflow: hidden; }}
+body {{ background: linear-gradient(135deg, #fff 0%, #b9e7ff 100%); }}
+#state {{ position: fixed; inset: 18px auto auto 18px; padding: 12px 16px;
+  color: #062b40; background: rgba(255,255,255,.8); font: 700 22px Consolas, monospace; }}
+</style></head>
+<body><div id='state'></div>
+<script>
+var resizeCount = 0;
+function report() {{
+  resizeCount++;
+  var w = window.innerWidth;
+  var h = window.innerHeight;
+  document.title = 'TDTEST-{token}-' + w + 'x' + h + '-r' + resizeCount;
+  document.getElementById('state').textContent = document.title;
+}}
+window.addEventListener('resize', report);
+report();
 </script>
 </body>
 </html>");

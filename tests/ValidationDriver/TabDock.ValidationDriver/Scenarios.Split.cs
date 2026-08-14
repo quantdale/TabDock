@@ -1,7 +1,9 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
@@ -21,14 +23,14 @@ internal static partial class Scenarios
     //   * >= 3 tabs        -> "Split screen" is a submenu of candidate partner
     //                          tabs (excluding the initiating tab); choosing one
     //                          puts initiating=LEFT, chosen=RIGHT.
-    //   * When split is active the menu also offers "Exit split screen" -> returns
-    //     to single-visible-guest, hides the departing member, releases nothing.
-    //   * Clicking either split member keeps the pair active. Hover/right-click
-    //     on an unrelated tab also leaves it untouched, but an ordinary LEFT
-    //     click on a non-member is an explicit presentation switch: split exits
-    //     and the clicked tab becomes the full-width active guest.
-    // The app logs SPLIT[enter] / SPLIT[exit] / SPLIT[replace] / SPLIT[member-gone]
-    // (all present in committed source).
+    //   * While the relationship exists the menu offers "Exit split screen";
+    //     current members omit the reconfiguration entry.
+    //   * Clicking either split member keeps the exact pair active. Hover and
+    //     right-click on an unrelated tab leave it untouched, while an ordinary
+    //     LEFT click on a non-member suspends the pair and presents that guest
+    //     full-width. Clicking either composite half resumes the same pair.
+    // The app logs SPLIT[enter] / SPLIT[suspend] / SPLIT[resume] / SPLIT[exit]
+    // / SPLIT[replace] / SPLIT[member-gone] (all present in committed source).
     //
     // Pane geometry contract: the content-area marker HWND (class TabDockContentHost)
     // gives the full host client screen rect via Discover.GetClientScreenRect(host).
@@ -142,6 +144,30 @@ internal static partial class Scenarios
         Input.RightClickAt(x, y);
         if (Uia.FindMenuItemOnDesktop(ctx.TabDockPid, "Pop out", 3000) == null)
             throw new InvalidOperationException("Tab context menu did not appear.");
+        Input.SendKey(Input.VK_ESCAPE);
+        Thread.Sleep(180);
+    }
+
+    private static void AssertSplitMemberContextMenu(Ctx ctx, IntPtr container, string guestTitle, bool relationshipDefined)
+    {
+        AutomationElement? tab = FindTabText(container, guestTitle, out int count);
+        if (tab == null || count != 1)
+            throw new InvalidOperationException($"Tab for '{guestTitle}' not found uniquely for menu assertion (count={count}).");
+        (int x, int y) = Uia.Center(tab);
+        if (!EnsureClickable(container, x, y))
+            throw new InvalidOperationException($"Tab '{guestTitle}' was obscured — refusing to right-click blind.");
+        Input.RightClickAt(x, y);
+
+        AutomationElement? split = Uia.FindMenuItemOnDesktopByAutomationId(ctx.TabDockPid, "SplitScreen", 1200);
+        AutomationElement? exit = Uia.FindMenuItemOnDesktopByAutomationId(ctx.TabDockPid, "ExitSplitScreen", 3000);
+        ctx.Check(relationshipDefined ? split == null : split != null,
+            relationshipDefined
+                ? $"{guestTitle}: Split screen is absent for an existing pair member"
+                : $"{guestTitle}: Split screen availability returns after explicit exit");
+        ctx.Check(relationshipDefined ? exit != null : exit == null,
+            relationshipDefined
+                ? $"{guestTitle}: Exit split screen remains available"
+                : $"{guestTitle}: Exit split screen is absent after explicit exit");
         Input.SendKey(Input.VK_ESCAPE);
         Thread.Sleep(180);
     }
@@ -709,10 +735,10 @@ internal static partial class Scenarios
     }
 
     // -------------------------------------------------------------------------
-    // split-click-third: regression for the user-reported three-tab defect.
-    // With A/B split, an ordinary LEFT click on C is an explicit presentation
-    // switch: the split exits, A/B remain captured but hidden, C becomes the
-    // full-width active guest, and the ordinary three-tab strip is restored.
+    // split-click-third: persistent relationship regression for the
+    // user-reported three-tab defect. A/B remains the defined LEFT/RIGHT pair
+    // while C is presented as a temporary full-width single guest; selecting
+    // either half of the retained composite restores the exact same pair.
     // -------------------------------------------------------------------------
     private static void SplitClickThird(Ctx ctx, Options opt)
     {
@@ -728,40 +754,61 @@ internal static partial class Scenarios
         AssertSplitPanes(ctx, host, pigA, pigB, "split-click-third enter");
         ctx.Check(!NativeMethods.IsWindowVisible(pigC.Hwnd), "non-member C hidden during split");
 
-        AutomationElement? tabC = FindTabText(container, pigC.Title, out int count);
-        if (tabC == null || count != 1)
-            throw new InvalidOperationException($"Tab for '{pigC.Title}' not found uniquely (count={count}).");
-        (int tx, int ty) = Uia.Center(tabC);
-        if (!EnsureClickable(container, tx, ty))
-            throw new InvalidOperationException("Could not bring the third tab to a safe clickable state.");
+        int cycles = Math.Max(20, opt.Cycles ?? 20);
+        for (int i = 1; i <= cycles; i++)
+        {
+            AutomationElement? tabC = FindTabText(container, pigC.Title, out int count);
+            if (tabC == null || count != 1)
+                throw new InvalidOperationException($"cycle {i}: tab for '{pigC.Title}' not found uniquely (count={count}).");
+            (int tx, int ty) = Uia.Center(tabC);
+            if (!EnsureClickable(container, tx, ty))
+                throw new InvalidOperationException($"cycle {i}: third tab was not safely clickable.");
 
-        long clickOff = TabDockLog.RecordLogLength();
-        Input.ClickAt(tx, ty);
+            long suspendOff = TabDockLog.RecordLogLength();
+            Input.ClickAt(tx, ty);
+            ctx.Check(TabDockLog.WaitForLogLine(suspendOff, "SPLIT[suspend]", 3000),
+                $"cycle {i}: clicking C suspends pair presentation");
+            ctx.Check(TabDockLog.CountNewLines(suspendOff, "SPLIT[exit]") == 0,
+                $"cycle {i}: ordinary C selection does not tear down the relationship");
+            ctx.Check(Util.WaitUntil(() => IsDocked(pigC.Hwnd, host), 5000),
+                $"cycle {i}: C becomes the full-width docked guest");
+            ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindowVisible(pigA.Hwnd)
+                && !NativeMethods.IsWindowVisible(pigB.Hwnd), 3000),
+                $"cycle {i}: A/B are hidden while the pair is dormant");
+            ctx.Check(TabCount(container) == 2,
+                $"cycle {i}: dormant pair remains a composite plus C");
+            AutomationElement? dormantComposite = FindSplitComposite(container, out int dormantCount);
+            ctx.Check(dormantComposite != null && dormantCount == 1,
+                $"cycle {i}: dormant A|B composite remains represented");
+            ctx.Check(TabDockLog.CountNewLines(suspendOff, "Released tab") == 0
+                && TabDockLog.CountNewLines(suspendOff, "SPLIT[member-gone]") == 0,
+                $"cycle {i}: C selection releases no pair member");
 
-        ctx.Check(TabDockLog.WaitForLogLine(clickOff, "SPLIT[exit]", 3000),
-            "clicking the third tab exits split");
-        ctx.Check(Util.WaitUntil(() => IsDocked(pigC.Hwnd, host), 5000),
-            "clicked third tab C becomes the full-width docked guest");
-        ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindowVisible(pigA.Hwnd)
-            && !NativeMethods.IsWindowVisible(pigB.Hwnd), 3000),
-            "former split members A and B are hidden after the switch");
-        ctx.Check(TabCount(container) == 3, "ordinary three-tab strip restored after split exit");
-        ctx.Check(TabDockLog.CountNewLines(clickOff, "SPLIT[member-gone]") == 0,
-            "third-tab switch removes no split member");
-        ctx.Check(TabDockLog.CountNewLines(clickOff, "Released tab") == 0,
-            "third-tab switch releases no captured window");
+            string restoreTitle = i % 2 == 0 ? pigB.Title : pigA.Title;
+            GuestInfo restoreGuest = i % 2 == 0 ? pigB : pigA;
+            AutomationElement? memberText = FindTabText(container, restoreTitle, out int memberCount);
+            if (memberText == null || memberCount != 1)
+                throw new InvalidOperationException($"cycle {i}: retained member '{restoreTitle}' not found uniquely (count={memberCount}).");
+            (int mx, int my) = Uia.Center(memberText);
+            if (!EnsureClickable(container, mx, my))
+                throw new InvalidOperationException($"cycle {i}: retained composite half was not safely clickable.");
 
-        AutomationElement? tabA = FindTabText(container, pigA.Title, out int aCount);
-        if (tabA == null || aCount != 1)
-            throw new InvalidOperationException($"Tab for '{pigA.Title}' not found uniquely after split exit (count={aCount}).");
-        (int ax, int ay) = Uia.Center(tabA);
-        if (!EnsureClickable(container, ax, ay))
-            throw new InvalidOperationException("Could not bring the restored ordinary tab strip to a safe clickable state.");
-        Input.ClickAt(ax, ay);
-        ctx.Check(Util.WaitUntil(() => IsDocked(pigA.Hwnd, host), 5000),
-            "ordinary tab switching works after leaving split");
-        ctx.Check(!NativeMethods.IsWindowVisible(pigB.Hwnd) && !NativeMethods.IsWindowVisible(pigC.Hwnd),
-            "normal single-visible-tab semantics restored after the switch");
+            long resumeOff = TabDockLog.RecordLogLength();
+            Input.ClickAt(mx, my);
+            ctx.Check(TabDockLog.WaitForLogLine(resumeOff, "SPLIT[resume]", 3000),
+                $"cycle {i}: clicking {restoreTitle} resumes the pair");
+            AssertSplitPanes(ctx, host, pigA, pigB, $"cycle {i}: resumed A/B pair");
+            ctx.Check(!NativeMethods.IsWindowVisible(pigC.Hwnd),
+                $"cycle {i}: C is hidden after the pair resumes");
+            ctx.Check(TabCount(container) == 2,
+                $"cycle {i}: resumed pair remains one composite plus C");
+            ctx.Check(Util.WaitUntil(() => NativeMethods.GetForegroundWindow() == restoreGuest.Hwnd, 3000),
+                $"cycle {i}: clicked member becomes foreground without reversing LEFT/RIGHT");
+            ctx.Check(TabDockLog.CountNewLines(resumeOff, "SPLIT[exit]") == 0
+                && TabDockLog.CountNewLines(resumeOff, "SPLIT[member-gone]") == 0,
+                $"cycle {i}: resume is not relationship recreation/teardown");
+        }
+
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines");
     }
 
@@ -838,10 +885,9 @@ internal static partial class Scenarios
     }
 
     // -------------------------------------------------------------------------
-    // Historical CLI alias: this scenario originally asserted that a third-tab
-    // click persisted the pair. The corrected contract is the opposite. Keep
-    // the registered name to avoid unnecessary shard/CLI churn, but repeatedly
-    // prove enter-split -> click-third -> ordinary-tab recovery instead.
+    // split-third-tab-click-persists: retain the historical scenario name, but
+    // restore its intended meaning. Repeatedly prove A/B -> C -> A/B -> C
+    // without relationship teardown or member release.
     // -------------------------------------------------------------------------
     private static void SplitThirdTabClickPersists(Ctx ctx, Options opt)
     {
@@ -851,16 +897,14 @@ internal static partial class Scenarios
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB, pigC);
         ctx.Check(TabCount(container) == 3, "3 tabs after capture");
 
-        int cycles = Math.Max(5, opt.Cycles ?? 5);
+        long enterOff = TabDockLog.RecordLogLength();
+        ClickTabSubmenuItem(ctx, container, pigA.Title, "Split screen", pigB.Title);
+        ctx.Check(TabDockLog.WaitForLogLine(enterOff, "SPLIT[enter]", 3000), "split entered once");
+        AssertSplitPanes(ctx, host, pigA, pigB, "initial A/B pair");
+
+        int cycles = Math.Max(20, opt.Cycles ?? 20);
         for (int i = 1; i <= cycles; i++)
         {
-            long enterOff = TabDockLog.RecordLogLength();
-            ClickTabSubmenuItem(ctx, container, pigA.Title, "Split screen", pigB.Title);
-            ctx.Check(TabDockLog.WaitForLogLine(enterOff, "SPLIT[enter]", 3000),
-                $"cycle {i}: split entered");
-            AssertSplitPanes(ctx, host, pigA, pigB, $"cycle {i}: split enter");
-            ctx.Check(!NativeMethods.IsWindowVisible(pigC.Hwnd), $"cycle {i}: C hidden while pair is active");
-
             AutomationElement? tabC = FindTabText(container, pigC.Title, out int cCount);
             if (tabC == null || cCount != 1)
                 throw new InvalidOperationException($"cycle {i}: tab C not found uniquely (count={cCount}).");
@@ -868,38 +912,400 @@ internal static partial class Scenarios
             if (!EnsureClickable(container, cx, cy))
                 throw new InvalidOperationException($"cycle {i}: third tab is obscured — refusing to click blind.");
 
-            long clickOff = TabDockLog.RecordLogLength();
+            long suspendOff = TabDockLog.RecordLogLength();
             Input.ClickAt(cx, cy);
-            ctx.Check(TabDockLog.WaitForLogLine(clickOff, "SPLIT[exit]", 3000),
-                $"cycle {i}: third-tab click exits split");
-            ctx.Check(Util.WaitUntil(() => IsDocked(pigC.Hwnd, host), 5000),
-                $"cycle {i}: C becomes the full-width active guest");
-            ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindowVisible(pigA.Hwnd)
-                && !NativeMethods.IsWindowVisible(pigB.Hwnd), 3000),
-                $"cycle {i}: A/B hidden after third-tab switch");
-            ctx.Check(TabCount(container) == 3, $"cycle {i}: ordinary three-tab strip restored");
-            ctx.Check(TabDockLog.CountNewLines(clickOff, "SPLIT[member-gone]") == 0,
-                $"cycle {i}: no structural member removal");
-            ctx.Check(TabDockLog.CountNewLines(clickOff, "Released tab") == 0,
-                $"cycle {i}: no captured window released");
+            ctx.Check(TabDockLog.WaitForLogLine(suspendOff, "SPLIT[suspend]", 3000),
+                $"cycle {i}: C suspends the pair");
+            ctx.Check(Util.WaitUntil(() => IsDocked(pigC.Hwnd, host)
+                && !NativeMethods.IsWindowVisible(pigA.Hwnd)
+                && !NativeMethods.IsWindowVisible(pigB.Hwnd), 5000),
+                $"cycle {i}: C is the only visible full-width guest");
+            ctx.Check(TabCount(container) == 2, $"cycle {i}: composite pair remains represented beside C");
+            ctx.Check(TabDockLog.CountNewLines(suspendOff, "SPLIT[exit]") == 0
+                && TabDockLog.CountNewLines(suspendOff, "Released tab") == 0,
+                $"cycle {i}: suspension does not tear down or release A/B");
 
-            AutomationElement? tabA = FindTabText(container, pigA.Title, out int aCount);
-            if (tabA == null || aCount != 1)
-                throw new InvalidOperationException($"cycle {i}: tab A not found uniquely after exit (count={aCount}).");
-            (int ax, int ay) = Uia.Center(tabA);
-            if (!EnsureClickable(container, ax, ay))
-                throw new InvalidOperationException($"cycle {i}: ordinary tab A is obscured — refusing to click blind.");
-            Input.ClickAt(ax, ay);
-            ctx.Check(Util.WaitUntil(() => IsDocked(pigA.Hwnd, host), 5000),
-                $"cycle {i}: normal tab A can be activated after split exit");
-            ctx.Check(!NativeMethods.IsWindowVisible(pigB.Hwnd) && !NativeMethods.IsWindowVisible(pigC.Hwnd),
-                $"cycle {i}: single-visible-tab semantics restored");
-            ctx.Check(TabDockLog.CountNewLines(clickOff, "EXCEPTION") == 0,
-                $"cycle {i}: no EXCEPTION");
+            string restoreTitle = i % 2 == 0 ? pigB.Title : pigA.Title;
+            AutomationElement? restoreText = FindTabText(container, restoreTitle, out int restoreCount);
+            if (restoreText == null || restoreCount != 1)
+                throw new InvalidOperationException($"cycle {i}: retained member '{restoreTitle}' not found uniquely (count={restoreCount}).");
+            (int rx, int ry) = Uia.Center(restoreText);
+            if (!EnsureClickable(container, rx, ry))
+                throw new InvalidOperationException($"cycle {i}: retained pair half is obscured — refusing to click blind.");
+
+            long resumeOff = TabDockLog.RecordLogLength();
+            Input.ClickAt(rx, ry);
+            ctx.Check(TabDockLog.WaitForLogLine(resumeOff, "SPLIT[resume]", 3000),
+                $"cycle {i}: {restoreTitle} resumes the pair");
+            AssertSplitPanes(ctx, host, pigA, pigB, $"cycle {i}: pair restored");
+            ctx.Check(!NativeMethods.IsWindowVisible(pigC.Hwnd), $"cycle {i}: C hidden after pair restore");
+            ctx.Check(TabCount(container) == 2, $"cycle {i}: pair remains one composite item beside C");
+            ctx.Check(TabDockLog.CountNewLines(resumeOff, "SPLIT[exit]") == 0
+                && TabDockLog.CountNewLines(resumeOff, "SPLIT[member-gone]") == 0,
+                $"cycle {i}: resume preserves relationship identity");
         }
 
         ctx.Check(pigA.Proc != null && !pigA.Proc.HasExited && pigB.Proc != null && !pigB.Proc.HasExited
             && pigC.Proc != null && !pigC.Proc.HasExited, "all three pigs alive after the switching cycles");
+    }
+
+    // -------------------------------------------------------------------------
+    // split-four-tab-nonmember-switching: with [A|B], C, and D projected in
+    // the strip, switching C -> D -> C while the pair is dormant must never
+    // replace the relationship. Each composite-half click restores A LEFT and
+    // B RIGHT without requiring a new Split screen command.
+    // -------------------------------------------------------------------------
+    private static void SplitFourTabNonmemberSwitching(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "S4-A", "--color", "red");
+        GuestInfo pigB = SpawnPig(ctx, "S4-B", "--color", "blue");
+        GuestInfo pigC = SpawnPig(ctx, "S4-C", "--color", "green");
+        GuestInfo pigD = SpawnPig(ctx, "S4-D", "--color", "yellow");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB, pigC, pigD);
+        ctx.Check(TabCount(container) == 4, "4 tabs after capture");
+
+        long enterOff = TabDockLog.RecordLogLength();
+        ClickTabSubmenuItem(ctx, container, pigA.Title, "Split screen", pigB.Title);
+        ctx.Check(TabDockLog.WaitForLogLine(enterOff, "SPLIT[enter]", 3000), "4-tab pair entered");
+        AssertSplitPanes(ctx, host, pigA, pigB, "4-tab pair enter");
+        ctx.Check(TabCount(container) == 3, "4-tab projection is [A|B] plus C plus D");
+
+        int cycles = Math.Max(10, opt.Cycles ?? 10);
+        GuestInfo[] nonMembers = { pigC, pigD };
+        for (int i = 1; i <= cycles; i++)
+        {
+            GuestInfo target = nonMembers[(i - 1) % nonMembers.Length];
+            AutomationElement? targetText = FindTabText(container, target.Title, out int targetCount);
+            if (targetText == null || targetCount != 1)
+                throw new InvalidOperationException($"cycle {i}: non-member '{target.Title}' not found uniquely (count={targetCount}).");
+            (int tx, int ty) = Uia.Center(targetText);
+            if (!EnsureClickable(container, tx, ty))
+                throw new InvalidOperationException($"cycle {i}: non-member '{target.Title}' was obscured.");
+
+            long suspendOff = TabDockLog.RecordLogLength();
+            Input.ClickAt(tx, ty);
+            if (i == 1)
+                ctx.Check(TabDockLog.WaitForLogLine(suspendOff, "SPLIT[suspend]", 3000),
+                    "first non-member selection suspends pair presentation");
+            ctx.Check(Util.WaitUntil(() => IsDocked(target.Hwnd, host)
+                && !NativeMethods.IsWindowVisible(pigA.Hwnd)
+                && !NativeMethods.IsWindowVisible(pigB.Hwnd), 5000),
+                $"cycle {i}: '{target.Title}' is the only visible full-width guest");
+            ctx.Check(TabCount(container) == 3, $"cycle {i}: composite remains beside both non-members");
+            ctx.Check(TabDockLog.CountNewLines(suspendOff, "SPLIT[exit]") == 0
+                && TabDockLog.CountNewLines(suspendOff, "SPLIT[member-gone]") == 0,
+                $"cycle {i}: selecting '{target.Title}' does not tear down A/B");
+
+            string restoreTitle = i % 2 == 0 ? pigB.Title : pigA.Title;
+            AutomationElement? restoreText = FindTabText(container, restoreTitle, out int restoreCount);
+            if (restoreText == null || restoreCount != 1)
+                throw new InvalidOperationException($"cycle {i}: retained member '{restoreTitle}' not found uniquely (count={restoreCount}).");
+            (int rx, int ry) = Uia.Center(restoreText);
+            if (!EnsureClickable(container, rx, ry))
+                throw new InvalidOperationException($"cycle {i}: retained member '{restoreTitle}' was obscured.");
+
+            long resumeOff = TabDockLog.RecordLogLength();
+            Input.ClickAt(rx, ry);
+            ctx.Check(TabDockLog.WaitForLogLine(resumeOff, "SPLIT[resume]", 3000),
+                $"cycle {i}: '{restoreTitle}' resumes the exact pair");
+            AssertSplitPanes(ctx, host, pigA, pigB, $"cycle {i}: pair restored");
+            ctx.Check(!NativeMethods.IsWindowVisible(pigC.Hwnd) && !NativeMethods.IsWindowVisible(pigD.Hwnd),
+                $"cycle {i}: both non-members hidden after pair restore");
+            ctx.Check(TabCount(container) == 3, $"cycle {i}: pair remains represented beside C and D");
+            ctx.Check(TabDockLog.CountNewLines(resumeOff, "SPLIT[exit]") == 0,
+                $"cycle {i}: pair resume does not emit relationship exit");
+        }
+
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines");
+        ctx.Check(pigA.Proc != null && !pigA.Proc.HasExited && pigB.Proc != null && !pigB.Proc.HasExited
+            && pigC.Proc != null && !pigC.Proc.HasExited && pigD.Proc != null && !pigD.Proc.HasExited,
+            "all four pigs alive after non-member switching cycles");
+    }
+
+    private static bool WaitForNewClientPresentation(GuestInfo guest, int priorCount, int timeoutMs, string phase)
+    {
+        bool changed = Util.WaitUntil(() => PigLog.CountLines(guest.Pid, "CLIENT_PRESENT") > priorCount, timeoutMs);
+        string latest = PigLog.ReadLines(guest.Pid)
+            .LastOrDefault(line => line.IndexOf("CLIENT_PRESENT", StringComparison.OrdinalIgnoreCase) >= 0)
+            ?? "(no CLIENT_PRESENT line)";
+        GuardedProc.Log($"  client-render {phase} guest={guest.Title}: prior={priorCount} changed={changed} latest={latest}");
+        return changed;
+    }
+
+    // -------------------------------------------------------------------------
+    // split-three-app-client-settle: deterministic client-side evidence for the
+    // 2-app versus 3-app presentation matrix. GuineaPig logs dimensions after
+    // its WndProc has processed WM_SIZE/WM_SHOWWINDOW; the scenario never clicks
+    // inside a guest to make a stale client correct itself.
+    // -------------------------------------------------------------------------
+    private static void SplitThreeAppClientSettle(Ctx ctx, Options opt)
+    {
+        GuestInfo twoA = SpawnPig(ctx, "R2-A", "--color", "red", "--resize-probe");
+        GuestInfo twoB = SpawnPig(ctx, "R2-B", "--color", "blue", "--resize-probe");
+        (IntPtr twoContainer, IntPtr twoHost) = CaptureIntoGroup(ctx, twoA, twoB);
+
+        // R1: two captured apps, unsplit, tab-to-tab switching.
+        foreach (GuestInfo guest in new[] { twoA, twoB, twoA, twoB })
+        {
+            int before = PigLog.CountLines(guest.Pid, "CLIENT_PRESENT");
+            AutomationElement? tab = FindTabText(twoContainer, guest.Title, out int count);
+            if (tab == null || count != 1)
+                throw new InvalidOperationException($"R1: tab for '{guest.Title}' not found uniquely (count={count}).");
+            (int x, int y) = Uia.Center(tab);
+            if (!EnsureClickable(twoContainer, x, y))
+                throw new InvalidOperationException($"R1: tab '{guest.Title}' was obscured.");
+            Input.ClickAt(x, y);
+            ctx.Check(Util.WaitUntil(() => IsDocked(guest.Hwnd, twoHost), 4000),
+                $"R1: '{guest.Title}' is full-width after unsplit switch");
+            ctx.Check(WaitForNewClientPresentation(guest, before, 3000, "R1 unsplit switch"),
+                $"R1: '{guest.Title}' client processed presentation without guest click");
+        }
+
+        // R3: two captured apps, split immediately inspected with no corrective
+        // pane click. Both clients must report the split presentation.
+        int twoABefore = PigLog.CountLines(twoA.Pid, "CLIENT_PRESENT");
+        int twoBBefore = PigLog.CountLines(twoB.Pid, "CLIENT_PRESENT");
+        long twoEnterOff = TabDockLog.RecordLogLength();
+        EnterSplitTwo(ctx, twoContainer, twoA);
+        ctx.Check(TabDockLog.WaitForLogLine(twoEnterOff, "SPLIT[enter]", 3000), "R3: two-app split entered");
+        AssertSplitPanes(ctx, twoHost, twoA, twoB, "R3 two-app split");
+        ctx.Check(WaitForNewClientPresentation(twoA, twoABefore, 3000, "R3 split A"),
+            "R3: two-app LEFT client processed split resize without pane click");
+        ctx.Check(WaitForNewClientPresentation(twoB, twoBBefore, 3000, "R3 split B"),
+            "R3: two-app RIGHT client processed split resize without pane click");
+
+        GuestInfo threeA = SpawnPig(ctx, "R3-A", "--color", "red", "--resize-probe");
+        GuestInfo threeB = SpawnPig(ctx, "R3-B", "--color", "blue", "--resize-probe");
+        GuestInfo threeC = SpawnPig(ctx, "R3-C", "--color", "green", "--resize-probe");
+        (IntPtr threeContainer, IntPtr threeHost) = CaptureIntoGroup(ctx, threeA, threeB, threeC);
+
+        // R2: three captured apps, unsplit A -> B -> C -> A.
+        foreach (GuestInfo guest in new[] { threeA, threeB, threeC, threeA })
+        {
+            int before = PigLog.CountLines(guest.Pid, "CLIENT_PRESENT");
+            AutomationElement? tab = FindTabText(threeContainer, guest.Title, out int count);
+            if (tab == null || count != 1)
+                throw new InvalidOperationException($"R2: tab for '{guest.Title}' not found uniquely (count={count}).");
+            (int x, int y) = Uia.Center(tab);
+            if (!EnsureClickable(threeContainer, x, y))
+                throw new InvalidOperationException($"R2: tab '{guest.Title}' was obscured.");
+            Input.ClickAt(x, y);
+            ctx.Check(Util.WaitUntil(() => IsDocked(guest.Hwnd, threeHost), 4000),
+                $"R2: '{guest.Title}' is full-width after unsplit switch");
+            ctx.Check(WaitForNewClientPresentation(guest, before, 3000, "R2 unsplit switch"),
+                $"R2: '{guest.Title}' client processed presentation without guest click");
+        }
+
+        // R4: three-app split A/B, C hidden, immediate client evidence.
+        int threeABefore = PigLog.CountLines(threeA.Pid, "CLIENT_PRESENT");
+        int threeBBefore = PigLog.CountLines(threeB.Pid, "CLIENT_PRESENT");
+        long threeEnterOff = TabDockLog.RecordLogLength();
+        ClickTabSubmenuItem(ctx, threeContainer, threeA.Title, "Split screen", threeB.Title);
+        ctx.Check(TabDockLog.WaitForLogLine(threeEnterOff, "SPLIT[enter]", 3000), "R4: three-app split entered");
+        AssertSplitPanes(ctx, threeHost, threeA, threeB, "R4 three-app split");
+        ctx.Check(!NativeMethods.IsWindowVisible(threeC.Hwnd), "R4: third app C hidden during A/B split");
+        ctx.Check(WaitForNewClientPresentation(threeA, threeABefore, 3000, "R4 split A"),
+            "R4: three-app LEFT client processed split resize without pane click");
+        ctx.Check(WaitForNewClientPresentation(threeB, threeBBefore, 3000, "R4 split B"),
+            "R4: three-app RIGHT client processed split resize without pane click");
+
+        // R5/R6: pair -> C -> pair, with immediate client evidence and no
+        // corrective guest click. Repeat at least ten cycles here; the focused
+        // state scenario separately drives the required twenty-cycle minimum.
+        int cycles = Math.Max(10, opt.Cycles ?? 10);
+        for (int i = 1; i <= cycles; i++)
+        {
+            int cBefore = PigLog.CountLines(threeC.Pid, "CLIENT_PRESENT");
+            AutomationElement? cTab = FindTabText(threeContainer, threeC.Title, out int cCount);
+            if (cTab == null || cCount != 1)
+                throw new InvalidOperationException($"R5 cycle {i}: C tab not found uniquely (count={cCount}).");
+            (int cx, int cy) = Uia.Center(cTab);
+            if (!EnsureClickable(threeContainer, cx, cy))
+                throw new InvalidOperationException($"R5 cycle {i}: C tab was obscured.");
+            long suspendOff = TabDockLog.RecordLogLength();
+            Input.ClickAt(cx, cy);
+            ctx.Check(TabDockLog.WaitForLogLine(suspendOff, "SPLIT[suspend]", 3000),
+                $"R5 cycle {i}: pair suspended for C");
+            ctx.Check(Util.WaitUntil(() => IsDocked(threeC.Hwnd, threeHost)
+                && !NativeMethods.IsWindowVisible(threeA.Hwnd)
+                && !NativeMethods.IsWindowVisible(threeB.Hwnd), 5000),
+                $"R5 cycle {i}: C is the only visible full-width guest");
+            ctx.Check(WaitForNewClientPresentation(threeC, cBefore, 3000, $"R5 cycle {i} C"),
+                $"R5 cycle {i}: C client processed full-width presentation without guest click");
+            ctx.Check(TabDockLog.CountNewLines(suspendOff, "SPLIT[exit]") == 0,
+                $"R5 cycle {i}: ordinary C selection did not exit relationship");
+
+            int aBefore = PigLog.CountLines(threeA.Pid, "CLIENT_PRESENT");
+            int bBefore = PigLog.CountLines(threeB.Pid, "CLIENT_PRESENT");
+            string restoreTitle = i % 2 == 0 ? threeB.Title : threeA.Title;
+            AutomationElement? restoreTab = FindTabText(threeContainer, restoreTitle, out int restoreCount);
+            if (restoreTab == null || restoreCount != 1)
+                throw new InvalidOperationException($"R5 cycle {i}: retained member not found uniquely (count={restoreCount}).");
+            (int rx, int ry) = Uia.Center(restoreTab);
+            if (!EnsureClickable(threeContainer, rx, ry))
+                throw new InvalidOperationException($"R5 cycle {i}: retained member tab was obscured.");
+            long resumeOff = TabDockLog.RecordLogLength();
+            Input.ClickAt(rx, ry);
+            ctx.Check(TabDockLog.WaitForLogLine(resumeOff, "SPLIT[resume]", 3000),
+                $"R5 cycle {i}: composite half resumes A/B");
+            AssertSplitPanes(ctx, threeHost, threeA, threeB, $"R5 cycle {i} restored pair");
+            ctx.Check(!NativeMethods.IsWindowVisible(threeC.Hwnd),
+                $"R5 cycle {i}: C hidden after pair restoration");
+            ctx.Check(WaitForNewClientPresentation(threeA, aBefore, 3000, $"R5 cycle {i} A restore"),
+                $"R5 cycle {i}: A client processed pair restore without guest click");
+            ctx.Check(WaitForNewClientPresentation(threeB, bBefore, 3000, $"R5 cycle {i} B restore"),
+                $"R5 cycle {i}: B client processed pair restore without guest click");
+            ctx.Check(TabDockLog.CountNewLines(resumeOff, "SPLIT[exit]") == 0,
+                $"R5 cycle {i}: resume did not tear down relationship");
+        }
+
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0,
+            "client-settle matrix produced no EXCEPTION lines");
+    }
+
+    // -------------------------------------------------------------------------
+    // split-diagnostic-snapshot: a dormant pair remains relationship metadata,
+    // but its expected visible geometry is one full-width non-member guest.
+    // The assertion reads the same serialized logical snapshot used by support
+    // diagnostics, so it cannot pass from outer HWND rectangles alone.
+    // -------------------------------------------------------------------------
+    private static void SplitDiagnosticSnapshot(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "SDI-A", "--color", "red");
+        GuestInfo pigB = SpawnPig(ctx, "SDI-B", "--color", "blue");
+        GuestInfo pigC = SpawnPig(ctx, "SDI-C", "--color", "green");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB, pigC);
+
+        ClickTabSubmenuItem(ctx, container, pigA.Title, "Split screen", pigB.Title);
+        AssertSplitPanes(ctx, host, pigA, pigB, "diagnostic snapshot split");
+
+        AutomationElement? cTab = FindTabText(container, pigC.Title, out int count);
+        if (cTab == null || count != 1)
+            throw new InvalidOperationException($"Diagnostic snapshot: C tab not found uniquely (count={count}).");
+        (int x, int y) = Uia.Center(cTab);
+        if (!EnsureClickable(container, x, y))
+            throw new InvalidOperationException("Diagnostic snapshot: C tab was obscured — refusing to click blind.");
+        Input.ClickAt(x, y);
+        ctx.Check(Util.WaitUntil(() => IsDocked(pigC.Hwnd, host)
+            && !NativeMethods.IsWindowVisible(pigA.Hwnd)
+            && !NativeMethods.IsWindowVisible(pigB.Hwnd), 5000),
+            "diagnostic snapshot: pair dormant and C is the only visible guest");
+
+        if (!Input.ForceForeground(container))
+            throw new InvalidOperationException("Diagnostic snapshot: could not foreground the verified container.");
+
+        string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        if (string.IsNullOrWhiteSpace(desktop) || !Directory.Exists(desktop))
+            throw new InvalidOperationException("Diagnostic snapshot: desktop directory is unavailable.");
+        DateTime startedUtc = DateTime.UtcNow;
+        Input.SendHotkeyCtrlAltShiftD();
+
+        string? bundle = null;
+        bool exported = Util.WaitUntil(() =>
+        {
+            bundle = Directory.GetFiles(desktop, "TabDock-Diagnostics-*.zip")
+                .Select(path => new FileInfo(path))
+                .Where(info => info.LastWriteTimeUtc >= startedUtc && info.Length > 0)
+                .OrderByDescending(info => info.LastWriteTimeUtc)
+                .Select(info => info.FullName)
+                .FirstOrDefault();
+            return bundle != null;
+        }, 5000);
+        ctx.Check(exported && bundle != null, "diagnostic hotkey exported a support bundle");
+        if (!exported || bundle == null)
+            return;
+
+        try
+        {
+            using ZipArchive archive = ZipFile.OpenRead(bundle);
+            ZipArchiveEntry? entry = archive.GetEntry("logical-snapshot.json");
+            if (entry == null)
+            {
+                ctx.Check(false, "support bundle contains logical-snapshot.json");
+                return;
+            }
+
+            using Stream stream = entry.Open();
+            using JsonDocument document = JsonDocument.Parse(stream);
+            JsonElement logical = document.RootElement.EnumerateArray()
+                .FirstOrDefault(item => item.TryGetProperty("groupId", out _)
+                    && item.TryGetProperty("splitActive", out JsonElement splitActive)
+                    && splitActive.GetBoolean());
+            bool found = logical.ValueKind != JsonValueKind.Undefined;
+            ctx.Check(found, "logical snapshot contains the captured group");
+            if (!found)
+                return;
+
+            bool splitPresented = logical.GetProperty("splitPresented").GetBoolean();
+            string left = logical.GetProperty("splitLeftMemberKey").GetString() ?? string.Empty;
+            string right = logical.GetProperty("splitRightMemberKey").GetString() ?? string.Empty;
+            long activeGuest = logical.GetProperty("activeGuestHwnd").GetInt64();
+            int expectedPanes = logical.GetProperty("expectedPaneRects").GetArrayLength();
+            int fullWidthMembers = logical.GetProperty("members").EnumerateArray()
+                .Count(member => member.TryGetProperty("expectedPaneRect", out JsonElement pane)
+                    && pane.ValueKind != JsonValueKind.Null);
+
+            ctx.Check(!splitPresented, "logical snapshot distinguishes dormant from presented split");
+            ctx.Check(left.Length > 0 && right.Length > 0,
+                "logical snapshot retains exact LEFT/RIGHT relationship members");
+            ctx.Check(activeGuest == pigC.Hwnd.ToInt64(),
+                "logical snapshot identifies C as the active full-width guest");
+            ctx.Check(expectedPanes == 0 && fullWidthMembers == 1,
+                "dormant snapshot reports one full-width expected guest and no expected panes");
+        }
+        finally
+        {
+            try { File.Delete(bundle); }
+            catch (Exception ex) { GuardedProc.Log($"  Diagnostic snapshot cleanup could not remove generated bundle: {ex.GetType().Name}."); }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // split-dormant-member-removal: removing A from dormant A/B while C is
+    // visible dissolves the invalid relationship but does not promote B or
+    // disturb C. B remains a normal hidden captured tab.
+    // -------------------------------------------------------------------------
+    private static void SplitDormantMemberRemoval(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "SDM-A", "--color", "red");
+        GuestInfo pigB = SpawnPig(ctx, "SDM-B", "--color", "blue");
+        GuestInfo pigC = SpawnPig(ctx, "SDM-C", "--color", "green");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB, pigC);
+
+        long enterOff = TabDockLog.RecordLogLength();
+        ClickTabSubmenuItem(ctx, container, pigA.Title, "Split screen", pigB.Title);
+        ctx.Check(TabDockLog.WaitForLogLine(enterOff, "SPLIT[enter]", 3000), "dormant-removal pair entered");
+        AssertSplitPanes(ctx, host, pigA, pigB, "dormant-removal pair enter");
+
+        AutomationElement? cTab = FindTabText(container, pigC.Title, out int cCount);
+        if (cTab == null || cCount != 1)
+            throw new InvalidOperationException($"Dormant-removal C tab not found uniquely (count={cCount}).");
+        (int cx, int cy) = Uia.Center(cTab);
+        if (!EnsureClickable(container, cx, cy))
+            throw new InvalidOperationException("Dormant-removal C tab was obscured.");
+        long suspendOff = TabDockLog.RecordLogLength();
+        Input.ClickAt(cx, cy);
+        ctx.Check(TabDockLog.WaitForLogLine(suspendOff, "SPLIT[suspend]", 3000),
+            "dormant-removal pair suspended for C");
+        ctx.Check(Util.WaitUntil(() => IsDocked(pigC.Hwnd, host), 5000),
+            "C is full-width before dormant member removal");
+
+        long removeOff = TabDockLog.RecordLogLength();
+        ClickTabCloseButton(ctx, container, pigA.Title);
+        ctx.Check(TabDockLog.WaitForLogLine(removeOff, "SPLIT[member-gone]", 3000),
+            "removing dormant A dissolves the invalid relationship");
+        ctx.Check(Util.WaitUntil(() => IsDocked(pigC.Hwnd, host), 5000),
+            "C remains the current full-width guest after dormant removal");
+        ctx.Check(!NativeMethods.IsWindowVisible(pigB.Hwnd),
+            "surviving former pair member B remains hidden after dormant removal");
+        ctx.Check(TabCount(container) == 2, "ordinary B/C tabs remain after dormant removal");
+        ctx.Check(pigA.Proc != null && !pigA.Proc.HasExited
+            && pigB.Proc != null && !pigB.Proc.HasExited
+            && pigC.Proc != null && !pigC.Proc.HasExited,
+            "dormant member removal releases no captured process");
+        ctx.Check(TabDockLog.CountNewLines(removeOff, "SPLIT[exit]") == 0,
+            "structural dormant invalidation uses member-gone rather than ordinary exit");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines");
     }
 
     // -------------------------------------------------------------------------
@@ -1546,8 +1952,9 @@ internal static partial class Scenarios
     // -------------------------------------------------------------------------
     // split-composite: the split pair renders as ONE composite tab item; clicking
     // either half focuses that member WITHOUT hiding the partner; clicking a
-    // non-member tab exits the split and restores the ordinary per-tab strip;
-    // per-half × and middle-click pop the specific member out and end the split.
+    // non-member suspends the pair while retaining the composite; explicit Exit
+    // while dormant clears it without replacing the current non-member guest;
+    // per-half × and middle-click still pop the specific member out.
     // -------------------------------------------------------------------------
     private static void SplitComposite(Ctx ctx, Options opt)
     {
@@ -1564,6 +1971,13 @@ internal static partial class Scenarios
         AssertSplitPanes(ctx, host, pigA, pigB, "split-composite enter");
         ctx.Check(!NativeMethods.IsWindowVisible(pigC.Hwnd), "non-member C is hidden during split");
         ctx.Check(TabCount(container) == 2, "split pair renders as ONE composite tab item");
+
+        int menuCycles = Math.Max(10, opt.Cycles ?? 10);
+        for (int i = 1; i <= menuCycles; i++)
+        {
+            AssertSplitMemberContextMenu(ctx, container, pigA.Title, relationshipDefined: true);
+            AssertSplitMemberContextMenu(ctx, container, pigB.Title, relationshipDefined: true);
+        }
 
         // Click the RIGHT half (B's title): B becomes the focused member, the
         // partner stays visible, split stays. (A is the active member right
@@ -1596,25 +2010,50 @@ internal static partial class Scenarios
         ctx.Check(TabDockLog.CountNewLines(click2Off, "SPLIT[exit]") == 0 && TabDockLog.CountNewLines(click2Off, "SPLIT[member-gone]") == 0,
             "clicking LEFT half keeps split active");
 
-        // Clicking the non-member C is an explicit presentation switch. The
-        // split exits, C becomes full-width, and all three ordinary tabs return.
-        long switchOff = TabDockLog.RecordLogLength();
+        // Clicking the non-member C suspends presentation only. The pair's
+        // composite remains in the strip and C becomes the single full-width
+        // guest; no relationship teardown is logged.
+        long suspendOff = TabDockLog.RecordLogLength();
         AutomationElement? cText = FindTabText(container, pigC.Title, out int cCount);
         if (cText == null || cCount != 1)
             throw new InvalidOperationException($"Tab '{pigC.Title}' not found uniquely (count={cCount}).");
         (int cx, int cy) = Uia.Center(cText);
         Input.ClickAt(cx, cy);
-        ctx.Check(TabDockLog.WaitForLogLine(switchOff, "SPLIT[exit]", 3000),
-            "clicking a non-member tab exits split");
+        ctx.Check(TabDockLog.WaitForLogLine(suspendOff, "SPLIT[suspend]", 3000),
+            "clicking a non-member tab suspends pair presentation");
+        ctx.Check(TabDockLog.CountNewLines(suspendOff, "SPLIT[exit]") == 0,
+            "ordinary non-member selection does not exit the pair relationship");
         ctx.Check(Util.WaitUntil(() => IsDocked(pigC.Hwnd, host), 5000),
             "non-member C becomes the full-width active guest");
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsWindowVisible(pigA.Hwnd)
             && !NativeMethods.IsWindowVisible(pigB.Hwnd), 3000),
-            "former pair members are hidden after the presentation switch");
-        ctx.Check(TabCount(container) == 3, "ordinary three-tab strip restored after clicking C");
-        ctx.Check(TabDockLog.CountNewLines(switchOff, "SPLIT[member-gone]") == 0
-            && TabDockLog.CountNewLines(switchOff, "Released tab") == 0,
-            "presentation switch does not remove or release a member");
+            "former pair members are hidden while the relationship is dormant");
+        ctx.Check(TabCount(container) == 2, "dormant pair remains one composite plus C");
+        ctx.Check(FindSplitComposite(container, out int dormantCompositeCount) != null
+            && dormantCompositeCount == 1, "dormant composite remains represented");
+        ctx.Check(TabDockLog.CountNewLines(suspendOff, "SPLIT[member-gone]") == 0
+            && TabDockLog.CountNewLines(suspendOff, "Released tab") == 0,
+            "presentation suspension does not remove or release a member");
+
+        for (int i = 1; i <= menuCycles; i++)
+        {
+            AssertSplitMemberContextMenu(ctx, container, pigA.Title, relationshipDefined: true);
+            AssertSplitMemberContextMenu(ctx, container, pigB.Title, relationshipDefined: true);
+        }
+
+        // Explicit exit while dormant clears the relationship but leaves C as
+        // the current full-width guest. The former members become ordinary
+        // tabs, and their normal Split screen action returns.
+        long dormantExitOff = TabDockLog.RecordLogLength();
+        ClickTabMenuItem(ctx, container, pigA.Title, "Exit split screen");
+        ctx.Check(TabDockLog.WaitForLogLine(dormantExitOff, "SPLIT[exit]", 3000),
+            "explicit Exit split screen clears a dormant relationship");
+        ctx.Check(Util.WaitUntil(() => IsDocked(pigC.Hwnd, host), 5000),
+            "C remains the full-width guest after dormant exit");
+        ctx.Check(!NativeMethods.IsWindowVisible(pigA.Hwnd) && !NativeMethods.IsWindowVisible(pigB.Hwnd),
+            "former pair members remain hidden after dormant exit");
+        ctx.Check(TabCount(container) == 3, "ordinary three-tab strip returns after dormant exit");
+        AssertSplitMemberContextMenu(ctx, container, pigA.Title, relationshipDefined: false);
 
         // Re-enter split (B LEFT, C RIGHT) and pop the RIGHT member via its half ×.
         long enter2Off = TabDockLog.RecordLogLength();

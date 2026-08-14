@@ -88,6 +88,9 @@ internal static class Program
                 case "--text-box":
                     opts.TextBox = true;
                     break;
+                case "--resize-probe":
+                    opts.ResizeProbe = true;
+                    break;
                 case "--min-width":
                     opts.MinWidth = int.Parse(Require(args, ref i));
                     break;

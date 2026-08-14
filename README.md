@@ -212,7 +212,7 @@ Use this checklist to verify a build before considering it ready.
 28. Click the LEFT half, then the RIGHT half, alternating several times; verify BOTH panes stay rendered and the clicked side receives input every time (switching focus must never hide the partner or leave a blank pane).
 29. Pop one half out via its `×` (or middle-click); verify the other half takes the full width immediately and stays visible.
 30. Maximize and restore the container while split; verify the panes stay cleanly partitioned.
-31. **Split persistence:** with three captured windows A/B/C and A+B split, hover C's tab, then click it, then right-click it and dismiss the menu, then click the LEFT half, then the RIGHT half, then click C again — the A+B pair must stay split and rendered the whole time (C never becomes the single visible guest; split ends only via **Exit split screen**, a new Split Screen selection, or popping/closing a member).
+31. **Split persistence:** with three captured windows A/B/C and A+B split, hover C's tab, then click it, then right-click it and dismiss the menu, then click the LEFT half, then the RIGHT half, then click C again — hovering leaves A/B presented; clicking C makes C the single full-width guest while the `[ A | B ]` relationship remains dormant; either composite half restores the exact A/B pair; split ends only via **Exit split screen**, an explicit new Split Screen selection, or popping/closing a member.
 
 ## Known limitations
 

@@ -90,6 +90,7 @@ public sealed class GroupViewModel : ViewModelBase
             {
                 foreach (var t in Tabs)
                     t.IsActive = t == value;
+                _splitComposite?.RefreshActiveState();
             }
         }
     }
@@ -172,6 +173,7 @@ public sealed class GroupViewModel : ViewModelBase
         if (left == null || right == null || ReferenceEquals(left, right))
             return;
         _splitComposite = new SplitCompositeViewModel(left, right);
+        _splitComposite.RefreshActiveState();
         RebuildDisplayTabs();
     }
 
@@ -361,16 +363,15 @@ public sealed class GroupViewModel : ViewModelBase
         }
         else if (ActiveTab != null && Tabs.Contains(ActiveTab))
         {
-            // The active tab itself was released, but the split-exit path
-            // (ContainerWindow.HandleSplitMemberRemoved, fired synchronously by
-            // Tabs.RemoveAt above) already promoted the pair's survivor as the
-            // new active tab. The positional neighbour pick below would
-            // disagree with that promotion whenever the removed member was the
-            // split's active member and a third tab exists — silently hiding
-            // the promoted survivor and showing the neighbour instead (the
-            // "one pane fails to render after interacting with the partner"
-            // defect). Honor the already-promoted active tab; SetActiveTab
-            // still re-syncs the model's positional ActiveIndex.
+            // The active tab itself was released, but the split-member removal
+            // path (ContainerWindow.HandleSplitMemberRemoved, fired
+            // synchronously by Tabs.RemoveAt above) has already selected the
+            // correct survivor when a presented pair loses a member, or
+            // retained the current non-member guest when a dormant pair loses
+            // one. The positional neighbour pick below would disagree with
+            // that transition and could silently hide the retained guest.
+            // Honor the already-selected active tab; SetActiveTab still
+            // re-syncs the model's positional ActiveIndex.
             SetActiveTab(ActiveTab);
         }
         else

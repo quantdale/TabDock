@@ -193,35 +193,39 @@ an in-window panel; the standalone picker remains for the fallback path.
 
 - **State** — `_splitLeft`/`_splitRight` hold `CapturedWindow` references
   (identity, not index, so the pair survives tab reordering); `_splitForeground`
-  tracks which member is z-order-top. Split is runtime-only (not persisted).
-- **Composite tab (presentation only)** — the strip renders the pair as ONE
-  visual item `[ A | B ]` (a subtle central separator) instead of two unrelated
-  tabs: `GroupViewModel.DisplayTabs` is the strip projection
+  tracks which member is z-order-top; `_splitPairPresented` separately records
+  whether the relationship currently occupies the two panes. Split is
+  runtime-only (not persisted), and a dormant relationship may coexist with a
+  non-member full-width active guest.
+- **Composite tab (presentation only)** — the strip renders the relationship as
+  ONE visual item `[ A | B ]` (a subtle central separator) instead of two
+  unrelated tabs: `GroupViewModel.DisplayTabs` is the strip projection
   (`SplitCompositeViewModel` wraps the two member `TabViewModel`s; the RIGHT
-  member's ordinary tab is suppressed while the pair exists; the composite
-  occupies the LEFT member's visual position; exit restores ordinary tabs in
-  `Group.Members` order). Domain identity is never merged — the two
-  `CapturedWindow`s remain separate members. The projection mirrors `Tabs`
-  exactly when no split is active (Add/Remove/Move mirrored so ListBox
+  member's ordinary tab is suppressed while the relationship exists; the
+  composite occupies the LEFT member's visual position; explicit exit or
+  structural invalidation restores ordinary tabs in `Group.Members` order).
+  Domain identity is never merged — the two `CapturedWindow`s remain separate
+  members. The projection mirrors `Tabs`
+  exactly when no split relationship is defined (Add/Remove/Move mirrored so ListBox
   containers survive reorders).
 - **Enter/exit** — `EnterSplit(left, right)` / `ExitSplit(keepActive)` route
   through the context menu (`ConfigureSplitMenuItems`: disabled below two tabs,
-  direct action at exactly two, submenu at three+, `Exit split screen` when
-  active). Clicking a composite HALF keeps the split and focuses that member
-  without hiding the partner (no ordinary tab-selection path can misinterpret a
-  member as needing to hide the other). **The pair is the persistent selected
-  tab-strip unit**: clicking or hovering a NON-paired tab leaves the pair
-  untouched — `SyncShepherdActiveWindow` rejects the non-member activation,
-  hides it only when it was newly visible (a fresh capture — journal-safe, one
-  bounded `SPLIT[persist]` line), and reverts the logical active tab to the
-  focused member via `FocusSplitMember`. Split ends ONLY from an explicit
-  `Exit split screen` / Split Screen replacement, or a structural member
-  removal (pop-out, ×, middle-click, self-close/hide, group deletion). Ctrl+Tab
-  while split cycles between the two members only.
+  direct action at exactly two, submenu at three+, and `Exit split screen` when
+  the relationship exists). Clicking a composite HALF keeps the pair and
+  focuses that member without hiding the partner. An ordinary left-click on a
+  NON-paired tab journal-safely suspends the presented pair, keeps the
+  relationship/composite, and presents the selected guest full-width; clicking
+  either composite half resumes the unchanged LEFT/RIGHT pair. Split ends ONLY
+  from an explicit `Exit split screen` / explicit Split Screen replacement, or
+  structural member removal (pop-out, ×, middle-click, self-close/hide, group
+  deletion). Ctrl+Tab follows the current presentation: it is pair-scoped when
+  the pair is presented and ordinary single-guest navigation when dormant.
   Per-half × / middle-click pop THAT member out; right-click builds a
-  member-specific menu (Pop out / Close window plus the split-aware items).
-  Composite dragging is disabled while split is active (the composite is not a
-  drag unit; normal-mode drag reorder is unchanged). Departing members are
+  member-specific menu (Pop out / Close window plus `Exit split screen`; an
+  existing relationship member does not receive a redundant `Split screen`
+  action in either presented or dormant state). Composite dragging is disabled
+  while the relationship exists (the composite is not a drag unit;
+  normal-mode drag reorder is unchanged). Departing members are
   hidden via `_shepherd.Hide` (journal-before-hide preserved); neither member
   is ever released by a split transition.
 - **Layout** — `LayoutSplitPanes` derives LEFT/RIGHT halves from the content
@@ -250,19 +254,22 @@ an in-window panel; the standalone picker remains for the fallback path.
   the batch on a known validation failure, and falls back only for native
   Begin/Defer/End failure. It does not claim impossible atomic HWND identity.
 - **Focused member (one canonical operation)** — `FocusSplitMember(member)`
-  is the ONLY path that focuses a member of the active pair: it updates
+  is the ONLY path that focuses or resumes a member of the defined pair: it updates
   `_splitForeground` (z-top) and `_shepherdActiveWindow` (logical active +
   tab highlight + `Group.ActiveIndex`), emits the bounded `SPLIT[focus]`
   diagnostic (only when the focused member changes), re-glues both panes with
   the member on top, and grants the member real foreground. Every entry point
   routes through it: composite half click, active-tab sync, direct guest click
   (WinEvent), and the WM_ACTIVATE reassert — so LEFT and RIGHT are peers after
-  split creation and no initiator/partner asymmetry can arise. It never
-  changes split membership or hides the partner.
-- **Survivor promotion** — when a member leaves the group the split ends and
-  the survivor is promoted to the single visible guest; `ReleaseTab` honors
-  that promotion (no positional neighbour pick may hide or displace the
-  survivor afterwards).
+  split creation and no initiator/partner asymmetry can arise. From dormant
+  state it first resumes both panes; it never changes split membership or
+  reverses LEFT/RIGHT identity.
+- **Survivor promotion** — when a member leaves a presented pair the split ends
+  and the survivor is promoted to the single visible guest; when a dormant pair
+  loses a member, the current non-member guest remains visible and the surviving
+  former member remains hidden as an ordinary tab. `ReleaseTab` honors either
+  transition (no positional neighbour pick may hide or displace the selected
+  guest afterwards).
 - **Window-state reconciliation** — minimize hides the visible guest(s)
   synchronously; restore/maximize re-glues through the coalesced post-layout
   pass (`RequestRelayout`), never synchronously against the pre-transition
@@ -282,10 +289,11 @@ an in-window panel; the standalone picker remains for the fallback path.
 - **Lifecycle** — split-aware `SyncShepherdActiveWindow`, `StateChanged`,
   `NoteGuestMoveSize` (drag-out measured against the member's own pane),
   `RestoreMinimizedWindow`, `PairZOrderBehindGuest`, and the WM_ACTIVATE
-  reassert. `GuestLifecycleService.OnWindowHidden` treats a hide of either split
-  member as guest-initiated teardown (both are visible in split). A split member
-  leaving the group (pop-out, drag-out, self-close, self-hide) ends the split and
-  promotes the survivor to the single visible guest.
+  reassert. `GuestLifecycleService.OnWindowHidden` distinguishes intentional
+  pair-presentation hides from guest-initiated teardown. A split member leaving
+  the group (pop-out, drag-out, self-close, self-hide) ends the relationship;
+  presented-pair removal promotes the survivor, while dormant-pair removal
+  retains the current non-member guest.
 - **Primitives** — `WindowShepherdService.PositionGuest` (position one guest at a
   z-order slot), `PositionGuestsDeferred` (atomic two-guest + container batch),
   `SetForeground` (foreground without repositioning),

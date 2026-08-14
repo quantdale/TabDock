@@ -276,6 +276,42 @@ internal static class Uia
     }
 
     /// <summary>
+    /// Finds a menu item by AutomationId inside any popup owned by
+    /// <paramref name="pid"/>. This is the locale-independent counterpart to
+    /// <see cref="FindMenuItemOnDesktop"/> used by split-menu qualification.
+    /// </summary>
+    public static AutomationElement? FindMenuItemOnDesktopByAutomationId(
+        uint pid,
+        string automationId,
+        int timeoutMs)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            Util.ThrowIfCancelled();
+            try
+            {
+                foreach (IntPtr h in Discover.GetTopLevelWindowsByPid(pid, visibleOnly: true))
+                {
+                    AutomationElement? top = FromHwnd(h);
+                    AutomationElement? mi = top?.FindFirst(
+                        TreeScope.Subtree,
+                        new AndCondition(
+                            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.MenuItem),
+                            new PropertyCondition(AutomationElement.AutomationIdProperty, automationId)));
+                    if (mi != null)
+                        return mi;
+                }
+            }
+            catch
+            {
+            }
+            Thread.Sleep(150);
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Reports whether a menu item named <paramref name="name"/> (found by the same
     /// desktop-popup search as <see cref="FindMenuItemOnDesktop"/>) is enabled. Returns
     /// <c>null</c> when the item is not found within the timeout — callers must treat that

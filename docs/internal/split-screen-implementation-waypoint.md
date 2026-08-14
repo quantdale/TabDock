@@ -1,5 +1,13 @@
 # Split Screen Implementation Waypoint
 
+> Historical implementation waypoint. The later focused change
+> `persistent-split-pair-presentation-2026-08-14` supersedes the original
+> third-tab exit wording in this document: the current contract keeps the
+> A/B relationship defined, presents a clicked non-member full-width while the
+> pair is dormant, and resumes A/B from either composite half. See
+> `docs/ARCHITECTURE.md` and `openspec/specs/ui-ux-hardening/spec.md` for the
+> current state model.
+
 ## Objective
 
 Implement a production-ready **vertical split-screen** feature for TabDock: exactly two captured application tabs displayed simultaneously in a left/right split, with a polished context-menu workflow, correct Shepherd lifecycle behavior, robust edge-case handling, automated ValidationDriver coverage, and no regression to existing TabDock behavior.

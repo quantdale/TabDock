@@ -235,7 +235,7 @@ public sealed class NativeSnapshotService
         }));
         NativeMethods.RECT content = EstimateContentRect(hwnd, outer);
         points.Add(("content-center", Center(content)));
-        if (logical?.SplitActive == true && logical.ExpectedPaneRects.Count >= 2)
+        if (logical?.SplitPresented == true && logical.ExpectedPaneRects.Count >= 2)
         {
             points.Add(("split-left-center", Center(ToNativeRect(logical.ExpectedPaneRects[0]))));
             points.Add(("split-right-center", Center(ToNativeRect(logical.ExpectedPaneRects[1]))));
