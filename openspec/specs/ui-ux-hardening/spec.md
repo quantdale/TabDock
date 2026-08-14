@@ -122,33 +122,58 @@ SHALL be logged per frame.
 - **WHEN** the application starts on a customer machine
 - **THEN** the log contains `ENV[startup]` with OS/.NET/bitness and the full monitor layout, and each open container logs `ENV[container]` — sufficient to diagnose machine-specific geometry failures without further queries
 
-### Requirement: The split pair SHALL persist until an explicit or structural teardown
+### Requirement: The split pair SHALL persist until an explicit presentation switch or structural teardown
 Once a split pair `{LEFT, RIGHT}` is active it SHALL remain the selected
-tab-strip unit until EITHER an explicit split-changing operation (the "Exit
-split screen" menu item, or a new Split Screen selection that replaces the
-pair) OR a structural member removal (pop-out, per-half × / middle-click,
-member self-close/self-hide, group deletion, any unavoidable lifecycle removal
-of one pair member). Hover, left-click, or context-menu open/close on a
-non-member tab SHALL NOT exit the split, hide a member, change the logical
-visible guest set, or make the non-member the ordinary active single guest:
-the visible set SHALL remain exactly `{LEFT, RIGHT}`. A non-member activation
-SHALL be rejected and the logical active tab reverted to the focused member
-(Group.ActiveIndex re-synced; no visibility change; no release). A newly
-captured window added while split is active SHALL be hidden (journal-safe) so
-the visible set stays exactly the pair. Keyboard tab navigation (Ctrl+Tab)
-while split is active SHALL cycle only between the two members.
+composite unit while the user interacts with either split member and while a
+non-member tab is merely hovered or right-clicked. An ordinary **left-click**
+on a non-member tab SHALL instead be treated as an explicit presentation switch:
+TabDock SHALL journal-safely hide both split members, clear the split composite,
+make the clicked tab the ordinary active tab, and present it full-width without
+releasing any captured member.
+
+If either split-member hide cannot complete safely and returns recovery-pending,
+TabDock SHALL fail closed: the split remains authoritative, the clicked
+non-member SHALL NOT become selected/active, and the existing pair SHALL be
+re-presented so a partially completed hide cannot leave one blank pane.
+
+A newly captured window added while split is active SHALL continue to be hidden
+journal-safely so the visible set remains the pair. Ctrl+Tab while split is
+active SHALL continue to cycle only between the two split members. Split-member
+focus, direct guest click, hover, and non-member context-menu open/close SHALL
+not by themselves change split membership.
+
+#### Scenario: Clicking a third tab exits split and opens that tab
+- **WHEN** a split `{A, B}` is active with a third captured tab C and the user left-clicks C's ordinary tab
+- **THEN** a normal split exit occurs, A and B are hidden but remain captured, C becomes the single active full-width guest, the ordinary three-tab strip is restored, and no member is released
+
+#### Scenario: An uncertain split hide fails the third-tab switch closed
+- **WHEN** the user left-clicks C while `{A, B}` is split and hiding either A or B becomes recovery-pending
+- **THEN** C does not become the active tab, the split remains authoritative, and TabDock re-presents A and B through the existing split layout path while preserving recovery evidence
 
 #### Scenario: Hovering a third tab leaves the pair untouched
-- **WHEN** a split `{A, B}` is active with a third tab C present and the user hovers C's tab (pointer moved onto and away from it, repeated cycles)
-- **THEN** after every cycle the split is still active with SplitLeft==A and SplitRight==B, both panes are visible and glued, C stays hidden, no `SPLIT[exit]`, no member hidden/released, and no ordinary tab-visibility transition occurred
+- **WHEN** a split `{A, B}` is active with a third tab C and the user hovers C without left-clicking it
+- **THEN** the pair remains `{A, B}`, both panes stay visible/glued, C stays hidden, and no split exit or release occurs
 
-#### Scenario: Clicking a third tab leaves the pair untouched
-- **WHEN** a split `{A, B}` is active with a third tab C present and the user clicks C's tab (alternating with clicks on both halves, repeated cycles)
-- **THEN** after every step the pair remains `{A, B}`, both panes are visible and glued, C never becomes the visible active single guest, the settled active tab index is the focused member's, and no `SPLIT[exit]`/`SPLIT[member-gone]`/release occurs
+#### Scenario: Right-clicking a third tab leaves the pair untouched
+- **WHEN** a split `{A, B}` is active with a third tab C and the user opens and dismisses C's context menu
+- **THEN** the pair remains active and visible and C remains a captured hidden non-member
 
-#### Scenario: Capturing a window while split is active does not disturb the pair
-- **WHEN** a split `{A, B}` is active and the user adds a window D through the capture surface
-- **THEN** D joins the group but is hidden, the visible set stays exactly `{A, B}`, the split stays active, and the logical active tab stays on the focused member
+### Requirement: Split creation SHALL settle presentation after TabDock chrome closes
+A split created from a TabDock context menu SHALL receive one bounded
+post-popup presentation settle after TabDock-owned chrome is no longer active.
+The settle SHALL re-run the existing split layout against the current content
+rect and request real foreground for the current focused split member through
+the existing identity-checked foreground API. This settle SHALL not synthesize
+`WM_SIZE`, alter guest window styles, reparent guests, use `AttachThreadInput`,
+or bypass foreground/identity guards.
+
+#### Scenario: Initial split does not require a corrective pane click
+- **WHEN** the user selects Split screen from a tab context menu
+- **THEN** after the menu closes both guests are laid out in their current panes and the focused/initiating member receives a real foreground request, so the first correct split presentation does not depend on the user clicking inside that guest
+
+#### Scenario: TabDock chrome is never preempted by the settle
+- **WHEN** another TabDock-owned popup/chrome interaction is still active while a split settle is pending
+- **THEN** the settle remains pending and does not foreground a guest until the chrome interaction has ended
 
 ### Requirement: Native move/size completion SHALL reconcile against final geometry AND local z-order
 When the container's own native move/size loop ends (`WM_EXITSIZEMOVE`), the
