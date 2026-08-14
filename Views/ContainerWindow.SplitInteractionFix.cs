@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using TabDock.Models;
+using TabDock.Services;
 using TabDock.ViewModels;
 
 namespace TabDock.Views;
