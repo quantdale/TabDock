@@ -1077,3 +1077,154 @@ commit containing this record.
   2. Create the single coherent substantive commit and push `main` normally.
   3. Fetch refs and verify the exact hosted workflow run; fix only a real
      hosted defect, then stop committing once green.
+
+## R12–R15 final source-hardening pass
+
+### Implementation and focused validation checkpoint — 2026-08-14
+
+- R12 implementation is complete. Capture now performs strong pre-token
+  revalidation after durable `JournalCapture`, refuses to install `SetProp` on
+  a changed PID/thread/class/executable/process instance, verifies the token,
+  and performs a cheap generation gate immediately before DWM mutation. Hide
+  performs the durable `JournalHide` write before a cheap gate and
+  `SW_HIDE`. Release, rescue, restore, foreground, z-order, and deferred
+  positioning paths use cheap generation gates before later distinct native
+  writes; token removal is exact-token scoped. The final check-to-call Win32
+  race remains explicitly documented as unavoidable.
+- R12 deterministic coverage now includes capture journal-to-token races,
+  token-to-DWM races, hide commit/boundary mismatch and uncertainty, release
+  changes before placement/between placement and visibility/before DWM/before
+  token removal, and rescue changes after placement/visibility/transitions.
+  Hot-tier identity checks continue to perform zero process-start probes.
+- R13 implementation is complete. `--pending-recovery` is read-only and
+  reports sanitized stable session IDs, schema/entry counts, historical fields,
+  and status. `--recover-pending` requires selecting one entry, selecting a
+  live top-level candidate, matching all available historical fields, and
+  typing exact `YES`. It refuses existing capture/recovery properties, installs
+  a distinct ephemeral token, revalidates before each native mutation, uses
+  visibility-only v1 semantics and full recorded v2 presentation, retains
+  failed/unverifiable evidence, writes a durable resolution sidecar, and
+  atomically retires only the resolved entry while preserving siblings/unknown
+  JSON fields. If retirement is interrupted after the marker is durable, a
+  later supervised invocation retries disk-only retirement without repeating
+  native recovery. Doctor guidance and privacy tests are included.
+- R14 implementation is complete. Source now classifies awareness with
+  `GetAwarenessFromDpiAwarenessContext`, accepts known unaware/system/per-monitor
+  contexts only with a valid target-monitor DPI, and fails closed for unknown
+  awareness or unavailable monitor DPI. The authoritative docs/specs explain
+  physical outer geometry, possible DWM content blur, 96-DPI min-track
+  conversion, and external mixed-DPI hardware qualification. Deterministic DPI
+  tests cover known unaware/aware acceptance, unknown/failure refusal, 500 at
+  144 DPI, 96-DPI no-op, aware no-scaling, helper cleanup, and negative
+  coordinates.
+- R15 implementation is complete. The exact 1.8.0 tarball was inspected: its
+  postinstall only prints an opt-in completion hint, skips in CI, and is not
+  required for validation. CI now installs the pinned package with
+  `npm install --global --ignore-scripts`; exact Node 24/npm 11 local install,
+  `openspec --version`, and `validate --all --no-interactive` passed.
+- Focused validation: Debug app build passed with 0 warnings/errors;
+  diagnostics self-test passed `153 checks / 0 failures`; local OpenSpec passed
+  `16/16`; and `git diff --check` passed. Full Release/ValidationDriver/
+  publish/NuGet/privacy gate and hosted CI remain to be run for this dirty
+  worktree.
+- Canonical validation now passes on the staged tree: Release solution,
+  ValidationDriver, GuineaPig, geometry, diagnostics (`153/0`), version/doctor,
+  read-only pending-recovery discovery, support-bundle privacy, OpenSpec
+  (`16/16`), NuGet audit, and self-contained publish/version smokes. The full
+  staged diff and architecture/invariant review are complete; task 7.5 is
+  marked complete in the substantive change record. Hosted CI remains to be
+  inspected after the normal commit/push.
+- Next three actions: create the substantive commit; push `main` fast-forward;
+  inspect and, only if necessary, repair the exact hosted workflow run.
+
+### Reconciliation checkpoint — 2026-08-14
+
+- Dynamic Git reconciliation is clean: branch `main`, local `HEAD`, and
+  `origin/main` all resolve to the supplied `3f2462f3dd62c86e46adef759d73ff5a15c9e348`
+  baseline after `git fetch origin`; no unrelated worktree changes exist.
+- R12 is confirmed in current source. Capture commits `JournalCapture`, then
+  installs the per-HWND token and immediately proceeds to DWM without a strong
+  pre-token recheck. Hide commits `JournalHide`, then calls `SW_HIDE` without a
+  post-I/O generation gate. Release and v3 rescue perform several distinct
+  native writes after one strong check without cheap generation revalidation
+  between them. Positioning hot paths use the intended bounded HWND/PID/thread/
+  class/token tier, but `PositionAndShow` must recheck before its post-restore
+  position and before its subsequent z-order pin.
+- R12 design: add a pre-token strong gate after capture journal commit; use a
+  cheap binding/`IsWindow`/token/PID/thread/class gate immediately before each
+  later distinct mutation; retain strong executable/process-start checks only at
+  slow transaction entry and capture's post-journal gate. Token removal remains
+  exact-token and generation-scoped. The final check-to-native-call interval is
+  the unavoidable residual Win32 race, not an atomicity claim.
+- R12 outcome policy: positive mismatch stops native work and may clear only the
+  exact old journal identity; unverifiable evidence stops native work and keeps
+  the journal/member retryable. Rescue uses the same distinction after partial
+  placement; a replacement after an already-completed old-window mutation is
+  classified as stale old evidence, never as permission to touch the replacement.
+- R13 is confirmed: pending legacy sidecars are only counted and logged; no
+  product operation discovers candidates, asks for confirmation, establishes a
+  temporary token, or retires one entry. Historical source proves v1 only
+  recorded HWND/PID/executable for a guest hidden by TabDock, so supervised v1
+  recovery is visibility-only; v2 may restore its recorded presentation after
+  explicit confirmation. The selected candidate must match every historical
+  field available, then receive a distinct ephemeral recovery property token.
+  Entry retirement will use durable sidecar resolution markers plus atomic
+  version-aware removal of one JSON entry, preserving siblings and unknown
+  fields; unresolved or failed entries remain pending.
+- R14 is confirmed: current capture source and the archived DPI-acceptance
+  decision intentionally accept known DPI-unaware guests and fail closed only
+  for unknown/unreadable awareness or monitor DPI. The current README and the
+  main `ui-ux-hardening` spec still contain the obsolete non-100% refusal claim.
+  The authoritative contract will distinguish physical outer geometry,
+  DWM-scaled/blurry content, centralized 96-DPI min-track conversion, and
+  externally unqualified physical mixed-DPI hardware.
+- R15 is confirmed from the exact `@fission-ai/openspec@1.8.0` tarball: its
+  postinstall only prints an opt-in shell-completion hint, skips in CI, and
+  never provides validation functionality. A local `--ignore-scripts` install
+  ran `openspec --version` (`1.8.0`) and the full repository validation (`16/16`)
+  successfully. CI will use the pinned package with lifecycle scripts disabled,
+  without broad npm approval or stderr suppression.
+
+### Implementation checkpoint
+
+- Planned source seams: an injectable capture token/DWM adapter and journal/
+  mutation sequencing hooks for deterministic race tests; shared cheap recovery
+  generation evaluation; a supervised `--pending-recovery` read-only catalog and
+  `--recover-pending` explicit console workflow; separate temporary recovery
+  property name; durable pending-entry resolution markers; and diagnostics/privacy
+  coverage for pending summaries.
+- Planned OpenSpec updates: extend native identity, recovery compatibility, and
+  monitor-DPI deltas with R12–R14 scenarios; add a CI-tooling delta for R15;
+  synchronize affected main capabilities, including replacing the stale DPI
+  acceptance requirement. Documentation updates cover README, architecture,
+  testing, and doctor guidance.
+- Validation status at this checkpoint: no R12–R15 repository edits yet; the
+  historical baseline's last reported local gate remains diagnostics `111/0`,
+  OpenSpec `16/16`, and canonical Release/publish/privacy/NuGet success. These
+  are historical evidence only until the new changes are tested.
+- Next 3 actions:
+  1. Update active OpenSpec/state/docs with this transaction model, then
+     implement capture/hide/release/rescue guards and deterministic race seams.
+  2. Implement and test supervised pending recovery, then reconcile DPI docs/spec
+     and the pinned npm lifecycle policy.
+  3. Run targeted and canonical gates, review/commit/push `main`, and inspect the
+     exact hosted workflow until the final SHA is green.
+
+### Canonical local qualification / pre-commit checkpoint — 2026-08-14
+
+- The final staged tree passed `dotnet build TabDock.sln -c Release --nologo`,
+  the Release ValidationDriver build, and
+  `.\scripts\validate.ps1 -Configuration Release -Ci -Publish`.
+- The canonical script reported zero build warnings/errors, no vulnerable
+  NuGet packages, diagnostics `153 checks / 0 failures`, pending-recovery
+  discovery, support-bundle privacy, OpenSpec `16 passed / 0 failed`, and
+  self-contained publish/version smokes all passed.
+- The staged source review covered every changed file, destructive native call,
+  identity outcome, pending-evidence lifecycle, DPI statement, CI install
+  policy, architecture invariant, generated-artifact/secret scan, and
+  `git diff --cached --check`. No real-input ValidationDriver scenario was run
+  in this pass; unsafe or unavailable M2/M8/Chrome/foreground qualifications
+  remain external items.
+- Next three actions: create the substantive commit; push `main` normally and
+  verify local/origin parity; inspect the exact hosted workflow run and repair
+  only a real CI defect before stopping repository modifications.

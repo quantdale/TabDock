@@ -26,3 +26,32 @@ obtained through a PerMonitorV2 HWND associated with that monitor and
 - **WHEN** pure conversion tests supply 96, 120, 144, or 192 DPI
 - **THEN** unaware logical dimensions SHALL convert to the expected physical
   dimensions while aware guests and failed probes remain unchanged
+
+### Requirement: Known DPI-unaware guests SHALL remain capturable
+
+Capture SHALL accept a guest whose DPI-awareness probe positively identifies
+`DPI_UNAWARE`, including when the target monitor's effective DPI is not 96.
+TabDock SHALL keep physical outer-window geometry as the positioning contract,
+while documenting that Windows may bitmap-scale the unaware guest's content.
+Unknown or failed awareness and monitor-DPI probes SHALL still fail closed.
+
+#### Scenario: Known unaware capture is accepted on a valid scaled monitor
+
+- **WHEN** awareness is known `DPI_UNAWARE` and the target monitor helper
+  returns a valid effective DPI such as 144
+- **THEN** capture SHALL be admitted, the outer geometry SHALL remain physical,
+  and the content-rendering caveat SHALL not be reported as a capture refusal
+
+#### Scenario: Unknown awareness remains refused
+
+- **WHEN** the awareness context is zero, throws, or otherwise cannot be
+  classified
+- **THEN** capture SHALL be refused closed rather than treating unknown as
+  known unaware or aware
+
+#### Scenario: Unaware minimum track is converted once at the boundary
+
+- **WHEN** an unaware guest reports a logical minimum track width of 500 at
+  144 DPI
+- **THEN** the centralized conversion SHALL produce 750 physical pixels;
+  96 DPI SHALL remain 500 and aware guests SHALL remain unchanged

@@ -136,13 +136,11 @@ public static class DiagnosticEnvironmentService
         InspectJsonFile(journalPath, isState: false, result);
         try
         {
-            int pendingCount = Directory.Exists(directory)
-                ? Directory.GetFiles(directory, "hidden-windows.json.pending*").Length
-                : 0;
+            PendingRecoveryCatalog pending = PendingRecoveryService.Discover(directory);
+            int pendingCount = pending.Files.Count(file => file.HasUnresolvedEvidence);
             result.PendingJournalFileCount = pendingCount;
-            result.PendingJournalStatus = pendingCount == 0
-                ? "absent"
-                : "manual-recovery-pending";
+            result.PendingJournalStatus = pending.Error
+                ?? (pendingCount == 0 ? "absent" : "manual-recovery-pending");
         }
         catch (UnauthorizedAccessException)
         {

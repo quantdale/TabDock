@@ -109,3 +109,52 @@ paths rather than be treated as a wildcard.
 
 - **WHEN** a valid member is checked repeatedly through the hot tier
 - **THEN** the identity seam SHALL report zero process-start probes
+
+### Requirement: Destructive native mutations SHALL revalidate at generation boundaries
+
+After a potentially slow journal or other blocking transaction, capture,
+hide, release, and crash rescue SHALL perform a cheap generation revalidation
+immediately before each distinct destructive native mutation. The cheap gate
+SHALL use the live binding when available, `IsWindow`, the expected HWND token,
+PID, GUI thread, and class; a strong executable/process-start probe SHALL not
+be repeated on every hot layout frame. Only a `Match` SHALL authorize the next
+native write. The final check-to-call interval remains an unavoidable ordinary
+Win32 race and SHALL NOT be described as atomic.
+
+#### Scenario: Capture refuses a recycled HWND after journal commit
+
+- **WHEN** `JournalCapture` succeeds but the pre-token PID, thread, class,
+  executable, or process-start identity no longer matches
+- **THEN** `SetProp` and all DWM/presentation mutations SHALL be skipped, the
+  in-memory binding SHALL be removed, and only the exact old journal record MAY
+  be cleared
+
+#### Scenario: Capture refuses DWM mutation after token installation changes
+
+- **WHEN** the expected capture token is installed but the cheap generation
+  gate fails before the first DWM mutation
+- **THEN** DWM SHALL not receive a mutation for that HWND generation and the
+  exact token cleanup/journal outcome SHALL be generation-scoped
+
+#### Scenario: Hide refuses a replacement after durable JournalHide
+
+- **WHEN** `JournalHide` completes and the cheap generation gate observes a
+  mismatch or unverifiable identity
+- **THEN** `ShowWindow(SW_HIDE)` SHALL not be called on the replacement; a
+  mismatch MAY clear only old exact evidence, while uncertainty retains the
+  journal and retryable member
+
+#### Scenario: Release stops after a partial old-window mutation
+
+- **WHEN** placement succeeds but the captured generation changes before
+  visibility, DWM, foreground, or token-removal work
+- **THEN** no subsequent native mutation SHALL target the replacement and the
+  old release evidence SHALL be retained or classified only from positive
+  mismatch evidence
+
+#### Scenario: Rescue stops after placement when generation changes
+
+- **WHEN** a v3 rescue identity matches initially but its generation token or
+  cheap identity fields change after placement
+- **THEN** visibility, DWM restoration, and token removal SHALL not run against
+  the replacement; unverifiable evidence SHALL remain retryable

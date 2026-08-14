@@ -1,7 +1,7 @@
 # ui-ux-hardening
 
 ## Purpose
-Covers the UI/UX hardening campaign: split-screen pair semantics (the pair is one persistent logical selection unit with peer members, survivor promotion on member removal, deterministic self-testable partition), window-state reconciliation against the final content rect, native move/size completion reconciliation against final geometry AND local z-order, DPI-aware capture refusal at non-100% scaling, and the bounded environment fingerprint.
+Covers the UI/UX hardening campaign: split-screen pair semantics (the pair is one persistent logical selection unit with peer members, survivor promotion on member removal, deterministic self-testable partition), window-state reconciliation against the final content rect, native move/size completion reconciliation against final geometry AND local z-order, the known-DPI-unaware physical-coordinate contract, and the bounded environment fingerprint.
 ## Requirements
 
 ### Requirement: The split pair is one logical selection unit with peer members
@@ -70,18 +70,26 @@ heights, positive/zero/negative origins, odd widths) and a seeded fuzz sweep
 - **WHEN** the self-test runs over widths 799/800/801/1023/1024/1025/1919/1920/1921 at positive and negative origins
 - **THEN** LEFT.Right == RIGHT.Left, RIGHT.Right == content.Right, LEFT.Width + RIGHT.Width == content.Width, and zero overlap/gap hold for every case
 
-### Requirement: DPI-unaware guests are refused at non-100% scaling
-Capture SHALL refuse a guest whose process is DPI-unaware when the system DPI
-differs from 96 (physical-pixel glue cannot represent the guest's
-DWM-virtualized coordinate space), reporting the reason through the normal
-capture error channel. If the awareness context probe, system-DPI probe, or
-supporting identity query fails or returns an invalid zero value, capture SHALL
-fail closed and report the refusal rather than proceeding with unverified
-geometry.
+### Requirement: Known DPI-unaware guests use the physical-coordinate contract
+Capture SHALL accept a guest when its awareness probe succeeds and identifies a
+known `DPI_UNAWARE` context and the target monitor's effective DPI is valid.
+TabDock SHALL continue to position the independent top-level outer HWND from
+its PerMonitorV2 caller in physical screen pixels. Windows may bitmap-scale the
+unaware guest's content, so rendering can be blurry even when outer geometry is
+correct. The guest's 96-DPI logical minimum-track value SHALL be converted at
+the centralized boundary using the target monitor's effective DPI. If the
+awareness or monitor-DPI probe fails, returns unknown, or returns an invalid
+zero value, capture SHALL fail closed rather than admitting unverified
+coordinate assumptions. Deterministic tests SHALL NOT claim physical mixed-DPI
+hardware qualification.
 
-#### Scenario: Legacy DPI-unaware window at 150% scaling
-- **WHEN** the user attempts to capture a DPI-unaware window on a system at 150% scaling
-- **THEN** capture is refused with a clear message and no geometry corruption occurs
+#### Scenario: Known DPI-unaware window at 150% scaling
+- **WHEN** the user attempts to capture a known DPI-unaware window on a monitor at 150% scaling
+- **THEN** capture is accepted, its outer geometry remains physical-pixel based, and any content blur is a Windows scaling effect rather than a capture refusal
+
+#### Scenario: Unaware minimum tracking is converted centrally
+- **WHEN** an unaware guest reports a 96-DPI logical minimum track of 500 on a 144-DPI monitor
+- **THEN** TabDock applies a 750-pixel physical minimum; at 96 DPI the value remains 500, and an aware guest does not receive unaware scaling
 
 #### Scenario: An invalid DPI probe does not admit an unverified guest
 - **WHEN** the guest awareness context or system-DPI probe fails or returns zero during capture

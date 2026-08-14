@@ -184,6 +184,12 @@ try {
         throw 'Doctor did not create its requested output file.'
     }
 
+    $pendingRecoveryPath = Join-Path $TempRoot 'pending-recovery.txt'
+    Invoke-Executable "Pending-recovery discovery smoke ($Configuration)" $AppExe @('--pending-recovery', '--output', $pendingRecoveryPath)
+    if (-not (Test-Path -LiteralPath $pendingRecoveryPath -PathType Leaf)) {
+        throw 'Pending-recovery discovery did not create its requested output file.'
+    }
+
     $bundlePath = Join-Path $TempRoot 'support-bundle.zip'
     Invoke-Executable "Support-bundle privacy smoke ($Configuration)" $AppExe @('--support-bundle', '--output', $bundlePath)
     if (-not (Test-Path -LiteralPath $bundlePath -PathType Leaf)) {

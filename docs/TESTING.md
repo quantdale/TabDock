@@ -4,13 +4,14 @@ This document consolidates how to validate changes to TabDock without rediscover
 
 ## CLI-safe diagnostics
 
-The version, doctor, and support-bundle commands are safe to run from a normal
+The version, doctor, support-bundle, and pending-recovery discovery commands are safe to run from a normal
 non-elevated terminal and do not start the main UI or WinEvent hooks:
 
 ```powershell
 dotnet build TabDock.csproj -c Release
 & .\bin\Release\net8.0-windows\win-x64\TabDock.exe --version
 & .\bin\Release\net8.0-windows\win-x64\TabDock.exe --doctor
+& .\bin\Release\net8.0-windows\win-x64\TabDock.exe --pending-recovery
 & .\bin\Release\net8.0-windows\win-x64\TabDock.exe --selftest-geometry
 & .\bin\Release\net8.0-windows\win-x64\TabDock.exe --selftest-diagnostics
 ```
@@ -22,7 +23,12 @@ Use `--doctor --output <path>` for a copyable text file and
 live repro, `Ctrl+Alt+Shift+D` captures the in-process logical group/split
 snapshot even if the header is hidden. Inspect the ZIP before sending it:
 titles are hashes/lengths, paths are redacted, and no full personal files are
-collected.
+collected. `--pending-recovery` is also read-only and uses stable session entry
+IDs; it does not rewrite or mutate pending evidence. `--recover-pending` is a
+separate intentionally mutating workflow and must be run only under supervised
+operator control: it requires selecting the entry, selecting the exact live
+top-level candidate, and typing `YES`. Never use an automatic recover-all
+command or a raw Win32 tool for legacy evidence.
 
 ---
 
@@ -452,6 +458,9 @@ The final high-risk smoke set also passed fresh supervised runs of
   upgraded installation finds a legacy tokenless v1/v2 journal, it must leave
   the original bytes in `hidden-windows.json.pending*`, report
   `manual-recovery-pending` from `--doctor`, and perform no native rescue.
+  Run `--pending-recovery` to inspect it read-only, then use the supervised
+  `--recover-pending` command to select and explicitly confirm one live target;
+  failed recovery retains the entry and resolving one entry preserves siblings.
 - Create a group without capturing a tab, exit, and relaunch: the empty shell
   must not return. Also exercise a picker attempt where every selected target
   fails; the provisional picker-created group must close and must not be saved.
@@ -473,16 +482,20 @@ unique numbered sibling), emits a `SHEPHERD[journal-pending]` diagnostic, and
 does not retry it on every launch. Do not delete or edit that file before
 recovery is complete.
 
-For supervised manual recovery, first copy the pending file to a disposable
-backup, run `TabDock.exe --doctor` to record the pending count, and inspect the
-stored PID, executable, class, and (v2) process-start fields against a
-read-only HWND enumeration from a trusted recovery tool. Only after an operator
-confirms the live window is the intended guest should that tool show/restore its
-original placement. Preserve the pending file until the guest is visibly
-standalone; then archive it outside `%APPDATA%\TabDock` and relaunch TabDock.
-If the identity cannot be confirmed, leave the pending evidence intact and
-contact support. This path is deliberately supervised because the old schema
-cannot prove HWND generation the way v3 can.
+Run `TabDock.exe --pending-recovery` for read-only discovery. It reports counts,
+schema versions, stable per-session entry IDs, available historical fields, and
+sanitized current-window status without exposing full pending paths or window
+titles. If an entry may be recoverable, run `TabDock.exe --recover-pending`
+from a supervised terminal. Select one entry, select the exact live top-level
+window from the local candidate list, and type `YES`; a rejection or mismatch
+performs no native mutation. Recovery validates every historical field present,
+refuses existing capture/recovery tokens, installs a new temporary generation
+guard, and revalidates it immediately before each presentation mutation. v1
+restores visibility only; v2 may restore its recorded placement, visibility,
+and DWM transition state. A failed or unverifiable transaction retains the
+pending evidence. A successful entry gets a durable resolution marker and is
+retired atomically without destroying unresolved siblings or unknown JSON
+fields. Startup never performs tokenless legacy recovery.
 
 ### 5. Cross-monitor / DPI
 
@@ -493,8 +506,11 @@ cannot prove HWND generation the way v3 can.
   guest's own `GetDpiForWindow` result of 96 is therefore not used as the
   monitor scale.
 - `--selftest-diagnostics` exercises the injectable DPI helper lifecycle and
-  probe/conversion seams; it does not pretend to qualify physical mixed-DPI
-  hardware.
+  probe/conversion seams. The deterministic contract is: known DPI-unaware
+  plus a valid monitor DPI is accepted; unknown/unreadable awareness or monitor
+  DPI is refused; a 96-DPI logical minimum-track value of 500 becomes 750 at
+  144 DPI and remains 500 at 96 DPI; aware guests do not receive unaware
+  scaling. These checks do not pretend to qualify physical mixed-DPI hardware.
 - Move a container between monitors with different scaling (e.g. 100% and 150%).
 - Verify the content area re-lays out and the active guest fills it.
 - Maximize on a larger secondary monitor (1440p/4K), including negative monitor

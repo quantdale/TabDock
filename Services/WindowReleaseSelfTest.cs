@@ -26,6 +26,10 @@ internal static class WindowReleaseSelfTest
         }
 
         Check(ValidStrongIdentityReleases());
+        Check(ValidHideUsesJournalBoundary());
+        Check(HideJournalCommitMismatchNeverCallsShowWindow());
+        Check(HideBoundaryMismatchNeverCallsShowWindow());
+        Check(HideBoundaryUnverifiablePreservesJournal());
         Check(DefinitePidMismatchDoesNotMutate());
         Check(DefiniteTokenMismatchDoesNotMutate());
         Check(DefiniteStartMismatchDoesNotMutate());
@@ -41,6 +45,10 @@ internal static class WindowReleaseSelfTest
         Check(EmergencyReleaseContinuesPastPendingMember());
         Check(CloseGroupRetainsPendingMember());
         Check(LaterRetryCompletesPreviouslyUnverifiableRelease());
+        Check(ReleaseChangeBeforePlacementNeverMutates());
+        Check(ReleaseChangeBetweenPlacementAndVisibilityStops());
+        Check(ReleaseChangeBeforeTransitionsStops());
+        Check(ReleaseChangeBeforeTokenRemovalStopsCleanup());
         return (checks, failures);
     }
 
@@ -52,6 +60,58 @@ internal static class WindowReleaseSelfTest
             && fixture.Native.MutationCount > 0
             && fixture.ReadEntries().Count == 0
             && fixture.Identity.CaptureToken == IntPtr.Zero;
+    }
+
+    private static bool ValidHideUsesJournalBoundary()
+    {
+        using TestFixture fixture = TestFixture.Create();
+        WindowHideOutcome result = fixture.Service.Hide(fixture.Captured);
+        return result == WindowHideOutcome.Hidden
+            && fixture.Native.ShowWindowCount == 1
+            && fixture.Native.TransitionCount == 0
+            && fixture.ReadEntries().Count == 1;
+    }
+
+    private static bool HideJournalCommitMismatchNeverCallsShowWindow()
+    {
+        using TestFixture fixture = TestFixture.Create(
+            sequencingHook: (stage, identity) =>
+            {
+                if (stage == "JournalHide.committed")
+                    identity.ReplaceGeneration();
+            });
+        WindowHideOutcome result = fixture.Service.Hide(fixture.Captured);
+        return result == WindowHideOutcome.TargetGoneOrRecycled
+            && fixture.Native.ShowWindowCount == 0
+            && fixture.ReadEntries().Count == 0;
+    }
+
+    private static bool HideBoundaryMismatchNeverCallsShowWindow()
+    {
+        using TestFixture fixture = TestFixture.Create(
+            sequencingHook: (stage, identity) =>
+            {
+                if (stage == "hide-after-journal.before")
+                    identity.ReplaceGeneration();
+            });
+        WindowHideOutcome result = fixture.Service.Hide(fixture.Captured);
+        return result == WindowHideOutcome.TargetGoneOrRecycled
+            && fixture.Native.ShowWindowCount == 0
+            && fixture.ReadEntries().Count == 0;
+    }
+
+    private static bool HideBoundaryUnverifiablePreservesJournal()
+    {
+        using TestFixture fixture = TestFixture.Create(
+            sequencingHook: (stage, identity) =>
+            {
+                if (stage == "hide-after-journal.before")
+                    identity.ThrowOnClassProbe = true;
+            });
+        WindowHideOutcome result = fixture.Service.Hide(fixture.Captured);
+        return result == WindowHideOutcome.RecoveryPending
+            && fixture.Native.ShowWindowCount == 0
+            && fixture.ReadEntries().Count == 1;
     }
 
     private static bool DefinitePidMismatchDoesNotMutate()
@@ -197,8 +257,8 @@ internal static class WindowReleaseSelfTest
         using TestFixture fixture = TestFixture.Create();
         fixture.Identity.FailTokenRemoval = true;
         WindowReleaseOutcome result = fixture.Service.Release(fixture.Captured);
-        return result == WindowReleaseOutcome.Released
-            && fixture.ReadEntries().Count == 0
+        return result == WindowReleaseOutcome.RecoveryPending
+            && fixture.ReadEntries().Count == 1
             && fixture.Identity.CaptureToken == new IntPtr(fixture.Captured.WindowIdentityToken)
             && !WindowIdentityGate.IsCaptureTokenAvailable(fixture.Captured.Hwnd, fixture.Identity);
     }
@@ -242,6 +302,61 @@ internal static class WindowReleaseSelfTest
             && second == WindowReleaseOutcome.Released
             && fixture.ReadEntries().Count == 0
             && fixture.Native.MutationCount > 0;
+    }
+
+    private static bool ReleaseChangeBeforePlacementNeverMutates()
+    {
+        using TestFixture fixture = TestFixture.Create(
+            sequencingHook: (stage, identity) =>
+            {
+                if (stage == "release-before-placement.before")
+                    identity.ReplaceGeneration();
+            });
+        WindowReleaseOutcome result = fixture.Service.Release(fixture.Captured);
+        return result == WindowReleaseOutcome.TargetGoneOrRecycled
+            && fixture.Native.PlacementCount == 0
+            && fixture.Native.ShowWindowCount == 0
+            && fixture.Native.TransitionCount == 0;
+    }
+
+    private static bool ReleaseChangeBetweenPlacementAndVisibilityStops()
+    {
+        using TestFixture fixture = TestFixture.Create();
+        fixture.Native.AfterPlacement = fixture.Identity.ReplaceGeneration;
+        WindowReleaseOutcome result = fixture.Service.Release(fixture.Captured);
+        return result == WindowReleaseOutcome.TargetGoneOrRecycled
+            && fixture.Native.PlacementCount == 1
+            && fixture.Native.ShowWindowCount == 0
+            && fixture.Native.TransitionCount == 0;
+    }
+
+    private static bool ReleaseChangeBeforeTransitionsStops()
+    {
+        using TestFixture fixture = TestFixture.Create(
+            sequencingHook: (stage, identity) =>
+            {
+                if (stage == "release-before-transitions.before")
+                    identity.ReplaceGeneration();
+            });
+        WindowReleaseOutcome result = fixture.Service.Release(fixture.Captured);
+        return result == WindowReleaseOutcome.TargetGoneOrRecycled
+            && fixture.Native.PlacementCount == 1
+            && fixture.Native.ShowWindowCount == 1
+            && fixture.Native.ForegroundCount == 1
+            && fixture.Native.TransitionCount == 0;
+    }
+
+    private static bool ReleaseChangeBeforeTokenRemovalStopsCleanup()
+    {
+        using TestFixture fixture = TestFixture.Create();
+        fixture.Native.AfterTransitions = fixture.Identity.ReplaceGeneration;
+        WindowReleaseOutcome result = fixture.Service.Release(fixture.Captured);
+        return result == WindowReleaseOutcome.TargetGoneOrRecycled
+            && fixture.Native.PlacementCount == 1
+            && fixture.Native.ShowWindowCount == 1
+            && fixture.Native.TransitionCount == 1
+            && fixture.Identity.TokenRemovalCount == 0
+            && fixture.ReadEntries().Count == 0;
     }
 
     private static bool CloseGroupRetainsPendingMember()
@@ -292,7 +407,9 @@ internal static class WindowReleaseSelfTest
         public HiddenWindowEntry Entry { get; }
         public WindowShepherdService Service { get; }
 
-        public static TestFixture Create(bool twoEntries = false)
+        public static TestFixture Create(
+            bool twoEntries = false,
+            Action<string, FakeIdentityApi>? sequencingHook = null)
         {
             string root = Path.Combine(Path.GetTempPath(), "TabDock-release-selftest-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
@@ -311,7 +428,15 @@ internal static class WindowReleaseSelfTest
                 FakeIdentityApi secondIdentity = FakeIdentityApi.For(2, 22, 202, 2002);
                 identity.Add(secondIdentity);
                 TestFixture fixture = new(root, journalPath, statePath, tempLog, identity, native, captured, entry,
-                    new WindowShepherdService(tempLog, journalPath, identity, new FakeMonitorDpiProbe(), native));
+                    new WindowShepherdService(
+                        tempLog,
+                        journalPath,
+                        identity,
+                        new FakeMonitorDpiProbe(),
+                        native,
+                        testSequencingHook: sequencingHook == null
+                            ? null
+                            : stage => sequencingHook(stage, identity)));
                 fixture.CapturedSecond = second;
                 fixture.IdentityForSecond = secondIdentity;
                 fixture.WriteEntries(entries.ToArray());
@@ -321,7 +446,15 @@ internal static class WindowReleaseSelfTest
             }
 
             var result = new TestFixture(root, journalPath, statePath, tempLog, identity, native, captured, entry,
-                new WindowShepherdService(tempLog, journalPath, identity, new FakeMonitorDpiProbe(), native));
+                new WindowShepherdService(
+                    tempLog,
+                    journalPath,
+                    identity,
+                    new FakeMonitorDpiProbe(),
+                    native,
+                    testSequencingHook: sequencingHook == null
+                        ? null
+                        : stage => sequencingHook(stage, identity)));
             result.WriteEntries(entries.ToArray());
             result.Service.BindCapturedWindowForTesting(captured);
             return result;
@@ -406,6 +539,10 @@ internal static class WindowReleaseSelfTest
         public bool ThrowOnExecutableProbe { get; set; }
         public bool ThrowOnClassProbe { get; set; }
         public bool FailTokenRemoval { get; set; }
+        public int TokenRemovalCount { get; private set; }
+
+        public void ReplaceGeneration()
+            => CaptureToken = new IntPtr(2002);
 
         private FakeIdentityApi(IntPtr hwnd, uint pid, long start, long token)
         {
@@ -449,6 +586,7 @@ internal static class WindowReleaseSelfTest
 
         public bool RemoveCaptureIdentityToken(IntPtr hwnd, IntPtr expectedToken)
         {
+            TokenRemovalCount++;
             if (FailTokenRemoval)
                 return false;
             FakeIdentityApi item = Find(hwnd);
@@ -476,20 +614,31 @@ internal static class WindowReleaseSelfTest
     {
         private readonly Dictionary<IntPtr, bool> _visible = new();
         public int MutationCount { get; private set; }
+        public int PlacementCount { get; private set; }
+        public int ShowWindowCount { get; private set; }
+        public int ForegroundCount { get; private set; }
+        public int TransitionCount { get; private set; }
+        public int TokenRemovalCount { get; set; }
+        public Action? AfterPlacement { get; set; }
+        public Action? AfterTransitions { get; set; }
         public bool SetWindowPlacement(IntPtr hwnd, ref NativeMethods.WINDOWPLACEMENT placement)
         {
             MutationCount++;
+            PlacementCount++;
+            AfterPlacement?.Invoke();
             return true;
         }
         public bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags)
         {
             MutationCount++;
+            PlacementCount++;
             return true;
         }
         public bool ShowWindow(IntPtr hwnd, int command)
         {
             MutationCount++;
-            _visible.TryGetValue(hwnd, out bool previous);
+            ShowWindowCount++;
+            bool previous = !_visible.TryGetValue(hwnd, out bool visible) || visible;
             _visible[hwnd] = command != NativeMethods.SW_HIDE;
             return previous;
         }
@@ -498,12 +647,15 @@ internal static class WindowReleaseSelfTest
         public bool SetForegroundWindow(IntPtr hwnd)
         {
             MutationCount++;
+            ForegroundCount++;
             return true;
         }
         public IntPtr GetForegroundWindow() => IntPtr.Zero;
         public int SetTransitionsDisabled(IntPtr hwnd, int value)
         {
             MutationCount++;
+            TransitionCount++;
+            AfterTransitions?.Invoke();
             return 0;
         }
         public string DescribeWindow(IntPtr hwnd) => "fake";

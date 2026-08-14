@@ -127,6 +127,11 @@ public static class DiagnosticReportService
         builder.AppendLine($"state={report.Persistence.StateStatus} schemaVersion={report.Persistence.SchemaVersion?.ToString() ?? "unavailable"} groupCount={report.Persistence.GroupCount} persistedMemberMetadataCount={report.Persistence.PersistedMemberMetadataCount}");
         builder.AppendLine($"journal={report.Persistence.JournalStatus} journalEntryCount={report.Persistence.JournalEntryCount?.ToString() ?? "unavailable"} logExists={report.Persistence.LogExists}");
         builder.AppendLine($"pendingJournal={report.Persistence.PendingJournalStatus} pendingJournalFileCount={report.Persistence.PendingJournalFileCount}");
+        if (report.Persistence.PendingJournalFileCount > 0)
+        {
+            builder.AppendLine("pendingRecovery=run TabDock.exe --pending-recovery (read-only), then TabDock.exe --recover-pending from a supervised terminal to select one live target");
+            builder.AppendLine("pendingRecoveryPolicy=legacy tokenless entries are never mutated automatically and unresolved evidence is retained");
+        }
         builder.AppendLine();
         builder.AppendLine("[tabdock-processes]");
         if (report.TabDockProcesses.Count == 0)

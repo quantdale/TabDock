@@ -19,16 +19,15 @@ a state-only commit to record the preceding push or its CI result; report the
 final pushed SHA and CI result in the session output and let the next session
 verify them independently.
 
-## Current checkpoint — post-remediation safety closure
+## Current checkpoint — R12–R15 final source-hardening pass
 
-- Objective: resolve the narrow R7–R11 source findings and re-review R4/R6;
-  do not repeat the completed deep audit.
-- Status: R7/R8/R9 implementation and deterministic validation complete; R10
-  state-protocol cleanup, R11 workflow review, and focused R4/R6 review are
-  complete. Repository-content implementation and pre-push validation are
-  complete; Git handoff and hosted CI are dynamic follow-up state.
-  The verified pre-closure baseline was clean and matched `origin/main` at
-  `f4f953c962549726c8362b94e93538b9ea85b750`.
+- Objective: close only the independently identified R12 HWND mutation-boundary,
+  R13 legacy pending-recovery, R14 DPI-contract drift, and R15 npm lifecycle
+  warning findings; do not repeat the completed deep audit.
+- Status: R12–R15 implementation, canonical local qualification, and final
+  source review are complete; the worktree is intentionally staged pending the
+  substantive commit, fast-forward push, and hosted CI inspection. Git refs
+  remain dynamically authoritative.
 - Active plan/spec records:
   `.agent/execplans/tabdock-deep-audit-remediation-2026-08-13.md` and
   `openspec/changes/post-remediation-review-followup-2026-08-13/`.
@@ -38,6 +37,16 @@ verify them independently.
 - Prior review also confirmed: R9 omitted restore visibility; R10 had stale
   post-push wording; and R11 needed current action-runtime review. All are
   addressed in the repository content described above.
+- R12 now has strong post-journal capture revalidation, cheap generation gates
+  before later native mutations, exact-token cleanup, and deterministic capture,
+  hide, release, and rescue sequencing tests. R13 now has read-only
+  `--pending-recovery` discovery plus explicitly confirmed `--recover-pending`
+  v1/v2 recovery with temporary generation tokens and sibling-safe retirement;
+  a durable resolved marker can also be retried through disk-only cleanup.
+- R14 source/docs/spec now agree that known DPI-unaware guests are accepted
+  under physical outer-window geometry, with DWM-rendering and hardware
+  qualification caveats; unknown awareness remains fail-closed. R15's exact
+  Node 24/npm 11 `--ignore-scripts` install and OpenSpec validation passed.
 
 ## Resume protocol
 
@@ -100,10 +109,12 @@ probing; and ValidationDriver safety guards.
 
 ## Validation and remaining work
 
-- Passed in this closure: Debug and Release application/solution/driver builds;
-  canonical `validate.ps1 -Configuration Release -Ci -Publish`; NuGet audit;
-  support-bundle privacy; diagnostics self-test `111 checks / 0 failures`; and
-  OpenSpec validation `16/16`.
+- Focused and canonical validation: Debug/Release app and ValidationDriver
+  builds passed with 0 warnings/errors; diagnostics self-test passed `153/0`;
+  OpenSpec passed `16/16`; NuGet audit and support-bundle privacy passed;
+  pending-recovery discovery and self-contained publish smokes passed. Exact
+  Node 24/npm 11 pinned OpenSpec installation with `--ignore-scripts` passed
+  version and validation. Commit, push, and hosted CI remain.
 - Remaining product qualification: M2 supervised session-ending cancellation;
   physical M8 mixed-DPI/multi-monitor matrix; unavailable Chrome scenarios;
   and the foreground-policy-limited split case.
@@ -122,9 +133,9 @@ evidence only and is not the current Git state. The previous state file had
 grown into a self-referential checkpoint chain; its durable campaign detail is
 retained in the execplan rather than repeated here.
 
-## Next actions (conditional on dynamic Git state)
+## Next actions
 
-1. Resolve branch, `HEAD`, `origin/main`, and worktree status.
-2. If this repository content is uncommitted, create the single substantive
-   commit and push it as a normal fast-forward; otherwise skip that phase.
-3. Query hosted CI for the current main SHA and stop committing once green.
+1. Create the one coherent substantive commit from the reviewed staged tree.
+2. Push `main` with an ordinary fast-forward and verify local/main ref parity.
+3. Inspect hosted CI for the exact final SHA; fix only a real hosted defect and
+   stop committing once green.

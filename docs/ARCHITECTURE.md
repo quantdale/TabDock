@@ -352,10 +352,14 @@ placeholders until the user repopulates or deletes them.
 ### Cross-machine hardening
 
 - **Physical-coordinate Shepherding and DPI-unaware acceptance.** TabDock remains
-  PerMonitorV2 and positions every independent top-level guest using physical
-  screen coordinates. A known DPI-unaware guest is accepted; its DWM-scaled
-  content may be blurry, but its outer rect still follows the physical pane.
-  Unknown or failed guest-awareness/monitor probes fail closed.
+  PerMonitorV2 and positions every independent top-level guest's outer HWND in
+  physical screen coordinates. A known DPI-unaware guest is accepted at any
+  valid monitor DPI; Windows may bitmap-scale its content, so it can look blurry
+  exactly as it does standalone, while its outer rect follows the physical pane.
+  The guest's 96-DPI logical minimum-track result is converted centrally using
+  the target monitor's effective DPI. Unknown or failed guest-awareness/monitor
+  probes fail closed. System-aware guests are expected to track correctly on a
+  single-DPI system; physical mixed-DPI qualification remains external.
 - **Contract-correct arbitrary-monitor DPI probing.** Microsoft documents
   [`GetDpiForMonitor`](https://learn.microsoft.com/en-us/windows/win32/api/shellscalingapi/nf-shellscalingapi-getdpiformonitor)
   as not DPI-aware and says not to call it from a per-monitor-aware thread, so
@@ -383,6 +387,17 @@ placeholders until the user repopulates or deletes them.
   restore, dirty min-track probing, lifecycle teardown, and crash recovery —
   every path that can hide, restore, release, or otherwise make a delayed
   native mutation against an external window.
+- **Mutation-boundary revalidation.** The durable `JournalCapture`/`JournalHide`
+  writes remain before presentation mutation. Capture performs a strong
+  pre-token recheck immediately before `SetProp`, then a cheap token/binding
+  check immediately before DWM suppression. Hide performs a cheap generation
+  check after `JournalHide` and immediately before `ShowWindow(SW_HIDE)`.
+  Release and crash rescue repeat the cheap generation check before each later
+  placement, visibility, DWM, foreground, and exact-token-removal operation;
+  a mismatch stops the transaction and an unverifiable result retains recovery
+  evidence. The final check-to-native-call interval is an unavoidable residual
+  Win32 race, not an atomicity guarantee. No per-frame path adds executable or
+  process-start probes.
 - **Monitor-specific maximize bounds** — `WM_GETMINMAXINFO` uses the work area
   of the monitor containing the container. The WPF container has no independent
   primary-monitor `MaxWidth`/`MaxHeight` clamp, so a larger secondary monitor

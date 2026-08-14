@@ -30,7 +30,10 @@ jobs:
           package-manager-cache: false
 
       - name: Install pinned OpenSpec CLI
-        run: npm install --global @fission-ai/openspec@1.8.0
+        # OpenSpec 1.8.0's postinstall only prints an opt-in shell-completion
+        # hint (and is skipped in CI); validation does not need it. Keep the
+        # pinned global install hermetic without approving lifecycle scripts.
+        run: npm install --global --ignore-scripts @fission-ai/openspec@1.8.0
 
       # This is intentionally the hermetic qualification entry point. It runs
       # audited restore, Release builds, native/geometry/diagnostics/persistence

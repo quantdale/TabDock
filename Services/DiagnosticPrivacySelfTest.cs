@@ -48,6 +48,26 @@ internal static class DiagnosticPrivacySelfTest
         Check(validJson);
         Check(!Contains(sanitizedJson, profile, profileSlash, appData, appDataSlash, username, "SECRET-TOKEN", "API-KEY-SECRET"));
 
+        string pendingRoot = Path.Combine(Path.GetTempPath(), "TabDock-pending-privacy-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(pendingRoot);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(pendingRoot, "hidden-windows.json.pending"),
+                "{\"Entries\":[{\"Hwnd\":1,\"Pid\":2,\"ExePath\":\"C:\\\\Users\\\\private\\\\guest.exe\"}]}" );
+            string pendingReport = PendingRecoveryService.FormatDiscovery(pendingRoot);
+            Check(!Contains(pendingReport, pendingRoot, "private", "guest.exe", "window title"));
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(pendingRoot))
+                    Directory.Delete(pendingRoot, recursive: true);
+            }
+            catch { }
+        }
+
         string root = Path.Combine(Path.GetTempPath(), "TabDock-privacy-selftest-" + Guid.NewGuid().ToString("N"));
         string bundlePath = Path.Combine(root, "support.zip");
         Directory.CreateDirectory(root);
@@ -63,6 +83,7 @@ internal static class DiagnosticPrivacySelfTest
                 string content = reader.ReadToEnd();
                 Check(!Contains(content, profile, profileSlash, appData, appDataSlash, localAppData, username));
                 Check(!Contains(content, "SECRET-TOKEN", "super-secret", "bearer-secret"));
+                Check(!Contains(content, "C:\\Users\\private\\guest.exe", "hidden-windows.json.pending"));
             }
         }
         catch

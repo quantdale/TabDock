@@ -86,3 +86,50 @@ Two robustness gaps in the existing behavior are closed (format unchanged, toler
 #### Scenario: A journal with null Entries is handled once, not retried forever
 - **WHEN** `hidden-windows.json` is syntactically valid JSON but has `"Entries": null`
 - **THEN** it is treated as an empty journal (or quarantined as corrupt exactly once) — rescue completes, the file is not left in place to fail identically on every subsequent launch, and no orphan that IS correctly journaled is skipped because of it
+
+### Requirement: Destructive journaled mutations SHALL revalidate HWND generation at native boundaries
+
+After potentially slow journal I/O or a preceding native presentation mutation,
+`WindowShepherdService` SHALL perform an immediate cheap generation check before
+the next destructive native operation. Capture SHALL strongly revalidate PID,
+GUI thread, class, executable, and process-start identity after
+`JournalCapture` and before installing its per-capture token, then check the
+new token before DWM mutation. Hide SHALL revalidate after `JournalHide` and
+before `ShowWindow(SW_HIDE)`. Release and startup rescue SHALL stop on a
+mismatch or preserve recovery evidence on an unverifiable result; exact token
+removal SHALL be property-value scoped. The final check-to-native-call interval
+is an unavoidable Win32 residual race and SHALL NOT be described as atomic.
+
+#### Scenario: A recycled target after JournalHide is never hidden
+- **WHEN** the HWND generation changes after the durable hide journal commit
+- **THEN** `ShowWindow(SW_HIDE)` SHALL not be called for that numeric HWND and
+  old journal cleanup SHALL not remove a newer generation's evidence
+
+#### Scenario: Rescue stops after a replacement appears
+- **WHEN** a valid v3 rescue identity passes its initial check but the target
+  generation changes after placement restoration
+- **THEN** visibility, DWM, and token-removal mutations SHALL not continue
+  against the replacement HWND, and the old evidence SHALL be classified from
+  the observed mismatch
+
+### Requirement: Tokenless legacy evidence SHALL be recovered only by explicit supervision
+
+Startup SHALL never mutate a v1 or v2 tokenless journal entry. The application
+SHALL provide a read-only pending-evidence discovery command and a separate
+user-initiated recovery command that requires entry selection, live top-level
+window selection, validation of every historical field available, and explicit
+confirmation. Recovery SHALL establish a new ephemeral generation token and
+revalidate it before each placement, visibility, DWM, and token-removal
+operation. v1 recovery SHALL restore visibility only; v2 MAY restore recorded
+presentation state. Failed or unresolved recovery SHALL retain the evidence,
+and retiring one entry SHALL preserve unresolved siblings and unknown fields.
+
+#### Scenario: Pending legacy evidence is not auto-mutated
+- **WHEN** startup finds v1 or v2 journal bytes without the v3 per-HWND token
+- **THEN** it SHALL preserve them as pending evidence and perform zero native
+  presentation mutations until a user confirms a selected live target
+
+#### Scenario: Supervised recovery retains an unresolved sibling
+- **WHEN** one entry in a multi-entry pending file is successfully recovered
+- **THEN** only that entry SHALL be durably marked and retired; unresolved
+  sibling entries and unknown JSON fields SHALL remain available

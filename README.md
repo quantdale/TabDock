@@ -48,6 +48,8 @@ WinEvent hooks, or loading/saving product state:
 .\TabDock.exe --doctor
 .\TabDock.exe --doctor --output .\TabDock-doctor.txt
 .\TabDock.exe --support-bundle --output .\TabDock-Diagnostics.zip
+.\TabDock.exe --pending-recovery
+.\TabDock.exe --recover-pending
 ```
 
 `--doctor` is a read-only report. It includes sanitized Windows/runtime,
@@ -215,7 +217,7 @@ Use this checklist to verify a build before considering it ready.
 
 - **Elevated windows:** A non-elevated TabDock cannot capture a window owned by an elevated process due to UIPI (it can't position/foreground it either, not just reparent it). TabDock ships as a standard-user app and asks the user to run elevated if they need to group elevated windows.
 
-- **DPI-unaware windows at non-100% scaling:** Windows whose process is not DPI-aware run in a system-virtualized coordinate space, which cannot be docked reliably with physical-pixel geometry; TabDock refuses to capture them when the system scale is not 100% (with a clear message). Per-monitor-aware and system-aware windows (all modern apps, including every mainstream browser and terminal) are unaffected. On a single-DPI system at any scale, system-aware windows dock correctly; mixed-DPI multi-monitor setups with system-aware guests are the one documented gap.
+- **DPI awareness:** A guest whose DPI-awareness probe succeeds and identifies it as known `DPI_UNAWARE` is capturable at any valid monitor scale. TabDock is PerMonitorV2 and positions independent top-level outer HWNDs in physical screen pixels, so the unaware guest's outer geometry remains physical-pixel exact; Windows may bitmap-scale its content, making it appear blurry just as it does when run standalone. An unaware guest's 96-DPI logical minimum-track size is converted centrally using the target monitor's effective DPI. A failed or unknown awareness/monitor-DPI probe is refused fail-closed. System-aware guests are expected to track correctly on a single-DPI system; mixed-DPI physical qualification remains external and is not claimed by deterministic tests.
 
 - **Persistence across reboots:** HWNDs are not stable across reboots, so TabDock cannot reliably re-attach the exact same live windows after a restart. It persists group names, accent colors, custom labels, tab order, and executable paths as layout intent. It restores only groups that contain saved tab metadata, leaves those groups empty at runtime for the user to re-populate, and does not persist fresh zero-tab shells. It never persists application content.
 
@@ -227,6 +229,19 @@ Use this checklist to verify a build before considering it ready.
   journal without the v3 HWND-generation token is preserved as
   `hidden-windows.json.pending*` for supervised manual recovery rather than
   being silently discarded; `--doctor` reports that pending state.
+
+  If `--doctor` reports pending legacy evidence, run
+  `TabDock.exe --pending-recovery` first. This is read-only and lists stable
+  per-session entry IDs, schema versions, available historical fields, and
+  sanitized status without exposing the pending file's full path. From a
+  supervised terminal, run `TabDock.exe --recover-pending`, select one pending
+  entry, select the exact live top-level window from the local candidate list,
+  and type `YES` to confirm. The workflow validates every historical field
+  present in that entry and installs a temporary generation guard before
+  changing presentation. v1 evidence restores visibility only; v2 evidence
+  may restore its recorded presentation state. A rejected, ambiguous, failed,
+  or unverifiable recovery retains the evidence. Resolving one entry preserves
+  unresolved siblings, and startup never performs tokenless legacy recovery.
 
 ## Diagnostics
 

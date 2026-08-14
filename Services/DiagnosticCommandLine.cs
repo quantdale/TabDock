@@ -16,6 +16,8 @@ public enum DiagnosticCommandKind
     Doctor,
     SupportBundle,
     SelfTest,
+    PendingRecovery,
+    RecoverPending,
 }
 
 public sealed class DiagnosticCommandRequest
@@ -41,6 +43,8 @@ public static class DiagnosticCommandLine
             "--doctor" => DiagnosticCommandKind.Doctor,
             "--support-bundle" => DiagnosticCommandKind.SupportBundle,
             "--selftest-diagnostics" => DiagnosticCommandKind.SelfTest,
+            "--pending-recovery" => DiagnosticCommandKind.PendingRecovery,
+            "--recover-pending" => DiagnosticCommandKind.RecoverPending,
             _ => DiagnosticCommandKind.None,
         };
         if (kind == DiagnosticCommandKind.None)
@@ -112,6 +116,18 @@ public static class DiagnosticCommandLine
                     if (PersistenceSelfTest.LastAccessDeniedFixtureStatus is string aclStatus && aclStatus != "pass")
                         Write($"SELFTEST[diagnostics] persistence-acl-fixture={aclStatus}");
                     return failures == 0 ? 0 : 1;
+                case DiagnosticCommandKind.PendingRecovery:
+                    string discovery = PendingRecoveryService.FormatDiscovery();
+                    if (string.IsNullOrWhiteSpace(request.OutputPath))
+                        Write(discovery);
+                    else
+                    {
+                        File.WriteAllText(Path.GetFullPath(request.OutputPath), discovery);
+                        Write($"pending recovery report: {Path.GetFullPath(request.OutputPath)}");
+                    }
+                    return 0;
+                case DiagnosticCommandKind.RecoverPending:
+                    return PendingRecoveryService.RunInteractive();
                 default:
                     return 0;
             }
@@ -172,6 +188,10 @@ internal static class DiagnosticSelfTest
             && doctor.Kind == DiagnosticCommandKind.Doctor && doctor.OutputPath == "report.txt");
         Check(DiagnosticCommandLine.TryParse(new[] { "--doctor", "--bad" }, out _, out string? parserError)
             && parserError != null);
+        Check(DiagnosticCommandLine.TryParse(new[] { "--pending-recovery" }, out DiagnosticCommandRequest pending, out _)
+            && pending.Kind == DiagnosticCommandKind.PendingRecovery);
+        Check(DiagnosticCommandLine.TryParse(new[] { "--recover-pending" }, out DiagnosticCommandRequest recover, out _)
+            && recover.Kind == DiagnosticCommandKind.RecoverPending);
 
         var trace = new DiagnosticTrace(3);
         long first = trace.Record("one");
@@ -200,6 +220,9 @@ internal static class DiagnosticSelfTest
         Check(MinTrackProbeSelfTest.InitializesEveryField());
         Check(WindowShepherdService.MinTrackProbeTimeoutMilliseconds <= 100);
         Check(WindowIdentitySelfTest.CoversIdentityTiers());
+        (int captureChecks, int captureFailures) = CaptureBoundarySelfTest.Run();
+        checks += captureChecks;
+        failures += captureFailures;
         (int releaseChecks, int releaseFailures) = WindowReleaseSelfTest.Run();
         checks += releaseChecks;
         failures += releaseFailures;
@@ -215,6 +238,9 @@ internal static class DiagnosticSelfTest
         (int privacyChecks, int privacyFailures) = DiagnosticPrivacySelfTest.Run();
         checks += privacyChecks;
         failures += privacyFailures;
+        (int pendingChecks, int pendingFailures) = PendingRecoverySelfTest.Run();
+        checks += pendingChecks;
+        failures += pendingFailures;
         var concurrent = new DiagnosticTrace(128);
         Parallel.For(0, 512, i => concurrent.Record("concurrent"));
         Check(concurrent.Snapshot().Count == 128);

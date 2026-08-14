@@ -37,3 +37,22 @@
 - [x] 6.4 Complete the final state-protocol, CI-runtime, R4/R6 review, and
   canonical validation gate; query hosted CI dynamically after the substantive
   content commit without a state-only follow-up.
+
+## 7. R12–R15 final source-hardening pass
+
+- [x] 7.1 Add immediate mutation-boundary revalidation to capture, hide,
+  release, rescue, and affected hot-path sequencing; add deterministic TOCTOU
+  tests and preserve bounded hot-tier identity behavior.
+- [x] 7.2 Implement read-only pending evidence discovery and explicitly
+  supervised v1/v2 recovery with candidate confirmation, a distinct temporary
+  generation token, safe partial-transaction behavior, and entry-scoped
+  durable retirement; add privacy and lifecycle tests.
+- [x] 7.3 Reconcile the known-DPI-unaware acceptance contract across source
+  comments, README, architecture, testing, main specs, and deterministic DPI
+  tests without claiming physical mixed-DPI qualification.
+- [x] 7.4 Install pinned OpenSpec in CI with `--ignore-scripts`, document the
+  reviewed postinstall rationale, reproduce local validation, and inspect the
+  hosted warning state.
+- [x] 7.5 Run the complete canonical qualification suite, review every changed
+  file and invariant, commit one coherent substantive unit, push main, and
+  verify/fix the exact hosted CI run.

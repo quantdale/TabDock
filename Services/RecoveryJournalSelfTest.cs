@@ -37,6 +37,9 @@ internal static class RecoveryJournalSelfTest
         Check(MixedV3EvidenceIsPreservedTogether());
         Check(V3TokenMismatchIsStaleWithoutMutation());
         Check(StartProbeUnavailableIsRetried());
+        Check(IdentityChangeAfterPlacementStopsRescue());
+        Check(IdentityChangeAfterVisibilityStopsDwmRescue());
+        Check(IdentityChangeBeforeTokenRemovalStopsCleanup());
         Check(LegacyReadCannotBeDowngraded());
         Check(LegacyWriteCannotDowngradeSchema());
         Check(UnverifiableHidePreservesJournal());
@@ -238,6 +241,69 @@ internal static class RecoveryJournalSelfTest
         }
     }
 
+    private static bool IdentityChangeAfterPlacementStopsRescue()
+    {
+        string root = CreateRoot(out string journalPath);
+        try
+        {
+            WriteV3(journalPath, Entry(1, 11, 101, 1001));
+            using var log = new LoggingService(Path.Combine(root, "logs"));
+            var api = new FakeRecoveryApi { ChangeTokenAfterPlacement = true };
+            WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
+            return !File.Exists(journalPath)
+                && api.PlacementMutationCount == 1
+                && api.VisibilityMutationCount == 0
+                && api.TransitionMutationCount == 0
+                && api.TokenRemovalCount == 0;
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static bool IdentityChangeAfterVisibilityStopsDwmRescue()
+    {
+        string root = CreateRoot(out string journalPath);
+        try
+        {
+            WriteV3(journalPath, Entry(1, 11, 101, 1001));
+            using var log = new LoggingService(Path.Combine(root, "logs"));
+            var api = new FakeRecoveryApi { ChangeTokenAfterShow = true };
+            WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
+            return !File.Exists(journalPath)
+                && api.PlacementMutationCount == 1
+                && api.VisibilityMutationCount == 1
+                && api.TransitionMutationCount == 0
+                && api.TokenRemovalCount == 0;
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static bool IdentityChangeBeforeTokenRemovalStopsCleanup()
+    {
+        string root = CreateRoot(out string journalPath);
+        try
+        {
+            WriteV3(journalPath, Entry(1, 11, 101, 1001));
+            using var log = new LoggingService(Path.Combine(root, "logs"));
+            var api = new FakeRecoveryApi { ChangeTokenAfterTransitions = true };
+            WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
+            return !File.Exists(journalPath)
+                && api.PlacementMutationCount == 1
+                && api.VisibilityMutationCount == 1
+                && api.TransitionMutationCount == 1
+                && api.TokenRemovalCount == 0;
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static bool LegacyReadCannotBeDowngraded()
     {
         const string legacyV2 = "{\"Version\":2,\"Entries\":[{\"Hwnd\":1,\"Pid\":11,\"ExePath\":\"guest-11.exe\",\"ClassName\":\"Pig\",\"ProcessStartTimeUtcTicks\":101}]}";
@@ -397,6 +463,9 @@ internal static class RecoveryJournalSelfTest
     private sealed class FakeRecoveryApi : IRecoveryNativeApi
     {
         public bool StartProbeUnavailable { get; set; }
+        public bool ChangeTokenAfterPlacement { get; set; }
+        public bool ChangeTokenAfterShow { get; set; }
+        public bool ChangeTokenAfterTransitions { get; set; }
         public Dictionary<IntPtr, (uint Pid, uint ThreadId, string Exe, string ClassName, long StartTicks, long Token)> Identity { get; } = new()
         {
             [new IntPtr(1)] = (11, 1011, "guest-11.exe", "Pig", 101, 1001),
@@ -404,6 +473,10 @@ internal static class RecoveryJournalSelfTest
         };
         public HashSet<IntPtr> Shown { get; } = new();
         public int NativeMutationCount { get; private set; }
+        public int PlacementMutationCount { get; private set; }
+        public int VisibilityMutationCount { get; private set; }
+        public int TransitionMutationCount { get; private set; }
+        public int TokenRemovalCount { get; private set; }
         public Dictionary<IntPtr, IntPtr> CaptureTokens => Identity.ToDictionary(
             pair => pair.Key,
             pair => new IntPtr(pair.Value.Token));
@@ -418,6 +491,7 @@ internal static class RecoveryJournalSelfTest
         public IntPtr GetCaptureIdentityToken(IntPtr hwnd) => new IntPtr(Identity[hwnd].Token);
         public bool RemoveCaptureIdentityToken(IntPtr hwnd, IntPtr expectedToken)
         {
+            TokenRemovalCount++;
             if (GetCaptureIdentityToken(hwnd) != expectedToken)
                 return false;
             (uint pid, uint threadId, string exe, string className, long startTicks, long _) = Identity[hwnd];
@@ -427,28 +501,46 @@ internal static class RecoveryJournalSelfTest
         public bool SetWindowPlacement(IntPtr hwnd, ref NativeMethods.WINDOWPLACEMENT placement)
         {
             NativeMutationCount++;
+            PlacementMutationCount++;
+            if (ChangeTokenAfterPlacement)
+                ReplaceIdentity(hwnd);
             return true;
         }
         public bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags)
         {
             NativeMutationCount++;
+            PlacementMutationCount++;
+            if (ChangeTokenAfterPlacement)
+                ReplaceIdentity(hwnd);
             return true;
         }
         public bool ShowWindow(IntPtr hwnd, int command)
         {
             NativeMutationCount++;
+            VisibilityMutationCount++;
             bool previouslyVisible = Shown.Contains(hwnd);
             if (command == NativeMethods.SW_HIDE)
                 Shown.Remove(hwnd);
             else
                 Shown.Add(hwnd);
+            if (ChangeTokenAfterShow)
+                ReplaceIdentity(hwnd);
             return previouslyVisible;
         }
         public bool IsWindowVisible(IntPtr hwnd) => Shown.Contains(hwnd);
         public int SetTransitionsDisabled(IntPtr hwnd, int value)
         {
             NativeMutationCount++;
+            TransitionMutationCount++;
+            if (ChangeTokenAfterTransitions)
+                ReplaceIdentity(hwnd);
             return 0;
+        }
+
+        private void ReplaceIdentity(IntPtr hwnd)
+        {
+            (uint pid, uint threadId, string exe, string className, long startTicks, long _) = Identity[hwnd];
+            Identity[hwnd] = (pid, threadId, exe, className, startTicks, 2002);
         }
     }
 

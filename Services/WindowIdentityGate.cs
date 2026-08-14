@@ -194,6 +194,87 @@ internal static class WindowIdentityGate
         }
     }
 
+    /// <summary>
+    /// Evaluates the strong identity fields before the per-capture HWND token
+    /// has been installed. This is the capture journal-to-token boundary: the
+    /// token cannot be required yet, but every other strong field must still
+    /// match immediately before SetProp.
+    /// </summary>
+    public static WindowIdentityResult EvaluateBeforeCaptureToken(
+        CapturedWindow captured,
+        IWindowIdentityNativeApi api,
+        bool verifyExecutable,
+        bool verifyProcessInstance,
+        out string reason)
+    {
+        try
+        {
+            if (!api.IsWindow(captured.Hwnd))
+                return Mismatch("HWND no longer exists", out reason);
+
+            if (captured.ProcessId == 0 || captured.WindowThreadId == 0)
+                return Unverifiable("captured process/thread identity is unavailable", out reason);
+
+            WindowProcessIdentity current = api.GetProcessIdentity(captured.Hwnd);
+            if (current.ProcessId == 0 || current.ThreadId == 0)
+                return Unverifiable("live process/thread identity could not be read", out reason);
+            if (current.ProcessId != captured.ProcessId)
+                return Mismatch("process ID differs", out reason);
+            if (current.ThreadId != captured.WindowThreadId)
+                return Mismatch("GUI thread ID differs", out reason);
+
+            if (string.IsNullOrWhiteSpace(captured.OriginalClassName))
+                return Unverifiable("captured window class is unavailable", out reason);
+            string? currentClass = api.GetClassName(captured.Hwnd);
+            if (string.IsNullOrWhiteSpace(currentClass))
+                return Unverifiable("window class could not be read", out reason);
+            if (!string.Equals(currentClass, captured.OriginalClassName, StringComparison.Ordinal))
+                return Mismatch("window class differs", out reason);
+
+            if (verifyExecutable)
+            {
+                if (string.IsNullOrWhiteSpace(captured.ExePath))
+                    return Unverifiable("captured executable identity is unavailable", out reason);
+                string? currentExe = api.GetProcessImagePath(current.ProcessId);
+                if (string.IsNullOrWhiteSpace(currentExe))
+                    return Unverifiable("executable identity could not be read", out reason);
+                if (!string.Equals(currentExe, captured.ExePath, StringComparison.OrdinalIgnoreCase))
+                    return Mismatch("executable identity differs", out reason);
+            }
+
+            if (verifyProcessInstance)
+            {
+                if (captured.ProcessStartTimeUtcTicks == 0)
+                    return Unverifiable("captured process-start identity is unavailable", out reason);
+                long currentStart = api.GetProcessStartTimeUtcTicks(current.ProcessId);
+                if (currentStart == 0)
+                    return Unverifiable("process-start identity could not be read", out reason);
+                if (currentStart != captured.ProcessStartTimeUtcTicks)
+                    return Mismatch("process-start identity differs", out reason);
+            }
+
+            reason = "all pre-token identity evidence matched";
+            return WindowIdentityResult.Match;
+        }
+        catch (Exception ex)
+        {
+            reason = $"identity probe threw {ex.GetType().Name}";
+            return WindowIdentityResult.Unverifiable;
+        }
+
+        static WindowIdentityResult Mismatch(string message, out string resultReason)
+        {
+            resultReason = message;
+            return WindowIdentityResult.Mismatch;
+        }
+
+        static WindowIdentityResult Unverifiable(string message, out string resultReason)
+        {
+            resultReason = message;
+            return WindowIdentityResult.Unverifiable;
+        }
+    }
+
     public static bool Matches(
         CapturedWindow captured,
         IWindowIdentityNativeApi api,

@@ -52,3 +52,75 @@ match SHALL mutate and clear the entry only after restoration is verified.
   succeeds
 - **THEN** the guest SHALL be restored, its exact capture token SHALL be
   removed, and only then may its journal entry be consumed
+
+### Requirement: Tokenless legacy evidence SHALL require supervised recovery
+
+Pending v1/v2 evidence SHALL have a read-only discovery operation and a
+separate explicitly user-started recovery operation. Startup SHALL never
+mutate a tokenless legacy HWND. Recovery SHALL enumerate live top-level
+windows, require explicit candidate selection and confirmation, compare every
+historical identity field present in the entry, require an explicit candidate
+selection when more than one historical match exists, and refuse nonmatching
+candidates.
+
+#### Scenario: Pending discovery is read-only and identifies evidence
+
+- **WHEN** a user runs the pending-recovery discovery command
+- **THEN** it SHALL report pending-file/schema/entry counts and sanitized
+  recorded-window status without changing a file or native window
+
+#### Scenario: An unconfirmed candidate is never mutated
+
+- **WHEN** the operator rejects a candidate, selects a mismatching candidate,
+  or does not provide the exact confirmation
+- **THEN** no presentation or property mutation SHALL occur and the pending
+  bytes SHALL remain unchanged
+
+#### Scenario: A new recovery generation guard is required
+
+- **WHEN** the operator confirms a matching live target
+- **THEN** recovery SHALL refuse any existing capture/recovery property, install
+  a distinct ephemeral token, verify it, and revalidate it immediately before
+  each placement, visibility, DWM, and token-removal mutation
+
+### Requirement: Legacy recovery semantics SHALL reflect historical evidence
+
+Supervised v1 recovery SHALL restore visibility only because v1 recorded no
+placement or process-instance state. Supervised v2 recovery MAY restore its
+recorded placement, visibility, and transition state only after all available
+historical identity matches and the new generation guard is established.
+
+#### Scenario: Explicit v1 recovery is visibility-only
+
+- **WHEN** a user confirms a valid v1 target and the temporary generation guard
+  remains valid
+- **THEN** recovery SHALL call/show and verify visibility without fabricating
+  geometry or maximize state
+
+#### Scenario: Explicit v2 recovery restores recorded presentation
+
+- **WHEN** a user confirms a valid v2 target and the temporary generation guard
+  remains valid
+- **THEN** recovery SHALL restore the recorded presentation fields, verifying
+  each post-state and retaining evidence if any mutation fails
+
+### Requirement: Pending entry retirement SHALL be atomic and entry-scoped
+
+Successful recovery SHALL make an auditable durable resolution marker before
+atomically removing only the resolved entry. Unresolved sibling entries and
+unknown JSON fields SHALL remain intact. A cleanup failure SHALL retain the
+original pending evidence and prevent repeated native recovery of the same
+already-resolved entry.
+
+#### Scenario: One entry resolves without destroying siblings
+
+- **WHEN** entry A in a multi-entry pending file is recovered successfully
+- **THEN** entries B and later SHALL remain recoverable with their original
+  fields and the file SHALL not be replaced by an empty or unrelated journal
+
+#### Scenario: Recovery failure retains evidence
+
+- **WHEN** target selection, temporary-token installation, placement,
+  visibility, DWM restoration, or token removal fails
+- **THEN** the pending entry SHALL remain available and no success marker SHALL
+  authorize its retirement

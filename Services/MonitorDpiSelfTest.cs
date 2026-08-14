@@ -14,6 +14,16 @@ internal static class MonitorDpiSelfTest
         var probe = new FakeProbe { Dpi = 144 };
         bool targetDpiIsConsumed = probe.GetEffectiveDpi(new IntPtr(7)) == 144;
         bool conversionUsesProbeDpi = SplitGeometry.ScaleUnawareLogicalToPhysical(500, probe.GetEffectiveDpi(new IntPtr(7))) == 750;
+        bool knownUnawareAtValidDpiIsAccepted = DpiCapturePolicy.HasKnownAwarenessAndMonitorDpi(
+            DpiCapturePolicy.DpiAwarenessUnaware, 144);
+        bool knownAwareAtValidDpiIsAccepted = DpiCapturePolicy.HasKnownAwarenessAndMonitorDpi(
+            DpiCapturePolicy.DpiAwarenessPerMonitor, 144);
+        bool unknownAwarenessIsRefused = !DpiCapturePolicy.HasKnownAwarenessAndMonitorDpi(-1, 144);
+        bool failedMonitorDpiIsRefused = !DpiCapturePolicy.HasKnownAwarenessAndMonitorDpi(
+            DpiCapturePolicy.DpiAwarenessUnaware, 0);
+        bool awareMinimumIsNotScaled = !DpiCapturePolicy.ShouldScaleUnawareMinimum(
+            DpiCapturePolicy.DpiAwarenessPerMonitor, 144)
+            && SplitGeometry.ScaleUnawareLogicalToPhysical(500, 96) == 500;
 
         probe.Dpi = 0;
         bool failedProbeIsUnavailable = probe.GetEffectiveDpi(new IntPtr(7)) == 0
@@ -49,7 +59,13 @@ internal static class MonitorDpiSelfTest
 
         bool nativeLifecycleIsBounded = CoversNativeLifecycle();
 
-        return targetDpiIsConsumed && conversionUsesProbeDpi && failedProbeIsUnavailable
+        return targetDpiIsConsumed && conversionUsesProbeDpi
+            && knownUnawareAtValidDpiIsAccepted
+            && knownAwareAtValidDpiIsAccepted
+            && unknownAwarenessIsRefused
+            && failedMonitorDpiIsRefused
+            && awareMinimumIsNotScaled
+            && failedProbeIsUnavailable
             && negativeCoordinatesArePreserved
             && extremeCoordinatesDoNotOverflow
             && invalidRectangleFailsClosed

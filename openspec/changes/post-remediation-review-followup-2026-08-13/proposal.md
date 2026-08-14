@@ -23,6 +23,18 @@ commit/CI self-reference loop.
   through the same contract-correct probe.
 - Refactor `.agent/STATE.md` and repository instructions so Git resolves live
   state dynamically and embedded SHAs/CI IDs are historical evidence only.
+- Revalidate the captured generation immediately after slow journal work and
+  immediately before each later destructive native mutation, while keeping
+  hot layout checks in the bounded token/PID/thread/class tier.
+- Add an explicitly user-started pending-journal discovery and recovery
+  workflow. Legacy v1 recovery is visibility-only; v2 may restore its recorded
+  presentation only after human candidate confirmation and a new ephemeral
+  generation token.
+- Reconcile the DPI-unaware acceptance contract across source, main specs,
+  README, architecture, testing, and diagnostics without claiming physical
+  mixed-DPI qualification.
+- Install the pinned OpenSpec CLI in hosted CI with lifecycle scripts disabled
+  after verifying that its postinstall is only an opt-in completion hint.
 
 ## Capabilities
 

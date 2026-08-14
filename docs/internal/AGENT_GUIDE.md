@@ -286,7 +286,7 @@ The intended distribution artifact is the self-contained single-file executable 
   marker prevents tray-style guests from being resurrected. Recycled HWND/PID
   identities are rejected.
 
-These limitations are documented in `README.md` and should not be treated as bugs to be fixed without changing the project's scope. GPU-rendered/Electron/DirectX apps showing black or frozen content, and mixed-DPI sizing issues across monitors, were artifacts of the deleted Reparent backend (`SetParent` breaking DWM composition and per-monitor DPI messages respectively) and no longer apply under Shepherd — a guest is never reparented, so it's never compositor-invalidated and always receives its own native DPI handling untouched.
+These limitations are documented in `README.md` and should not be treated as bugs to be fixed without changing the project's scope. GPU-rendered/Electron/DirectX apps showing black or frozen content were artifacts of the deleted Reparent backend (`SetParent` breaking DWM composition) and do not apply under Shepherd — a guest is never reparented and retains its own native rendering. Shepherd accepts a known DPI-unaware guest using physical outer-window geometry, although Windows may scale its content; physical mixed-DPI hardware remains an external qualification rather than an unconditional guarantee.
 
 ---
 
