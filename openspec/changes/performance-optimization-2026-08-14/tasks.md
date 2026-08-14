@@ -20,6 +20,9 @@
 ## Phase C — build and tooling
 
 - [x] Remove solution-contained duplicate builds from `scripts/validate.ps1`.
+- [x] Keep the isolated Performance runner non-gating but include its audited
+  restore and compile-only build in canonical validation so CI detects harness
+  compilation drift.
 - [x] Add locked repository-owned OpenSpec tooling and use it in local/hosted
   validation with npm cache and lifecycle scripts disabled.
 - [x] Evaluate NuGet lock mode; do not retain it because the SDK-generated
@@ -51,5 +54,7 @@
   validation from the final tree.
 - [x] Review diff/invariants and update campaign record/state without a
   self-referential state-only commit.
-- [ ] Commit/push only when explicitly authorized by the task and verify CI for
-  the exact resulting SHA.
+
+Normal `main` push and exact-SHA hosted-CI confirmation are dynamic session
+handoff evidence governed by `AGENTS.md`; they are intentionally not persisted
+as a post-CI checkbox that would require another state-only commit.

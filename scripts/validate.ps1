@@ -2,9 +2,9 @@
 .SYNOPSIS
     One-command validation entry point for TabDock.
 .DESCRIPTION
-    Builds the solution once (covering the main app and Spike) plus both
-    ValidationDriver projects, then runs the hermetic
-    diagnostics/geometry/persistence/privacy qualification.
+    Builds the solution once (covering the main app and Spike) plus the
+    ValidationDriver, GuineaPig, and non-gating Performance projects, then runs
+    the hermetic diagnostics/geometry/persistence/privacy qualification.
     Real-input ValidationDriver execution is opt-in and remains supervised.
 .PARAMETER Configuration
     Build configuration. Debug is the local default; CI uses Release.
@@ -37,6 +37,7 @@ $Solution       = Join-Path $RepoRoot 'TabDock.sln'
 $AppExe         = Join-Path $RepoRoot "bin\$Configuration\net8.0-windows\win-x64\TabDock.exe"
 $DriverProject  = Join-Path $RepoRoot 'tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj'
 $PigProject     = Join-Path $RepoRoot 'tests\ValidationDriver\TabDock.GuineaPig\TabDock.GuineaPig.csproj'
+$PerfProject    = Join-Path $RepoRoot 'tests\Performance\TabDock.Performance.csproj'
 $OpenSpecRoot   = Join-Path $RepoRoot 'tools\openspec'
 $OpenSpecLocal  = Join-Path $OpenSpecRoot 'node_modules\.bin\openspec.cmd'
 $TempRoot       = Join-Path ([IO.Path]::GetTempPath()) "TabDock-validation-$PID-$([Guid]::NewGuid().ToString('N'))"
@@ -186,7 +187,7 @@ function Assert-SupportBundlePrivacy {
 New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null
 Push-Location $RepoRoot
 try {
-    $restoreProjects = @($Solution, $DriverProject, $PigProject)
+    $restoreProjects = @($Solution, $DriverProject, $PigProject, $PerfProject)
     if ($Ci) {
         foreach ($project in $restoreProjects) {
             Invoke-Step "Restore with NuGet audit: $(Split-Path -Leaf $project)" {
@@ -213,6 +214,9 @@ try {
     }
     Invoke-Step "Build GuineaPig ($Configuration, no RID)" {
         dotnet build $PigProject -c $Configuration --nologo @noRestore
+    }
+    Invoke-Step "Build Performance runner ($Configuration, compile-only)" {
+        dotnet build $PerfProject -c $Configuration --nologo @noRestore
     }
 
     Invoke-Executable "Geometry self-test ($Configuration)" $AppExe @('--selftest-geometry')

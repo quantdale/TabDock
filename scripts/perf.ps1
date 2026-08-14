@@ -60,9 +60,9 @@ try {
     if ($IncludeBuildMatrix) {
         New-Item -ItemType Directory -Path $matrixRoot -Force | Out-Null
         $restoreProjects = @(
-            @{ name = 'restore-solution-locked'; path = $repoRoot + '\TabDock.sln' },
-            @{ name = 'restore-validation-driver-locked'; path = $repoRoot + '\tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj' },
-            @{ name = 'restore-guinea-pig-locked'; path = $repoRoot + '\tests\ValidationDriver\TabDock.GuineaPig\TabDock.GuineaPig.csproj' }
+            @{ name = 'restore-solution-audited'; path = $repoRoot + '\TabDock.sln' },
+            @{ name = 'restore-validation-driver-audited'; path = $repoRoot + '\tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj' },
+            @{ name = 'restore-guinea-pig-audited'; path = $repoRoot + '\tests\ValidationDriver\TabDock.GuineaPig\TabDock.GuineaPig.csproj' }
         )
         foreach ($restoreProject in $restoreProjects) {
             $buildMeasurements += Measure-CommandDuration $restoreProject.name {

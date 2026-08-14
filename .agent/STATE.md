@@ -16,18 +16,19 @@ this text.
   diagnostic metadata, post-Loaded HWND reuse, bounded generation-safe picker
   icon resolution, duplicate-build removal, locked OpenSpec/npm tooling, and
   NuGet lock mode was evaluated but not retained because hosted SDK-generated
-  package versions differ. No speculative logger, persistence,
-  min-track, z-order, or large-class refactor was retained.
+  package versions differ. The non-gating Performance project is included in
+  canonical restore/build qualification so the engineering harness cannot rot
+  while normal CI remains green. No speculative logger, persistence, min-track,
+  z-order, or large-class refactor was retained.
 - Active plan/spec: `.agent/plans/tabdock-performance-optimization-2026-08-14.md`
   plus `openspec/changes/performance-optimization-2026-08-14/`.
 - Campaign record: `docs/internal/perf-2026-08-14.md`.
 - Current local evidence: final Release validation passes with `193 checks / 0
-  failures`, OpenSpec `18 passed / 0 failed`, locked audited restores,
-  publish, recovery/support-bundle smoke, and published `--version`. The
-  non-gating performance harness has trace, logger, picker, persistence, and
-  build/tool timing JSON evidence. Commit/push/hosted-CI status remains
-  dynamic and is never persisted as a claim about the commit containing this
-  file.
+  failures`, OpenSpec `18 passed / 0 failed`, audited restores, publish,
+  recovery/support-bundle smoke, and published `--version`. The non-gating
+  performance harness has trace, logger, picker, persistence, and build/tool
+  timing JSON evidence. Commit/push/hosted-CI status remains dynamic and is
+  never persisted as a claim about the commit containing this file.
 
 ## Closure decisions
 
