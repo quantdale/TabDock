@@ -59,8 +59,10 @@
                                      hard-coded thumbprint)
 
       digicert-stm signing uses the official DigiCert smctl tooling
-      (installed by the digicert/code-signing-software-trust-action@v1
-      setup step in the prepare-release-candidate workflow) with the
+      (installed by the digicert/code-signing-software-trust-action setup
+      step in the prepare-release-candidate workflow, pinned to the full
+      immutable SHA
+      fae23a455ba4bde62b64fd7cb2f81ade788f5a95 / v1.2.1) with the
       current official simple-signing invocation:
 
           smctl sign --simple --input <exe> --keypair-alias <alias>
@@ -414,14 +416,15 @@ if ($provider -eq 'digicert-stm') {
     }
     if ([string]::IsNullOrWhiteSpace($smctlPath) -or -not (Test-Path -LiteralPath $smctlPath -PathType Leaf)) {
         $status = 'SIGNING_FAILED'
-        Write-Host 'sign-release: digicert-stm requires the official DigiCert smctl tool, which was not found on PATH. The prepare-release-candidate workflow installs it via the digicert/code-signing-software-trust-action@v1 setup step (simple-signing-mode); SMCTL_PATH may override the lookup for development/testing.' -ForegroundColor Red
+        Write-Host 'sign-release: digicert-stm requires the official DigiCert smctl tool, which was not found on PATH. The prepare-release-candidate workflow installs it via the digicert/code-signing-software-trust-action setup step pinned to fae23a455ba4bde62b64fd7cb2f81ade788f5a95 (v1.2.1, simple-signing-mode); SMCTL_PATH may override the lookup for development/testing.' -ForegroundColor Red
         Emit-Result
         exit 3
     }
 
     $keypairAlias = [Environment]::GetEnvironmentVariable('SM_KEYPAIR_ALIAS')
     # Current official simple-signing invocation, mirroring
-    # digicert/code-signing-software-trust-action@v1 smctl_signing.ts:
+    # digicert/code-signing-software-trust-action smctl_signing.ts
+    # (action pinned to fae23a455ba4bde62b64fd7cb2f81ade788f5a95 / v1.2.1):
     #   smctl sign --simple --input <path> --keypair-alias <alias>
     #          [--digalg sha256] [--exit-non-zero-on-fail]
     # Timestamping stays enabled (the service timestamps by default); the
