@@ -48,12 +48,12 @@
 - [x] 8.2 Run canonical validation (builds, geometry/diagnostics 205 checks, doctor/version, support-bundle privacy, OpenSpec 19/19, publish smoke) — PASS.
 - [x] 8.3 Push reconciliation and verify exact-SHA hosted CI.
 - [x] 8.4 Close PR #10 without merging and delete the superseded branch once exact-SHA CI is green.
-- [ ] 8.5 Confirm remote branch set contains `main` only after cleanup.
+- [x] 8.5 Confirm remote branch set contains `main` only after cleanup (verified via `git branch -r`: `origin/HEAD -> origin/main`, `origin/main`).
 
 ## 9. Repository protection policy
 
 - [x] 9.1 Document recommended GitHub settings (release-tag ruleset: no force push, no deletion; optional exact-SHA status requirement for `v*` tags) — actual repository setting mutation is `BLOCKED_ENVIRONMENT` unless API credentials with admin scope are available and the mutation is safe to perform.
-- [ ] 9.2 Apply the release-tag ruleset if repository permissions allow — NOT DONE if API scope is insufficient; the documented recommendation remains the deliverable.
+- [x] 9.2 Apply the release-tag ruleset — DONE: ruleset `release-tags` (id 20878779, active, tag target, `refs/tags/v*`: deletion and force-push blocked) applied via the repository API with admin scope.
 
 ## 10. Final qualification and release decision
 
