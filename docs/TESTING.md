@@ -240,6 +240,42 @@ The diagnostics self-test also poisons and verifies the synthetic
 between a real USER32 message (which supplies initialized `MINMAXINFO` storage)
 and TabDock's manually allocated probe buffer.
 
+### Split qualification orchestrator and input provenance
+
+For the focused split closure, use the single repository orchestrator:
+
+```powershell
+.\scripts\qa-split.ps1 -Tier deterministic
+.\scripts\qa-split.ps1 -Tier controlled
+.\scripts\qa-split.ps1 -Tier interactive
+.\scripts\qa-split.ps1 -Tier browser
+.\scripts\qa-split.ps1 -Tier stress
+.\scripts\qa-split.ps1 -Tier compare
+```
+
+`-Tier all` runs the deterministic, controlled, interactive, structural,
+rendering, and available-browser coverage in one supervised invocation.
+`-Cycles`, `-Seed`, `-Browser`, `-KeepArtifacts`, `-JsonOutput`,
+`-BaselineSha`, and `-CandidatePath` are available for bounded reproduction
+and historical comparison. Results are written beneath the ignored
+`artifacts/qa-split/<run-id>/` directory as JSON and JUnit XML.
+
+The real-input guard uses a fresh run ID. Every launched process is registered
+with PID, process-start identity, executable path, role, ancestry, and its
+validated top-level HWNDs. A per-run native marker is attached only after that
+process proof succeeds. Immediately before each input operation the driver
+resolves `WindowFromPoint` and `GA_ROOT`, rereads process/HWND identity, and
+requires the live run marker. An unrelated overlay, stale/recreated HWND, or
+unverifiable root produces a privacy-safe diagnostic and sends no input. A
+browser executable name or title is never sufficient; browser tests use a
+unique temporary profile and validate the isolated process ancestry. Cleanup
+only touches identities launched and still provable for the current run.
+
+The browser tier reports `SKIP_BROWSER_NOT_INSTALLED` for an absent browser and
+`BLOCKED_BROWSER_HARNESS` when an installed browser cannot be safely launched
+or proven. It records the local page's viewport and resize sequence before any
+guest corrective click; a pass never depends on clicking the browser pane.
+
 **Run-budget note:** each driver process has a bounded 12-spawn scenario cap
 and 10-minute safety budget. `all` is now a guarded parent orchestrator: it
 launches the named hermetic shards as separate child driver processes, so each

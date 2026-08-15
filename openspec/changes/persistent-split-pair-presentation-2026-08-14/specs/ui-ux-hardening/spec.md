@@ -139,3 +139,51 @@ is insufficient. Unavailable browser coverage SHALL be reported explicitly.
   resize counters are recorded for unsplit, split, dormant, and resumed states;
   otherwise the report records `BLOCKED_ENVIRONMENT` for the unavailable browser
   portion without claiming a pass
+
+### Requirement: Guarded qualification proves current test-run input ownership
+
+Every automated input operation SHALL first prove the intended root HWND belongs
+to the current run. The proof SHALL bind a unique run identifier to the launched
+process PID, process-start identity, executable identity, expected ancestry, and
+then to a live top-level HWND marked for that run only after process provenance
+has succeeded. Immediately before input the harness SHALL resolve
+`WindowFromPoint` to `GA_ROOT` and revalidate the current registration. Missing,
+stale, recycled, unrelated, or unverifiable identity SHALL fail closed and send
+no input. PID, executable name, title, UIA name, or an old HWND value alone is
+not sufficient.
+
+#### Scenario: Unrelated occlusion is a guarded failure
+
+- **WHEN** an unrelated desktop window covers a test target coordinate
+- **THEN** the harness emits a privacy-safe machine-readable identity diagnostic
+  and sends no click or key
+
+#### Scenario: Browser descendants stay within the isolated run
+
+- **WHEN** a browser creates renderer or browser-process descendants for an
+  isolated test profile
+- **THEN** only descendants proven to belong to the launched isolated instance
+  and its run-marked top-level HWNDs are accepted; existing personal browser
+  windows are rejected
+
+### Requirement: Split qualification is tiered and machine-readable
+
+The change SHALL provide deterministic state-contract tests, controlled HWND
+integration tests, guarded UI input tests, isolated browser tests where a
+browser is installed, bounded stress/failure-injection tests, and isolated
+historical comparison. Every scenario SHALL emit JSON containing the run ID,
+scenario/iteration, candidate identity, expected and observed state,
+relationship/presentation state, visible HWND/geometry evidence, client resize
+evidence where applicable, and a bounded diagnostic/artifact reference. A run
+that stops during setup SHALL be reported as blocked/failure rather than a
+passing `0/N` result.
+
+#### Scenario: Deterministic scenario emits machine-readable evidence
+
+- **WHEN** a deterministic qualification scenario (for example the geometry
+  self-test) runs to completion
+- **THEN** its result JSON carries the run identifier, scenario and iteration,
+  candidate identity, expected/observed state, relationship/presentation state,
+  visible HWND and geometry evidence, client-resize evidence where applicable,
+  and a bounded diagnostic/artifact reference; a run that stops during setup is
+  reported as blocked/failure rather than a passing `0/N` result

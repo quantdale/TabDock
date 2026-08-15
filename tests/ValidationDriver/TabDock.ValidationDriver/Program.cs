@@ -33,6 +33,7 @@ internal static class Program
 
         var opt = new Options();
         var scenarios = new List<string>();
+        string? selfTestSuite = null;
         bool listRequested = false;
         bool helpRequested = false;
         for (int i = 0; i < args.Length; i++)
@@ -41,6 +42,11 @@ internal static class Program
             {
                 case "--yes":
                     opt.Yes = true;
+                    break;
+                case "--selftest":
+                    if (i + 1 >= args.Length)
+                        return Usage("--selftest requires split, identity, or all.");
+                    selfTestSuite = args[++i];
                     break;
                 case "--cycles":
                     if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out int n) || n < 1)
@@ -115,6 +121,12 @@ internal static class Program
 
         if (helpRequested)
             return Usage(null, 0);
+        if (selfTestSuite != null)
+        {
+            TestRunProvenance.BeginRun();
+            GuardedProc.Log($"Deterministic qualification runId={TestRunProvenance.RunId}.");
+            return DeterministicSelfTests.Run(selfTestSuite);
+        }
         if (listRequested)
             return ListScenarios();
         if (scenarios.Count == 0 && opt.Shard == null)
@@ -205,6 +217,8 @@ internal static class Program
         };
 
         Input.SaveCursor();
+        TestRunProvenance.BeginRun();
+        GuardedProc.Log($"Validation runId={TestRunProvenance.RunId} marker={TestRunProvenance.MarkerName}.");
         bool allPassed = true;
         int ran = 0;
         try
@@ -343,6 +357,7 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine("Options:");
         Console.WriteLine("  --yes          skip the interactive confirmation (supervised runs)");
+        Console.WriteLine("  --selftest NAME run native-free split/identity contracts (split|identity|all)");
         Console.WriteLine("  --cycles N     cycle count for maximize-repro (default 3) and repeat-cycles (default 5)");
         Console.WriteLine("  --guest KIND   guest app for scenarios that need one: pig (default), wt, chrome-nogpu, chrome-gpu, chrome-normal, edge-normal, firefox-normal, codex, chatgptclassic");
         Console.WriteLine("  --configuration Debug|Release   select build output (default Debug)");

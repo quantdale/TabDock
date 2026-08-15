@@ -61,6 +61,9 @@ internal static class Program
                 case "--title":
                     opts.Title = Require(args, ref i);
                     break;
+                case "--run-id":
+                    opts.RunId = Require(args, ref i);
+                    break;
                 case "--color":
                     opts.Color = Require(args, ref i);
                     break;

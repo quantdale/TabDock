@@ -29,30 +29,57 @@ internal static class TabDockLog
         }
     }
 
-    /// <summary>Lines appended since <paramref name="offset"/>. Handles the 1 MB rotation (file shrunk → reread from 0).</summary>
+    /// <summary>
+    /// Lines appended since <paramref name="offset"/>. When the application
+    /// rotates its 1 MB log between the cursor read and this call, the cursor
+    /// belongs to <c>TabDock.log.old</c>; read its suffix followed by the new
+    /// file. This keeps transition assertions truthful across rotation without
+    /// treating unrelated old content as current evidence.
+    /// </summary>
     public static string[] ReadNewLines(long offset)
     {
         try
         {
-            using var fs = new FileStream(LogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            if (fs.Length < offset)
-                offset = 0; // Log rotated underneath us.
-            fs.Seek(offset, SeekOrigin.Begin);
-            using var sr = new StreamReader(fs, Encoding.UTF8);
-            string content = sr.ReadToEnd();
-
             var lines = new List<string>();
-            foreach (string raw in content.Split('\n'))
+            var current = new FileInfo(LogPath);
+            if (current.Exists && current.Length < offset)
             {
-                string line = raw.TrimEnd('\r');
-                if (line.Length > 0)
-                    lines.Add(line);
+                // LoggingService keeps one predecessor at .old. The cursor
+                // was recorded against the previous file, so retain only its
+                // suffix and then append all of the newly opened file.
+                string rotatedPath = LogPath + ".old";
+                var rotated = new FileInfo(rotatedPath);
+                if (rotated.Exists && offset <= rotated.Length)
+                    lines.AddRange(ReadLines(rotatedPath, offset));
+                if (current.Exists)
+                    lines.AddRange(ReadLines(LogPath, 0L));
+            }
+            else if (current.Exists)
+            {
+                lines.AddRange(ReadLines(LogPath, offset));
             }
             return lines.ToArray();
         }
         catch
         {
             return Array.Empty<string>();
+        }
+    }
+
+    private static IEnumerable<string> ReadLines(string path, long offset)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        if (offset < 0 || offset > fs.Length)
+            offset = 0;
+        fs.Seek(offset, SeekOrigin.Begin);
+        using var sr = new StreamReader(fs, Encoding.UTF8);
+        string content = sr.ReadToEnd();
+        foreach (string raw in content.Split('\n'))
+        {
+            string line = raw.TrimEnd('\r');
+            if (line.Length > 0)
+                yield return line;
         }
     }
 

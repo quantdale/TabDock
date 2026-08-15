@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading;
 
 namespace TabDock.ValidationDriver;
 
@@ -22,6 +23,26 @@ internal static class Discover
     /// driver's safety checks. A zero/invalid HWND never becomes actionable.
     /// </summary>
     public static bool TryCaptureIdentity(IntPtr hwnd, out WindowIdentity identity)
+    {
+        // Process image/start-time queries are independent native calls. A
+        // live window can therefore briefly produce an incomplete snapshot
+        // while another process is starting/stopping or the OS is servicing a
+        // burst of identity probes. Re-read the complete identity a bounded
+        // number of times; this never admits a partial result and remains
+        // fail-closed when the HWND genuinely disappears or changes owner.
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            if (TryCaptureIdentityOnce(hwnd, out identity))
+                return true;
+            if (attempt < 2)
+                Thread.Sleep(2);
+        }
+
+        identity = default;
+        return false;
+    }
+
+    private static bool TryCaptureIdentityOnce(IntPtr hwnd, out WindowIdentity identity)
     {
         identity = default;
         if (!NativeMethods.IsWindow(hwnd))

@@ -33,6 +33,7 @@ internal sealed class GuestInfo
     public string Title = string.Empty;
     public WindowIdentity? Identity;
     public bool IsPig;
+    public string Role = "ControlledGuest";
 
     /// <summary>
     /// True for guests that are the user's own pre-existing real application
@@ -61,6 +62,16 @@ internal sealed class GuestInfo
     public string? VerifyFilePath;
 }
 
+internal enum QualificationStatus
+{
+    Pass,
+    Fail,
+    Skip,
+    Blocked,
+}
+
+internal sealed record AssertionEvidence(string Name, bool Passed);
+
 /// <summary>Per-scenario state: the TabDock instance, spawned guests, containers, and assertion results.</summary>
 internal sealed class Ctx
 {
@@ -75,11 +86,51 @@ internal sealed class Ctx
     public readonly List<IntPtr> Containers = new List<IntPtr>();
     public readonly List<WindowIdentity> ContainerIdentities = new List<WindowIdentity>();
     public bool Pass = true;
+    public QualificationStatus Status { get; private set; } = QualificationStatus.Pass;
+    public DateTimeOffset StartedUtc { get; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? FinishedUtc { get; set; }
+    public readonly List<AssertionEvidence> Assertions = new();
+    public readonly List<string> FailureReasons = new();
+    public string? ExpectedState { get; set; }
+    public string? ObservedState { get; set; }
+    // Captured immediately before cleanup so the result artifact describes
+    // the state that was qualified, not the deliberately torn-down state.
+    public object[]? LiveVisibleHwndSet { get; set; }
+    public object[]? LiveGuestRectangles { get; set; }
+    public object[]? LivePaneRectangles { get; set; }
+    public object[]? LiveClientRenderingEvidence { get; set; }
+    public string? LiveForegroundHwnd { get; set; }
+    public string[]? LiveSplitRelationshipMembers { get; set; }
+    public bool? LiveSplitPairPresented { get; set; }
+    public string? LiveActiveGuest { get; set; }
 
     public void Check(bool condition, string what)
     {
         GuardedProc.Log($"  {(condition ? "PASS" : "FAIL")}: {what}");
-        Pass &= condition;
+        Assertions.Add(new AssertionEvidence(what, condition));
+        if (!condition)
+        {
+            Pass = false;
+            if (Status == QualificationStatus.Pass)
+                Status = QualificationStatus.Fail;
+            FailureReasons.Add(what);
+        }
+    }
+
+    public void Skip(string reason)
+    {
+        GuardedProc.Log($"  SKIP: {reason}");
+        Status = QualificationStatus.Skip;
+        Pass = true;
+        FailureReasons.Add(reason);
+    }
+
+    public void Block(string reason)
+    {
+        GuardedProc.Log($"  BLOCKED: {reason}");
+        Status = QualificationStatus.Blocked;
+        Pass = false;
+        FailureReasons.Add(reason);
     }
 }
 
@@ -326,6 +377,7 @@ internal static partial class Scenarios
         "dragprobe",
 "capture-dpi-unaware-guest",
 "capture-dpi-system-guest",
+        "split-comparison-observe",
         "startup-group-not-hidden-behind-existing-window",
         "startup-does-not-steal-foreground-after-external-activation",
     };
@@ -397,6 +449,8 @@ internal static partial class Scenarios
             return "split-render";
         if (Array.IndexOf(SplitFocusScenarios, name) >= 0)
             return "split-focus";
+        if (name == "split-comparison-observe")
+            return "split-render";
         if (name.StartsWith("split-", StringComparison.Ordinal) || name == "split")
             return null;
         if (name.Contains("drag", StringComparison.Ordinal)
@@ -559,6 +613,7 @@ internal static partial class Scenarios
             "split-three-app-client-settle" => SplitThreeAppClientSettle,
             "split-diagnostic-snapshot" => SplitDiagnosticSnapshot,
             "split-dormant-member-removal" => SplitDormantMemberRemoval,
+            "split-comparison-observe" => SplitComparisonObserve,
             "split-drag-release-render-stability" => SplitDragReleaseRenderStability,
             "drag-release-render-stability" => DragReleaseRenderStability,
             "split-directclick" => SplitDirectClick,
@@ -643,7 +698,7 @@ internal static partial class Scenarios
         catch (OperationCanceledException)
         {
             if (ctx != null)
-                ctx.Pass = false;
+                ctx.Check(false, "aborted: bounded budget or cancellation");
             GuardedProc.Log("  ABORTED: overall time budget exceeded or Ctrl+C.");
             throw;
         }
@@ -651,14 +706,17 @@ internal static partial class Scenarios
         {
             GuardedProc.Log($"  ERROR: {ex.Message}");
             if (ctx != null)
-                ctx.Pass = false;
+                ctx.Check(false, $"unhandled exception: {ex.GetType().Name}");
         }
         finally
         {
             if (ctx != null)
             {
+                QualificationResultWriter.CaptureLiveEvidence(ctx);
                 Cleanup(ctx);
                 ctx.Check(NoSpawnedGuestWindowsRemain(ctx), "cleanup left no spawned guest top-level windows");
+                ctx.FinishedUtc = DateTimeOffset.UtcNow;
+                QualificationResultWriter.WriteScenario(ctx);
             }
             else
             {
@@ -671,9 +729,10 @@ internal static partial class Scenarios
                 RestoreStateSnapshot();
                 GuardedProc.Log("  Cleanup: setup failed before context creation; state snapshot restored.");
             }
-            GuardedProc.Log($"SCENARIO {name}: {(ctx != null && ctx.Pass ? "PASS" : "FAIL")}");
+            GuardedProc.Log($"SCENARIO {name}: {(ctx == null ? "FAIL" : ctx.Status.ToString().ToUpperInvariant())}");
         }
-        return ctx != null && ctx.Pass;
+        return ctx != null
+            && (ctx.Status is QualificationStatus.Pass or QualificationStatus.Skip);
     }
 
     // -------------------------------------------------------------------------
@@ -709,7 +768,7 @@ internal static partial class Scenarios
     private static Ctx StartScenario(string name)
     {
         GuardedProc.ResetScenarioBudget();
-        Input.ResetIdentityScope();
+        Input.ResetIdentityScope(name);
         s_snapshotReady = false;
         s_backupSnapshotReady = false;
         s_isolationReady = false;
@@ -806,6 +865,8 @@ internal static partial class Scenarios
             WorkingDirectory = Path.GetDirectoryName(TabDockExe)!,
         });
         ctx.TabDockPid = (uint)ctx.TabDock.Id;
+        if (!TestRunProvenance.RegisterLaunchedProcess(ctx.TabDock, "TabDockUnderTest", out string tabDockProcessReason))
+            throw new InvalidOperationException($"TabDock process provenance could not be established: {tabDockProcessReason}.");
 
         ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
         if (ctx.MainHwnd == IntPtr.Zero)
@@ -892,7 +953,7 @@ internal static partial class Scenarios
                     if (TryRefreshStableIdentity(identity, out WindowIdentity current))
                     {
                         ctx.ContainerIdentities[i] = current;
-                        Input.RegisterIdentity(current);
+                        Input.RegisterIdentity(current, TestRunProvenance.WindowRole(current.Hwnd));
                         toClose.Add(current.Hwnd);
                     }
                     else
@@ -902,7 +963,9 @@ internal static partial class Scenarios
                 {
                     string t = NativeMethods.GetWindowTextString(h) ?? string.Empty;
                     if (h != ctx.MainHwnd &&
-                        (t.StartsWith("Group", StringComparison.Ordinal) || t.StartsWith("TDVAL-", StringComparison.Ordinal)))
+                        (t.StartsWith("Group", StringComparison.Ordinal)
+                            || t.StartsWith("TDVAL-", StringComparison.Ordinal)
+                            || t.StartsWith("TDTEST:", StringComparison.Ordinal)))
                     {
                         toClose.Add(h);
                     }
@@ -944,7 +1007,7 @@ internal static partial class Scenarios
                 {
                     GuardedProc.Log($"  Cleanup: WM_CLOSE -> guest window 0x{g.Hwnd.ToInt64():X} ('{g.Title}') (shared-host process left untouched).");
                     g.Identity = currentGuestIdentity;
-                    Input.RegisterIdentity(currentGuestIdentity);
+                    Input.RegisterIdentity(currentGuestIdentity, TestRunProvenance.WindowRole(currentGuestIdentity.Hwnd));
                     VerifiedWindowOps.PostMessage(currentGuestIdentity, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
                 }
             }
@@ -1086,10 +1149,17 @@ internal static partial class Scenarios
     // -------------------------------------------------------------------------
     private static GuestInfo SpawnPig(Ctx ctx, string tag, params string[] extraFlags)
     {
-        string title = $"TDVAL-{tag}-{Rng.Next(0x10000):X4}";
-        string args = $"--title \"{title}\"" + (extraFlags.Length > 0 ? " " + string.Join(" ", extraFlags) : string.Empty);
+        string title = $"TDTEST:{TestRunProvenance.RunIdCompact[..8]}:{tag}-{Rng.Next(0x10000):X4}";
+        bool legacyPig = string.Equals(
+            Environment.GetEnvironmentVariable("TABDOCK_QA_LEGACY_PIG"), "1", StringComparison.Ordinal);
+        string args = $"--title \"{title}\""
+            + (legacyPig ? string.Empty : $" --run-id \"{TestRunProvenance.RunIdCompact}\"")
+            + (extraFlags.Length > 0 ? " " + string.Join(" ", extraFlags) : string.Empty);
         Process p = GuardedProc.SpawnGuarded(new ProcessStartInfo(PigExe, args) { UseShellExecute = false });
-        var g = new GuestInfo { Proc = p, Pid = (uint)p.Id, Title = title, IsPig = true };
+        string role = $"GuineaPig{tag}";
+        if (!TestRunProvenance.RegisterLaunchedProcess(p, role, out string processReason))
+            throw new InvalidOperationException($"GuineaPig process provenance could not be established: {processReason}.");
+        var g = new GuestInfo { Proc = p, Pid = (uint)p.Id, Title = title, IsPig = true, Role = role };
         g.Hwnd = Discover.WaitForTopLevelWindow(g.Pid, t => t == title, 15000);
         if (g.Hwnd == IntPtr.Zero)
             throw new InvalidOperationException($"Pig window '{title}' did not appear within 15s.");
@@ -1134,19 +1204,13 @@ internal static partial class Scenarios
                 // (reproduced live: a stale shared profile directory caused a
                 // "Restore pages?" window instead of time.is, breaking the picker
                 // lookup with 0 matches).
-                return WithStableTabMatchKey(SpawnClassGuest(ctx, ChromeExe,
-                    $"--user-data-dir=\"{FreshProfileDir("TabDockChromeProfileNormal")}\" --no-first-run --no-default-browser-check --disable-session-crashed-bubble https://time.is",
-                    "Chrome_WidgetWin_1", useShellExecute: true), "Google Chrome");
+                return SpawnBrowserGuest(ctx, kind, "CHR");
             case "edge-normal":
                 // Chromium-based: same window class, args shape, and fresh-profile
                 // rationale as chrome-normal.
-                return WithStableTabMatchKey(SpawnClassGuest(ctx, EdgeExe,
-                    $"--user-data-dir=\"{FreshProfileDir("TabDockEdgeProfileNormal")}\" --no-first-run --no-default-browser-check --disable-session-crashed-bubble https://time.is",
-                    "Chrome_WidgetWin_1", useShellExecute: true), "Microsoft");
+                return SpawnBrowserGuest(ctx, kind, "EDG");
             case "brave-normal":
-                return WithStableTabMatchKey(SpawnClassGuest(ctx, BraveExe,
-                    $"--user-data-dir=\"{FreshProfileDir("TabDockBraveProfileNormal")}\" --no-first-run --no-default-browser-check --disable-session-crashed-bubble https://time.is",
-                    "Chrome_WidgetWin_1", useShellExecute: true), "Brave");
+                return SpawnBrowserGuest(ctx, kind, "BRV");
             case "firefox-normal":
                 // Gecko engine, different window class. NOT installed on this dev
                 // machine (docs/internal/TEST_PLAN.md section 4) — this case is
@@ -1248,17 +1312,39 @@ internal static partial class Scenarios
     {
         HashSet<IntPtr> existing = Discover.FindWindowsByClass(className);
         Process launcher = GuardedProc.SpawnGuarded(new ProcessStartInfo(exe, args) { UseShellExecute = useShellExecute });
+        string role = BrowserRole(exe);
+        if (!TestRunProvenance.RegisterLaunchedProcess(launcher, role + ".Launcher", out string launcherReason))
+            throw new InvalidOperationException($"Guest launcher provenance could not be established: {launcherReason}.");
 
         IntPtr hwnd = IntPtr.Zero;
-        Util.WaitUntil(() => (hwnd = Discover.FindNewWindowByClass(className, existing)) != IntPtr.Zero, 20000, 150);
+        Util.WaitUntil(() =>
+        {
+            foreach (IntPtr candidate in FindNewWindowsByClass(className, existing))
+            {
+                NativeMethods.GetWindowThreadProcessId(candidate, out uint candidatePid);
+                if (TestRunProvenance.RegisterDescendantProcess(
+                    candidatePid,
+                    role,
+                    (uint)launcher.Id,
+                    exe,
+                    out _))
+                {
+                    hwnd = candidate;
+                    return true;
+                }
+            }
+            return false;
+        }, 20000, 150);
         if (hwnd == IntPtr.Zero)
-            throw new InvalidOperationException($"No new {className} window appeared for guest '{exe}'.");
+            throw new InvalidOperationException($"No new {className} window with proven launcher ancestry appeared for guest '{exe}'.");
 
         NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
         Process owner = launcher;
         if (pid != 0 && pid != (uint)launcher.Id)
         {
-            // wt.exe / chrome.exe launchers can hand the window to another process; track it for cleanup.
+            // The owner process was already registered with exact process
+            // identity and launcher ancestry before this window was accepted.
+            // Track it for cleanup, but never treat PID alone as provenance.
             try
             {
                 owner = Process.GetProcessById((int)pid);
@@ -1278,6 +1364,7 @@ internal static partial class Scenarios
             Hwnd = hwnd,
             Title = NativeMethods.GetWindowTextString(hwnd) ?? string.Empty,
             IsPig = false,
+            Role = role,
         };
         if (string.IsNullOrEmpty(g.Title))
             throw new InvalidOperationException("Guest window has no title; cannot match a picker row safely.");
@@ -1285,6 +1372,34 @@ internal static partial class Scenarios
         ctx.Guests.Add(g);
         GuardedProc.Log($"  Guest '{g.Title}' PID {g.Pid} HWND 0x{g.Hwnd.ToInt64():X}.");
         return g;
+    }
+
+    private static IEnumerable<IntPtr> FindNewWindowsByClass(string className, HashSet<IntPtr> existing)
+    {
+        var found = new List<IntPtr>();
+        NativeMethods.EnumWindows((hwnd, _) =>
+        {
+            if (existing.Contains(hwnd) || !NativeMethods.IsWindowVisible(hwnd))
+                return true;
+            if (string.Equals(NativeMethods.GetClassNameString(hwnd), className, StringComparison.OrdinalIgnoreCase))
+                found.Add(hwnd);
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    private static string BrowserRole(string executable)
+    {
+        string name = Path.GetFileName(executable);
+        if (name.Equals("msedge.exe", StringComparison.OrdinalIgnoreCase))
+            return "BrowserEdge";
+        if (name.Equals("brave.exe", StringComparison.OrdinalIgnoreCase))
+            return "BrowserBrave";
+        if (name.Equals("chrome.exe", StringComparison.OrdinalIgnoreCase))
+            return "BrowserChrome";
+        if (name.Equals("firefox.exe", StringComparison.OrdinalIgnoreCase))
+            return "BrowserFirefox";
+        return "ControlledProcess";
     }
 
     /// <summary>
@@ -1396,6 +1511,7 @@ internal static partial class Scenarios
         IntPtr pickerHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 10000);
         if (pickerHwnd == IntPtr.Zero)
             throw new InvalidOperationException("'Capture windows' picker did not appear within 10s.");
+        Input.RegisterDiscoveredWindow(pickerHwnd, "TabDockCapturePicker");
         AutomationElement? picker = Uia.FromHwnd(pickerHwnd);
         if (picker == null)
             throw new InvalidOperationException("Picker HWND found but UIA FromHandle failed.");
@@ -1431,7 +1547,11 @@ internal static partial class Scenarios
                     if (list != null && scrolls < 8)
                     {
                         Rect lr = Uia.GetElementRect(list);
-                        Input.ScrollWheel((int)(lr.X + lr.Width / 2), (int)(lr.Y + lr.Height / 2), -2);
+                        int sx = (int)(lr.X + lr.Width / 2);
+                        int sy = (int)(lr.Y + lr.Height / 2);
+                        if (!EnsureClickable(pickerHwnd, sx, sy))
+                            throw new InvalidOperationException("Picker list was obscured or failed identity proof; refusing to scroll blind.");
+                        Input.ScrollWheel(sx, sy, -2);
                         scrolls++;
                     }
                     else
@@ -1441,6 +1561,8 @@ internal static partial class Scenarios
                         if (refreshBtn != null && rc == 1)
                         {
                             (int fx, int fy) = Uia.Center(refreshBtn);
+                            if (!EnsureClickable(pickerHwnd, fx, fy))
+                                throw new InvalidOperationException("Picker Refresh point was obscured or failed identity proof; refusing to click blind.");
                             Input.ClickAt(fx, fy);
                         }
                         scrolls = 0;
@@ -1485,6 +1607,15 @@ internal static partial class Scenarios
                     _ => Uia.Center(row),
                 };
                 GuardedProc.Log($"  CaptureIntoGroup: click attempt {attempt + 1} at ({cx},{cy}).");
+                if (!EnsureClickable(pickerHwnd, cx, cy))
+                {
+                    if (attempt < 2 && RepositionVerifiedWindow(pickerHwnd, "picker"))
+                        GuardedProc.Log("  CaptureIntoGroup: moved the verified picker to a virtual-screen corner; the next row point remains guard-gated.");
+                    else
+                        GuardedProc.Log($"  CaptureIntoGroup: picker row point was not currently clickable on attempt {attempt + 1}; no input sent, trying the next verified point.");
+                    Thread.Sleep(150);
+                    continue;
+                }
                 Input.ClickAt(cx, cy);
                 Thread.Sleep(350);
                 var ts = Uia.GetToggleState(row);
@@ -1499,13 +1630,59 @@ internal static partial class Scenarios
         AutomationElement? groupBtn = Uia.FindDescendantByName(picker, ControlType.Button, "Group these", null, out int btnCount);
         if (groupBtn == null || btnCount != 1)
             throw new InvalidOperationException($"'Group these' button not found uniquely (count={btnCount}).");
-        (int bx, int by) = Uia.Center(groupBtn);
-        IntPtr wfp = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = bx, y = by });
-        IntPtr wfpRoot = NativeMethods.GetAncestor(wfp, NativeMethods.GA_ROOT);
-        GuardedProc.Log($"  Clicking 'Group these' at ({bx},{by}); windowFromPoint root=0x{wfpRoot.ToInt64():X} picker=0x{pickerHwnd.ToInt64():X} fg=0x{NativeMethods.GetForegroundWindow().ToInt64():X}.");
-        Input.ClickAt(bx, by);
-        if (!Util.WaitUntil(() => !NativeMethods.IsWindow(pickerHwnd), 3000))
-            GuardedProc.Log("  WARNING: picker still open 3s after 'Group these' click.");
+        bool pickerClosed = false;
+        for (int attempt = 0; attempt < 3 && !pickerClosed; attempt++)
+        {
+            // Refresh the UIA peer and point on every retry. A WPF command can
+            // remain enabled while its first real click is consumed by a stale
+            // focus/activation transition; retrying a freshly verified point is
+            // safer than assuming the old point still targets the picker.
+            if (attempt > 0)
+            {
+                picker = Uia.FromHwnd(pickerHwnd);
+                if (picker == null)
+                    break;
+                groupBtn = Uia.FindDescendantByName(picker, ControlType.Button, "Group these", null, out btnCount);
+                if (groupBtn == null || btnCount != 1)
+                    break;
+            }
+
+            (int bx, int by) = Uia.Center(groupBtn);
+            if (!groupBtn.Current.IsEnabled)
+                throw new InvalidOperationException("'Group these' button is disabled after the selected rows were verified On.");
+            IntPtr wfp = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = bx, y = by });
+            IntPtr wfpRoot = NativeMethods.GetAncestor(wfp, NativeMethods.GA_ROOT);
+            GuardedProc.Log($"  Clicking 'Group these' attempt {attempt + 1} at ({bx},{by}); windowFromPoint root=0x{wfpRoot.ToInt64():X} picker=0x{pickerHwnd.ToInt64():X} fg=0x{NativeMethods.GetForegroundWindow().ToInt64():X}.");
+            if (!EnsureClickable(pickerHwnd, bx, by))
+            {
+                if (attempt < 2 && RepositionVerifiedWindow(pickerHwnd, "picker"))
+                {
+                    GuardedProc.Log("  CaptureIntoGroup: moved the verified picker to a virtual-screen corner before retrying; the next button point remains guard-gated.");
+                    continue;
+                }
+                throw new InvalidOperationException("'Group these' point was obscured or failed identity proof; refusing to click blind.");
+            }
+            Input.ClickAt(bx, by);
+            pickerClosed = Util.WaitUntil(() => !NativeMethods.IsWindow(pickerHwnd), 3000, 50);
+            if (!pickerClosed)
+            {
+                // The button is IsDefault in the production picker.  A real
+                // click can be consumed by a just-completed WPF focus/command
+                // transition even while the point remains correctly owned by
+                // the picker.  Retry through the same guarded foreground path
+                // and press the default-button key as a human would; never use
+                // UIA Invoke or treat a still-open picker as success.
+                if (Input.ForceForeground(pickerHwnd))
+                {
+                    Input.SendKey(Input.VK_RETURN);
+                    pickerClosed = Util.WaitUntil(() => !NativeMethods.IsWindow(pickerHwnd), 3000, 50);
+                }
+            }
+            if (!pickerClosed)
+                GuardedProc.Log($"  WARNING: picker still open after 'Group these' attempt {attempt + 1}; rediscovering before retry.");
+        }
+        if (!pickerClosed)
+            throw new InvalidOperationException("'Group these' did not close the verified capture picker after three guarded attempts.");
 
         IntPtr container = IntPtr.Zero;
         Util.WaitUntil(() =>
@@ -1556,7 +1733,7 @@ internal static partial class Scenarios
         }
         ctx.MainClassName = identity.ClassName;
         ctx.MainIdentity = identity;
-        Input.RegisterIdentity(identity);
+        Input.RegisterIdentity(identity, "TabDockMainWindow");
     }
 
     private static bool IsCurrentMainWindow(Ctx ctx)
@@ -1576,7 +1753,7 @@ internal static partial class Scenarios
             throw new InvalidOperationException($"Guest HWND 0x{guest.Hwnd.ToInt64():X} failed process/class/title identity verification.");
         }
         guest.Identity = identity;
-        Input.RegisterIdentity(identity);
+        Input.RegisterIdentity(identity, guest.Role);
     }
 
     private static void RememberContainer(Ctx ctx, IntPtr hwnd)
@@ -1588,7 +1765,7 @@ internal static partial class Scenarios
         }
         ctx.Containers.Add(hwnd);
         ctx.ContainerIdentities.Add(identity);
-        Input.RegisterIdentity(identity);
+        Input.RegisterIdentity(identity, "TabDockContainer");
     }
 
     private static WindowIdentity GetRememberedContainerIdentity(Ctx ctx, IntPtr hwnd)
@@ -1601,7 +1778,7 @@ internal static partial class Scenarios
                 if (!TryRefreshStableIdentity(identity, out WindowIdentity current))
                     throw new InvalidOperationException($"Container HWND 0x{hwnd.ToInt64():X} changed identity; refusing a native window operation.");
                 ctx.ContainerIdentities[i] = current;
-                Input.RegisterIdentity(current);
+                Input.RegisterIdentity(current, TestRunProvenance.WindowRole(current.Hwnd));
                 return current;
             }
         }
@@ -1661,6 +1838,9 @@ internal static partial class Scenarios
         return list == null ? -1 : Uia.CountChildrenOfType(list, ControlType.ListItem);
     }
 
+    private static bool WaitForTabCount(IntPtr container, int expected, int timeoutMs)
+        => Util.WaitUntil(() => TabCount(container) == expected, timeoutMs);
+
     private static AutomationElement? FindTabText(IntPtr container, string guestTitle, out int count)
     {
         count = 0;
@@ -1668,6 +1848,26 @@ internal static partial class Scenarios
         if (list == null)
             return null;
         return Uia.FindDescendantByName(list, ControlType.Text, null, guestTitle, out count);
+    }
+
+    /// <summary>
+    /// Re-queries the live tab strip until a unique title is exposed. WPF can
+    /// rebuild the virtualized ListBoxItem tree after a split presentation
+    /// transition; a single UIA snapshot in that interval is not evidence that
+    /// the tab disappeared. The predicate is bounded and only accepts a unique
+    /// current element, so callers still refuse ambiguous or stale targets.
+    /// </summary>
+    private static AutomationElement? WaitForTabText(IntPtr container, string guestTitle, int timeoutMs, out int count)
+    {
+        AutomationElement? found = null;
+        int currentCount = 0;
+        bool ready = Util.WaitUntil(() =>
+        {
+            found = FindTabText(container, guestTitle, out currentCount);
+            return found != null && currentCount == 1;
+        }, timeoutMs);
+        count = currentCount;
+        return ready ? found : null;
     }
 
     private static AutomationElement? FindSplitComposite(IntPtr container, out int count)
@@ -1695,16 +1895,216 @@ internal static partial class Scenarios
     /// </summary>
     private static bool EnsureClickable(IntPtr target, int x, int y)
     {
-        if (Input.ForceForeground(target))
-            return true;
+        bool foreground = Input.ForceForeground(target);
 
         IntPtr atPoint = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = x, y = y });
         IntPtr rootAtPoint = NativeMethods.GetAncestor(atPoint, NativeMethods.GA_ROOT);
         bool clickable = rootAtPoint == target;
+        if (!clickable)
+        {
+            // Preserve the guard's refusal as a structured artifact before a
+            // retry can let the covering window disappear. This is deliberately
+            // diagnostic-only: the caller still sends no input until the live
+            // point resolves to the verified test HWND.
+            IdentityDiagnostics.RecordPointFailure(
+                x,
+                y,
+                target,
+                rootAtPoint == IntPtr.Zero
+                    ? "point-has-no-window"
+                    : "point-obscured-by-unrelated-window");
+        }
         GuardedProc.Log(clickable
-            ? $"  EnsureClickable: ForceForeground failed for 0x{target.ToInt64():X}, but ({x},{y}) resolves to it directly (no obscuring window) — proceeding with a real click, as a human user would."
-            : $"  EnsureClickable: ForceForeground failed for 0x{target.ToInt64():X} and ({x},{y}) resolves to 0x{rootAtPoint.ToInt64():X} instead — refusing to click blind.");
+            ? foreground
+                ? $"  EnsureClickable: 0x{target.ToInt64():X} is foreground and ({x},{y}) resolves to the verified target."
+                : $"  EnsureClickable: ForceForeground failed for 0x{target.ToInt64():X}, but ({x},{y}) resolves to it directly (no obscuring window) — proceeding with a real click, as a human user would."
+            : foreground
+                ? $"  EnsureClickable: 0x{target.ToInt64():X} reported foreground, but ({x},{y}) resolves to 0x{rootAtPoint.ToInt64():X} instead — refusing to click blind."
+                : $"  EnsureClickable: ForceForeground failed for 0x{target.ToInt64():X} and ({x},{y}) resolves to 0x{rootAtPoint.ToInt64():X} instead — refusing to click blind.");
         return clickable;
+    }
+
+    /// <summary>
+    /// Obtains a fresh, bounded real-input point from the current tab-strip UIA
+    /// tree. WPF can recycle a text peer while the composite projection is
+    /// being rebuilt; a stale peer can report a rectangle at the minimized
+    /// sentinel coordinates even though the container itself is still the
+    /// intended target. Never turn that rectangle into input. Re-discover the
+    /// element, require two nearby rectangle reads to agree, require the
+    /// center to be inside the live container, and leave WindowFromPoint plus
+    /// the full provenance check to EnsureClickable/Input immediately before
+    /// the click.
+    /// </summary>
+    private static bool TryGetFreshTabPoint(
+        IntPtr container,
+        string guestTitle,
+        out int x,
+        out int y,
+        out string diagnostic)
+    {
+        x = 0;
+        y = 0;
+        diagnostic = "tab-element-unavailable";
+        const int attempts = 4;
+        for (int attempt = 1; attempt <= attempts; attempt++)
+        {
+            AutomationElement? tab = FindTabText(container, guestTitle, out int count);
+            if (tab == null || count != 1)
+            {
+                diagnostic = $"tab-element-count={count}";
+                Thread.Sleep(40);
+                continue;
+            }
+
+            try
+            {
+                Rect first = Uia.GetElementRect(tab);
+                Thread.Sleep(5);
+                Rect second = Uia.GetElementRect(tab);
+                NativeMethods.GetWindowRect(container, out NativeMethods.RECT containerRect);
+
+                double centerX = second.X + second.Width / 2.0;
+                double centerY = second.Y + second.Height / 2.0;
+                bool finite = !double.IsNaN(first.X) && !double.IsNaN(first.Y)
+                    && !double.IsNaN(first.Width) && !double.IsNaN(first.Height)
+                    && !double.IsNaN(second.X) && !double.IsNaN(second.Y)
+                    && !double.IsNaN(second.Width) && !double.IsNaN(second.Height)
+                    && !double.IsInfinity(first.X) && !double.IsInfinity(first.Y)
+                    && !double.IsInfinity(first.Width) && !double.IsInfinity(first.Height)
+                    && !double.IsInfinity(second.X) && !double.IsInfinity(second.Y)
+                    && !double.IsInfinity(second.Width) && !double.IsInfinity(second.Height);
+                bool usable = finite
+                    && first.Width >= 4 && first.Height >= 4
+                    && second.Width >= 4 && second.Height >= 4
+                    && Math.Abs(first.X - second.X) <= 2
+                    && Math.Abs(first.Y - second.Y) <= 2
+                    && Math.Abs(first.Width - second.Width) <= 2
+                    && Math.Abs(first.Height - second.Height) <= 2
+                    && centerX >= containerRect.left && centerX < containerRect.right
+                    && centerY >= containerRect.top && centerY < containerRect.bottom
+                    && NativeMethods.IsWindow(container)
+                    && NativeMethods.IsWindowVisible(container)
+                    && !NativeMethods.IsIconic(container);
+
+                if (usable)
+                {
+                    x = (int)Math.Round(centerX);
+                    y = (int)Math.Round(centerY);
+                    diagnostic = $"point=({x},{y}) rect={first.X:0.##},{first.Y:0.##},{first.Width:0.##}x{first.Height:0.##}";
+                    return true;
+                }
+
+                diagnostic = $"unstable-or-offscreen rect1={first.X:0.##},{first.Y:0.##},{first.Width:0.##}x{first.Height:0.##} "
+                    + $"rect2={second.X:0.##},{second.Y:0.##},{second.Width:0.##}x{second.Height:0.##} "
+                    + $"container={Util.FormatRect(containerRect)} visible={NativeMethods.IsWindowVisible(container)} "
+                    + $"iconic={NativeMethods.IsIconic(container)}";
+            }
+            catch (Exception ex)
+            {
+                diagnostic = $"uia-rectangle-{ex.GetType().Name}";
+            }
+
+            if (attempt < attempts)
+                Thread.Sleep(60);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Sends a bounded sequence of independently proven real clicks to a tab
+    /// until the requested native presentation predicate settles. A missing
+    /// transition is never treated as success and never causes an unguarded
+    /// fallback: every retry re-queries UIA and repeats the HWND provenance
+    /// proof at the new point.
+    /// </summary>
+    private static bool ClickTabTextUntil(
+        IntPtr container,
+        string guestTitle,
+        string action,
+        Func<bool> settled,
+        int maxAttempts = 3)
+    {
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            if (!TryGetFreshTabPoint(container, guestTitle, out int x, out int y, out string pointDiagnostic))
+            {
+                GuardedProc.Log($"  {action}: no safe fresh UIA point before attempt {attempt}/{maxAttempts}; {pointDiagnostic}; no input sent.");
+                if (attempt < maxAttempts)
+                {
+                    Thread.Sleep(100);
+                    continue;
+                }
+                return false;
+            }
+
+            GuardedProc.Log($"  {action}: guarded tab point attempt {attempt}/{maxAttempts} ({x},{y}); {pointDiagnostic}.");
+            if (!EnsureClickable(container, x, y))
+            {
+                GuardedProc.Log($"  {action}: point failed live WindowFromPoint/provenance proof on attempt {attempt}; no input sent.");
+                if (attempt < maxAttempts)
+                {
+                    Thread.Sleep(100);
+                    continue;
+                }
+                return false;
+            }
+
+            Input.ClickAt(x, y);
+            if (Util.WaitUntil(settled, 3000, 50))
+                return true;
+
+            GuardedProc.Log($"  {action}: expected transition did not settle after attempt {attempt}; re-discovering the tab before any retry.");
+            if (attempt < maxAttempts)
+                Thread.Sleep(100);
+        }
+
+        return settled();
+    }
+
+    /// <summary>
+    /// Moves only an already identity-registered test window when an
+    /// unrelated top-level window covers its current interaction rectangle.
+    /// This is test arrangement, not an input-safety exception: the target is
+    /// revalidated before the move and every subsequent point still passes
+    /// WindowFromPoint/GA_ROOT verification. The move lets a supervised run
+    /// recover from a persistent shell/security dialog without ever sending
+    /// input to that dialog.
+    /// </summary>
+    private static bool RepositionVerifiedWindow(IntPtr targetHwnd, string role)
+    {
+        if (!Discover.TryCaptureIdentity(targetHwnd, out WindowIdentity identity))
+            return false;
+
+        if (!NativeMethods.GetWindowRect(targetHwnd, out NativeMethods.RECT current))
+            return false;
+
+        int width = current.Width;
+        int height = current.Height;
+        int left = NativeMethods.GetSystemMetrics(NativeMethods.SM_XVIRTUALSCREEN);
+        int top = NativeMethods.GetSystemMetrics(NativeMethods.SM_YVIRTUALSCREEN);
+        int screenWidth = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXVIRTUALSCREEN);
+        int screenHeight = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYVIRTUALSCREEN);
+        if (width <= 0 || height <= 0 || screenWidth <= width || screenHeight <= height)
+            return false;
+
+        int x = left + 20;
+        int y = top + 20;
+        if (!VerifiedWindowOps.SetWindowPos(
+                identity,
+                IntPtr.Zero,
+                x,
+                y,
+                0,
+                0,
+                NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE))
+            return false;
+
+        Thread.Sleep(250);
+        bool valid = Discover.MatchesIdentity(identity);
+        if (valid)
+            GuardedProc.Log($"  Repositioned verified {role} HWND 0x{targetHwnd.ToInt64():X} to the virtual-screen corner; every subsequent point remains guard-gated.");
+        return valid;
     }
 
     /// <summary>
@@ -1825,29 +2225,54 @@ internal static partial class Scenarios
     /// </summary>
     private static void ClickAddWindowButton(IntPtr container)
     {
-        // Coordinates are resolvable via UIA/GetWindowRect without needing the
-        // container to be foreground yet, so compute them first and let
-        // EnsureClickable fall back to a point-obscured check if a plain
-        // ForceForeground fails.
-        AutomationElement? containerEl = Uia.FromHwnd(container);
-        int count = 0;
-        AutomationElement? addBtn = containerEl == null
-            ? null
-            : Uia.FindDescendantByName(containerEl, ControlType.Button, "Add window to group", null, out count);
-        int x, y;
-        if (addBtn != null && count == 1)
+        for (int attempt = 0; attempt < 3; attempt++)
         {
-            (x, y) = Uia.Center(addBtn);
-        }
-        else
-        {
-            (x, y) = CaptionButtonCenterFromRight(container, 3);
-            GuardedProc.Log($"  ClickAddWindowButton: UIA Name lookup found {count} match(es) for 'Add window to group'; falling back to the pixel-offset caption-button position ({x},{y}).");
-        }
+            // Coordinates are resolvable via UIA/GetWindowRect without needing
+            // the container to be foreground yet, so compute them first and let
+            // EnsureClickable prove that the point is still owned by this
+            // registered container immediately before input.
+            AutomationElement? containerEl = Uia.FromHwnd(container);
+            int count = 0;
+            AutomationElement? addBtn = containerEl == null
+                ? null
+                : Uia.FindDescendantByName(containerEl, ControlType.Button, "Add window to group", null, out count);
+            int x, y;
+            List<(int X, int Y)> candidatePoints;
+            if (addBtn != null && count == 1)
+            {
+                Rect addRect = Uia.GetElementRect(addBtn);
+                (x, y) = Uia.Center(addBtn);
+                candidatePoints = new List<(int X, int Y)>
+                {
+                    (x, y),
+                    ((int)(addRect.X + Math.Max(5, addRect.Width * 0.10)), (int)(addRect.Y + addRect.Height / 2)),
+                    ((int)(addRect.X + Math.Max(5, addRect.Width * 0.90)), (int)(addRect.Y + addRect.Height / 2)),
+                };
+            }
+            else
+            {
+                (x, y) = CaptionButtonCenterFromRight(container, 3);
+                GuardedProc.Log($"  ClickAddWindowButton: UIA Name lookup found {count} match(es) for 'Add window to group'; falling back to the pixel-offset caption-button position ({x},{y}).");
+                candidatePoints = new List<(int X, int Y)> { (x, y) };
+            }
 
-        if (!EnsureClickable(container, x, y))
+            bool clicked = false;
+            foreach ((int candidateX, int candidateY) in candidatePoints.Distinct())
+            {
+                if (!EnsureClickable(container, candidateX, candidateY))
+                    continue;
+                Input.ClickAt(candidateX, candidateY);
+                clicked = true;
+                break;
+            }
+            if (clicked)
+                return;
+
+            if (attempt < 2 && RepositionVerifiedWindow(container, "TabDock container"))
+                continue;
+
             throw new InvalidOperationException("Could not bring the container to the foreground and its 'Add window' button is obscured — refusing to click blind.");
-        Input.ClickAt(x, y);
+        }
     }
 
     /// <summary>
@@ -1907,6 +2332,18 @@ internal static partial class Scenarios
                     0 => Uia.Center(textEl),
                     _ => Uia.Center(row),
                 };
+                if (!EnsureClickable(existingContainer, cx, cy))
+                {
+                    if (attempt < 2 && RepositionVerifiedWindow(existingContainer, "TabDock container"))
+                    {
+                        // Moving the registered container changes the UIA
+                        // coordinates. Rediscover the root and row on the next
+                        // bounded attempt; no input was sent for this attempt.
+                        Thread.Sleep(150);
+                        continue;
+                    }
+                    throw new InvalidOperationException($"Inline panel row for '{g.Title}' was obscured or failed identity proof; refusing to click blind.");
+                }
                 Input.ClickAt(cx, cy);
                 Thread.Sleep(350);
                 toggledOn = Uia.GetToggleState(row) == System.Windows.Automation.ToggleState.On;
@@ -1916,11 +2353,42 @@ internal static partial class Scenarios
             Thread.Sleep(200);
         }
 
-        AutomationElement? addBtn = Uia.FindDescendantByName(root, ControlType.Button, "Add selected", null, out int addCount);
-        if (addBtn == null || addCount != 1)
-            throw new InvalidOperationException($"Inline 'Add selected' button not found uniquely (count={addCount}).");
-        (int ax, int ay) = Uia.Center(addBtn);
-        Input.ClickAt(ax, ay);
+        bool added = false;
+        for (int attempt = 0; attempt < 3 && !added; attempt++)
+        {
+            root = Uia.FromHwnd(existingContainer)
+                ?? throw new InvalidOperationException("Inline capture root disappeared before submitting.");
+            AutomationElement? addBtn = Uia.FindDescendantByName(root, ControlType.Button, "Add selected", null, out int addCount);
+            if (addBtn == null || addCount != 1)
+                throw new InvalidOperationException($"Inline 'Add selected' button not found uniquely (count={addCount}).");
+            Rect addRect = Uia.GetElementRect(addBtn);
+            (int ax, int ay) = Uia.Center(addBtn);
+            var candidatePoints = new[]
+            {
+                (X: ax, Y: ay),
+                (X: (int)(addRect.X + Math.Max(5, addRect.Width * 0.10)), Y: (int)(addRect.Y + addRect.Height / 2)),
+                (X: (int)(addRect.X + Math.Max(5, addRect.Width * 0.90)), Y: (int)(addRect.Y + addRect.Height / 2)),
+            };
+            foreach ((int candidateX, int candidateY) in candidatePoints.Distinct())
+            {
+                if (!EnsureClickable(existingContainer, candidateX, candidateY))
+                    continue;
+                Input.ClickAt(candidateX, candidateY);
+                added = true;
+                break;
+            }
+            if (!added)
+            {
+                if (attempt < 2 && RepositionVerifiedWindow(existingContainer, "TabDock container"))
+                {
+                    Thread.Sleep(150);
+                    continue;
+                }
+                throw new InvalidOperationException("Inline 'Add selected' point was obscured or failed identity proof; refusing to click blind.");
+            }
+        }
+        if (!added)
+            throw new InvalidOperationException("Inline 'Add selected' was not submitted after guarded retries.");
         // The inline panel closes itself after adding.
         Util.WaitUntil(() => Uia.FindDescendantByName(root, ControlType.Button, "Add selected", null, out _) == null, 5000);
 
@@ -2053,7 +2521,7 @@ internal static partial class Scenarios
                 return false;
             }
             g.Identity = currentIdentity;
-            Input.RegisterIdentity(currentIdentity);
+            Input.RegisterIdentity(currentIdentity, TestRunProvenance.WindowRole(currentIdentity.Hwnd));
 
             string processName;
             try { processName = g.Proc.ProcessName; }
@@ -2188,7 +2656,7 @@ internal static partial class Scenarios
         return false;
     }
 
-    /// <summary>Every visible top-level TDVAL-* window must belong to a guest this scenario spawned (TabDock's own renamed container excluded).</summary>
+    /// <summary>Every visible top-level controlled guest window must belong to a guest this scenario spawned (TabDock's own renamed container excluded).</summary>
     private static bool NoOrphanPigWindows(Ctx ctx)
     {
         var knownPids = new HashSet<uint>(ctx.Guests.Select(g => g.Pid));
@@ -2198,7 +2666,8 @@ internal static partial class Scenarios
             if (!NativeMethods.IsWindowVisible(hwnd))
                 return true;
             string title = NativeMethods.GetWindowTextString(hwnd) ?? string.Empty;
-            if (!title.StartsWith("TDVAL-", StringComparison.Ordinal))
+            if (!title.StartsWith("TDVAL-", StringComparison.Ordinal)
+                && !title.StartsWith("TDTEST:", StringComparison.Ordinal))
                 return true;
             NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
             if (pid == ctx.TabDockPid || knownPids.Contains(pid))
@@ -2236,7 +2705,7 @@ internal static partial class Scenarios
 
     /// <summary>
     /// Counts open container/group windows for this TabDock instance (title
-    /// starts with "Group" or "TDVAL-", the same prefix convention Cleanup()
+    /// starts with "Group", "TDVAL-", or the per-run "TDTEST:" marker, the same prefix convention Cleanup()
     /// uses), excluding the main launcher window. Used to positively assert
     /// "exactly one container is open" after an action that must target an
     /// EXISTING group rather than accidentally creating a new one.
@@ -2249,7 +2718,9 @@ internal static partial class Scenarios
             if (h == ctx.MainHwnd)
                 continue;
             string t = NativeMethods.GetWindowTextString(h) ?? string.Empty;
-            if (t.StartsWith("Group", StringComparison.Ordinal) || t.StartsWith("TDVAL-", StringComparison.Ordinal))
+            if (t.StartsWith("Group", StringComparison.Ordinal)
+                || t.StartsWith("TDVAL-", StringComparison.Ordinal)
+                || t.StartsWith("TDTEST:", StringComparison.Ordinal))
                 n++;
         }
         return n;

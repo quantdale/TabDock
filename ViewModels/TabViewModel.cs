@@ -15,6 +15,13 @@ public sealed class TabViewModel : ViewModelBase
 
     public string Title => Model.DisplayLabel;
 
+    /// <summary>
+    /// Stable UI Automation identifier for an ordinary tab-strip item. The
+    /// container style binds this value to the generated ListBoxItem so the
+    /// driver can distinguish ordinary tabs from the split projection.
+    /// </summary>
+    public string AutomationId => "TabItem";
+
     public bool IsActive
     {
         get => _isActive;

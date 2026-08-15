@@ -43,6 +43,22 @@ public enum DpiMenuMode
 /// -3, per-monitor-v2 = -4. No references to TabDock's own P/Invoke surface.</summary>
 internal static class PigDpi
 {
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ClientRect
+    {
+        internal int Left;
+        internal int Top;
+        internal int Right;
+        internal int Bottom;
+
+        internal int Width => Right - Left;
+        internal int Height => Bottom - Top;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetClientRect(IntPtr hwnd, out ClientRect rect);
+
     [DllImport("user32.dll")]
     internal static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
 
@@ -96,12 +112,20 @@ internal static class PigDpi
         string awareness = ctx == IntPtr.Zero ? "unknown" : GetAwarenessFromDpiAwarenessContext(ctx).ToString();
         return $"dpi={dpi} awareness={awareness}";
     }
+
+    internal static (int Width, int Height) GetNativeClientSize(IntPtr hwnd, Size fallback)
+    {
+        return GetClientRect(hwnd, out ClientRect rect) && rect.Width >= 0 && rect.Height >= 0
+            ? (rect.Width, rect.Height)
+            : (fallback.Width, fallback.Height);
+    }
 }
 
 /// <summary>Parsed command-line options for the guinea-pig window.</summary>
 public sealed class PigOptions
 {
     public string Title = string.Empty;
+    public string RunId = string.Empty;
     public string? Color;
     public bool Pulse;
     public bool HideOnClose;
@@ -149,6 +173,9 @@ public sealed class PigForm : Form
     private const int MsgKillFocus = 0x0008;
     private const int MsgMouseActivate = 0x0021;
     private const int MsgGetMinMaxInfo = 0x0024;
+    private const int MsgEnterSizeMove = 0x0231;
+    private const int MsgExitSizeMove = 0x0232;
+    private const int MsgWindowPosChanged = 0x0047;
 
     private readonly PigOptions _opts;
     private readonly string? _logPath;
@@ -158,6 +185,7 @@ public sealed class PigForm : Form
     private bool _pulseOn;
     private TextBox? _textBox;
     private int _resizeProbeCount;
+    private int _nativeMoveCount;
 
     public PigForm(PigOptions opts)
     {
@@ -285,7 +313,7 @@ public sealed class PigForm : Form
         FormClosing += OnPigFormClosing;
         FormClosed += (s, e) => Log("LIFECYCLE FormClosed");
 
-        Log($"LIFECYCLE Created title='{opts.Title}' pid={Environment.ProcessId} color={_baseColor} " +
+        Log($"LIFECYCLE Created title='{opts.Title}' pid={Environment.ProcessId} runId={opts.RunId} color={_baseColor} " +
             $"pulse={opts.Pulse} hideOnClose={opts.HideOnClose} minThenHide={opts.MinimizeThenHideOnClose} " +
             $"selfClose={opts.SelfCloseAfterSeconds} selfMin={opts.SelfMinimizeAfterSeconds} closeButton={opts.CloseButton} textBox={opts.TextBox} " +
             $"resizeProbe={opts.ResizeProbe} " +
@@ -338,6 +366,8 @@ public sealed class PigForm : Form
                 MsgSetFocus => "WM_SETFOCUS",
                 MsgKillFocus => "WM_KILLFOCUS",
                 MsgMouseActivate => "WM_MOUSEACTIVATE",
+                MsgEnterSizeMove => "WM_ENTERSIZEMOVE",
+                MsgExitSizeMove => "WM_EXITSIZEMOVE",
                 _ => null,
             };
             if (name != null)
@@ -362,11 +392,30 @@ public sealed class PigForm : Form
 
         base.WndProc(ref m);
 
+        if (_opts.ResizeProbe && m.Msg == MsgExitSizeMove)
+        {
+            Log($"NATIVE_MOVE_END sequence={_nativeMoveCount}");
+        }
+        else if (_opts.ResizeProbe && m.Msg == MsgEnterSizeMove)
+        {
+            _nativeMoveCount++;
+            Log($"NATIVE_MOVE_START sequence={_nativeMoveCount}");
+        }
+        else if (_opts.ResizeProbe && m.Msg == MsgWindowPosChanged)
+        {
+            Log($"NATIVE_MOVE_POSITION sequence={_nativeMoveCount}");
+        }
+
         if (_opts.ResizeProbe && (m.Msg == MsgSize || m.Msg == MsgShowWindow))
         {
             if (m.Msg == MsgSize)
                 _resizeProbeCount++;
-            Log($"CLIENT_PRESENT msg={(m.Msg == MsgSize ? "WM_SIZE" : "WM_SHOWWINDOW")} visible={Visible} client={ClientSize.Width}x{ClientSize.Height} resizeCount={_resizeProbeCount}");
+            // WinForms can still expose the previous managed ClientSize while
+            // the WndProc is unwinding WM_SIZE. The native client rectangle is
+            // the authoritative post-message rendering evidence and avoids
+            // recording a stale width that disagrees with the HWND itself.
+            (int clientWidth, int clientHeight) = PigDpi.GetNativeClientSize(Handle, ClientSize);
+            Log($"CLIENT_PRESENT msg={(m.Msg == MsgSize ? "WM_SIZE" : "WM_SHOWWINDOW")} visible={Visible} client={clientWidth}x{clientHeight} formsClient={ClientSize.Width}x{ClientSize.Height} resizeCount={_resizeProbeCount}");
         }
 
         // When reparented as a WS_CHILD, WinForms does not always forward focus to

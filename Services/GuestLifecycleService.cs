@@ -52,7 +52,7 @@ public sealed class GuestLifecycleService
     public void Attach(WinEventMonitor monitor)
     {
         monitor.WindowDestroyed += (_, args) => OnWindowDestroyed(args.Hwnd);
-        monitor.WindowHidden += (_, args) => OnWindowHidden(args.Hwnd, args.VisibleAtCallback);
+        monitor.WindowHidden += (_, args) => OnWindowHidden(args.Hwnd, args.VisibleAtCallback, args.EventTime);
         monitor.WindowMinimized += (_, args) => OnWindowMinimized(args.Hwnd);
         monitor.WindowMoveSizeStarted += (_, args) => OnGuestMoveSize(args.Hwnd, started: true);
         monitor.WindowMoveSizeEnded += (_, args) => OnGuestMoveSize(args.Hwnd, started: false);
@@ -71,7 +71,7 @@ public sealed class GuestLifecycleService
         RemoveDeadMember(group, match, show: true);
     }
 
-    private void OnWindowHidden(IntPtr hwnd, bool? visibleAtCallback)
+    private void OnWindowHidden(IntPtr hwnd, bool? visibleAtCallback, uint eventTime)
     {
         StopMinimizeHideProbe(hwnd);
         if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match))
@@ -133,6 +133,19 @@ public sealed class GuestLifecycleService
         // hidden, orphaned window (and close a single-tab group outright).
         // This also covers split mode: minimizing the container hides both
         // split members, and neither may be torn down as a self-hide.
+        // A container minimize hides its guests through the same USER32 path as
+        // a guest tray-close. The hide event is posted asynchronously and can be
+        // delivered after WPF has already reported Normal/Maximized, so current
+        // WindowState alone is not a sufficient source proof. ContainerWindow
+        // records the exact expected hide and its restore boundary; consume only
+        // an event proven to belong to that transition. A hide generated after
+        // restore remains a genuine guest lifecycle event and is not suppressed.
+        if (container?.IsContainerDrivenGuestHide(match, eventTime) == true)
+        {
+            _log.Log($"WinEvent: captured window 0x{hwnd.ToInt64():X} hide matched the container minimize transition; retaining its captured tab.");
+            return;
+        }
+
         if (container?.WindowState == WindowState.Minimized)
             return;
 
@@ -185,7 +198,7 @@ public sealed class GuestLifecycleService
                 return;
             }
 
-            OnWindowHidden(hwnd, visibleAtCallback: false);
+            OnWindowHidden(hwnd, visibleAtCallback: false, eventTime: unchecked((uint)Environment.TickCount));
         };
         _minimizeHideDebounce[hwnd] = (timer, member);
         timer.Start();

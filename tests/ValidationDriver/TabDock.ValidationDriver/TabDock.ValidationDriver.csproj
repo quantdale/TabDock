@@ -13,6 +13,7 @@
   <ItemGroup>
     <Compile Include="..\..\..\NativeMethods.cs" Link="NativeMethods.cs" />
     <Compile Include="..\..\..\Services\MonitorDpiService.cs" Link="MonitorDpiService.cs" />
+    <Compile Include="..\..\..\Models\SplitPresentationPolicy.cs" Link="SplitPresentationPolicy.cs" />
   </ItemGroup>
 
 </Project>

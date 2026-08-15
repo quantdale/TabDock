@@ -74,6 +74,27 @@ public partial class ContainerWindow : Window
     // must never be re-fought every frame (resize war). Records the pane rect
     // each guest last refused; the layout skips re-positioning that exact rect.
     private readonly Dictionary<long, NativeMethods.RECT> _refusedPaneByHwnd = new();
+
+    // A container minimize hides its visible guests with ShowWindow(SW_HIDE).
+    // USER32 raises the same EVENT_OBJECT_HIDE used for a guest tray-close, and
+    // WinEventMonitor posts that event back to this UI thread. The event can be
+    // delivered after a restore has already changed WindowState, so retain the
+    // native source boundary rather than inferring intent from the current state.
+    private readonly Dictionary<IntPtr, ContainerHideExpectation> _containerHideExpectations = new();
+
+    private readonly struct ContainerHideExpectation
+    {
+        public ContainerHideExpectation(uint hideEventTime, uint restoreEventTime, bool restoreObserved)
+        {
+            HideEventTime = hideEventTime;
+            RestoreEventTime = restoreEventTime;
+            RestoreObserved = restoreObserved;
+        }
+
+        public uint HideEventTime { get; }
+        public uint RestoreEventTime { get; }
+        public bool RestoreObserved { get; }
+    }
     // Debounced refresh of the guest minima while a guest is visible, so a
     // dynamic native minimum (browser UI state, sidebar, toolbar) is respected
     // without probing on every frame.
@@ -87,6 +108,13 @@ public partial class ContainerWindow : Window
     private System.Windows.Threading.DispatcherTimer? _activateReassertTimer;
     private System.Windows.Threading.DispatcherTimer? _stateSettledTimer;
     private System.Windows.Threading.DispatcherTimer? _restoreMinimizedTimer;
+
+    // A captured guest's native title-bar move/size loop is authoritative until
+    // EVENT_SYSTEM_MOVESIZEEND. Do not let an intermediate relayout classify
+    // the still-moving HWND as a native-minimum refusal; that transient record
+    // would suppress the final re-glue after the gesture ends.
+    private bool _guestMoveSizeActive;
+    private long _guestMoveSizeGeneration;
 
     // The tab context menu most recently opened by TabsListBox_PreviewMouseRightButtonDown.
     // Tracked so the WM_ACTIVATE reassert can tell "the user is interacting with the
@@ -949,6 +977,8 @@ public partial class ContainerWindow : Window
         _splitForeground = null;
         _splitPairPresented = false;
         _splitPresentationGeneration++;
+        _guestMoveSizeActive = false;
+        _guestMoveSizeGeneration++;
         _activateReassertTimer?.Stop();
         _stateSettledTimer?.Stop();
         _restoreMinimizedTimer?.Stop();
@@ -958,6 +988,7 @@ public partial class ContainerWindow : Window
             menu.Closed -= TabContextMenu_Closed;
         _trackedTabContextMenus.Clear();
         _chromePopupActive = false;
+        _containerHideExpectations.Clear();
 
         // Unregister the HWNDs cached at Loaded time — live reads return
         // IntPtr.Zero by now, which would no-op and leak the stale values.
@@ -983,16 +1014,17 @@ public partial class ContainerWindow : Window
             {
                 if (IsSplitPresented)
                 {
-                    LogHidePending(_splitLeft!, _shepherd.Hide(_splitLeft!));
-                    LogHidePending(_splitRight!, _shepherd.Hide(_splitRight!));
+                    HideForContainerMinimize(_splitLeft!);
+                    HideForContainerMinimize(_splitRight!);
                 }
                 else if (_shepherdActiveWindow != null)
                 {
-                    LogHidePending(_shepherdActiveWindow, _shepherd.Hide(_shepherdActiveWindow));
+                    HideForContainerMinimize(_shepherdActiveWindow);
                 }
             }
             else
             {
+                MarkContainerRestoreBoundary();
                 // Re-glue through the coalescer, NOT synchronously: StateChanged
                 // fires before WPF has re-arranged the content marker to the new
                 // native size, so the marker's rect is still the pre-transition
@@ -1040,6 +1072,72 @@ public partial class ContainerWindow : Window
         };
         _stateSettledTimer = settledTimer;
         settledTimer.Start();
+    }
+
+    private static uint CurrentNativeEventTime()
+        => unchecked((uint)Environment.TickCount);
+
+    private void HideForContainerMinimize(CapturedWindow window)
+    {
+        // Record intent immediately before the journal-safe native hide. The
+        // WinEvent callback carries its own USER32 timestamp, allowing the
+        // lifecycle service to correlate the posted hide even if a restore
+        // changes WindowState before the callback is dispatched.
+        _containerHideExpectations[window.Hwnd] = new ContainerHideExpectation(
+            CurrentNativeEventTime(),
+            restoreEventTime: 0,
+            restoreObserved: false);
+
+        WindowHideOutcome outcome = _shepherd.Hide(window);
+        LogHidePending(window, outcome);
+        if (outcome == WindowHideOutcome.TargetGoneOrRecycled)
+            _containerHideExpectations.Remove(window.Hwnd);
+    }
+
+    private void MarkContainerRestoreBoundary()
+    {
+        if (_containerHideExpectations.Count == 0)
+            return;
+
+        uint restoreEventTime = CurrentNativeEventTime();
+        foreach (IntPtr hwnd in _containerHideExpectations.Keys.ToList())
+        {
+            ContainerHideExpectation expectation = _containerHideExpectations[hwnd];
+            _containerHideExpectations[hwnd] = new ContainerHideExpectation(
+                expectation.HideEventTime,
+                restoreEventTime,
+                restoreObserved: true);
+        }
+    }
+
+    /// <summary>
+    /// Returns true only for a hide event whose native callback timestamp is
+    /// within the container-issued minimize interval. A queued event from that
+    /// interval can arrive after WPF reports a restored state; it must not be
+    /// mistaken for a guest tray-close. Events generated after the restore
+    /// boundary are genuine guest lifecycle events and are allowed through.
+    /// </summary>
+    public bool IsContainerDrivenGuestHide(CapturedWindow window, uint eventTime)
+    {
+        if (!_containerHideExpectations.TryGetValue(window.Hwnd, out ContainerHideExpectation expectation))
+            return false;
+
+        if (WindowState == WindowState.Minimized || !expectation.RestoreObserved)
+            return true;
+
+        // USER32 supplies dwmsEventTime for real WinEvent callbacks. A missing
+        // timestamp cannot prove provenance, so fail closed and let the normal
+        // guest-hide path decide rather than broadly trusting a stale marker.
+        if (eventTime == 0)
+        {
+            _containerHideExpectations.Remove(window.Hwnd);
+            return false;
+        }
+
+        bool occurredAfterHide = unchecked((int)(eventTime - expectation.HideEventTime)) >= 0;
+        bool occurredBeforeRestore = unchecked((int)(eventTime - expectation.RestoreEventTime)) <= 0;
+        _containerHideExpectations.Remove(window.Hwnd);
+        return occurredAfterHide && occurredBeforeRestore;
     }
 
     private void LogStateSnapshot(string phase)
@@ -1146,6 +1244,9 @@ public partial class ContainerWindow : Window
         _splitForeground = null;
         _splitPairPresented = false;
         _splitPresentationGeneration++;
+        _guestMoveSizeActive = false;
+        _guestMoveSizeGeneration++;
+        _containerHideExpectations.Clear();
         _activateReassertTimer?.Stop();
         _stateSettledTimer?.Stop();
         _restoreMinimizedTimer?.Stop();
@@ -1879,6 +1980,7 @@ public partial class ContainerWindow : Window
     /// </summary>
     public void ReleaseCapturedWindow(CapturedWindow window, bool show = true)
     {
+        _containerHideExpectations.Remove(window.Hwnd);
         var tab = _viewModel.Tabs.FirstOrDefault(t => t.Model == window);
         if (tab != null)
         {
@@ -2471,6 +2573,8 @@ public partial class ContainerWindow : Window
     {
         if (!IsSplitPresented)
             return;
+        if (_guestMoveSizeActive)
+            return;
         if (WindowState == WindowState.Minimized)
             return;
         // While container chrome is raised, including the owned close-group
@@ -3025,10 +3129,15 @@ public partial class ContainerWindow : Window
     {
         if (started)
         {
+            _guestMoveSizeActive = true;
+            _guestMoveSizeGeneration++;
             DiagnosticRuntime.Record("guest.movesize.start", _containerHwnd, window.Hwnd,
                 group: Group.Id.ToString("N"), action: "observe", result: "callback-received");
             return;
         }
+        _guestMoveSizeActive = false;
+        long finalGeneration = ++_guestMoveSizeGeneration;
+
         // In split mode either visible member may be dragged out by its own real
         // title bar; otherwise only the active tab is tracked.
         if (IsSplitPresented)
@@ -3044,6 +3153,9 @@ public partial class ContainerWindow : Window
             || NativeMethods.IsIconic(window.Hwnd) || NativeMethods.IsZoomed(window.Hwnd))
             return;
 
+        _constraintDirty = true;
+        _refusedPaneByHwnd.Clear();
+
         // Measure against the member's OWN pane rect in split mode so the
         // re-glue path is deterministic even when the other pane is foreground.
         NativeMethods.RECT docked = IsSplitPresented ? SplitPaneRect(window) : GetContentAreaScreenRect();
@@ -3057,6 +3169,33 @@ public partial class ContainerWindow : Window
             LayoutSplitPanes();
         else
             LayoutShepherdActiveWindow(forceZOrder: true);
+
+        // WinEvent dispatch is already posted to the WPF thread, but USER32 can
+        // finish the final drag normalization after the movesize-end callback's
+        // first synchronous layout. One bounded render-priority pass observes
+        // that final native state without a blind sleep or a timer. The
+        // generation and member checks prevent a released/recycled HWND from
+        // receiving stale repair work.
+        Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
+        {
+            if (finalGeneration != _guestMoveSizeGeneration
+                || _containerHwnd == IntPtr.Zero
+                || _guestMoveSizeActive
+                || !NativeMethods.IsWindow(window.Hwnd)
+                || !NativeMethods.IsWindowVisible(window.Hwnd))
+                return;
+
+            if (IsSplitPresented && IsSplitMember(window))
+            {
+                _constraintDirty = true;
+                _refusedPaneByHwnd.Clear();
+                LayoutSplitPanes();
+            }
+            else if (!IsSplitPresented && ReferenceEquals(_shepherdActiveWindow, window))
+            {
+                LayoutShepherdActiveWindow(forceZOrder: true);
+            }
+        }));
 
         NativeMethods.GetWindowRect(window.Hwnd, out NativeMethods.RECT after);
         DiagnosticRuntime.Record("guest.movesize.end", _containerHwnd, window.Hwnd,

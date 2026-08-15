@@ -22,10 +22,15 @@
 - [x] Preserve hover, direct-focus, structural-removal, and settle regressions.
 - [x] Add controlled rendering/client-response qualification and isolate browser
       evidence outside the repository.
+- [x] Add per-run process/HWND provenance, root-at-point diagnostics, stale HWND
+      rejection, and fail-closed guarded input coverage.
+- [x] Add JSON/JUnit qualification artifacts and one tiered split orchestrator
+      covering deterministic, controlled, interactive, browser, stress, and
+      historical comparison modes.
 
 ## Qualification
 
 - [x] Run Release build and `scripts/validate.ps1 -Configuration Release -Ci -Publish`.
-- [ ] Run focused guarded interactive scenarios and available browser matrix.
-- [ ] Compare baseline `8b75c99cdd149648b54f98ed2ff0f9f2598bd0fc` with candidate.
+- [x] Run focused guarded interactive scenarios and available browser matrix.
+- [x] Compare baseline `8b75c99cdd149648b54f98ed2ff0f9f2598bd0fc` with candidate.
 - [ ] Audit diff/prohibited APIs, commit/push main, and verify exact-SHA CI.

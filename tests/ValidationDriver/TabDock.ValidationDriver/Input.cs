@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -33,34 +32,31 @@ internal static class Input
     // before every click/scroll and foreground-dependent key event. This
     // makes a stale/recycled HWND fail closed instead of sending input to the
     // user's foreground application.
-    private static readonly Dictionary<IntPtr, WindowIdentity> RegisteredWindows = new();
-    private static readonly HashSet<uint> RegisteredProcessIds = new();
-    private static readonly Dictionary<uint, (string ExePath, long StartTimeUtcTicks)> RegisteredProcesses = new();
     private static WindowIdentity? _activeTarget;
     private static int _lastX;
     private static int _lastY;
     private static bool _hasLastPoint;
     private static bool _leftButtonHeld;
 
-    public static void ResetIdentityScope()
+    public static void ResetIdentityScope(string? scenario = null)
     {
-        RegisteredWindows.Clear();
-        RegisteredProcessIds.Clear();
-        RegisteredProcesses.Clear();
-        RegisteredProcessIds.Add(NativeMethods.CurrentProcessId);
-        RegisteredProcesses[NativeMethods.CurrentProcessId] =
-            (NativeMethods.GetProcessImagePath(NativeMethods.CurrentProcessId) ?? string.Empty,
-                Discover.TryGetProcessStartTimeUtcTicks(NativeMethods.CurrentProcessId));
+        TestRunProvenance.BeginScenario(scenario ?? TestRunProvenance.CurrentScenario);
         _activeTarget = null;
         _hasLastPoint = false;
         _leftButtonHeld = false;
     }
 
-    public static void RegisterIdentity(WindowIdentity identity)
+    public static void RegisterIdentity(WindowIdentity identity, string role = "DiscoveredWindow")
     {
-        RegisteredWindows[identity.Hwnd] = identity;
-        RegisteredProcessIds.Add(identity.ProcessId);
-        RegisteredProcesses[identity.ProcessId] = (identity.ExePath, identity.ProcessStartTimeUtcTicks);
+        if (!TestRunProvenance.TryRegisterWindow(identity, role, out string reason))
+            throw new InvalidOperationException($"Refusing to register HWND 0x{identity.Hwnd.ToInt64():X}: {reason}.");
+    }
+
+    public static void RegisterDiscoveredWindow(IntPtr hwnd, string role)
+    {
+        if (!Discover.TryCaptureIdentity(hwnd, out WindowIdentity identity))
+            throw new InvalidOperationException($"Refusing to register HWND 0x{hwnd.ToInt64():X}: identity unavailable.");
+        RegisterIdentity(identity, role);
     }
 
     /// <summary>Real mouse-wheel scroll at (x,y). Positive notches scroll up, negative scroll down.</summary>
@@ -93,12 +89,35 @@ internal static class Input
         IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
         if (root == IntPtr.Zero)
             root = hwnd;
-        if (!Discover.TryCaptureIdentity(root, out WindowIdentity target)
-            || !IsScoped(target))
+        string scopeReason = string.Empty;
+        WindowIdentity target = default;
+        bool identityCaptured = false;
+        bool targetValid = false;
+        int identityAttempt = 0;
+        // Foreground transitions can briefly make one of the independent
+        // identity reads incomplete even though this HWND was already
+        // registered for the run. Re-read the complete proof for a bounded
+        // interval; this only retries evidence collection and never broadens
+        // the scope or permits an unverified operation.
+        for (; identityAttempt < 4 && !targetValid; identityAttempt++)
         {
-            GuardedProc.Log($"WARNING: refusing foreground operation for unverified HWND 0x{root.ToInt64():X}.");
+            identityCaptured = Discover.TryCaptureIdentity(root, out target);
+            targetValid = identityCaptured
+                && IsScoped(target, out scopeReason);
+            if (!targetValid && identityAttempt < 3)
+                Thread.Sleep(3);
+        }
+        if (!targetValid)
+        {
+            string reason = identityCaptured
+                ? (string.IsNullOrEmpty(scopeReason) ? "identity-scope-rejected" : scopeReason)
+                : "identity-unavailable";
+            GuardedProc.Log($"WARNING: refusing foreground operation for unverified HWND 0x{root.ToInt64():X}: {reason}.");
+            IdentityDiagnostics.RecordPointFailure(_hasLastPoint ? _lastX : 0, _hasLastPoint ? _lastY : 0, root, reason);
             return false;
         }
+        if (identityAttempt > 1)
+            GuardedProc.Log($"  Foreground identity proof settled after bounded retry for HWND 0x{target.Hwnd.ToInt64():X}.");
         _activeTarget = target;
 
         for (int attempt = 0; attempt < 4; attempt++)
@@ -152,37 +171,10 @@ internal static class Input
         return ForceForeground(root == IntPtr.Zero ? hwnd : root);
     }
 
-    private static bool IsScoped(WindowIdentity current)
+    private static bool IsScoped(WindowIdentity current, out string reason)
     {
-        if (current.ProcessId == NativeMethods.CurrentProcessId)
-            return true;
-
-        if (!RegisteredProcessIds.Contains(current.ProcessId)
-            || !RegisteredProcesses.TryGetValue(current.ProcessId, out var processIdentity))
-            return false;
-
-        if (!string.Equals(current.ExePath, processIdentity.ExePath, StringComparison.OrdinalIgnoreCase)
-            || current.ProcessStartTimeUtcTicks != processIdentity.StartTimeUtcTicks)
-            return false;
-
-        if (!RegisteredWindows.TryGetValue(current.Hwnd, out WindowIdentity expected))
-            return true; // dynamic dialog/child root in a registered test process
-
-        if (current.ProcessId != expected.ProcessId
-            || current.WindowThreadId != expected.WindowThreadId
-            || !string.Equals(current.ClassName, expected.ClassName, StringComparison.Ordinal)
-            || !string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase)
-            || current.ProcessStartTimeUtcTicks != expected.ProcessStartTimeUtcTicks)
-        {
-            return false;
-        }
-
-        // Browser titles and clock pages legitimately change while a scenario
-        // is running. Once the stable process/class/executable identity still
-        // matches, refresh the title snapshot used by the next operation.
-        if (!string.Equals(current.Title, expected.Title, StringComparison.Ordinal))
-            RegisteredWindows[current.Hwnd] = current;
-        return true;
+        bool result = TestRunProvenance.TryValidateWindow(current, out reason);
+        return result;
     }
 
     private static bool MatchesStableIdentity(IntPtr hwnd, WindowIdentity expected)
@@ -193,7 +185,7 @@ internal static class Input
             && string.Equals(current.ClassName, expected.ClassName, StringComparison.Ordinal)
             && string.Equals(current.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase)
             && current.ProcessStartTimeUtcTicks == expected.ProcessStartTimeUtcTicks
-            && IsScoped(current);
+            && IsScoped(current, out _);
     }
 
     private static bool VerifyForegroundTarget(bool allowRegisteredDragTarget = false)
@@ -201,15 +193,19 @@ internal static class Input
         if (!_activeTarget.HasValue)
         {
             GuardedProc.Log("WARNING: refusing keyboard input before a verified foreground target was established.");
+            IdentityDiagnostics.RecordPointFailure(_hasLastPoint ? _lastX : 0, _hasLastPoint ? _lastY : 0, IntPtr.Zero, "no-verified-foreground-target");
             return false;
         }
 
         IntPtr foreground = NativeMethods.GetForegroundWindow();
+        bool foregroundUnavailable = foreground == IntPtr.Zero;
         IntPtr root = NativeMethods.GetAncestor(foreground, NativeMethods.GA_ROOT);
         if (root == IntPtr.Zero)
             root = foreground;
-        bool currentValid = Discover.TryCaptureIdentity(root, out WindowIdentity current)
-            && IsScoped(current);
+        string currentScopeReason = string.Empty;
+        bool currentIdentityCaptured = Discover.TryCaptureIdentity(root, out WindowIdentity current);
+        bool currentValid = currentIdentityCaptured
+            && IsScoped(current, out currentScopeReason);
         WindowIdentity previousTarget = _activeTarget.Value;
         bool previousTargetLive = MatchesStableIdentity(previousTarget.Hwnd, previousTarget);
         bool targetChanged = currentValid && current.Hwnd != _activeTarget.Value.Hwnd;
@@ -224,25 +220,24 @@ internal static class Input
         // A modal dialog or edit surface created by the same verified process
         // is also a safe transition while the owner HWND remains live. A live
         // target in a different process still requires exact matching.
-        bool registeredDragTarget = allowRegisteredDragTarget && currentValid
-            && RegisteredWindows.TryGetValue(current.Hwnd, out WindowIdentity registered)
-            && registered.ProcessId == current.ProcessId
-            && registered.WindowThreadId == current.WindowThreadId
-            && string.Equals(registered.ClassName, current.ClassName, StringComparison.Ordinal)
-            && string.Equals(registered.ExePath, current.ExePath, StringComparison.OrdinalIgnoreCase)
-            && registered.ProcessStartTimeUtcTicks == current.ProcessStartTimeUtcTicks;
         bool registeredTargetTransition = currentValid
-            && RegisteredWindows.ContainsKey(previousTarget.Hwnd)
-            && RegisteredWindows.ContainsKey(current.Hwnd)
-            && (registeredDragTarget || IsRegisteredIdentity(current));
+            && (allowRegisteredDragTarget || TestRunProvenance.IsProcessInScope(current.ProcessId));
         if (!currentValid || (previousTargetLive && targetChanged && !sameProcessIdentity
             && !registeredTargetTransition))
         {
             string actual = Discover.TryCaptureIdentity(root, out WindowIdentity observed)
-                ? $"pid={observed.ProcessId} class='{observed.ClassName}' title='{observed.Title}' exe='{observed.ExePath}' start={observed.ProcessStartTimeUtcTicks}"
+                ? TestRunProvenance.SafeIdentity(observed)
                 : "identity-unavailable";
             WindowIdentity expected = _activeTarget.Value;
-            GuardedProc.Log($"WARNING: refusing keyboard input; foreground 0x{root.ToInt64():X} is not the verified target (expected=0x{expected.Hwnd.ToInt64():X} pid={expected.ProcessId} class='{expected.ClassName}' start={expected.ProcessStartTimeUtcTicks}; actual={actual}).");
+            string reason = currentValid
+                ? "foreground-target-transition-not-proven"
+                : foregroundUnavailable
+                    ? "foreground-window-unavailable"
+                : (currentIdentityCaptured
+                    ? (string.IsNullOrEmpty(currentScopeReason) ? "identity-scope-rejected" : currentScopeReason)
+                    : "identity-unavailable");
+            GuardedProc.Log($"WARNING: refusing keyboard input; foreground 0x{root.ToInt64():X} is not the verified target (expected={TestRunProvenance.SafeIdentity(expected)}; actual={actual}; reason={reason}).");
+            IdentityDiagnostics.RecordPointFailure(_hasLastPoint ? _lastX : 0, _hasLastPoint ? _lastY : 0, expected.Hwnd, reason);
             return false;
         }
         if (!previousTargetLive || targetChanged)
@@ -251,35 +246,55 @@ internal static class Input
         return true;
     }
 
-    private static bool IsRegisteredIdentity(WindowIdentity current)
-    {
-        return RegisteredWindows.TryGetValue(current.Hwnd, out WindowIdentity expected)
-            && expected.ProcessId == current.ProcessId
-            && expected.WindowThreadId == current.WindowThreadId
-            && string.Equals(expected.ClassName, current.ClassName, StringComparison.Ordinal)
-            && string.Equals(expected.ExePath, current.ExePath, StringComparison.OrdinalIgnoreCase)
-            && expected.ProcessStartTimeUtcTicks == current.ProcessStartTimeUtcTicks;
-    }
-
     private static bool VerifyPointTarget(int x, int y)
     {
         if (!_activeTarget.HasValue)
         {
             GuardedProc.Log("WARNING: refusing coordinate input before a verified target was established.");
+            IdentityDiagnostics.RecordPointFailure(x, y, IntPtr.Zero, "no-verified-target");
             return false;
         }
 
-        IntPtr atPoint = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = x, y = y });
-        IntPtr root = NativeMethods.GetAncestor(atPoint, NativeMethods.GA_ROOT);
-        if (root == IntPtr.Zero)
+        // WindowFromPoint and the process identity APIs are separate native
+        // observations. A WPF popup closing, a guest activation, or a brief
+        // shell transition can make one sample resolve to an incomplete or
+        // unregistered HWND even though the same point is immediately back on
+        // the already-proven test window. Re-sample a bounded number of times;
+        // input is still refused unless a complete current identity passes the
+        // run provenance guard. This is a retry of evidence collection, not a
+        // whitelist or an identity bypass.
+        IntPtr root = IntPtr.Zero;
+        string scopeReason = string.Empty;
+        WindowIdentity current = default;
+        bool currentValid = false;
+        bool identityCaptured = false;
+        string lastReason = "identity-unavailable";
+        for (int attempt = 0; attempt < 4 && !currentValid; attempt++)
         {
-            GuardedProc.Log($"WARNING: refusing coordinate input at ({x},{y}); no window is under the point.");
-            return false;
-        }
+            IntPtr atPoint = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = x, y = y });
+            root = NativeMethods.GetAncestor(atPoint, NativeMethods.GA_ROOT);
+            if (root == IntPtr.Zero)
+            {
+                lastReason = "no-window-under-point";
+            }
+            else
+            {
+                identityCaptured = Discover.TryCaptureIdentity(root, out current);
+                currentValid = identityCaptured && IsScoped(current, out scopeReason);
+                lastReason = identityCaptured
+                    ? (string.IsNullOrEmpty(scopeReason) ? "identity-scope-rejected" : scopeReason)
+                    : "identity-unavailable";
+            }
 
-        if (!Discover.TryCaptureIdentity(root, out WindowIdentity current) || !IsScoped(current))
+            if (!currentValid && attempt < 3)
+                Thread.Sleep(3);
+        }
+        if (!currentValid)
         {
-            GuardedProc.Log($"WARNING: refusing coordinate input at ({x},{y}); root 0x{root.ToInt64():X} is outside the test identity scope.");
+            GuardedProc.Log(root == IntPtr.Zero
+                ? $"WARNING: refusing coordinate input at ({x},{y}); no window is under the point after bounded identity retries."
+                : $"WARNING: refusing coordinate input at ({x},{y}); root 0x{root.ToInt64():X} is outside the test identity scope after bounded retries: {lastReason}.");
+            IdentityDiagnostics.RecordPointFailure(x, y, _activeTarget.Value.Hwnd, lastReason);
             return false;
         }
 

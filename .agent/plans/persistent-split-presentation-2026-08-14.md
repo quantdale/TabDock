@@ -1,8 +1,8 @@
 # Plan: Persistent split relationship and rendering qualification
 
-**Status:** active
+**Status:** active — qualification and closure in progress
 **Owner/session:** Codex
-**Updated:** 2026-08-14
+**Updated:** 2026-08-15
 
 ## Objective
 
@@ -42,14 +42,14 @@ and available Chromium-family browsers.
       presentation relayout.
 - [x] Update diagnostics and paired-member context menus.
 - [x] Update ValidationDriver scenarios and add rendering/client evidence seams.
-- [x] Build and run deterministic validation; attempt guarded interactive/browser
-      qualification where the environment permits.
+- [x] Build and run deterministic validation; resolve the guarded interactive
+      identity-scope blocker and qualify available Chromium-family browsers.
 - [ ] Compare baseline and candidate, audit the diff, commit/push only after
       applicable gates, and verify exact-SHA hosted CI.
 
 ## Evidence and decisions
 
-- Baseline `HEAD` and `origin/main` are both `8b75c99cdd149648b54f98ed2ff0f9f2598bd0fc`.
+- The session began on `main` at the expected `13c3d6f8134081aae1db03944483861888f5057f`; live refs remain governed by Git and are rechecked before push.
 - Existing `ContainerWindow.SplitInteractionFix.cs` calls `ExitSplit(target)`
   for a third-tab click, so the rejected behavior is explicit and localized.
 - `GroupViewModel.DisplayTabs` already suppresses the RIGHT member while a
@@ -62,8 +62,13 @@ and available Chromium-family browsers.
 **Next action:** inspect the final diff, commit the candidate, rerun the
 canonical Release/publish gate for the candidate SHA, push `main`, and verify
 the exact-SHA GitHub Actions run.
-**Qualification blocker:** the guarded ValidationDriver capture preflight
-refused the current desktop because the discovered TabDock root HWND was
-outside its verified test identity scope; the Computer Use native pipe was
-also unavailable. No input-safety guard was bypassed. Browser qualification is
-therefore external/manual evidence only in this environment.
+**Qualification finding:** the guarded preflight blocker was category G: an
+unrelated PowerShell-owned `#32770` security-warning overlay covered the
+picker coordinate. WindowFromPoint/GA_ROOT correctly rejected that root and
+sent no input. The harness now records the privacy-safe identity diagnostic,
+validates the launched process tree and run marker, and moves only the already
+proven picker to a virtual-screen corner before retrying the same guarded point.
+Guarded local UI qualification now executes. The GuineaPig fixture records
+client dimensions, resize count, activation, move/size, and run-scoped JSON
+evidence; Edge and Brave have completed isolated browser cycles with automatic
+viewport evidence, while Chrome is reported as `SKIP_BROWSER_NOT_INSTALLED`.

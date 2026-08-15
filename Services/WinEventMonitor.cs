@@ -265,7 +265,7 @@ public sealed class WinEventMonitor : IDisposable
                         ["eventTime"] = dwmsEventTime.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     });
             }
-            Post(new WindowEventArgs(hwnd, eventType, foreground, desktopCapturedMember));
+            Post(new WindowEventArgs(hwnd, eventType, foreground, desktopCapturedMember, eventTime: dwmsEventTime));
             return;
         }
 
@@ -300,7 +300,8 @@ public sealed class WinEventMonitor : IDisposable
             hwnd,
             eventType,
             capturedMember: capturedMember,
-            visibleAtCallback: visibleAtCallback));
+            visibleAtCallback: visibleAtCallback,
+            eventTime: dwmsEventTime));
     }
 
     private void Post(WindowEventArgs args)
@@ -444,18 +445,26 @@ public sealed class WindowEventArgs : EventArgs
     public IntPtr RelatedHwnd { get; }
     public CapturedWindow? CapturedMember { get; }
     public bool? VisibleAtCallback { get; }
+    /// <summary>
+    /// Native WinEvent callback timestamp (the USER32 dwmsEventTime value).
+    /// The hide lifecycle uses it to distinguish a queued TabDock-issued hide
+    /// from a later guest-issued hide after a container restore.
+    /// </summary>
+    public uint EventTime { get; }
 
     public WindowEventArgs(
         IntPtr hwnd,
         uint eventType,
         IntPtr relatedHwnd = default,
         CapturedWindow? capturedMember = null,
-        bool? visibleAtCallback = null)
+        bool? visibleAtCallback = null,
+        uint eventTime = 0)
     {
         Hwnd = hwnd;
         EventType = eventType;
         RelatedHwnd = relatedHwnd;
         CapturedMember = capturedMember;
         VisibleAtCallback = visibleAtCallback;
+        EventTime = eventTime;
     }
 }

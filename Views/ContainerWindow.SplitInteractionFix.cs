@@ -139,8 +139,16 @@ public partial class ContainerWindow
             CompositionTarget.Rendering -= SplitPresentationSettle_Rendering;
             return;
         }
-        if (!IsSplitPresented
-            || _splitPresentationSettleGeneration != _splitPresentationGeneration)
+        var settleState = new TabDock.Models.SplitPresentationState(
+            _splitLeft?.Hwnd.ToString("X"),
+            _splitRight?.Hwnd.ToString("X"),
+            IsSplitPresented,
+            _splitForeground?.Hwnd.ToString("X") ?? _splitLeft?.Hwnd.ToString("X"),
+            _splitPresentationGeneration);
+        if (!TabDock.Models.SplitPresentationPolicy.IsCurrentSettle(
+                settleState,
+                _splitPresentationSettleGeneration)
+            || !IsSplitPresented)
         {
             DisarmSplitPresentationSettle();
             return;

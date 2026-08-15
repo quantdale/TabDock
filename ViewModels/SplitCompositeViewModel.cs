@@ -29,6 +29,13 @@ public sealed class SplitCompositeViewModel : ViewModelBase
     public TabViewModel Right { get; }
 
     /// <summary>
+    /// Stable UI Automation identifier for the generated ListBoxItem. Keeping
+    /// this on the item data, rather than only on a nested Border, makes the
+    /// composite discoverable while it is dormant as well as presented.
+    /// </summary>
+    public string AutomationId => "SplitCompositeItem";
+
+    /// <summary>
     /// The tab-strip item container style binds IsSelected TwoWay to IsActive on
     /// every item. The composite is selected whenever either member is the
     /// logical active guest; the individual half highlights still come from the

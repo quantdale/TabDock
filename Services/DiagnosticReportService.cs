@@ -188,20 +188,52 @@ public static class DiagnosticReportService
         if (!string.IsNullOrWhiteSpace(directory))
             Directory.CreateDirectory(directory);
 
-        DiagnosticReport report = CreateReport(includeHash: true);
-        string doctor = FormatDoctor(report);
-        using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
-        using var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: false);
-        AddEntry(archive, "version.txt", FormatVersion(report.Build));
-        AddEntry(archive, "doctor.txt", doctor);
-        AddEntry(archive, "environment.json", ToJson(report));
-        AddEntry(archive, "environment.txt", FormatEnvironment(report));
-        AddEntry(archive, "state-summary.json", JsonSerializer.Serialize(report.Persistence, s_jsonOptions));
-        AddEntry(archive, "hwnd-snapshot.json", JsonSerializer.Serialize(report.NativeWindows, s_jsonOptions));
-        AddEntry(archive, "logical-snapshot.json", JsonSerializer.Serialize(report.LogicalPresentations, s_jsonOptions));
-        AddEntry(archive, "trace.jsonl", string.Join(Environment.NewLine, report.Trace.Select(e => JsonSerializer.Serialize(e, s_jsonOptions))) + Environment.NewLine);
-        AddEntry(archive, "recent-log.txt", report.RecentLog);
-        return path;
+        // Publish only a completed archive. Writing directly to the final
+        // desktop path lets a file watcher observe a non-empty but still-open
+        // ZIP and makes consumers race the producer. The temporary name is
+        // unique so an earlier export in the same timestamp second cannot be
+        // mistaken for this one; the final move happens after both the stream
+        // and ZipArchive have closed.
+        string temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            DiagnosticReport report = CreateReport(includeHash: true);
+            string doctor = FormatDoctor(report);
+            using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+            using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: false))
+            {
+                AddEntry(archive, "version.txt", FormatVersion(report.Build));
+                AddEntry(archive, "doctor.txt", doctor);
+                AddEntry(archive, "environment.json", ToJson(report));
+                AddEntry(archive, "environment.txt", FormatEnvironment(report));
+                AddEntry(archive, "state-summary.json", JsonSerializer.Serialize(report.Persistence, s_jsonOptions));
+                AddEntry(archive, "hwnd-snapshot.json", JsonSerializer.Serialize(report.NativeWindows, s_jsonOptions));
+                AddEntry(archive, "logical-snapshot.json", JsonSerializer.Serialize(report.LogicalPresentations, s_jsonOptions));
+                AddEntry(archive, "trace.jsonl", string.Join(Environment.NewLine, report.Trace.Select(e => JsonSerializer.Serialize(e, s_jsonOptions))) + Environment.NewLine);
+                AddEntry(archive, "recent-log.txt", report.RecentLog);
+            }
+
+            File.Move(temporaryPath, path, overwrite: true);
+            return path;
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(temporaryPath))
+                    File.Delete(temporaryPath);
+            }
+            catch (IOException)
+            {
+                // The primary export exception, if any, remains authoritative;
+                // a locked temporary artifact is safer to leave than to retry
+                // destructively from a diagnostics path.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Same fail-closed cleanup rule for externally held files.
+            }
+        }
     }
 
     private static void AddEntry(ZipArchive archive, string name, string content)

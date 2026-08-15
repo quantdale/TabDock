@@ -236,6 +236,55 @@ is insufficient. Missing browser installations SHALL be reported explicitly.
 - **WHEN** available Chromium-family browsers are driven through pair/non-member transitions using isolated profiles
 - **THEN** the harness records client-reported viewport dimensions and resize counters, or reports missing browser coverage as BLOCKED_ENVIRONMENT
 
+### Requirement: Guarded automated input SHALL prove current test-run ownership
+Every automated mouse or keyboard operation that can affect a desktop window
+SHALL be preceded by a current ownership proof for the intended target. The
+proof SHALL bind a unique run identifier to the launched process identity
+(PID, process-start identity, executable identity, and expected ancestry), then
+to a discovered top-level HWND that is live, still owned by that process, and
+marked for that run only after the process proof succeeds. The point target
+SHALL be resolved through `WindowFromPoint` and `GA_ROOT` immediately before
+input. A missing, stale, recycled, unrelated, or unverifiable root SHALL cause
+the operation to fail closed without sending input.
+
+PID, executable name, title text, UI Automation name, or a prior HWND value
+alone SHALL NOT establish ownership. A recreated HWND SHALL be rediscovered
+and revalidated; an HWND reused by another process SHALL be rejected. Browser
+descendants SHALL be accepted only when they belong to the isolated browser
+instance launched for the same run, never merely because the executable family
+is installed.
+
+#### Scenario: An unrelated overlay blocks a guarded click
+- **WHEN** an unrelated window covers the intended test coordinate
+- **THEN** the harness records the UIA/point/root/process/ancestry mismatch and
+  sends no mouse or keyboard input
+
+#### Scenario: A recreated test HWND is revalidated
+- **WHEN** a controlled test process replaces its top-level HWND
+- **THEN** the stale HWND is retired, the new HWND is accepted only after a
+  fresh process and run-marker proof, and a recycled HWND from another process
+  is rejected
+
+### Requirement: Qualification results SHALL be machine-readable and tiered
+The split qualification harness SHALL provide deterministic contract tests,
+controlled HWND integration tests, guarded real-input tests, isolated browser
+tests where available, bounded stress/failure-injection tests, and historical
+comparison mode without weakening the input guard. Each scenario result SHALL
+record its run identifier, scenario and iteration, candidate identity,
+expected/observed state, relationship/presentation state, visible HWND and
+geometry evidence, client-rendering evidence where applicable, and a bounded
+failure artifact reference. Results SHALL be emitted as JSON and SHALL never
+report a setup-stopped `0/N` run as a pass.
+
+#### Scenario: A setup-stopped run is never reported as a pass
+
+- **WHEN** a deterministic qualification scenario stops during setup
+- **THEN** the harness emits a JSON result carrying the run identifier, scenario
+  and iteration, candidate identity, expected/observed state,
+  relationship/presentation state, visible HWND and geometry evidence,
+  client-rendering evidence where applicable, and a bounded artifact reference,
+  and records the run as blocked/failure rather than a passing `0/N`
+
 ### Requirement: Native move/size completion SHALL reconcile against final geometry AND local z-order
 When the container's own native move/size loop ends (`WM_EXITSIZEMOVE`), the
 application SHALL schedule exactly one coalesced post-layout reconciliation

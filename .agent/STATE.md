@@ -35,6 +35,21 @@ this text.
   dormant exit, `split-diagnostic-snapshot` checks serialized dormant logical
   state, and the controlled client-settle scenario compares two versus three
   captured GuineaPig windows without corrective guest clicks.
+- The ValidationDriver now uses a per-run GUID and marker, records launched
+  process start/executable/ancestry identity, registers top-level HWNDs only
+  after that proof, and revalidates the marker and live process identity before
+  every input. Recreated HWNDs must be rediscovered; stale or recycled HWNDs,
+  unrelated roots, shell roots, and browser windows outside the launched tree
+  fail closed. JSON/JUnit results retain privacy-safe point/root diagnostics.
+- The original guarded-input blocker was proven to be an unrelated
+  PowerShell-owned `#32770` security-warning overlay over the picker (category
+  G), not an unregistered TabDock root. The guard refused it without sending
+  input; the harness now repositions only the already-proven picker and repeats
+  the same guard.
+- GuineaPig exposes structured client width/height, resize and activation
+  evidence. The browser fixture launches isolated local pages/profiles with
+  run-scoped titles; Edge and Brave have passed automatic viewport transitions,
+  and Chrome is explicitly reported unavailable when not installed.
 - Canonical and change-level OpenSpec sources describe the corrected behavior in
   `openspec/specs/ui-ux-hardening/` and
   `openspec/changes/persistent-split-pair-presentation-2026-08-14/`.
@@ -98,12 +113,14 @@ this text.
   than outer HWND geometry alone.
 - Do not automate shutdown/logoff. Do not claim mixed-DPI hardware,
   unavailable-browser, or foreground-policy qualification without evidence.
-- The guarded interactive attempt stopped at capture preflight because the
-  discovered TabDock root HWND was outside the driver's verified identity
-  scope; the Computer Use native pipe was unavailable too. No input-safety
-  guard was bypassed. Treat real-input and browser viewport evidence as
-  remaining external qualification until a verified interactive desktop is
-  available.
+- Deterministic, controlled, guarded interactive, browser, and seeded stress
+  qualification are run locally through `scripts/qa-split.ps1`; each tier is
+  evidence-backed by JSON/JUnit artifacts and does not treat setup-stopped 0/N
+  runs as passes. Installed Edge and Brave are isolated; missing Chrome is a
+  skip, not a core-suite failure.
+- Remaining user-facing work is the short manual smoke confirmation after the
+  final exact-SHA build/CI handoff. Do not claim any unavailable browser or
+  mixed-DPI/foreground-policy condition without a corresponding artifact.
 
 ## Resume
 
