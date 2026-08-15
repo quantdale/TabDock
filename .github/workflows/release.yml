@@ -1,0 +1,224 @@
+name: release
+
+# Intentionally NOT triggered by pushes: a main push produces a candidate
+# build through `build.yml`, but a production release is an explicit,
+# exact-SHA, qualification-gated decision. Run this workflow manually with a
+# specific commit SHA; set qualification-only=false AND create-release=true
+# only when the human release gate has genuinely passed.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Exact source commit SHA to qualify (required)'
+        required: true
+        type: string
+      version:
+        description: 'Semantic version (must match TabDock.csproj Version)'
+        required: false
+        default: '1.0.0'
+        type: string
+      tag:
+        description: 'Release tag (created only when a release is published)'
+        required: false
+        default: 'v1.0.0'
+        type: string
+      qualification-only:
+        description: 'Qualify and preserve the artifact only (no release)'
+        required: false
+        default: true
+        type: boolean
+      create-release:
+        description: 'Publish the GitHub Release with the qualified artifact'
+        required: false
+        default: false
+        type: boolean
+      signing-required:
+        description: 'Treat missing Authenticode material as a qualification failure'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: windows-latest
+    steps:
+      # Current checkout action: Node 24 action runtime (runner-supported).
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+
+      # The workflow must operate on the exact requested commit; a mismatch
+      # aborts before any build work begins.
+      - name: Verify exact candidate SHA
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne '${{ inputs.sha }}') {
+            throw "Checked out $actual but the release candidate was requested as ${{ inputs.sha }}"
+          }
+          Write-Host "Candidate SHA verified: $actual"
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: tools/openspec/package-lock.json
+
+      - name: Install pinned OpenSpec CLI
+        working-directory: tools/openspec
+        run: npm ci --ignore-scripts
+
+      # Canonical hermetic qualification (audited restore, Release builds,
+      # self-tests, doctor/version/bundle privacy, OpenSpec validation).
+      # SendInput/hardware scenarios never run on the hosted runner.
+      - name: Canonical qualification
+        shell: pwsh
+        env:
+          OPENSPEC_NO_UPDATE_CHECK: '1'
+          OPENSPEC_TELEMETRY: '0'
+        run: .\scripts\validate.ps1 -Configuration Release -Ci
+
+      # Exact-SHA artifact chain: publish -> execute + qualify the exact
+      # binary -> optional signing -> signature verification -> SHA-256 ->
+      # release-manifest.json + SHA256SUMS.txt. The qualified artifact is
+      # uploaded without any rebuild.
+      - name: Release qualification and artifact provenance
+        shell: pwsh
+        env:
+          OPENSPEC_NO_UPDATE_CHECK: '1'
+          OPENSPEC_TELEMETRY: '0'
+          SIGNCERT_BASE64: ${{ secrets.SIGNCERT_BASE64 }}
+          SIGNCERT_PASSWORD: ${{ secrets.SIGNCERT_PASSWORD }}
+          SIGNCERT_TIMESTAMP: ${{ secrets.SIGNCERT_TIMESTAMP }}
+          RELEASE_SIGNING_REQUIRED: ${{ inputs.signing-required }}
+        run: .\scripts\release-qualify.ps1 -Ci -Sha '${{ inputs.sha }}' -Version '${{ inputs.version }}' -Sign -OutDir (Join-Path $env:RUNNER_TEMP 'release-artifacts')
+
+      # Immutable retention of the exact qualified artifact.
+      - name: Upload qualified release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tabdock-release-${{ inputs.sha }}
+          path: ${{ runner.temp }}/release-artifacts
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    needs: qualify
+    if: ${{ !cancelled() && needs.qualify.result == 'success' && github.event.inputs.qualification-only == 'false' && github.event.inputs.create-release == 'true' }}
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download qualified artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: tabdock-release-${{ inputs.sha }}
+          path: release-artifacts
+
+      # Fail-closed re-verification before any release mutation: the manifest
+      # must claim PASS for THIS exact SHA and the on-disk bytes must match.
+      - name: Re-verify qualified artifact provenance
+        shell: pwsh
+        run: |
+          $dir = 'release-artifacts'
+          $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
+          if ($manifest.qualificationStatus -ne 'PASS') {
+            throw "Refusing to release: qualificationStatus=$($manifest.qualificationStatus)"
+          }
+          if ($manifest.sourceCommitSha -ne '${{ inputs.sha }}') {
+            throw "Refusing to release: manifest SHA $($manifest.sourceCommitSha) != ${{ inputs.sha }}"
+          }
+          $exe = Join-Path $dir 'TabDock.exe'
+          $onDisk = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLowerInvariant()
+          $expected = if ($manifest.finalSignedSha256) { $manifest.finalSignedSha256 } else { $manifest.unsignedQualifiedSha256 }
+          if ($onDisk -ne $expected) {
+            throw "Refusing to release: on-disk SHA-256 $onDisk != manifest $expected"
+          }
+          Write-Host 'Artifact provenance re-verified: PASS'
+
+      # Render release notes from the manifest (never from a rebuild).
+      - name: Render release notes
+        shell: pwsh
+        run: |
+          $manifest = Get-Content (Join-Path 'release-artifacts' 'release-manifest.json') -Raw | ConvertFrom-Json
+          $signed = $manifest.signingStatus
+          $sha = if ($manifest.finalSignedSha256) { $manifest.finalSignedSha256 } else { $manifest.artifactSha256 }
+          $notes = @"
+TabDock $($manifest.semanticVersion)
+
+## Release identity
+
+- Source commit: ``$($manifest.sourceCommitSha)``
+- Executable SHA-256: ``$sha``
+- Authenticode signing: $signed (verification: $($manifest.signatureVerification))
+- Runtime: .NET 8 self-contained, win-x64 single file (no install required)
+- Supported OS: Windows 10 (recent builds) and Windows 11, 64-bit
+
+## Qualification
+
+- Automated qualification: $($manifest.qualificationStatus) (hermetic: builds, geometry/diagnostics/privacy/persistence self-tests, doctor/version, support-bundle privacy, OpenSpec validation)
+- Exact-SHA provenance: artifact produced by and qualified against commit $($manifest.sourceCommitSha)
+
+## External gates NOT performed for this release
+
+- Final human Windows smoke: $($manifest.externalGates.finalWindowsHumanSmoke)
+- Physical mixed-DPI hardware qualification: $($manifest.externalGates.physicalMixedDpi)
+- Browser coverage: $($manifest.externalGates.browserCoverage)
+- Destructive logoff/shutdown testing: $($manifest.externalGates.destructiveLogoffTesting)
+
+These gates require real hardware/human evidence; their absence does not reduce the PASS status of the automated chain.
+
+## Known limitations
+
+See the repository README "Known limitations" section. The most important ones:
+
+- Maximizing a docked guest window itself fills the whole monitor (cosmetic UX gap).
+- Elevated (admin) applications cannot be captured by a standard-user TabDock (UIPI).
+- HWNDs are not stable across reboots; persisted state is layout intent, not live windows.
+- Physical mixed-DPI and unavailable-browser qualification are NOT claimed.
+- Force-killing TabDock is safe (guests are never reparented); the journaled recovery restores identity-valid guests on next launch.
+
+## Support
+
+- Read-only diagnostics: ``TabDock.exe --doctor``, ``--support-bundle``
+- Privacy: support bundles are sanitized; raw logs are local-only and must be redacted before sharing.
+"@
+          $notes | Set-Content -Path 'RELEASE_NOTES.md' -Encoding utf8
+
+      # Intentional publication of the exact qualified artifact. The tag is
+      # created at the exact candidate SHA; no source modification and no
+      # second compilation occurs here.
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create '${{ inputs.tag }}' --repo ${{ github.repository }} `
+            --target '${{ inputs.sha }}' `
+            --title 'TabDock ${{ inputs.version }}' `
+            --notes-file RELEASE_NOTES.md `
+            release-artifacts/TabDock.exe `
+            release-artifacts/SHA256SUMS.txt `
+            release-artifacts/release-manifest.json
+
+      - name: Verify release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = gh release view '${{ inputs.tag }}' --repo ${{ github.repository }} --json assets --jq '.assets[].name'
+          $required = @('TabDock.exe', 'SHA256SUMS.txt', 'release-manifest.json')
+          foreach ($name in $required) {
+            if ($assets -notcontains $name) {
+              throw "Release asset missing after publication: $name"
+            }
+          }
+          Write-Host 'Release assets verified: PASS'

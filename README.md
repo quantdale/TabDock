@@ -18,6 +18,13 @@ Built with C# / .NET 8 / WPF, using only P/Invoke for native interop.
 dotnet build TabDock.csproj
 ```
 
+`global.json` pins the .NET 8 SDK feature band (roll-forward stays within
+.NET 8); any installed .NET 8 SDK with feature band 8.0.4xx or later satisfies
+it. NuGet restore is ordinary — strict NuGet lock mode is deliberately
+avoided because SDK-generated `Microsoft.NET.ILLink.Tasks` differences make
+lock results unstable across supported SDKs — and CI enforces a mandatory
+vulnerability audit (`NuGetAuditMode=all`, warnings as errors).
+
 Run the app:
 
 ```powershell
@@ -249,6 +256,69 @@ Use this checklist to verify a build before considering it ready.
   an interrupted transaction resumes by phase and does not repeat native work
   after its durable native-complete marker. Resolving one entry preserves
   unresolved siblings, and startup never performs tokenless legacy recovery.
+
+- **Browser qualification:** browsers are exercised only when actually
+  installed, with isolated temporary profiles that never touch the user's real
+  profile. An unavailable browser is reported explicitly and never counted as
+  coverage. Physical mixed-DPI qualification is a separate external gate (see
+  `docs/release/mixed-dpi-qualification.md`).
+
+## Releases and release qualification
+
+### Version contract
+
+`TabDock.csproj`'s `<Version>` is the single authoritative version mechanism.
+`--version`, the assembly metadata, `BuildIdentity`, and the release manifest
+all derive from it. Historical non-semantic tag names (`stable`, `split`) do
+not dictate the semantic version contract.
+
+### Release chain
+
+Release engineering is exact-SHA and immutable:
+
+```
+intended SHA -> clean exact checkout -> audited restore -> publish ->
+execute and qualify THE PUBLISHED EXE -> optional Authenticode signing ->
+signature verification -> SHA-256 -> release-manifest.json + SHA256SUMS.txt ->
+immutable artifact retention -> human gates -> intentional GitHub Release
+```
+
+- `scripts/release-qualify.ps1` enforces the exact SHA, refuses dirty
+  worktrees, publishes once, qualifies the published executable (embedded
+  source commit must equal the candidate SHA; the executable's self-reported
+  SHA-256 must equal `Get-FileHash`; geometry + diagnostics self-tests run on
+  that binary), and writes `release-manifest.json` + `SHA256SUMS.txt`.
+- `.github/workflows/release.yml` is dispatch-only (never runs on a push) and
+  requires an explicit commit SHA. Publication is a separate explicit
+  decision that re-verifies provenance before consuming the preserved
+  artifact — a stable release can never silently substitute a different
+  binary.
+- Qualification vocabulary: `PASS`, `FAIL`, `BLOCKED_EXTERNAL`,
+  `BLOCKED_ENVIRONMENT`, `SKIP_NOT_APPLICABLE`. A 0/N scenario run, an
+  unavailable browser, or missing mixed-DPI hardware is never `PASS`.
+- Human gates stay explicitly unperformed until real evidence exists:
+  final manual Windows smoke (`docs/release/final-smoke.md`) and physical
+  mixed-DPI qualification (`docs/release/mixed-dpi-qualification.md`).
+
+### Signing policy
+
+Authenticode signing is optional by default and mandatory only when
+`RELEASE_SIGNING_REQUIRED=true` is set. Material is supplied exclusively
+through CI secrets (`SIGNCERT_BASE64`, `SIGNCERT_PASSWORD`, optional
+`SIGNCERT_TIMESTAMP`); no certificate or password is ever committed.
+`scripts/sign-release.ps1` records one of `NOT_CONFIGURED`, `SIGNED`,
+`SIGNATURE_VERIFIED`, or `SIGNING_FAILED` in the release manifest, and when
+signing changes the bytes both `unsignedQualifiedSha256` and
+`finalSignedSha256` are recorded. An unsigned executable is never described
+as signed. Git commit signatures are unrelated to Authenticode and are never
+conflated.
+
+### Reproducibility
+
+`global.json` pins the .NET 8 SDK feature band; NuGet restore is ordinary
+with a mandatory CI vulnerability audit (strict lock mode deliberately
+avoided); OpenSpec tooling is pinned through `tools/openspec/package-lock.json`
+and installed with `npm ci --ignore-scripts`.
 
 ## Diagnostics
 

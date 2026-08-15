@@ -169,6 +169,7 @@ Transcript*.txt
 setup.exe
 output/
 artifacts/
+.artifacts/
 
 # ------------------------------------------------------------------------------
 # Node.js tooling (defensive; no Node projects in the repo today)

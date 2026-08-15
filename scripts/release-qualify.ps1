@@ -1,0 +1,300 @@
+<#
+.SYNOPSIS
+    Exact-SHA release qualification and artifact provenance for TabDock.
+
+.DESCRIPTION
+    Produces the single-file Release executable, qualifies THAT exact binary
+    (version identity, embedded source commit, hermetic self-tests), computes
+    its SHA-256, applies optional Authenticode signing, and writes
+    release-manifest.json plus SHA256SUMS.txt beside the artifact.
+
+    The chain is intentionally immutable:
+        intended SHA -> actual HEAD -> audited restore -> publish ->
+        execute + qualify the published executable -> optional signing ->
+        signature verification -> SHA-256 -> manifest -> checksums
+
+    No second compilation happens after the artifact is qualified: the
+    executable that passes qualification is the executable that is hashed,
+    manifested, and (when a release is created) uploaded.
+
+.PARAMETER Sha
+    The exact source commit the release must be built from. When empty, HEAD
+    is used and reported. A non-empty mismatch fails the qualification.
+
+.PARAMETER Version
+    Semantic version recorded in the manifest (the csproj Version is the
+    authoritative mechanism; this must agree with it).
+
+.PARAMETER OutDir
+    Directory for TabDock.exe, SHA256SUMS.txt, and release-manifest.json.
+    Defaults to <repo>/.artifacts/release.
+
+.PARAMETER Ci
+    Enable CI policy: audited NuGet restore, OpenSpec validation, and no
+    worktree-dirty failure for a fresh checkout.
+
+.PARAMETER Sign
+    Attempt Authenticode signing when SIGNCERT_BASE64/SIGNCERT_PASSWORD are
+    present (see scripts/sign-release.ps1). Without material the manifest
+    records NOT_CONFIGURED; with RELEASE_SIGNING_REQUIRED=true the
+    qualification fails instead.
+
+.PARAMETER SkipOpenSpec
+    Skip OpenSpec validation (local convenience when the pinned CLI is not
+    installed and no global openspec exists).
+#>
+[CmdletBinding()]
+param(
+    [string]$Sha = '',
+    [string]$Version = '1.0.0',
+    [string]$OutDir = '',
+    [switch]$Ci,
+    [switch]$Sign,
+    [switch]$SkipOpenSpec
+)
+
+$ErrorActionPreference = 'Stop'
+
+$RepoRoot      = Split-Path -Parent $PSScriptRoot
+$MainProject   = Join-Path $RepoRoot 'TabDock.csproj'
+$OpenSpecLocal = Join-Path $RepoRoot 'tools\openspec\node_modules\.bin\openspec.cmd'
+
+if ([string]::IsNullOrWhiteSpace($OutDir)) {
+    $OutDir = Join-Path $RepoRoot '.artifacts\release'
+}
+$OutDir = [IO.Path]::GetFullPath($OutDir)
+$ArtifactExe = Join-Path $OutDir 'TabDock.exe'
+
+function Invoke-Step {
+    param([string]$Name, [scriptblock]$Body)
+    Write-Host ''
+    Write-Host "==> $Name" -ForegroundColor Cyan
+    & $Body
+    if ($LASTEXITCODE -ne 0) {
+        throw "FAILED: $Name (exit code $LASTEXITCODE)"
+    }
+}
+
+function ConvertTo-ProcessArgumentLine {
+    param([string[]]$Arguments)
+    return (($Arguments | ForEach-Object { '"' + $_.Replace('"', '\"') + '"' }) -join ' ')
+}
+
+function Invoke-Executable {
+    param([string]$Name, [string]$Path, [string[]]$Arguments)
+    Write-Host ''
+    Write-Host "==> $Name" -ForegroundColor Cyan
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Executable not found: $Path"
+    }
+    $argumentLine = ConvertTo-ProcessArgumentLine $Arguments
+    $process = Start-Process -FilePath $Path -ArgumentList $argumentLine -NoNewWindow -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "FAILED: $Name (exit code $($process.ExitCode))"
+    }
+}
+
+function Invoke-Captured {
+    param([string]$Path, [string[]]$Arguments, [int]$TimeoutSeconds = 300)
+    $argumentLine = ConvertTo-ProcessArgumentLine $Arguments
+    $psi = [Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $Path
+    $psi.Arguments = $argumentLine
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $psi
+    if (-not $process.Start()) { throw "Could not start: $Path" }
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        $process.Kill()
+        throw "$Path did not exit within $TimeoutSeconds seconds"
+    }
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
+    return [pscustomobject]@{ ExitCode = $process.ExitCode; Stdout = $stdout; Stderr = $stderr }
+}
+
+$verdict = 'FAIL'
+$failureReason = ''
+$manifest = [ordered]@{
+    product             = 'TabDock'
+    semanticVersion     = $Version
+    sourceCommitSha     = 'unavailable'
+    artifactFileName    = 'TabDock.exe'
+    artifactSha256      = 'unavailable'
+    unsignedQualifiedSha256 = 'unavailable'
+    finalSignedSha256   = $null
+    targetRuntimeIdentifier = 'win-x64'
+    configuration       = 'Release'
+    buildIdentity       = [ordered]@{ informationalVersion = 'unavailable'; selfReportedSha256 = 'unavailable' }
+    signingStatus       = 'NOT_CONFIGURED'
+    signatureVerification = 'NOT_PERFORMED'
+    qualificationStatus = $verdict
+    qualificationTimestamp = [DateTimeOffset]::UtcNow.ToString('O')
+    workflowRunId       = $env:GITHUB_RUN_ID
+    externalGates       = [ordered]@{
+        finalWindowsHumanSmoke   = 'BLOCKED_EXTERNAL'
+        physicalMixedDpi         = 'BLOCKED_EXTERNAL'
+        browserCoverage          = 'SKIP_NOT_APPLICABLE'
+        destructiveLogoffTesting = 'SKIP_NOT_APPLICABLE'
+        signingCredentials       = 'NOT_CONFIGURED'
+    }
+}
+
+Push-Location $RepoRoot
+try {
+    try {
+    # --- Exact-SHA and worktree verification --------------------------------
+    $intendedSha = $Sha
+    $actualSha = (git rev-parse HEAD).Trim()
+    Write-Host "intended source SHA: $($(if ([string]::IsNullOrWhiteSpace($intendedSha)) { '(HEAD)' } else { $intendedSha }))" -ForegroundColor Yellow
+    Write-Host "actual HEAD SHA:     $actualSha" -ForegroundColor Yellow
+    if ([string]::IsNullOrWhiteSpace($intendedSha)) {
+        $intendedSha = $actualSha
+    }
+    if ($intendedSha -ne $actualSha) {
+        throw "Exact-SHA mismatch: requested $intendedSha but HEAD is $actualSha"
+    }
+    $manifest.sourceCommitSha = $actualSha
+
+    $dirty = @(git status --porcelain)
+    if ($dirty.Count -gt 0) {
+        if ($Ci) {
+            throw "Dirty working tree during CI qualification is unexpected (checkout should be exact): $($dirty -join '; ')"
+        }
+        throw "Dirty working tree: a release candidate must be qualified from a clean exact commit. Commit or stash the $($dirty.Count) changed path(s) first."
+    }
+
+    # --- Audited restore ------------------------------------------------------
+    if ($Ci) {
+        Invoke-Step 'Restore with NuGet audit' {
+            dotnet restore $MainProject -p:NuGetAudit=true -p:NuGetAuditMode=all '-warnaserror:NU1900;NU1901;NU1902;NU1903;NU1904' --nologo
+        }
+        $noRestore = @('--no-restore')
+    }
+    else {
+        $noRestore = @()
+    }
+
+    # --- Release publish (single-file, self-contained, win-x64) --------------
+    Invoke-Step 'Publish single-file executable (Release, win-x64)' {
+        dotnet publish $MainProject -c Release -r win-x64 --self-contained true @noRestore -o $OutDir `
+            -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:IncludeNativeLibrariesForSelfExtract=true
+    }
+    if (-not (Test-Path -LiteralPath $ArtifactExe -PathType Leaf)) {
+        throw "Publish did not produce $ArtifactExe"
+    }
+
+    # --- Qualify THE EXACT ARTIFACT ------------------------------------------
+    $versionRun = Invoke-Captured $ArtifactExe @('--version')
+    if ($versionRun.ExitCode -ne 0) {
+        throw "Published --version failed: $($versionRun.Stderr)"
+    }
+    $selfSha = [regex]::Match($versionRun.Stdout, '(?im)^sha256:\s*([0-9A-Fa-f]{64})').Groups[1].Value
+    $commitLine = [regex]::Match($versionRun.Stdout, '(?im)^commit:\s*([0-9a-f]{40})').Groups[1].Value
+    $manifest.buildIdentity.informationalVersion = [regex]::Match($versionRun.Stdout, '(?im)^informationalVersion:\s*(\S+)').Groups[1].Value
+    $manifest.buildIdentity.selfReportedSha256 = $selfSha
+    if ($commitLine -ne $actualSha) {
+        throw "Published executable reports commit $commitLine but the candidate SHA is $actualSha"
+    }
+    if ([string]::IsNullOrWhiteSpace($selfSha)) {
+        throw 'Published executable did not report its own SHA-256'
+    }
+    Write-Host "published exe source identity: $commitLine (matches HEAD)" -ForegroundColor Green
+    Write-Host "published exe self-reported sha256: $selfSha" -ForegroundColor Green
+
+    Invoke-Executable 'Published geometry self-test (exact artifact)' $ArtifactExe @('--selftest-geometry')
+    Invoke-Executable 'Published diagnostics self-test (exact artifact)' $ArtifactExe @('--selftest-diagnostics')
+
+    if ($Ci) {
+        $env:OPENSPEC_NO_UPDATE_CHECK = '1'
+        $env:OPENSPEC_TELEMETRY = '0'
+        if (-not (Test-Path -LiteralPath $OpenSpecLocal -PathType Leaf)) {
+            Invoke-Step 'Install repository-owned OpenSpec tooling' {
+                Push-Location (Join-Path $RepoRoot 'tools\openspec')
+                try { npm ci --ignore-scripts } finally { Pop-Location }
+            }
+        }
+        Invoke-Step 'OpenSpec validation' {
+            & $OpenSpecLocal validate --all --no-interactive
+        }
+    }
+    elseif (-not $SkipOpenSpec) {
+        $openSpec = if (Test-Path -LiteralPath $OpenSpecLocal -PathType Leaf) { $OpenSpecLocal }
+                   else { (Get-Command openspec -ErrorAction SilentlyContinue)?.Source }
+        if ($null -ne $openSpec) {
+            Invoke-Step 'OpenSpec validation' {
+                & $openSpec validate --all --no-interactive
+            }
+        }
+        else {
+            Write-Host 'OpenSpec CLI not found; skipping local spec validation (use -SkipOpenSpec to silence).' -ForegroundColor Yellow
+        }
+    }
+
+    # --- SHA-256 of the exact artifact ---------------------------------------
+    $computedSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $ArtifactExe).Hash.ToUpperInvariant()
+    if (-not [string]::Equals($computedSha, $selfSha, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Artifact SHA-256 mismatch: Get-FileHash=$computedSha but executable self-report=$selfSha"
+    }
+    $manifest.artifactSha256 = $computedSha.ToLowerInvariant()
+    $manifest.unsignedQualifiedSha256 = $computedSha.ToLowerInvariant()
+    Write-Host "SHA-256($($ArtifactExe)) = $computedSha (matches self-report)" -ForegroundColor Green
+
+    # --- Optional Authenticode signing ---------------------------------------
+    $signingRequired = [string]::Equals($env:RELEASE_SIGNING_REQUIRED, 'true', [StringComparison]::OrdinalIgnoreCase)
+    $signScript = Join-Path $PSScriptRoot 'sign-release.ps1'
+    if ($Sign -or $signingRequired -or $env:SIGNCERT_BASE64) {
+        $signResult = & $signScript -ExePath $ArtifactExe
+        if ($null -eq $signResult) {
+            throw 'sign-release.ps1 produced no structured result; signing infrastructure failure.'
+        }
+        $manifest.signingStatus = $signResult.Status
+        $manifest.signatureVerification = $signResult.Verification
+        $manifest.externalGates.signingCredentials = $signResult.Status
+        if ($signResult.FinalSha256) {
+            $manifest.finalSignedSha256 = $signResult.FinalSha256
+        }
+        if ($signingRequired -and $signResult.Status -ne 'SIGNED') {
+            throw "Production policy requires signing but the result was $($signResult.Status)"
+        }
+    }
+    elseif ($signingRequired) {
+        throw 'Production policy requires signing (RELEASE_SIGNING_REQUIRED=true) but no SIGNCERT_BASE64/SIGNCERT_PASSWORD material is configured.'
+    }
+
+    # --- Release manifest and checksums --------------------------------------
+    $manifest.qualificationStatus = 'PASS'
+    $manifest.qualificationTimestamp = [DateTimeOffset]::UtcNow.ToString('O')
+    $manifestJson = $manifest | ConvertTo-Json -Depth 5
+    $manifestPath = Join-Path $OutDir 'release-manifest.json'
+    [IO.File]::WriteAllText($manifestPath, $manifestJson, [Text.UTF8Encoding]::new($false))
+
+    $sumsPath = Join-Path $OutDir 'SHA256SUMS.txt'
+    [IO.File]::WriteAllText($sumsPath, "$computedSha  TabDock.exe`r`n", [Text.UTF8Encoding]::new($false))
+
+    $verdict = 'PASS'
+    Write-Host ''
+    Write-Host 'Release qualification: PASS' -ForegroundColor Green
+    Write-Host "Manifest: $manifestPath" -ForegroundColor Green
+    Write-Host "Checksums: $sumsPath" -ForegroundColor Green
+    $manifestJson
+    }
+    catch {
+        $failureReason = $_.Exception.Message
+        Write-Host ''
+        Write-Host "Release qualification: FAIL - $failureReason" -ForegroundColor Red
+        exit 1
+    }
+}
+finally {
+    Pop-Location
+    if ($verdict -ne 'PASS' -and [string]::IsNullOrWhiteSpace($failureReason)) {
+        Write-Host ''
+        Write-Host 'Release qualification: FAIL' -ForegroundColor Red
+        exit 1
+    }
+}
