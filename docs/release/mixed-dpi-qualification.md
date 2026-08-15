@@ -7,8 +7,11 @@ Deterministic repository tests (`--selftest-geometry`, `MonitorDpiSelfTest`)
 are **not** equivalent to physical mixed-DPI hardware qualification. This
 procedure is the required human/hardware gate. It must be executed against the
 **exact release candidate artifact** (same SHA-256 as the artifact in
-`release-manifest.json`) on a machine with at least two monitors at different
-scaling (e.g. 100% + 150%).
+`release-manifest.json` — the FINAL signed executable when production signing
+is in effect; signing changes the bytes, so qualify the artifact that will
+actually be distributed) on a machine with at least two monitors at different
+scaling (e.g. 100% + 150%). See `docs/release/publication-gates.md` for the
+trust model and the evidence schema.
 
 ## Rules
 
@@ -79,3 +82,30 @@ records PASS with evidence, the machine configuration is described, and the
 candidate artifact SHA-256 is recorded. Until then the gate remains
 `BLOCKED_NO_MIXED_DPI_HARDWARE` / `BLOCKED_EXTERNAL` and must be reported as
 such in `release-manifest.json` (`externalGates.physicalMixedDpi`).
+
+A PASS qualification must additionally be recorded in the production evidence
+file `release-external-evidence.json` (see `docs/release/publication-gates.md`):
+
+```json
+{
+  "schemaVersion": 1,
+  "sourceCommitSha": "<exact 40-char candidate SHA>",
+  "artifactSha256": "<exact FINAL artifact SHA-256>",
+  "finalWindowsHumanSmoke": {
+    "status": "<PASS only after docs/release/final-smoke.md>",
+    "completedAt": "...",
+    "operator": "...",
+    "evidence": "..."
+  },
+  "physicalMixedDpi": {
+    "status": "PASS",
+    "completedAt": "<ISO-8601 timestamp>",
+    "operator": "<human identity>",
+    "evidence": "16 scenarios PASS with per-scenario evidence JSON in <evidence-dir>; monitors 100% + 150%; machine OS build <build>"
+  }
+}
+```
+
+The mixed-DPI gate can never be marked PASS by a boolean or by an assertion
+in tooling: only this schema-validated record, bound to the exact source SHA
+and the exact final artifact hash, is accepted by the publication gate.

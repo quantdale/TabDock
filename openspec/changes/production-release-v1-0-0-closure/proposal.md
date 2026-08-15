@@ -23,6 +23,22 @@ still missing.
 - Add a fail-closed `release.yml` workflow (dispatch-only, exact commit,
   canonical qualification, artifact retention, optional intentional
   publication consuming the preserved artifact with re-verification).
+- Add an auditable external-gate evidence mechanism:
+  `release-external-evidence.json` records the final human Windows smoke and
+  the physical mixed-DPI qualification, bound to the exact candidate SHA and
+  the FINAL artifact hash; production publication is refused until the record
+  is schema-valid and both gates PASS. Qualification-only runs never need
+  evidence.
+- Correct the final-hash checksum contract: `artifactSha256` and
+  `SHA256SUMS.txt` always describe the FINAL distributed executable (after
+  signing, when signing occurs), `unsignedQualifiedSha256` retains the
+  pre-sign provenance hash, and file == manifest == checksums is enforced in
+  both qualification and publication. Add deterministic release-tooling
+  regression tests (including adversarial cases) that exercise the
+  signing-path semantics without real certificate material.
+- Make the production signing policy explicit: production publication
+  requires Authenticode `SIGNED` + `SIGNATURE_VERIFIED` with an independent
+  `signtool verify /pa`; RC qualification may remain unsigned.
 - Pin the .NET SDK via `global.json` (8.0 feature band, roll-forward within
   .NET 8 only) without reintroducing the deliberately-avoided NuGet lock
   mode; document the reproducibility policy.

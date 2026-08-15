@@ -60,18 +60,117 @@ qualified hash and the final signed hash SHALL be recorded.
 The release workflow SHALL be dispatch-only (never triggered by a push),
 require an exact commit, run canonical qualification, preserve the qualified
 artifact, and publish only through an explicit second decision. Publication
-SHALL re-verify the manifest (`PASS`, matching SHA, on-disk hash equal to the
-manifest) before consuming the preserved artifact, and SHALL verify the
+SHALL independently re-verify every production condition against the on-disk
+artifact before consuming it: manifest `PASS`, exact source SHA, exact
+semantic version, on-disk hash equal to the manifest's final artifact hash,
+`SHA256SUMS.txt` equal to the on-disk hash, schema-valid external evidence
+bound to the exact SHA and the final artifact hash, and (when production
+signing is mandatory) `SIGNED` + `SIGNATURE_VERIFIED` with an independent
+`signtool verify /pa` on the final executable. The workflow SHALL verify the
 published release assets afterwards. No source modification and no second
 compilation SHALL occur at publication time.
 
 #### Scenario: Publication re-verification fails
 - **WHEN** the preserved artifact's on-disk hash differs from the manifest
+  or from `SHA256SUMS.txt`
 - **THEN** publication is refused
+
+#### Scenario: Production publication requires external evidence
+- **WHEN** a production release is requested without a valid
+  `release-external-evidence.json` record (missing, malformed, wrong source
+  SHA, wrong artifact hash, or any mandatory gate not `PASS`)
+- **THEN** publication is refused and no release or tag is created
+
+#### Scenario: Qualification-only runs need no external evidence
+- **WHEN** a qualification-only run is requested
+- **THEN** the qualification succeeds and the manifest records
+  `productionReleaseEligibility = BLOCKED_EXTERNAL` without any evidence
 
 #### Scenario: Tag identity
 - **WHEN** a release is published with tag `v<semver>`
 - **THEN** the tag resolves to the exact qualified candidate SHA
+
+### Requirement: Final distributed hash contract
+The release manifest SHALL distinguish `unsignedQualifiedSha256` (the hash of
+the executable that passed pre-sign qualification, always retained),
+`finalSignedSha256` (the hash after Authenticode signing and verification,
+when signing changed the bytes), and `artifactSha256` (ALWAYS the hash of the
+final distributed executable). `SHA256SUMS.txt` SHALL describe the final
+distributed executable. The manifest and checksums SHALL be written only
+after signing, from the hash of the artifact as it exists at finalization
+time, and SHALL be cross-checked against the actual file in both release
+qualification and publication.
+
+#### Scenario: Signing changes the bytes
+- **WHEN** an artifact is signed before finalization
+- **THEN** `artifactSha256` and `SHA256SUMS.txt` carry the post-sign hash,
+  `unsignedQualifiedSha256` retains the pre-sign provenance hash, and any
+  disagreement with the on-disk file fails the qualification
+
+### Requirement: Production signing policy is explicit
+RC qualification SHALL permit `NOT_CONFIGURED` signing. Production
+publication (`create-release=true`) SHALL make Authenticode signing
+mandatory: the manifest must record `SIGNED` and `SIGNATURE_VERIFIED`, must
+carry `finalSignedSha256` equal to the final artifact hash, must not be a
+test-only mock-signed artifact, and the final executable SHALL pass an
+independent `signtool verify /pa` in the publication job. An unsigned
+production release SHALL NOT be silently defaulted.
+
+#### Scenario: Production publication without a signature
+- **WHEN** a production release is requested and the artifact is unsigned or
+  its signature is unverified
+- **THEN** publication is refused
+
+#### Scenario: RC qualification remains unsigned-capable
+- **WHEN** a qualification-only run has no signing material
+- **THEN** the qualification still passes with `signingStatus =
+  NOT_CONFIGURED` and external gates stay `BLOCKED_EXTERNAL`
+
+### Requirement: External production evidence is an auditable record
+Production publication SHALL require a `release-external-evidence.json`
+record with `schemaVersion`, `sourceCommitSha` (exact 40-character candidate
+SHA), `artifactSha256` (exact final artifact hash), and mandatory gates
+`finalWindowsHumanSmoke` and `physicalMixedDpi`, each carrying `status`
+(only `PASS` is acceptable), `operator`, `completedAt`, and `evidence`.
+A caller-controlled boolean SHALL NOT substitute for the record. Missing
+evidence, malformed evidence, wrong schema version, wrong source SHA, wrong
+artifact hash, `FAIL`, or `BLOCKED_EXTERNAL` SHALL fail closed. The validated
+record SHALL be retained with the release and its publish-time eligibility
+verdict recorded in `publication-verification.json`.
+
+#### Scenario: Evidence from another candidate cannot be reused
+- **WHEN** the evidence's source SHA or artifact hash does not match the
+  candidate and the final artifact being published
+- **THEN** publication is refused
+
+### Requirement: Signing-path regression protection without real material
+Release tooling SHALL provide deterministic tests that exercise the
+"artifact changed after signing" semantics without committing or generating
+persistent private key material: a test-only mock signer models the byte
+mutation, is marked `Mock=true`, refuses to run while real material is
+configured, and can never satisfy the production publication gate. The
+regression suite SHALL cover the unsigned path, the signed/mutated path,
+publication provenance, signing failure, and signature-verification failure.
+
+#### Scenario: A mock-signed artifact never reaches production
+- **WHEN** a manifest records `signingMock = true`
+- **THEN** the production publication gate refuses the artifact
+
+### Requirement: Native ABI self-test evidence
+The executable SHALL provide a fail-loud native ABI self-test
+(`--selftest-native-abi`) that validates the 44-byte `WINDOWPLACEMENT`
+contract against real user32 (structure size/offsets, get/set round trip,
+zero-length rejection, 60-byte rejection) and prints a per-machine
+environment report (OS identity, accepted length, get/set behavior). The
+supported-hosted CI SHALL run the self-test on more than one Windows build,
+and untested Windows versions SHALL remain documented as unproven rather
+than assumed.
+
+#### Scenario: A Windows build changes the placement ABI
+- **WHEN** a qualifying machine accepts a 60-byte `WINDOWPLACEMENT` or
+  rejects the 44-byte contract
+- **THEN** the self-test fails loudly and qualification fails until the
+  structure-size decision is revisited with that evidence
 
 ### Requirement: Version contract is authoritative
 The `TabDock.csproj` `Version` SHALL be the single authoritative version

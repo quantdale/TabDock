@@ -8,6 +8,13 @@ This is the final human gate for the **exact release candidate artifact**
 to `release-manifest.json`'s). It is a smoke test, not an exhaustive suite:
 every item is a quick manual check on a real desktop.
 
+**Which artifact:** the FINAL distributed executable — the signed `TabDock.exe`
+when production signing is in effect. Signing changes the bytes, so smoke
+testing an unsigned artifact and then publishing the signed one is NOT
+acceptable: the evidence must describe the exact bytes that will be
+distributed. See `docs/release/publication-gates.md` for the trust model and
+the evidence schema.
+
 Result vocabulary per item: `PASS`, `FAIL`, `SKIP_NOT_APPLICABLE`,
 `BLOCKED_ENVIRONMENT`. The overall smoke is PASS only when all applicable
 items PASS with evidence (a checklist signed by the operator).
@@ -18,6 +25,11 @@ items PASS with evidence (a checklist signed by the operator).
   (e.g. Notepad, Windows Terminal, a browser).
 - Run the release `TabDock.exe` (never a debug build).
 - Record the candidate SHA-256 and the machine OS build before starting.
+- Confirm the artifact identity first: `TabDock.exe --version` must report
+  the release commit and a SHA-256 equal to `release-manifest.json`
+  `artifactSha256` AND `SHA256SUMS.txt`. Also record the
+  `--selftest-native-abi` environment report for the compatibility matrix
+  (`docs/release/compatibility-matrix.md`).
 
 ## Application
 
@@ -123,3 +135,30 @@ The operator signs the checklist with: candidate SHA-256, machine OS build,
 date, and every item's result. The smoke is PASS only with every applicable
 item PASS; anything unexecuted is `BLOCKED_EXTERNAL` and is recorded as such
 in `release-manifest.json` (`externalGates.finalWindowsHumanSmoke`).
+
+A PASS smoke must additionally be recorded in the production evidence file
+`release-external-evidence.json` (see `docs/release/publication-gates.md`):
+
+```json
+{
+  "schemaVersion": 1,
+  "sourceCommitSha": "<exact 40-char candidate SHA>",
+  "artifactSha256": "<exact FINAL artifact SHA-256>",
+  "finalWindowsHumanSmoke": {
+    "status": "PASS",
+    "completedAt": "<ISO-8601 timestamp>",
+    "operator": "<human identity>",
+    "evidence": "38-item checklist signed by the operator; machine OS build <build>; SELFTEST[native-abi] report attached"
+  },
+  "physicalMixedDpi": {
+    "status": "<PASS only after docs/release/mixed-dpi-qualification.md>",
+    "completedAt": "...",
+    "operator": "...",
+    "evidence": "..."
+  }
+}
+```
+
+The smoke gate can never be marked PASS by a boolean or by an assertion in
+tooling: only this schema-validated record, bound to the exact source SHA and
+the exact final artifact hash, is accepted by the publication gate.

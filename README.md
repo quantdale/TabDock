@@ -279,39 +279,62 @@ Release engineering is exact-SHA and immutable:
 ```
 intended SHA -> clean exact checkout -> audited restore -> publish ->
 execute and qualify THE PUBLISHED EXE -> optional Authenticode signing ->
-signature verification -> SHA-256 -> release-manifest.json + SHA256SUMS.txt ->
-immutable artifact retention -> human gates -> intentional GitHub Release
+signature verification -> FINAL SHA-256 -> release-manifest.json +
+SHA256SUMS.txt (both describe the FINAL distributed bytes) -> immutable
+artifact retention -> human gates (evidence record) -> intentional GitHub
+Release
 ```
 
 - `scripts/release-qualify.ps1` enforces the exact SHA, refuses dirty
   worktrees, publishes once, qualifies the published executable (embedded
   source commit must equal the candidate SHA; the executable's self-reported
-  SHA-256 must equal `Get-FileHash`; geometry + diagnostics self-tests run on
-  that binary), and writes `release-manifest.json` + `SHA256SUMS.txt`.
+  SHA-256 must equal `Get-FileHash`; geometry + diagnostics + native-ABI
+  self-tests run on that binary), and writes `release-manifest.json` +
+  `SHA256SUMS.txt`. Hash semantics: `unsignedQualifiedSha256` is the
+  pre-sign provenance hash, `finalSignedSha256` is the post-sign hash (when
+  signing changed the bytes), and `artifactSha256` + `SHA256SUMS.txt` always
+  describe the FINAL distributed executable — enforced by
+  `scripts/release-tooling.ps1` (file == manifest == checksums).
 - `.github/workflows/release.yml` is dispatch-only (never runs on a push) and
   requires an explicit commit SHA. Publication is a separate explicit
-  decision that re-verifies provenance before consuming the preserved
-  artifact — a stable release can never silently substitute a different
-  binary.
+  decision that re-verifies provenance, checksums, external evidence, and
+  the Authenticode signature before consuming the preserved artifact — a
+  stable release can never silently substitute a different binary, and it is
+  IMPOSSIBLE to publish while the required human gates or the signature are
+  missing.
 - Qualification vocabulary: `PASS`, `FAIL`, `BLOCKED_EXTERNAL`,
   `BLOCKED_ENVIRONMENT`, `SKIP_NOT_APPLICABLE`. A 0/N scenario run, an
   unavailable browser, or missing mixed-DPI hardware is never `PASS`.
 - Human gates stay explicitly unperformed until real evidence exists:
   final manual Windows smoke (`docs/release/final-smoke.md`) and physical
-  mixed-DPI qualification (`docs/release/mixed-dpi-qualification.md`).
+  mixed-DPI qualification (`docs/release/mixed-dpi-qualification.md`). Their
+  PASS results must be recorded in `release-external-evidence.json`, bound to
+  the exact candidate SHA and the final artifact hash
+  (`docs/release/publication-gates.md`); qualification-only runs never need
+  evidence and their manifests honestly report
+  `productionReleaseEligibility = BLOCKED_EXTERNAL`.
+- Release-tooling regression tests: `scripts/release-tooling-tests.ps1`
+  (37 deterministic adversarial cases; no real certificates, no publishing).
 
 ### Signing policy
 
-Authenticode signing is optional by default and mandatory only when
-`RELEASE_SIGNING_REQUIRED=true` is set. Material is supplied exclusively
-through CI secrets (`SIGNCERT_BASE64`, `SIGNCERT_PASSWORD`, optional
-`SIGNCERT_TIMESTAMP`); no certificate or password is ever committed.
-`scripts/sign-release.ps1` records one of `NOT_CONFIGURED`, `SIGNED`,
-`SIGNATURE_VERIFIED`, or `SIGNING_FAILED` in the release manifest, and when
-signing changes the bytes both `unsignedQualifiedSha256` and
-`finalSignedSha256` are recorded. An unsigned executable is never described
-as signed. Git commit signatures are unrelated to Authenticode and are never
-conflated.
+RC qualification may run unsigned (`NOT_CONFIGURED`). PRODUCTION publication
+(`create-release=true`) makes Authenticode signing mandatory and is enforced
+twice: the qualify job requires it
+(`RELEASE_SIGNING_REQUIRED`/`RELEASE_PRODUCTION_GATE`) and the publish job
+independently requires `SIGNED` + `SIGNATURE_VERIFIED` + `finalSignedSha256`
+equal to the final artifact hash, then re-proves the signature with
+`signtool verify /pa`. An unsigned production release is never silently
+defaulted. Material is supplied exclusively through CI secrets
+(`SIGNCERT_BASE64`, `SIGNCERT_PASSWORD`, optional `SIGNCERT_TIMESTAMP`); no
+certificate or password is ever committed. `scripts/sign-release.ps1`
+records one of `NOT_CONFIGURED`, `SIGNED`, `SIGNATURE_VERIFIED`, or
+`SIGNING_FAILED` in the release manifest, and when signing changes the bytes
+both `unsignedQualifiedSha256` and `finalSignedSha256` are recorded. An
+unsigned executable is never described as signed. Test-only mock signing
+(`-MockSign*`, used by the regression tests) never runs with real material
+and can never pass the production gate. Git commit signatures are unrelated
+to Authenticode and are never conflated.
 
 ### Reproducibility
 
@@ -331,6 +354,13 @@ and installed with `npm ci --ignore-scripts`.
   unreadable-file handling, journal identity gates, monitor failure policy,
   storage degradation, and adversarial support-bundle sanitization. It creates
   only disposable temp fixtures and exits nonzero on any failure.
+- **Native ABI self-test:** `TabDock.exe --selftest-native-abi` proves the
+  44-byte `WINDOWPLACEMENT` user32 contract on the machine that runs it
+  (structure size/offsets, get/set round trip, zero-length and 60-byte
+  rejection) and prints a per-machine environment report (OS build, accepted
+  length, get/set behavior). Every qualification run executes these checks
+  via `--selftest-diagnostics`; the compatibility evidence is tracked in
+  `docs/release/compatibility-matrix.md`.
 - **Environment fingerprint:** every startup writes `ENV[startup]` (OS, .NET,
   bitness, monitor layout) and `ENV[launcher]` (system DPI); every container
   logs `ENV[container]` (rects, monitor, DPI, guest). For support, use the

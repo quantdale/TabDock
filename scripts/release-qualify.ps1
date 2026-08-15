@@ -11,11 +11,22 @@
     The chain is intentionally immutable:
         intended SHA -> actual HEAD -> audited restore -> publish ->
         execute + qualify the published executable -> optional signing ->
-        signature verification -> SHA-256 -> manifest -> checksums
+        signature verification -> FINAL SHA-256 -> manifest -> checksums
 
     No second compilation happens after the artifact is qualified: the
     executable that passes qualification is the executable that is hashed,
     manifested, and (when a release is created) uploaded.
+
+    Hash semantics (enforced by scripts/release-tooling.ps1):
+        unsignedQualifiedSha256 = hash of the executable that passed pre-sign
+                                  qualification (always retained)
+        finalSignedSha256       = hash after Authenticode signing + verification
+                                  (only when signing changed the bytes)
+        artifactSha256          = hash of the FINAL DISTRIBUTED executable
+        SHA256SUMS.txt          = hash of the FINAL DISTRIBUTED executable
+    The manifest and SHA256SUMS.txt are written only AFTER signing, from the
+    hash of the artifact as it exists at finalization time, so a signed
+    release never ships checksums that describe the unsigned executable.
 
 .PARAMETER Sha
     The exact source commit the release must be built from. When empty, HEAD
@@ -42,6 +53,16 @@
 .PARAMETER SkipOpenSpec
     Skip OpenSpec validation (local convenience when the pinned CLI is not
     installed and no global openspec exists).
+
+.DESCRIPTION
+    Production policy: when RELEASE_PRODUCTION_GATE=true (the release workflow
+    sets it for create-release=true runs), Authenticode signing becomes
+    mandatory exactly as if RELEASE_SIGNING_REQUIRED=true, test-only mock
+    signing is refused, and the manifest records releaseMode=PRODUCTION.
+    External human gates (final smoke, mixed-DPI) are NEVER verified by this
+    script; productionReleaseEligibility is therefore BLOCKED_EXTERNAL here
+    and the release workflow's publish job independently validates the
+    external evidence file before creating the release.
 #>
 [CmdletBinding()]
 param(
@@ -54,6 +75,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot 'release-tooling.ps1')
 
 $RepoRoot      = Split-Path -Parent $PSScriptRoot
 $MainProject   = Join-Path $RepoRoot 'TabDock.csproj'
@@ -119,6 +142,7 @@ function Invoke-Captured {
 
 $verdict = 'FAIL'
 $failureReason = ''
+$productionGate = [string]::Equals($env:RELEASE_PRODUCTION_GATE, 'true', [StringComparison]::OrdinalIgnoreCase)
 $manifest = [ordered]@{
     product             = 'TabDock'
     semanticVersion     = $Version
@@ -132,6 +156,13 @@ $manifest = [ordered]@{
     buildIdentity       = [ordered]@{ informationalVersion = 'unavailable'; selfReportedSha256 = 'unavailable' }
     signingStatus       = 'NOT_CONFIGURED'
     signatureVerification = 'NOT_PERFORMED'
+    signingMock         = $null
+    releaseMode         = if ($productionGate) { 'PRODUCTION' } else { 'QUALIFICATION_ONLY' }
+    # Qualification-time truth: external human gates are never verified by
+    # this script, so production eligibility is BLOCKED_EXTERNAL here. The
+    # release workflow's publish job validates the external evidence file and
+    # records the ELIGIBLE/FAIL verdict in publication-verification.json.
+    productionReleaseEligibility = 'BLOCKED_EXTERNAL'
     qualificationStatus = $verdict
     qualificationTimestamp = [DateTimeOffset]::UtcNow.ToString('O')
     workflowRunId       = $env:GITHUB_RUN_ID
@@ -235,17 +266,22 @@ try {
         }
     }
 
-    # --- SHA-256 of the exact artifact ---------------------------------------
-    $computedSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $ArtifactExe).Hash.ToUpperInvariant()
-    if (-not [string]::Equals($computedSha, $selfSha, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Artifact SHA-256 mismatch: Get-FileHash=$computedSha but executable self-report=$selfSha"
+    # --- SHA-256 of the exact artifact BEFORE signing ------------------------
+    # This is the unsigned provenance hash: the bytes that passed pre-sign
+    # qualification. It is retained in unsignedQualifiedSha256 even when
+    # Authenticode signing later changes the bytes.
+    $unsignedSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $ArtifactExe).Hash.ToUpperInvariant()
+    if (-not [string]::Equals($unsignedSha, $selfSha, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Artifact SHA-256 mismatch: Get-FileHash=$unsignedSha but executable self-report=$selfSha"
     }
-    $manifest.artifactSha256 = $computedSha.ToLowerInvariant()
-    $manifest.unsignedQualifiedSha256 = $computedSha.ToLowerInvariant()
-    Write-Host "SHA-256($($ArtifactExe)) = $computedSha (matches self-report)" -ForegroundColor Green
+    $manifest.unsignedQualifiedSha256 = $unsignedSha.ToLowerInvariant()
+    Write-Host "SHA-256($($ArtifactExe)) pre-sign = $unsignedSha (matches self-report)" -ForegroundColor Green
 
     # --- Optional Authenticode signing ---------------------------------------
-    $signingRequired = [string]::Equals($env:RELEASE_SIGNING_REQUIRED, 'true', [StringComparison]::OrdinalIgnoreCase)
+    # Production runs (RELEASE_PRODUCTION_GATE=true, set by the release
+    # workflow for create-release=true) make signing mandatory: a production
+    # release is never silently defaulted to unsigned.
+    $signingRequired = [string]::Equals($env:RELEASE_SIGNING_REQUIRED, 'true', [StringComparison]::OrdinalIgnoreCase) -or $productionGate
     $signScript = Join-Path $PSScriptRoot 'sign-release.ps1'
     if ($Sign -or $signingRequired -or $env:SIGNCERT_BASE64) {
         $signOutput = & $signScript -ExePath $ArtifactExe
@@ -259,33 +295,49 @@ try {
         $manifest.signingStatus = $signResult.Status
         $manifest.signatureVerification = $signResult.Verification
         $manifest.externalGates.signingCredentials = $signResult.Status
+        if ([bool]$signResult.Mock) {
+            $manifest.signingMock = $true
+            if ($productionGate) {
+                throw 'Test-only mock signing is refused under the production gate (RELEASE_PRODUCTION_GATE=true).'
+            }
+        }
         if ($signResult.FinalSha256) {
-            $manifest.finalSignedSha256 = $signResult.FinalSha256
+            if ($signResult.FinalSha256 -notmatch '^[0-9a-fA-F]{64}$') {
+                throw "sign-release.ps1 returned a malformed FinalSha256: '$($signResult.FinalSha256)'"
+            }
+            $manifest.finalSignedSha256 = $signResult.FinalSha256.ToLowerInvariant()
         }
         if ($signingRequired -and $signResult.Status -ne 'SIGNED') {
             throw "Production policy requires signing but the result was $($signResult.Status)"
         }
     }
     elseif ($signingRequired) {
-        throw 'Production policy requires signing (RELEASE_SIGNING_REQUIRED=true) but no SIGNCERT_BASE64/SIGNCERT_PASSWORD material is configured.'
+        throw 'Production policy requires signing (RELEASE_SIGNING_REQUIRED=true or RELEASE_PRODUCTION_GATE=true) but no SIGNCERT_BASE64/SIGNCERT_PASSWORD material is configured.'
     }
 
-    # --- Release manifest and checksums --------------------------------------
+    # --- Release manifest and checksums (FINAL distributed hash) -------------
+    # artifactSha256 and SHA256SUMS.txt are computed from the artifact AS IT
+    # EXISTS NOW (after signing). Complete-ReleaseRecords fails closed when
+    # the on-disk hash disagrees with finalSignedSha256 (signed path) or
+    # unsignedQualifiedSha256 (unsigned path), then proves
+    # file == manifest.artifactSha256 == SHA256SUMS.txt.
     $manifest.qualificationStatus = 'PASS'
     $manifest.qualificationTimestamp = [DateTimeOffset]::UtcNow.ToString('O')
-    $manifestJson = $manifest | ConvertTo-Json -Depth 5
-    $manifestPath = Join-Path $OutDir 'release-manifest.json'
-    [IO.File]::WriteAllText($manifestPath, $manifestJson, [Text.UTF8Encoding]::new($false))
-
-    $sumsPath = Join-Path $OutDir 'SHA256SUMS.txt'
-    [IO.File]::WriteAllText($sumsPath, "$computedSha  TabDock.exe`r`n", [Text.UTF8Encoding]::new($false))
+    $records = Complete-ReleaseRecords -Manifest $manifest -ArtifactPath $ArtifactExe -OutDir $OutDir
+    $manifestPath = $records.ManifestPath
+    $sumsPath = $records.SumsPath
 
     $verdict = 'PASS'
     Write-Host ''
     Write-Host 'Release qualification: PASS' -ForegroundColor Green
+    Write-Host "Unsigned qualified SHA-256: $($manifest.unsignedQualifiedSha256)" -ForegroundColor Green
+    if ($manifest.finalSignedSha256) {
+        Write-Host "Final signed SHA-256: $($manifest.finalSignedSha256)" -ForegroundColor Green
+    }
+    Write-Host "Final distributed SHA-256 (artifactSha256 == SHA256SUMS.txt): $($records.ArtifactSha256)" -ForegroundColor Green
     Write-Host "Manifest: $manifestPath" -ForegroundColor Green
     Write-Host "Checksums: $sumsPath" -ForegroundColor Green
-    $manifestJson
+    [IO.File]::ReadAllText($manifestPath)
     }
     catch {
         $failureReason = $_.Exception.Message

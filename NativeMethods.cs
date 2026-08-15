@@ -777,7 +777,7 @@ public static partial class NativeMethods
     /// would silently grow Marshal.SizeOf to 60 and break every placement
     /// restore, so the field is intentionally omitted and callers must keep
     /// length = Marshal.SizeOf&lt;WINDOWPLACEMENT&gt;(). NativeInteropSelfTest
-    /// locks this contract in on every qualifying machine.
+    /// locks this contract in on every qualifying machine (--selftest-native-abi prints per-machine environment evidence for the external compatibility matrix; a Windows build that ever accepts length == 60 fails the self-test loudly and the structure-size decision must be revisited with that evidence).
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct WINDOWPLACEMENT

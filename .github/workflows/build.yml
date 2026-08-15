@@ -48,3 +48,26 @@ jobs:
           OPENSPEC_NO_UPDATE_CHECK: '1'
           OPENSPEC_TELEMETRY: '0'
         run: .\scripts\validate.ps1 -Configuration Release -Ci -Publish
+
+  # Independent native-ABI evidence on a second Windows OS build (the
+  # windows-2022 runner image): proves the WINDOWPLACEMENT 44-byte user32
+  # contract on a Windows version different from windows-latest and prints the
+  # per-machine environment report. The self-test is hermetic (a never-shown
+  # probe window, no input), so it is safe on the hosted runner. This is
+  # evidence for docs/release/compatibility-matrix.md, not a substitute for
+  # the external Windows 10 x64 qualification.
+  native-abi-evidence:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build Release for native ABI evidence
+        run: dotnet build TabDock.sln -c Release --nologo
+
+      - name: Run native ABI self-test (real user32 placement contract)
+        shell: pwsh
+        run: .\bin\Release\net8.0-windows\win-x64\TabDock.exe --selftest-native-abi

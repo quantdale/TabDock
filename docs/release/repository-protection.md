@@ -15,8 +15,10 @@ its exact qualified source commit. Nothing in this ruleset touches `main` or
 the solo/autonomous-agent direct-push workflow: a push to `main` still runs
 the canonical `build` workflow, and validated changes continue to reach `main`
 directly. The production release path is additionally gated by the
-dispatch-only `release.yml` workflow, which re-verifies artifact provenance
-before creating a `v*` tag.
+dispatch-only `release.yml` workflow, which re-verifies artifact provenance,
+`SHA256SUMS.txt` consistency, the external evidence record, and the
+Authenticode signature before creating a `v*` tag (see
+`docs/release/publication-gates.md`).
 
 ## Deliberately NOT applied
 
