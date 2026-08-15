@@ -60,13 +60,14 @@ bytes. The release manifest never describes an unsigned executable as
 signed. Git commit signatures are irrelevant to Authenticode; they are never
 conflated.
 
-Production signing policy is explicit: any `create-release=true` run forces
-`RELEASE_SIGNING_REQUIRED=true` and `RELEASE_PRODUCTION_GATE=true`, and the
-publication job additionally requires `SIGNED` + `SIGNATURE_VERIFIED` +
-`finalSignedSha256` equal to the final artifact hash plus an independent
-`signtool verify /pa` on the downloaded executable. A production release is
-never silently unsigned; an unsigned GA would require an explicit documented
-policy change. RC qualification keeps its `NOT_CONFIGURED` allowance.
+Production signing policy is explicit: the Stage A candidate-preparation
+workflow (`prepare-release-candidate.yml`) forces `RELEASE_SIGNING_REQUIRED=true`
+and `RELEASE_PRODUCTION_GATE=true`, and the Stage B publication workflow
+additionally requires `SIGNED` + `SIGNATURE_VERIFIED` + `finalSignedSha256`
+equal to the final artifact hash plus an independent `signtool verify /pa`
+on the downloaded executable. A production release is never silently
+unsigned; an unsigned GA would require an explicit documented policy change.
+RC qualification keeps its `NOT_CONFIGURED` allowance.
 
 Test-only mock signer modes (`-MockSign`, `-MockSignFailure`,
 `-MockVerifyFailure`) model the byte-mutation semantics for the regression
@@ -77,32 +78,40 @@ never pass the publication gate.
 ### External production evidence
 
 Production publication requires a `release-external-evidence.json` record
-provided through the workflow's `external-evidence` input. The schema is
-`schemaVersion`, `sourceCommitSha` (exact 40-char candidate SHA),
-`artifactSha256` (exact FINAL artifact hash), and the mandatory gates
-`finalWindowsHumanSmoke` and `physicalMixedDpi` — each with `status` (only
-`PASS` is acceptable), `operator`, `completedAt`, and `evidence`. A
-caller-controlled boolean is not evidence. The publication job validates the
-record with the shared `Test-ExternalEvidenceFile`/`Test-PublicationEligibility`
-functions: missing, malformed, wrong-SHA, wrong-hash, `FAIL`, or
-`BLOCKED_EXTERNAL` all fail closed. The validated record is attached to the
-release, and `publication-verification.json` records the publish-time
-eligibility verdict.
+(schemaVersion 2) provided through the Stage B workflow's
+`external-evidence` input. The schema is `schemaVersion`, `sourceCommitSha`
+(exact 40-char candidate SHA), `artifactSha256` (exact FINAL artifact hash),
+`candidateWorkflowRunId` and `candidateArtifactName` (the exact Stage A run
+and artifact), and the mandatory gates `finalWindowsHumanSmoke`,
+`physicalMixedDpi`, and `windowsCompatibility` (with PASS entries for
+Windows 10 x64 and Windows 11 x64) — each gate with `status` (only `PASS` is
+acceptable), `operator`, ISO-8601 `completedAt` (not materially in the
+future), and `evidence` (plus `build`/`nativeAbiEvidence` for the Windows
+entries). A caller-controlled boolean is not evidence. The Stage B job
+validates the record with the shared `Test-ExternalEvidenceFile`/
+`Test-PublicationEligibility` functions: missing, malformed, wrong-SHA,
+wrong-hash, wrong-run, wrong-artifact, `FAIL`, or `BLOCKED_EXTERNAL` all fail
+closed. The validated record is attached to the release, and
+`publication-verification.json` records the publish-time eligibility verdict.
 
 ### Fail-closed release workflow
 
-`release.yml` is `workflow_dispatch`-only (no stable release on every push),
+The release chain is two-stage. `release.yml` is the RC qualification-only
+workflow: `workflow_dispatch`-only (no stable release on every push),
 requires an exact `sha` input, verifies the checkout against it, runs
-canonical qualification, then produces and retains the qualified artifact.
-Publication is an explicit second decision (`qualification-only=false` +
-`create-release=true`); the publish job runs the shared fail-closed gate
-(manifest `PASS`, exact SHA, exact version, on-disk hash == manifest
-`artifactSha256` == `SHA256SUMS.txt`, schema-valid evidence bound to the
-exact SHA and final hash, mandatory `SIGNED` + `SIGNATURE_VERIFIED` +
-independent `signtool verify /pa`) before `gh release create` with the
-preserved artifact, then verifies the published assets. Qualification-only
-runs never need evidence and may run unsigned. No source modification and no
-second compilation happens at publication time.
+canonical qualification, then produces and retains the qualified artifact
+(`tabdock-rc-<sha>-<run-id>`); it has NO publication path. Production
+candidates are prepared by `prepare-release-candidate.yml` (build once, sign
+once, immutable retention, no release) and published by `publish-release.yml`
+(Stage B), which takes the Stage A run id, downloads the EXACT artifact
+cross-run, runs the shared fail-closed gate (manifest `PASS`, exact SHA,
+version authority, releaseMode PRODUCTION, run binding, on-disk hash ==
+manifest `artifactSha256` == `SHA256SUMS.txt`, schema-v2 evidence bound to
+the exact SHA, final hash, run, and artifact, mandatory `SIGNED` +
+`SIGNATURE_VERIFIED` + independent `signtool verify /pa`) before
+`gh release create` with the downloaded bytes, then verifies the published
+assets. No source modification, no second compilation, and no second signing
+happens at publication time; the tag is derived as `v<semanticVersion>`.
 
 ### Version contract
 

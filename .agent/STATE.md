@@ -18,9 +18,10 @@ this text.
   - External production evidence is now enforced, not documented:
     `release-external-evidence.json` (schemaVersion 1, sourceCommitSha,
     artifactSha256, finalWindowsHumanSmoke + physicalMixedDpi each with
-    status/operator/completedAt/evidence). The release workflow's publish
-    job validates it via the shared gate and refuses publication when
-    evidence is missing/malformed/wrong-SHA/wrong-hash/FAIL/BLOCKED_EXTERNAL.
+    status/operator/completedAt/evidence — superseded by schemaVersion 2 in
+    Campaign D below). The release workflow's publish job validates it via
+    the shared gate and refuses publication when evidence is
+    missing/malformed/wrong-SHA/wrong-hash/FAIL/BLOCKED_EXTERNAL.
     Qualification-only runs never need evidence.
   - Checksum-ordering defect fixed: `artifactSha256` and `SHA256SUMS.txt`
     ALWAYS describe the FINAL distributed executable (post-sign);
@@ -32,12 +33,14 @@ this text.
     discovery/verify). `scripts/release-tooling-tests.ps1` = 37 deterministic
     adversarial regression cases using test-only mock signer modes
     (`sign-release.ps1 -MockSign/-MockSignFailure/-MockVerifyFailure`,
-    Mock=true, never with real material, never production-eligible).
+    Mock=true, never with real material, never production-eligible) —
+    extended to 69 cases in Campaign D.
   - Production signing policy explicit: `create-release=true` forces
-    RELEASE_SIGNING_REQUIRED + RELEASE_PRODUCTION_GATE; the publish job
-    additionally requires SIGNED + SIGNATURE_VERIFIED + finalSignedSha256 ==
-    final artifact hash + independent `signtool verify /pa`. RC qualification
-    may stay NOT_CONFIGURED.
+    RELEASE_SIGNING_REQUIRED + RELEASE_PRODUCTION_GATE (mechanism superseded
+    by the Stage A prepare-release-candidate workflow in Campaign D); the
+    publish job additionally requires SIGNED + SIGNATURE_VERIFIED +
+    finalSignedSha256 == final artifact hash + independent
+    `signtool verify /pa`. RC qualification may stay NOT_CONFIGURED.
   - WINDOWPLACEMENT: 44-byte runtime contract preserved; `--selftest-native-abi`
     added (structure/offsets, get/set round trip, zero-length and 60-byte
     rejection, per-machine environment report); `build.yml` gains a
@@ -49,6 +52,43 @@ this text.
     `final-smoke.md`/`mixed-dpi-qualification.md`/`repository-protection.md`/
     README. OpenSpec change `production-release-v1-0-0-closure` extended
     with the remediation tasks and delta requirements.
+- Campaign D (two-stage production architecture, independent review round 2,
+  this session):
+  - The release chain is now TWO stages with zero rebuild/re-sign between
+    them: `prepare-release-candidate.yml` (Stage A) builds once, signs once
+    (mandatory; BLOCKED_EXTERNAL preflight without credentials), verifies,
+    computes the final hash, and retains the immutable candidate
+    `tabdock-candidate-<sha>-<run-id>` — it never creates a release.
+    `publish-release.yml` (Stage B) takes the Stage A run id + schema-v2
+    evidence, resolves the run/artifact via the GitHub API (must exist in
+    this repo, must be the candidate workflow, completed/successful, artifact
+    live and unique), downloads the EXACT artifact cross-run
+    (`download-artifact@v7` `run-id`/`repository`/`github-token`), re-verifies
+    everything (project version at candidate SHA == manifest == downloaded
+    binary `--version`; file == manifest == SHA256SUMS; evidence bound to
+    SHA/hash/run/artifact; signtool verify /pa), and publishes those exact
+    bytes with the DERIVED tag `v<semanticVersion>` (no tag input exists).
+    `release.yml` is now RC qualification-only with no publication path
+    (artifact `tabdock-rc-<sha>-<run-id>`, `releaseMode=QUALIFICATION_ONLY`).
+  - Version authority: `TabDock.csproj <Version>` is the single authority;
+    release-qualify reads it from the exact candidate, the workflow `version`
+    input is EXPECTED-only (any disagreement fails), the manifest records the
+    project version, and the published binary's semantic + informational
+    versions must carry it; the Stage B gate requires manifest == recorded
+    binary identity == project version and re-runs the downloaded `--version`.
+  - Windows compatibility is now a machine-enforced production gate: evidence
+    schema v2 requires `windowsCompatibility` with PASS entries for real
+    Windows 10 x64 and Windows 11 x64 (status, build, operator, ISO-8601
+    completedAt, nativeAbiEvidence from `--selftest-native-abi`, evidence);
+    missing/FAIL/BLOCKED blocks publication. Evidence v2 also requires
+    `candidateWorkflowRunId` + `candidateArtifactName` and validates every
+    completedAt as ISO-8601, not materially future.
+  - `scripts/release-tooling-tests.ps1` extended to 69 deterministic cases:
+    version authority chain, derived-tag adversarial states, cross-run
+    candidate binding, Windows 10/11 gate failures, completedAt quality, and
+    static workflow guarantees (Stage B contains no build/sign/qualify
+    invocation; Stage A forces signing and never publishes; RC workflow has
+    no publication path).
 - Campaign B release engineering (repository side complete, with Campaign C
   corrections):
   - `scripts/release-qualify.ps1` — exact-SHA + clean-tree enforcement,
@@ -100,11 +140,12 @@ this text.
   identity. Hosted Actions evidence is always resolved dynamically for the
   exact SHA; it is not persisted here.
 - Release-tooling regression suite:
-  `scripts/release-tooling-tests.ps1` (37 cases; no real certificates, no
+  `scripts/release-tooling-tests.ps1` (69 cases; no real certificates, no
   publishing) — run before every release-pipeline change.
 - The release chain is `scripts/release-qualify.ps1 -Ci -Sha <sha> -Version
   1.0.0 -Sign` (locally: without `-Ci`); it fails on SHA mismatch, dirty
-  trees, published-exe identity mismatch, or self-report/hash mismatch, and
+  trees, published-exe identity mismatch, expected-version disagreement with
+  the authoritative csproj `<Version>`, or self-report/hash mismatch, and
   writes manifest + checksums from the FINAL artifact hash.
 - Do not automate shutdown/logoff. Do not claim mixed-DPI hardware,
   unavailable-browser, or foreground-policy qualification without evidence.
@@ -128,7 +169,12 @@ this text.
    `release-tags` ruleset.
 3. The remaining v1.0.0 work is external-gate evidence (human smoke,
    mixed-DPI hardware, signing credentials, Windows 10 x64 compatibility),
-   then an intentional `release.yml` production run against the exact final
-   SHA with `release-external-evidence.json`; do not publish v1.0.0 without
-   it.
+   then the two-stage production dispatch: obtain/configure the production
+   Authenticode credential, dispatch `prepare-release-candidate.yml` against
+   the exact final SHA (produces the ONE signed immutable candidate),
+   download that exact candidate, run the human/mixed-DPI/Windows
+   compatibility gates against those exact bytes, author
+   `release-external-evidence.json` (schemaVersion 2) with the run id and
+   artifact name, then dispatch `publish-release.yml` with that run id and
+   evidence; do not publish v1.0.0 without it.
 4. Do not create a state-only commit merely to record a SHA or CI run.

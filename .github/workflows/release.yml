@@ -1,23 +1,19 @@
 name: release
 
-# Intentionally NOT triggered by pushes: a main push produces a candidate
-# build through `build.yml`, but a production release is an explicit,
-# exact-SHA, qualification-gated decision. Run this workflow manually with a
-# specific commit SHA.
+# RC QUALIFICATION-ONLY workflow (never publishes). Intentionally NOT
+# triggered by pushes: a main push produces a candidate build through
+# build.yml, and release candidate preparation is an explicit, exact-SHA,
+# qualification-gated decision. Run this workflow manually with a specific
+# commit SHA to qualify the exact source and retain an RC artifact.
 #
-# Publication model:
-#   - qualification-only runs (default) qualify the exact SHA and retain the
-#     artifact. They never need external evidence and may run unsigned.
-#   - production runs (qualification-only=false AND create-release=true)
-#     require Authenticode signing (mandatory, never silently unsigned) and
-#     require the `external-evidence` input: a release-external-evidence.json
-#     record proving the final human Windows smoke and the physical mixed-DPI
-#     qualification both PASS against the EXACT final artifact being
-#     published. The publish job schema-validates the evidence, binds it to
-#     the requested SHA and the final artifact hash, re-verifies the artifact
-#     triple (file == manifest == SHA256SUMS.txt), and independently confirms
-#     the Authenticode signature before `gh release create`. Any failure
-#     refuses the release.
+# This workflow has NO publication path: a GitHub Release is never created
+# here. The two-stage production chain lives in the dedicated workflows:
+#   STAGE A  prepare-release-candidate.yml - builds, qualifies, signs, and
+#            retains the immutable PRODUCTION candidate (signing mandatory).
+#   STAGE B  publish-release.yml - downloads the retained Stage A artifact
+#            and publishes those EXACT bytes (no rebuild, no re-sign).
+# RC qualification may run unsigned (NOT_CONFIGURED) or signed, and never
+# requires external evidence.
 on:
   workflow_dispatch:
     inputs:
@@ -26,35 +22,15 @@ on:
         required: true
         type: string
       version:
-        description: 'Semantic version (must match TabDock.csproj Version)'
+        description: 'Expected semantic version (must equal TabDock.csproj <Version>, which is authoritative)'
         required: false
         default: '1.0.0'
         type: string
-      tag:
-        description: 'Release tag (created only when a release is published)'
-        required: false
-        default: 'v1.0.0'
-        type: string
-      qualification-only:
-        description: 'Qualify and preserve the artifact only (no release)'
-        required: false
-        default: true
-        type: boolean
-      create-release:
-        description: 'Publish the GitHub Release with the qualified artifact'
-        required: false
-        default: false
-        type: boolean
       signing-required:
-        description: 'Treat missing Authenticode material as a qualification failure (forced true when create-release=true)'
+        description: 'Treat missing Authenticode material as a qualification failure'
         required: false
         default: false
         type: boolean
-      external-evidence:
-        description: 'release-external-evidence.json content proving finalWindowsHumanSmoke=PASS and physicalMixedDpi=PASS for the exact final artifact. REQUIRED when create-release=true; ignored for qualification-only runs.'
-        required: false
-        default: ''
-        type: string
 
 permissions:
   contents: read
@@ -108,11 +84,9 @@ jobs:
       # binary -> optional signing -> signature verification -> SHA-256 ->
       # release-manifest.json + SHA256SUMS.txt (both describing the FINAL
       # distributed bytes) -> immutable artifact retention. The qualified
-      # artifact is uploaded without any rebuild.
-      #
-      # Production runs force RELEASE_SIGNING_REQUIRED=true and
-      # RELEASE_PRODUCTION_GATE=true: signing is mandatory for a production
-      # release and test-only mock signing is refused.
+      # artifact is uploaded without any rebuild. Signing is optional here:
+      # the manifest records NOT_CONFIGURED without material unless
+      # signing-required=true.
       - name: Release qualification and artifact provenance
         shell: pwsh
         env:
@@ -121,180 +95,40 @@ jobs:
           SIGNCERT_BASE64: ${{ secrets.SIGNCERT_BASE64 }}
           SIGNCERT_PASSWORD: ${{ secrets.SIGNCERT_PASSWORD }}
           SIGNCERT_TIMESTAMP: ${{ secrets.SIGNCERT_TIMESTAMP }}
-          RELEASE_SIGNING_REQUIRED: ${{ inputs.signing-required == 'true' || (inputs.qualification-only == 'false' && inputs.create-release == 'true') }}
-          RELEASE_PRODUCTION_GATE: ${{ inputs.qualification-only == 'false' && inputs.create-release == 'true' }}
+          RELEASE_SIGNING_REQUIRED: ${{ inputs.signing-required == 'true' }}
         run: .\scripts\release-qualify.ps1 -Ci -Sha '${{ inputs.sha }}' -Version '${{ inputs.version }}' -Sign -OutDir (Join-Path $env:RUNNER_TEMP 'release-artifacts')
 
-      # Immutable retention of the exact qualified artifact.
+      # Immutable retention of the exact qualified RC artifact.
       - name: Upload qualified release artifact
         uses: actions/upload-artifact@v7
         with:
-          name: tabdock-release-${{ inputs.sha }}
+          name: tabdock-rc-${{ inputs.sha }}-${{ github.run_id }}
           path: ${{ runner.temp }}/release-artifacts
           if-no-files-found: error
           retention-days: 90
 
-  publish:
-    needs: qualify
-    if: ${{ !cancelled() && needs.qualify.result == 'success' && github.event.inputs.qualification-only == 'false' && github.event.inputs.create-release == 'true' }}
-    runs-on: windows-latest
-    permissions:
-      contents: write
-    steps:
-      # Read-only checkout of the exact candidate: the publish job needs the
-      # shared release-tooling module and must operate on the exact SHA.
-      - name: Checkout exact candidate SHA
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.sha }}
-
-      - name: Verify exact candidate SHA
+      # The RC handoff: the artifact is retained here for inspection. It is
+      # NOT a production candidate and can never be published: production
+      # candidates are prepared (signed) and published by the two-stage
+      # workflows above.
+      - name: Record RC artifact identity
         shell: pwsh
         run: |
-          $actual = (git rev-parse HEAD).Trim()
-          if ($actual -ne '${{ inputs.sha }}') {
-            throw "Checked out $actual but the release candidate was requested as ${{ inputs.sha }}"
-          }
-          Write-Host "Candidate SHA verified: $actual"
-
-      - name: Download qualified artifact
-        uses: actions/download-artifact@v7
-        with:
-          name: tabdock-release-${{ inputs.sha }}
-          path: release-artifacts
-
-      # Fail-closed publication gate before any release mutation. The shared
-      # release-tooling gate independently re-verifies: manifest PASS for
-      # THIS exact SHA and version; final artifact on-disk SHA == manifest
-      # artifactSha256 == SHA256SUMS.txt; the external evidence file is
-      # schema-valid and bound to this exact SHA and the FINAL artifact hash
-      # with finalWindowsHumanSmoke=PASS and physicalMixedDpi=PASS; and
-      # (production signing is mandatory) signingStatus == SIGNED,
-      # signatureVerification == SIGNATURE_VERIFIED, finalSignedSha256 ==
-      # final artifact SHA, no test-only mock signing, and the Authenticode
-      # signature is re-proven on disk with signtool verify /pa. Any failure
-      # aborts before `gh release create`.
-      - name: Fail-closed publication gate
-        shell: pwsh
-        env:
-          RELEASE_EXTERNAL_EVIDENCE: ${{ inputs.external-evidence }}
-        run: |
-          . (Join-Path $env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1')
-          $dir = Join-Path $env:GITHUB_WORKSPACE 'release-artifacts'
-          $evidencePath = Join-Path $dir 'release-external-evidence.json'
-          [IO.File]::WriteAllText($evidencePath, $env:RELEASE_EXTERNAL_EVIDENCE, [Text.UTF8Encoding]::new($false))
-          $gate = Test-PublicationEligibility -ArtifactDir $dir -ExpectedSourceSha '${{ inputs.sha }}' -ExpectedVersion '${{ inputs.version }}' -EvidencePath $evidencePath -RequireSigning
-          if (-not $gate.Eligible) {
-            Write-Host 'Publication gate FAILED - refusing to create the GitHub Release:' -ForegroundColor Red
-            $gate.Failures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-            throw "Refusing to create the GitHub Release: $($gate.Failures.Count) gate failure(s)"
-          }
-          Write-Host 'Publication gate: PASS' -ForegroundColor Green
-
-          # Auditable publication record: the publish-time eligibility verdict
-          # computed from evidence (the manifest itself keeps the
-          # qualification-time BLOCKED_EXTERNAL value).
+          $dir = Join-Path $env:RUNNER_TEMP 'release-artifacts'
           $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
-          $verification = [ordered]@{
-            recordKind                   = 'publication-verification'
-            schemaVersion                = 1
-            product                      = 'TabDock'
-            semanticVersion              = $manifest.semanticVersion
-            sourceCommitSha              = $manifest.sourceCommitSha
-            artifactSha256               = $manifest.artifactSha256
-            productionReleaseEligibility = 'ELIGIBLE'
-            verifiedAt                   = [DateTimeOffset]::UtcNow.ToString('O')
-            checks                       = [ordered]@{
-              automatedQualification = 'PASS'
-              sourceCommitSha        = 'PASS'
-              semanticVersion        = 'PASS'
-              artifactTripleConsistency = 'PASS'
-              sha256Sums             = 'PASS'
-              externalEvidenceValid  = 'PASS'
-              finalWindowsHumanSmoke = 'PASS'
-              physicalMixedDpi       = 'PASS'
-              authenticodeSigning    = 'PASS'
-              signatureVerification  = 'PASS'
-            }
-          }
-          $verification | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $dir 'publication-verification.json') -Encoding utf8
-          Write-Host 'Publication verification record written: publication-verification.json' -ForegroundColor Green
+          $summary = @"
+          ## RC qualification artifact (NOT a production candidate)
 
-      # Render release notes from the manifest and the validated evidence
-      # (never from a rebuild).
-      - name: Render release notes
-        shell: pwsh
-        run: |
-          $manifest = Get-Content (Join-Path 'release-artifacts' 'release-manifest.json') -Raw | ConvertFrom-Json
-          $evidence = Get-Content (Join-Path 'release-artifacts' 'release-external-evidence.json') -Raw | ConvertFrom-Json
-          $signed = $manifest.signingStatus
-          $sha = if ($manifest.finalSignedSha256) { $manifest.finalSignedSha256 } else { $manifest.artifactSha256 }
-          $lines = [System.Collections.Generic.List[string]]::new()
-          $lines.Add("TabDock $($manifest.semanticVersion)")
-          $lines.Add('')
-          $lines.Add('## Release identity')
-          $lines.Add('')
-          $lines.Add("- Source commit: $($manifest.sourceCommitSha)")
-          $lines.Add("- Executable SHA-256: $sha")
-          $lines.Add("- Authenticode signing: $signed (verification: $($manifest.signatureVerification))")
-          $lines.Add('- Runtime: .NET 8 self-contained, win-x64 single file (no install required)')
-          $lines.Add('- Supported OS: Windows 10 (recent builds) and Windows 11, 64-bit')
-          $lines.Add('')
-          $lines.Add('## Qualification')
-          $lines.Add('')
-          $lines.Add("- Automated qualification: $($manifest.qualificationStatus) (hermetic: builds, geometry/diagnostics/privacy/persistence self-tests, doctor/version, support-bundle privacy, OpenSpec validation)")
-          $lines.Add("- Exact-SHA provenance: artifact produced by and qualified against commit $($manifest.sourceCommitSha)")
-          $lines.Add('')
-          $lines.Add('## External gates (production evidence)')
-          $lines.Add('')
-          $lines.Add("- Final human Windows smoke: $($evidence.finalWindowsHumanSmoke.status) - operator $($evidence.finalWindowsHumanSmoke.operator), completed $($evidence.finalWindowsHumanSmoke.completedAt)")
-          $lines.Add("- Physical mixed-DPI qualification: $($evidence.physicalMixedDpi.status) - operator $($evidence.physicalMixedDpi.operator), completed $($evidence.physicalMixedDpi.completedAt)")
-          $lines.Add("- Evidence is bound to source commit $($manifest.sourceCommitSha) and final artifact SHA-256 $($manifest.artifactSha256); the validated record is attached as release-external-evidence.json and the publish-time verdict as publication-verification.json")
-          $lines.Add('')
-          $lines.Add('## Known limitations')
-          $lines.Add('')
-          $lines.Add('See the repository README "Known limitations" section. The most important ones:')
-          $lines.Add('')
-          $lines.Add('- Maximizing a docked guest window itself fills the whole monitor (cosmetic UX gap).')
-          $lines.Add('- Elevated (admin) applications cannot be captured by a standard-user TabDock (UIPI).')
-          $lines.Add('- HWNDs are not stable across reboots; persisted state is layout intent, not live windows.')
-          $lines.Add('- Force-killing TabDock is safe (guests are never reparented); the journaled recovery restores identity-valid guests on next launch.')
-          $lines.Add('')
-          $lines.Add('## Support')
-          $lines.Add('')
-          $lines.Add('- Read-only diagnostics: TabDock.exe --doctor, --support-bundle')
-          $lines.Add('- Privacy: support bundles are sanitized; raw logs are local-only and must be redacted before sharing.')
-          $lines -join "`n" | Set-Content -Path 'RELEASE_NOTES.md' -Encoding utf8
+          - RC workflow run: `${{ github.run_id }}
+          - Artifact name: tabdock-rc-`${{ inputs.sha }}`-`${{ github.run_id }}
+          - Source commit: `${{ inputs.sha }}
+          - Semantic version: `$($manifest.semanticVersion)`
+          - Final distributed SHA-256: `$($manifest.artifactSha256)`
+          - Signing: `$($manifest.signingStatus)` / `$($manifest.signatureVerification)`
+          - releaseMode: `$($manifest.releaseMode)` (never publishable)
 
-      # Intentional publication of the exact qualified artifact. The tag is
-      # created at the exact candidate SHA; no source modification and no
-      # second compilation occurs here. The evidence and the publication
-      # verification record travel with the release as assets.
-      - name: Publish GitHub Release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create '${{ inputs.tag }}' --repo ${{ github.repository }} `
-            --target '${{ inputs.sha }}' `
-            --title 'TabDock ${{ inputs.version }}' `
-            --notes-file RELEASE_NOTES.md `
-            release-artifacts/TabDock.exe `
-            release-artifacts/SHA256SUMS.txt `
-            release-artifacts/release-manifest.json `
-            release-artifacts/release-external-evidence.json `
-            release-artifacts/publication-verification.json
-
-      - name: Verify release assets
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $assets = gh release view '${{ inputs.tag }}' --repo ${{ github.repository }} --json assets --jq '.assets[].name'
-          $required = @('TabDock.exe', 'SHA256SUMS.txt', 'release-manifest.json', 'release-external-evidence.json', 'publication-verification.json')
-          foreach ($name in $required) {
-            if ($assets -notcontains $name) {
-              throw "Release asset missing after publication: $name"
-            }
-          }
-          Write-Host 'Release assets verified: PASS'
+          This artifact supports RC/beta testing only. The production publication
+          chain requires a signed candidate from prepare-release-candidate.yml and the
+          publish-release.yml gate.
+          "@
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

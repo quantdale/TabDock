@@ -108,13 +108,14 @@ qualification and publication.
   disagreement with the on-disk file fails the qualification
 
 ### Requirement: Production signing policy is explicit
-RC qualification SHALL permit `NOT_CONFIGURED` signing. Production
-publication (`create-release=true`) SHALL make Authenticode signing
-mandatory: the manifest must record `SIGNED` and `SIGNATURE_VERIFIED`, must
-carry `finalSignedSha256` equal to the final artifact hash, must not be a
-test-only mock-signed artifact, and the final executable SHALL pass an
-independent `signtool verify /pa` in the publication job. An unsigned
-production release SHALL NOT be silently defaulted.
+RC qualification SHALL permit `NOT_CONFIGURED` signing. Production candidates
+(the `prepare-release-candidate` Stage A workflow) SHALL make Authenticode
+signing mandatory: the manifest must record `SIGNED` and
+`SIGNATURE_VERIFIED`, must carry `finalSignedSha256` equal to the final
+artifact hash, must not be a test-only mock-signed artifact, and the final
+executable SHALL pass an independent `signtool verify /pa` in the Stage B
+publication workflow. An unsigned production release SHALL NOT be silently
+defaulted.
 
 #### Scenario: Production publication without a signature
 - **WHEN** a production release is requested and the artifact is unsigned or
@@ -195,3 +196,97 @@ OpenSpec tooling SHALL remain pinned through its lockfile.
 - **THEN** `global.json` keeps the build on a .NET 8 SDK (or the build fails
   with a clear SDK-resolution error) rather than silently compiling with an
   unqualified SDK
+
+### Requirement: Production publication is a two-stage, no-rebuild chain
+Production publication SHALL be split into two distinct stages that share no
+build or signing step. STAGE A (a manually dispatched candidate-preparation
+workflow) SHALL build once, Authenticode-sign once (mandatory; missing
+credentials fail with `BLOCKED_EXTERNAL` before any build), verify the
+signature, compute the final distributed hash, and retain the immutable
+candidate artifact; it SHALL NOT create a GitHub Release. STAGE B (a separate
+publication workflow) SHALL accept the Stage A workflow run id and the
+external evidence record, download the EXISTING artifact from that run
+without rebuilding, republishing, re-signing, or modifying the executable,
+re-verify every production condition against the downloaded bytes, and
+publish those exact bytes. The published executable SHA SHALL equal the
+Stage A executable SHA SHALL equal the evidence `artifactSha256`.
+
+#### Scenario: A second build never happens
+- **WHEN** a production candidate exists and humans have qualified it
+- **THEN** publication consumes the retained Stage A artifact and performs
+  zero compilation and zero signing operations
+
+#### Scenario: Publication without the retained artifact is refused
+- **WHEN** the Stage A run does not exist, did not succeed, is not the
+  candidate-preparation workflow, has no live uniquely-named candidate
+  artifact, or the artifact is expired
+- **THEN** publication fails closed and no release or tag is created
+
+### Requirement: Stage B binds to the exact source run and artifact
+Stage B publication SHALL bind the downloaded artifact to the exact source
+workflow run and exact metadata, never to an artifact name alone: the run's
+`head_sha` SHALL equal the manifest `sourceCommitSha`; the manifest
+`workflowRunId` SHALL equal the requested run id; the manifest `releaseMode`
+SHALL be `PRODUCTION` (qualification-only artifacts SHALL be rejected); the
+artifact name SHALL match `tabdock-candidate-<sha>-<run-id>`; and the
+external evidence SHALL name the same run id and artifact name.
+
+#### Scenario: Evidence or manifest from another run is refused
+- **WHEN** the evidence or the manifest names a different workflow run or
+  artifact than the one being published
+- **THEN** publication fails closed
+
+### Requirement: The project version is the single authority
+`TabDock.csproj <Version>` SHALL be the single authoritative semantic
+version. Release qualification SHALL read it from the exact candidate source,
+SHALL treat any workflow version input as an EXPECTED value that must agree,
+SHALL record the project version in the manifest, and SHALL require the
+published executable's reported semantic version and informational version
+to carry it. Publication SHALL additionally require the manifest version, the
+recorded binary identity, and the project `<Version>` at the candidate SHA to
+agree.
+
+#### Scenario: A workflow version cannot override the project
+- **WHEN** release tooling is invoked with an expected version that differs
+  from the project's authoritative `<Version>`
+- **THEN** qualification fails before any build work and the manifest never
+  records the operator-supplied version
+
+### Requirement: The production tag is derived, not input
+The production release tag SHALL be derived as `v<semanticVersion>` from the
+authoritative version; the publication workflow SHALL NOT accept a tag input,
+so arbitrary or mismatched tags (`stable-final`, `v2.0.0` for version
+`1.0.0`) are structurally impossible and the protected `v*` tag namespace
+applies by construction.
+
+#### Scenario: An arbitrary tag cannot be created
+- **WHEN** a production release is published
+- **THEN** the tag is exactly `v<semanticVersion>` at the exact candidate SHA
+
+### Requirement: Windows compatibility is a production evidence gate
+Because v1.0.0 advertises Windows 10 and Windows 11 x64, production
+publication SHALL require `windowsCompatibility` evidence with PASS entries
+for both a real supported Windows 10 x64 system and a real Windows 11 x64
+system, each recording the OS build, operator, ISO-8601 completion time, the
+`--selftest-native-abi` evidence, and the qualification summary. Missing,
+malformed, `FAIL`, or `BLOCKED_EXTERNAL` Windows 10 or Windows 11 evidence
+SHALL block production publication. Windows 10 evidence SHALL NOT be
+fabricated; removing the Windows 10 support claim is an explicit product
+decision, never a silent gate-simplification.
+
+#### Scenario: Windows 10 remains unproven
+- **WHEN** a production release is requested without real Windows 10 x64
+  PASS evidence (build and native ABI self-test recorded)
+- **THEN** publication is refused
+
+### Requirement: External evidence is traceable and timestamp-quality
+External evidence (schemaVersion 2) SHALL record `candidateWorkflowRunId`
+(the numeric Stage A run id) and `candidateArtifactName` (the downloaded
+Stage A artifact name) in addition to the source SHA and final artifact hash.
+Every `completedAt` field SHALL parse as an ISO-8601 timestamp and SHALL not
+be materially in the future.
+
+#### Scenario: Future or malformed timestamps are refused
+- **WHEN** an evidence gate carries a non-ISO-8601 `completedAt` or one in
+  the future beyond the clock-skew tolerance
+- **THEN** the evidence is invalid and publication is refused

@@ -1,0 +1,158 @@
+name: prepare-release-candidate
+
+# STAGE A of the two-stage production release architecture: prepare an
+# immutable, Authenticode-signed production candidate for human
+# qualification. This workflow NEVER creates a GitHub Release: it builds
+# once, signs once, verifies the signature, computes the final distributed
+# SHA-256, and retains the exact candidate as an immutable Actions artifact.
+#
+# Humans then download THAT exact artifact, run the final Windows smoke, the
+# physical mixed-DPI qualification, and the Windows 10/11 compatibility gates
+# against those exact bytes, and author release-external-evidence.json
+# (schemaVersion 2) referencing this run and artifact. The separate
+# publish-release workflow (STAGE B) later downloads this same artifact and
+# publishes it WITHOUT rebuilding, re-signing, or touching the executable.
+#
+# Signing is MANDATORY on this path: a production candidate is only created
+# when real Authenticode material is configured (SIGNCERT_BASE64 +
+# SIGNCERT_PASSWORD). Without credentials the run fails with
+# BLOCKED_EXTERNAL and no candidate is produced. Qualification-only RC runs
+# remain possible through release.yml (unsigned or signed, never published).
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Exact source commit SHA to prepare (required)'
+        required: true
+        type: string
+      version:
+        description: 'Expected semantic version (must equal TabDock.csproj <Version>, which is authoritative)'
+        required: false
+        default: '1.0.0'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-candidate:
+    runs-on: windows-latest
+    steps:
+      # Current checkout action: Node 24 action runtime (runner-supported).
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+
+      # The workflow must operate on the exact requested commit; a mismatch
+      # aborts before any build work begins.
+      - name: Verify exact candidate SHA
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne '${{ inputs.sha }}') {
+            throw "Checked out $actual but the release candidate was requested as ${{ inputs.sha }}"
+          }
+          Write-Host "Candidate SHA verified: $actual"
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: tools/openspec/package-lock.json
+
+      - name: Install pinned OpenSpec CLI
+        working-directory: tools/openspec
+        run: npm ci --ignore-scripts
+
+      # Production candidates are only prepared with real signing material.
+      # Without it the run stops here with an explicit BLOCKED_EXTERNAL
+      # reason; nothing is built, signed, or retained.
+      - name: Signing material preflight (BLOCKED_EXTERNAL without credentials)
+        shell: pwsh
+        env:
+          SIGNCERT_BASE64: ${{ secrets.SIGNCERT_BASE64 }}
+          SIGNCERT_PASSWORD: ${{ secrets.SIGNCERT_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNCERT_BASE64) -or [string]::IsNullOrWhiteSpace($env:SIGNCERT_PASSWORD)) {
+            Write-Host '::error::BLOCKED_EXTERNAL: production-candidate preparation requires the Authenticode signing credentials (SIGNCERT_BASE64 + SIGNCERT_PASSWORD). No candidate is produced; configure the production certificate and re-dispatch.'
+            exit 1
+          }
+          Write-Host 'Signing material present: production-candidate preparation may proceed.'
+
+      # Canonical hermetic qualification (audited restore, Release builds,
+      # self-tests, doctor/version/bundle privacy, OpenSpec validation).
+      # SendInput/hardware scenarios never run on the hosted runner.
+      - name: Canonical qualification
+        shell: pwsh
+        env:
+          OPENSPEC_NO_UPDATE_CHECK: '1'
+          OPENSPEC_TELEMETRY: '0'
+        run: .\scripts\validate.ps1 -Configuration Release -Ci
+
+      # The production-candidate chain, exactly once: publish -> execute +
+      # qualify the exact binary -> Authenticode sign -> signature
+      # verification -> FINAL SHA-256 -> release-manifest.json +
+      # SHA256SUMS.txt (both describing the FINAL distributed bytes) ->
+      # immutable artifact retention. RELEASE_SIGNING_REQUIRED=true and
+      # RELEASE_PRODUCTION_GATE=true make signing mandatory and refuse
+      # test-only mock signing; releaseMode=PRODUCTION is recorded so the
+      # Stage B publication gate can reject qualification-only artifacts.
+      - name: Prepare signed production candidate (build once, sign once)
+        shell: pwsh
+        env:
+          OPENSPEC_NO_UPDATE_CHECK: '1'
+          OPENSPEC_TELEMETRY: '0'
+          SIGNCERT_BASE64: ${{ secrets.SIGNCERT_BASE64 }}
+          SIGNCERT_PASSWORD: ${{ secrets.SIGNCERT_PASSWORD }}
+          SIGNCERT_TIMESTAMP: ${{ secrets.SIGNCERT_TIMESTAMP }}
+          RELEASE_SIGNING_REQUIRED: 'true'
+          RELEASE_PRODUCTION_GATE: 'true'
+        run: .\scripts\release-qualify.ps1 -Ci -Sha '${{ inputs.sha }}' -Version '${{ inputs.version }}' -Sign -OutDir (Join-Path $env:RUNNER_TEMP 'production-candidate')
+
+      # Immutable retention of the exact signed candidate. The artifact name
+      # embeds the source SHA and the run id so Stage B can locate the exact
+      # artifact and so an artifact name alone is never sufficient
+      # provenance.
+      - name: Upload immutable production candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: tabdock-candidate-${{ inputs.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/production-candidate
+          if-no-files-found: error
+          retention-days: 90
+
+      # The human-qualification handoff: the operator records these exact
+      # values (run id, artifact name, source SHA, semantic version, final
+      # artifact SHA-256) in release-external-evidence.json before dispatching
+      # the publish-release workflow.
+      - name: Record candidate identity for human qualification
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'production-candidate'
+          $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
+          $sha = if ($manifest.finalSignedSha256) { $manifest.finalSignedSha256 } else { $manifest.artifactSha256 }
+          $summary = @"
+          ## Production candidate ready for human qualification
+
+          - Stage A workflow run: `${{ github.run_id }}`
+          - Candidate artifact name: tabdock-candidate-`${{ inputs.sha }}`-`${{ github.run_id }}
+          - Source commit: `${{ inputs.sha }}`
+          - Semantic version: `$($manifest.semanticVersion)` (project <Version>, authoritative)
+          - Final distributed SHA-256: `$sha`
+          - Signing: `$($manifest.signingStatus)` / `$($manifest.signatureVerification)`
+
+          Download the artifact from this run, verify TabDock.exe SHA-256 equals the
+          final distributed SHA-256, execute the human gates against those exact bytes
+          (docs/release/final-smoke.md, mixed-dpi-qualification.md,
+          compatibility-matrix.md), then author release-external-evidence.json
+          (schemaVersion 2) with candidateWorkflowRunId = `${{ github.run_id }}` and
+          candidateArtifactName = tabdock-candidate-`${{ inputs.sha }}`-`${{ github.run_id }}.
+          Dispatch the publish-release workflow with that run id and evidence; it
+          publishes THESE exact bytes without rebuilding or re-signing.
+          "@
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

@@ -48,14 +48,27 @@ so every qualifying machine contributes evidence.
 ## Production qualification requirements
 
 Before v1.0.0 production publication, the external compatibility gate must
-record evidence for at minimum:
+record PASS evidence in `release-external-evidence.json`
+(`windowsCompatibility`, schemaVersion 2 — see
+`docs/release/publication-gates.md`) for at minimum:
 
-1. a supported recent **Windows 10 x64** system (build recorded);
-2. **Windows 11 x64** (build recorded; 10.0.26200 already proven locally and
-   recorded in this matrix);
-3. the hosted Windows CI environment (proven automatically on every run).
+1. a supported recent **Windows 10 x64** system (`windows10`: `status` PASS,
+   OS build recorded in `build`, `operator`, ISO-8601 `completedAt`, the
+   `--selftest-native-abi` environment report in `nativeAbiEvidence`, and
+   `evidence`);
+2. **Windows 11 x64** (`windows11`: same structure; build recorded — the
+   10.0.26200 workstation already proven locally may be cited);
+3. the hosted Windows CI environment (proven automatically on every run:
+   every qualification executes the native ABI checks through
+   `--selftest-diagnostics`, and `build.yml` runs `--selftest-native-abi`
+   independently on windows-2022).
 
-Each entry needs the machine's OS build and the `--selftest-native-abi`
+Each external entry needs the machine's OS build and the `--selftest-native-abi`
 environment report (or a `--selftest-diagnostics` run log) recorded with the
-release evidence. Windows 10 evidence must NOT be fabricated if no Windows 10
-environment exists — the gate stays `BLOCKED_EXTERNAL` until a real run.
+release evidence. The Stage B publication gate fails closed when
+`windowsCompatibility` is missing, malformed, `FAIL`, `BLOCKED_EXTERNAL`, or
+lacks either the Windows 10 or the Windows 11 entry. Windows 10 evidence must
+NOT be fabricated if no Windows 10 environment exists — the gate stays
+`BLOCKED_EXTERNAL` until a real run. Dropping Windows 10 from the supported
+OS is a product decision that must be made explicitly (README, release notes,
+manifest/support metadata, this matrix) — never silently to pass the gate.

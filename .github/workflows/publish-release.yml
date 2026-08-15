@@ -1,0 +1,340 @@
+name: publish-release
+
+# STAGE B of the two-stage production release architecture: publish the
+# EXISTING immutable production candidate produced by the
+# prepare-release-candidate workflow (STAGE A). This workflow NEVER builds,
+# NEVER signs, and NEVER touches the candidate executable: it downloads the
+# exact artifact retained by the Stage A run, re-verifies every production
+# condition against those exact bytes (provenance, version authority, final
+# hash triple, Authenticode signature, schema-v2 external evidence including
+# the Windows 10/11 compatibility gate), and only then creates the GitHub
+# Release from the downloaded bytes.
+#
+# The tag is DERIVED as "v" + the authoritative semantic version recorded in
+# the candidate manifest; no free-form tag input exists, so arbitrary or
+# mismatched tags are structurally impossible and the protected v* tag
+# namespace is preserved. The tag resolves to the exact candidate source
+# SHA.
+on:
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: 'Stage A (prepare-release-candidate) workflow run ID that produced the candidate artifact'
+        required: true
+        type: string
+      external-evidence:
+        description: 'release-external-evidence.json content (schemaVersion 2) proving finalWindowsHumanSmoke, physicalMixedDpi, and windowsCompatibility PASS for the exact candidate. REQUIRED.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      # The publication target is the Stage A run, not this run: the source
+      # run must exist, must belong to this repository (gh resolves it
+      # against ${{ github.repository }}), must be the
+      # prepare-release-candidate workflow, and must have completed
+      # successfully. Its head SHA becomes the exact candidate SHA.
+      - name: Resolve and verify the Stage A source run
+        id: resolve-run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $runId = '${{ inputs.run-id }}'
+          if ($runId -notmatch '^\d+$') {
+            throw "run-id must be a numeric GitHub Actions run ID, got '$runId'"
+          }
+          $view = gh run view $runId --repo ${{ github.repository }} --json path,status,conclusion,headSha,workflowName 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            throw "Stage A run $runId does not exist or is not readable in ${{ github.repository }} (wrong run id, other repository, or insufficient permissions): $view"
+          }
+          $run = $view | ConvertFrom-Json
+          if ($run.path -ne '.github/workflows/prepare-release-candidate.yml') {
+            throw "run $runId belongs to workflow '$($run.path)'; only prepare-release-candidate.yml runs can produce production candidates"
+          }
+          if ($run.status -ne 'completed') {
+            throw "Stage A run $runId has status '$($run.status)'; only completed runs can be published"
+          }
+          if ($run.conclusion -ne 'success') {
+            throw "Stage A run $runId concluded '$($run.conclusion)'; only successful runs can be published"
+          }
+          if ($run.headSha -notmatch '^[0-9a-f]{40}$') {
+            throw "Stage A run $runId has a malformed head SHA: '$($run.headSha)'"
+          }
+          Write-Host "Stage A run verified: workflow=$($run.path) status=$($run.status) conclusion=$($run.conclusion) headSha=$($run.headSha)"
+          "head_sha=$($run.headSha)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      # Locate the EXACT candidate artifact in the Stage A run. The artifact
+      # name must match tabdock-candidate-<sha>-<run-id>, must not be
+      # expired, and must be unique; the embedded SHA must equal the run's
+      # head SHA. An expired or missing artifact fails closed here.
+      - name: Locate the production candidate artifact
+        id: locate-candidate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $runId = '${{ inputs.run-id }}'
+          $headSha = '${{ steps.resolve-run.outputs.head_sha }}'
+          $expectedName = "tabdock-candidate-$headSha-$runId"
+          $list = gh api "repos/${{ github.repository }}/actions/runs/$runId/artifacts" --paginate --jq '[.artifacts[] | { name, id, expired }]' 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            throw "cannot list artifacts of run $runId: $list"
+          }
+          try { $artifacts = @($list | ConvertFrom-Json) }
+          catch { throw "cannot parse the artifact listing of run $runId: $list" }
+          $live = @($artifacts | Where-Object { $_.name -eq $expectedName -and -not $_.expired })
+          if ($live.Count -eq 0) {
+            $expired = @($artifacts | Where-Object { $_.name -eq $expectedName -and $_.expired })
+            if ($expired.Count -gt 0) {
+              throw "candidate artifact '$expectedName' of run $runId is EXPIRED; the Stage A artifact must be re-prepared"
+            }
+            throw "run $runId has no live candidate artifact named '$expectedName' (wrong run id, artifact deleted, or not a prepare-release-candidate run)"
+          }
+          if ($live.Count -gt 1) {
+            throw "run $runId has $($live.Count) candidate artifacts named '$expectedName'; refusing to guess"
+          }
+          Write-Host "Candidate artifact located: $($live[0].name) (id $($live[0].id))"
+          "artifact_name=$($live[0].name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "artifact_id=$($live[0].id)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      # Read-only checkout of the exact candidate SHA: needed for the shared
+      # release-tooling module and for re-reading the authoritative project
+      # version at that exact commit.
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.resolve-run.outputs.head_sha }}
+
+      - name: Verify exact candidate SHA
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne '${{ steps.resolve-run.outputs.head_sha }}') {
+            throw "Checked out $actual but the Stage A run head SHA is ${{ steps.resolve-run.outputs.head_sha }}"
+          }
+          Write-Host "Candidate SHA verified: $actual"
+
+      # Download the EXACT artifact from the Stage A run using the supported
+      # cross-run mechanism (run-id + repository + github-token). The artifact
+      # is extracted as-is; nothing in this workflow builds or signs, and the
+      # candidate executable is never modified.
+      - name: Download the EXACT Stage A candidate artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ steps.locate-candidate.outputs.artifact_name }}
+          run-id: ${{ inputs.run-id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: candidate-artifact
+
+      # Fail-closed publication gate before any release mutation. The shared
+      # release-tooling gate re-verifies against the DOWNLOADED bytes:
+      # manifest PASS for this exact SHA and version; releaseMode PRODUCTION;
+      # manifest workflowRunId == the Stage A run; binary identity in the
+      # manifest agrees with the semantic version; on-disk SHA == manifest
+      # artifactSha256 == SHA256SUMS.txt; schema-v2 external evidence bound
+      # to this SHA, the final artifact hash, and this exact run + artifact,
+      # with finalWindowsHumanSmoke, physicalMixedDpi, and
+      # windowsCompatibility (Windows 10 + 11) all PASS; signingStatus
+      # SIGNED + SIGNATURE_VERIFIED + finalSignedSha256 == final artifact
+      # hash, no test-only mock signing, and an independent
+      # `signtool verify /pa` on the downloaded executable. Any failure
+      # aborts before `gh release create`.
+      - name: Fail-closed publication gate
+        shell: pwsh
+        env:
+          RELEASE_EXTERNAL_EVIDENCE: ${{ inputs.external-evidence }}
+        run: |
+          . (Join-Path $env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1')
+          $dir = Join-Path $env:GITHUB_WORKSPACE 'candidate-artifact'
+          $evidencePath = Join-Path $dir 'release-external-evidence.json'
+          [IO.File]::WriteAllText($evidencePath, $env:RELEASE_EXTERNAL_EVIDENCE, [Text.UTF8Encoding]::new($false))
+          $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
+          $expectedSha = '${{ steps.resolve-run.outputs.head_sha }}'
+          $expectedVersion = [string]$manifest.semanticVersion
+
+          # Project -> manifest version authority: the candidate's checked-out
+          # project file is still the root authority for the version.
+          $projectVersion = Get-ProjectSemanticVersion (Join-Path $env:GITHUB_WORKSPACE 'TabDock.csproj')
+          if ($projectVersion -ne $expectedVersion) {
+            throw "Version authority mismatch: project <Version> '$projectVersion' at the candidate SHA != manifest semanticVersion '$expectedVersion'"
+          }
+          Write-Host "Project version authority: csproj <Version> $projectVersion == manifest semanticVersion $expectedVersion" -ForegroundColor Green
+
+          $gate = Test-PublicationEligibility -ArtifactDir $dir -ExpectedSourceSha $expectedSha -ExpectedVersion $expectedVersion `
+            -EvidencePath $evidencePath -RequireSigning `
+            -ExpectedCandidateRunId '${{ inputs.run-id }}' `
+            -ExpectedCandidateArtifactName '${{ steps.locate-candidate.outputs.artifact_name }}'
+          if (-not $gate.Eligible) {
+            Write-Host 'Publication gate FAILED - refusing to create the GitHub Release:' -ForegroundColor Red
+            $gate.Failures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+            throw "Refusing to create the GitHub Release: $($gate.Failures.Count) gate failure(s)"
+          }
+          Write-Host 'Publication gate: PASS' -ForegroundColor Green
+
+      # Execute the DOWNLOADED binary read-only to prove the published bytes
+      # themselves report the authoritative identity: the same semantic
+      # version, the same source commit, and the same SHA-256 recorded in the
+      # manifest and evidence. The native ABI self-test also runs here as an
+      # extra hosted-CI sanity check on the exact published bytes.
+      - name: Verify downloaded executable identity (no mutation)
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:GITHUB_WORKSPACE 'candidate-artifact'
+          $exe = Join-Path $dir 'TabDock.exe'
+          $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
+          $versionRun = & $exe --version 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "downloaded candidate --version failed: $versionRun" }
+          $sem = [regex]::Match($versionRun, '(?im)^TabDock\s+(\S+)').Groups[1].Value
+          $commit = [regex]::Match($versionRun, '(?im)^commit:\s*([0-9a-f]{40})').Groups[1].Value
+          $sha = [regex]::Match($versionRun, '(?im)^sha256:\s*([0-9A-Fa-f]{64})').Groups[1].Value
+          if ($sem -ne [string]$manifest.semanticVersion) { throw "downloaded binary reports version '$sem' != manifest '$($manifest.semanticVersion)'" }
+          if ($commit -ne [string]$manifest.sourceCommitSha) { throw "downloaded binary reports commit '$commit' != manifest '$($manifest.sourceCommitSha)'" }
+          if ($sha -ne [string]$manifest.artifactSha256) { throw "downloaded binary reports sha256 '$sha' != manifest artifactSha256 '$($manifest.artifactSha256)'" }
+          Write-Host "Downloaded binary identity: version=$sem commit=$commit sha256=$sha (all match the manifest)" -ForegroundColor Green
+          & $exe --selftest-native-abi 2>&1 | Out-String | Write-Host
+          if ($LASTEXITCODE -ne 0) { throw "downloaded candidate --selftest-native-abi failed (exit $LASTEXITCODE)" }
+
+      # Auditable publication record: the publish-time eligibility verdict
+      # computed from the downloaded bytes and the validated evidence (the
+      # manifest itself keeps the qualification-time BLOCKED_EXTERNAL value).
+      - name: Write publication verification record
+        shell: pwsh
+        run: |
+          . (Join-Path $env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1')
+          $dir = Join-Path $env:GITHUB_WORKSPACE 'candidate-artifact'
+          $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
+          $evidence = Get-Content (Join-Path $dir 'release-external-evidence.json') -Raw | ConvertFrom-Json
+          $tag = Get-ReleaseTagFromVersion ([string]$manifest.semanticVersion)
+          $verification = [ordered]@{
+            recordKind                   = 'publication-verification'
+            schemaVersion                = 1
+            product                      = 'TabDock'
+            semanticVersion              = $manifest.semanticVersion
+            sourceCommitSha              = $manifest.sourceCommitSha
+            artifactSha256               = $manifest.artifactSha256
+            candidateWorkflowRunId       = '${{ inputs.run-id }}'
+            candidateArtifactName        = '${{ steps.locate-candidate.outputs.artifact_name }}'
+            releaseTag                   = $tag
+            productionReleaseEligibility = 'ELIGIBLE'
+            verifiedAt                   = [DateTimeOffset]::UtcNow.ToString('O')
+            checks                       = [ordered]@{
+              automatedQualification   = 'PASS'
+              sourceCommitSha          = 'PASS'
+              semanticVersion          = 'PASS'
+              projectVersionAuthority  = 'PASS'
+              tagBinding               = 'PASS'
+              artifactTripleConsistency = 'PASS'
+              sha256Sums               = 'PASS'
+              candidateRunBinding      = 'PASS'
+              candidateArtifactBinding = 'PASS'
+              externalEvidenceValid    = 'PASS'
+              finalWindowsHumanSmoke   = 'PASS'
+              physicalMixedDpi         = 'PASS'
+              windowsCompatibility     = 'PASS'
+              authenticodeSigning      = 'PASS'
+              signatureVerification    = 'PASS'
+              binaryIdentity           = 'PASS'
+            }
+          }
+          $verification | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $dir 'publication-verification.json') -Encoding utf8
+          Write-Host 'Publication verification record written: publication-verification.json' -ForegroundColor Green
+
+      # Render release notes from the manifest and the validated evidence
+      # (never from a rebuild). The tag is derived as v<semanticVersion>;
+      # there is no tag input to disagree with the version.
+      - name: Render release notes
+        shell: pwsh
+        run: |
+          . (Join-Path $env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1')
+          $manifest = Get-Content (Join-Path 'candidate-artifact' 'release-manifest.json') -Raw | ConvertFrom-Json
+          $evidence = Get-Content (Join-Path 'candidate-artifact' 'release-external-evidence.json') -Raw | ConvertFrom-Json
+          $tag = Get-ReleaseTagFromVersion ([string]$manifest.semanticVersion)
+          $sha = if ($manifest.finalSignedSha256) { $manifest.finalSignedSha256 } else { $manifest.artifactSha256 }
+          $lines = [System.Collections.Generic.List[string]]::new()
+          $lines.Add("TabDock $($manifest.semanticVersion)")
+          $lines.Add('')
+          $lines.Add('## Release identity')
+          $lines.Add('')
+          $lines.Add("- Source commit: $($manifest.sourceCommitSha)")
+          $lines.Add("- Executable SHA-256: $sha")
+          $lines.Add("- Authenticode signing: $($manifest.signingStatus) (verification: $($manifest.signatureVerification))")
+          $lines.Add('- Runtime: .NET 8 self-contained, win-x64 single file (no install required)')
+          $lines.Add('- Supported OS: Windows 10 (recent builds) and Windows 11, 64-bit')
+          $lines.Add("- Published from the immutable Stage A candidate artifact (run $($manifest.workflowRunId)); no rebuild, no re-sign")
+          $lines.Add('')
+          $lines.Add('## Qualification')
+          $lines.Add('')
+          $lines.Add("- Automated qualification: $($manifest.qualificationStatus) (hermetic: builds, geometry/diagnostics/privacy/persistence self-tests, doctor/version, support-bundle privacy, OpenSpec validation)")
+          $lines.Add("- Exact-SHA provenance: artifact produced by and qualified against commit $($manifest.sourceCommitSha)")
+          $lines.Add('')
+          $lines.Add('## External gates (production evidence)')
+          $lines.Add('')
+          $lines.Add("- Final human Windows smoke: $($evidence.finalWindowsHumanSmoke.status) - operator $($evidence.finalWindowsHumanSmoke.operator), completed $($evidence.finalWindowsHumanSmoke.completedAt)")
+          $lines.Add("- Physical mixed-DPI qualification: $($evidence.physicalMixedDpi.status) - operator $($evidence.physicalMixedDpi.operator), completed $($evidence.physicalMixedDpi.completedAt)")
+          $lines.Add("- Windows compatibility: $($evidence.windowsCompatibility.status) - Windows 10 x64 ($($evidence.windowsCompatibility.windows10.build), native ABI selftest recorded), Windows 11 x64 ($($evidence.windowsCompatibility.windows11.build), native ABI selftest recorded)")
+          $lines.Add("- Evidence is bound to source commit $($manifest.sourceCommitSha), final artifact SHA-256 $($manifest.artifactSha256), Stage A run $($manifest.workflowRunId), and candidate artifact $($evidence.candidateArtifactName); the validated record is attached as release-external-evidence.json and the publish-time verdict as publication-verification.json")
+          $lines.Add('')
+          $lines.Add('## Known limitations')
+          $lines.Add('')
+          $lines.Add('See the repository README "Known limitations" section. The most important ones:')
+          $lines.Add('')
+          $lines.Add('- Maximizing a docked guest window itself fills the whole monitor (cosmetic UX gap).')
+          $lines.Add('- Elevated (admin) applications cannot be captured by a standard-user TabDock (UIPI).')
+          $lines.Add('- HWNDs are not stable across reboots; persisted state is layout intent, not live windows.')
+          $lines.Add('- Force-killing TabDock is safe (guests are never reparented); the journaled recovery restores identity-valid guests on next launch.')
+          $lines.Add('')
+          $lines.Add('## Support')
+          $lines.Add('')
+          $lines.Add('- Read-only diagnostics: TabDock.exe --doctor, --support-bundle')
+          $lines.Add('- Privacy: support bundles are sanitized; raw logs are local-only and must be redacted before sharing.')
+          $lines -join "`n" | Set-Content -Path 'RELEASE_NOTES.md' -Encoding utf8
+          Write-Host "Derived release tag: $tag (v<semanticVersion>; no free-form tag input exists)"
+
+      # Intentional publication of the EXACT downloaded artifact. The derived
+      # tag is created at the exact candidate SHA; no source modification, no
+      # second compilation, and no signing occurs here. The evidence and the
+      # publication verification record travel with the release as assets.
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . (Join-Path $env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1')
+          $manifest = Get-Content (Join-Path 'candidate-artifact' 'release-manifest.json') -Raw | ConvertFrom-Json
+          $tag = Get-ReleaseTagFromVersion ([string]$manifest.semanticVersion)
+          gh release create $tag --repo ${{ github.repository }} `
+            --target '${{ steps.resolve-run.outputs.head_sha }}' `
+            --title "TabDock $($manifest.semanticVersion)" `
+            --notes-file RELEASE_NOTES.md `
+            candidate-artifact/TabDock.exe `
+            candidate-artifact/SHA256SUMS.txt `
+            candidate-artifact/release-manifest.json `
+            candidate-artifact/release-external-evidence.json `
+            candidate-artifact/publication-verification.json
+
+      - name: Verify release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . (Join-Path $env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1')
+          $manifest = Get-Content (Join-Path 'candidate-artifact' 'release-manifest.json') -Raw | ConvertFrom-Json
+          $tag = Get-ReleaseTagFromVersion ([string]$manifest.semanticVersion)
+          $assets = gh release view $tag --repo ${{ github.repository }} --json assets --jq '.assets[].name'
+          $required = @('TabDock.exe', 'SHA256SUMS.txt', 'release-manifest.json', 'release-external-evidence.json', 'publication-verification.json')
+          foreach ($name in $required) {
+            if ($assets -notcontains $name) {
+              throw "Release asset missing after publication: $name"
+            }
+          }
+          Write-Host "Release assets verified: PASS ($tag)"

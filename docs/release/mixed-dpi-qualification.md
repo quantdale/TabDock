@@ -84,13 +84,16 @@ candidate artifact SHA-256 is recorded. Until then the gate remains
 such in `release-manifest.json` (`externalGates.physicalMixedDpi`).
 
 A PASS qualification must additionally be recorded in the production evidence
-file `release-external-evidence.json` (see `docs/release/publication-gates.md`):
+file `release-external-evidence.json` (schemaVersion 2, see
+`docs/release/publication-gates.md`):
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "sourceCommitSha": "<exact 40-char candidate SHA>",
   "artifactSha256": "<exact FINAL artifact SHA-256>",
+  "candidateWorkflowRunId": "<Stage A prepare-release-candidate run ID>",
+  "candidateArtifactName": "tabdock-candidate-<sha>-<run-id>",
   "finalWindowsHumanSmoke": {
     "status": "<PASS only after docs/release/final-smoke.md>",
     "completedAt": "...",
@@ -102,6 +105,11 @@ file `release-external-evidence.json` (see `docs/release/publication-gates.md`):
     "completedAt": "<ISO-8601 timestamp>",
     "operator": "<human identity>",
     "evidence": "16 scenarios PASS with per-scenario evidence JSON in <evidence-dir>; monitors 100% + 150%; machine OS build <build>"
+  },
+  "windowsCompatibility": {
+    "status": "PASS",
+    "windows10": { "status": "PASS", "build": "<Windows 10 x64 build>", "operator": "...", "completedAt": "...", "nativeAbiEvidence": "...", "evidence": "..." },
+    "windows11": { "status": "PASS", "build": "<Windows 11 build>", "operator": "...", "completedAt": "...", "nativeAbiEvidence": "...", "evidence": "..." }
   }
 }
 ```

@@ -185,6 +185,111 @@ function Complete-ReleaseRecords {
     }
 }
 
+function Test-SemanticVersion {
+    <#
+    .SYNOPSIS
+        True when the value is a valid SemVer 2.0.0 core version (with an
+        optional prerelease suffix). Build metadata is not part of the
+        manifest semantic version.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Version)
+    return $Version -match '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+}
+
+function Get-SemanticVersionPart {
+    <#
+    .SYNOPSIS
+        Strips any '+<build-metadata>' suffix from an informational version,
+        leaving the semantic version part.
+    #>
+    param([Parameter(Mandatory = $true)][string]$InformationalVersion)
+    return $InformationalVersion.Split('+', 2)[0].Trim()
+}
+
+function Get-ProjectSemanticVersion {
+    <#
+    .SYNOPSIS
+        Reads the authoritative semantic version from the project file's
+        literal <Version> element. Refuses property expressions and malformed
+        values: the manifest, the binary, and any workflow version input may
+        only ever agree with the version the project itself declares.
+    #>
+    param([Parameter(Mandatory = $true)][string]$ProjectPath)
+    if (-not (Test-Path -LiteralPath $ProjectPath -PathType Leaf)) {
+        throw "Project file not found: $ProjectPath"
+    }
+    $text = [IO.File]::ReadAllText($ProjectPath)
+    $match = [regex]::Match($text, '<Version>\s*([^<\s]+)\s*</Version>')
+    if (-not $match.Success) {
+        throw "No literal <Version> element found in $ProjectPath; the project version cannot be authoritative if it is not a literal."
+    }
+    $version = $match.Groups[1].Value.Trim()
+    if ($version.Contains('$(')) {
+        throw "Project <Version> is the property expression '$version'; refusing to guess an authoritative version."
+    }
+    if (-not (Test-SemanticVersion $version)) {
+        throw "Project <Version> is not a valid semantic version: '$version'"
+    }
+    return $version
+}
+
+function Get-ReleaseTagFromVersion {
+    <#
+    .SYNOPSIS
+        Derives the production release tag from a semantic version. The tag is
+        always "v<semanticVersion>", never a free-form operator input, so the
+        protected v* tag namespace and the v<semanticVersion> policy are
+        structurally enforced.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Version)
+    if (-not (Test-SemanticVersion $Version)) {
+        throw "Cannot derive a production release tag from a malformed semantic version: '$Version'"
+    }
+    return "v$Version"
+}
+
+function Assert-ReleaseTagMatchesVersion {
+    <#
+    .SYNOPSIS
+        Fail-closed assertion that a proposed release tag equals the derived
+        "v<semanticVersion>" production tag. The publication workflow no
+        longer accepts a tag input (the tag is derived), so the adversarial
+        tag states (v2.0.0 for version 1.0.0, "stable", ...) are proven
+        impossible in the regression suite through this assertion.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Tag,
+        [Parameter(Mandatory = $true)][string]$Version
+    )
+    if (-not (Test-SemanticVersion $Version)) {
+        throw "Cannot validate a tag against a malformed semantic version: '$Version'"
+    }
+    $derived = "v$Version"
+    if ($Tag -ne $derived) {
+        throw "Release tag '$Tag' does not equal the derived production tag '$derived' (the production tag must be v<semanticVersion>)"
+    }
+    return $derived
+}
+
+function Test-CompletedAt {
+    <#
+    .SYNOPSIS
+        Validates an evidence completion timestamp: it must parse as an
+        ISO-8601 DateTimeOffset and must not be materially in the future
+        (5-minute clock-skew tolerance).
+    #>
+    param([Parameter(Mandatory = $true)][string]$Value)
+    $parsed = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse($Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) {
+        return [pscustomobject]@{ Valid = $false; Failure = "completedAt '$Value' is not a parseable ISO-8601 timestamp" }
+    }
+    $tolerance = [TimeSpan]::FromMinutes(5)
+    if ($parsed.UtcDateTime -gt [DateTimeOffset]::UtcNow.UtcDateTime.Add($tolerance)) {
+        return [pscustomobject]@{ Valid = $false; Failure = "completedAt '$Value' is in the future (beyond the 5-minute clock-skew tolerance)" }
+    }
+    return [pscustomobject]@{ Valid = $true; Failure = '' }
+}
+
 function Test-ExternalEvidenceFile {
     <#
     .SYNOPSIS
@@ -194,23 +299,29 @@ function Test-ExternalEvidenceFile {
 
     .DESCRIPTION
         The evidence file is the auditable record that the mandatory external
-        gates (final human Windows smoke, physical mixed-DPI qualification)
-        were performed against the exact bytes being published. It is bound to
-        the candidate source SHA and to the final artifact hash so evidence
-        from another candidate or another artifact can never be reused.
+        gates (final human Windows smoke, physical mixed-DPI qualification,
+        Windows 10/11 x64 compatibility) were performed against the exact
+        bytes being published. It is bound to the candidate source SHA, to the
+        final artifact hash, and (schema v2) to the exact Stage A workflow run
+        and artifact that produced the candidate, so evidence from another
+        candidate, another artifact, or another run can never be reused.
 
         A caller-controlled boolean is NOT accepted as evidence: only a
         schema-validated record with per-gate PASS status, operator,
-        completion time, and evidence detail passes. Anything else (missing
-        file, malformed JSON, wrong schema version, wrong SHA, wrong artifact
-        hash, FAIL, BLOCKED_EXTERNAL, missing fields) fails closed.
+        completion time (parseable ISO-8601, not materially in the future),
+        and evidence detail passes. Anything else (missing file, malformed
+        JSON, wrong schema version, wrong SHA, wrong artifact hash, wrong
+        candidate run/artifact, FAIL, BLOCKED_EXTERNAL, missing fields) fails
+        closed.
 
         Returns [pscustomobject]@{ Valid=[bool]; Failures=[string[]]; Evidence=$parsed }.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$EvidencePath,
         [Parameter(Mandatory = $true)][string]$ExpectedSourceSha,
-        [Parameter(Mandatory = $true)][string]$ExpectedArtifactSha
+        [Parameter(Mandatory = $true)][string]$ExpectedArtifactSha,
+        [string]$ExpectedCandidateRunId = '',
+        [string]$ExpectedCandidateArtifactName = ''
     )
     $failures = [System.Collections.Generic.List[string]]::new()
     $evidence = $null
@@ -235,8 +346,8 @@ function Test-ExternalEvidenceFile {
         return [pscustomobject]@{ Valid = $false; Failures = @($failures); Evidence = $null }
     }
 
-    if ($evidence.schemaVersion -ne 1) {
-        $failures.Add("external evidence schemaVersion=$($evidence.schemaVersion) (expected 1)")
+    if ($evidence.schemaVersion -ne 2) {
+        $failures.Add("external evidence schemaVersion=$($evidence.schemaVersion) (expected 2)")
     }
     $evSha = [string]$evidence.sourceCommitSha
     if ($evSha -notmatch '^[0-9a-f]{40}$') {
@@ -252,6 +363,23 @@ function Test-ExternalEvidenceFile {
     elseif (-not [string]::Equals($evHash, $ExpectedArtifactSha, [StringComparison]::OrdinalIgnoreCase)) {
         $failures.Add("external evidence artifactSha256 $evHash != final distributed artifact SHA-256 $ExpectedArtifactSha")
     }
+    # Schema v2: the evidence must name the exact Stage A run and artifact that
+    # produced the candidate, so a hash-match alone can never be sufficient
+    # provenance ("artifact-name = something" is never accepted by itself).
+    $evRunId = [string]$evidence.candidateWorkflowRunId
+    if ($evRunId -notmatch '^[0-9]+$') {
+        $failures.Add("external evidence candidateWorkflowRunId is malformed: '$evRunId' (expected the numeric Stage A workflow run ID)")
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($ExpectedCandidateRunId) -and $evRunId -ne $ExpectedCandidateRunId) {
+        $failures.Add("external evidence candidateWorkflowRunId $evRunId != Stage A candidate run $ExpectedCandidateRunId")
+    }
+    $evArtifactName = [string]$evidence.candidateArtifactName
+    if ([string]::IsNullOrWhiteSpace($evArtifactName)) {
+        $failures.Add('external evidence candidateArtifactName is empty (the Stage A candidate artifact must be named)')
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($ExpectedCandidateArtifactName) -and $evArtifactName -ne $ExpectedCandidateArtifactName) {
+        $failures.Add("external evidence candidateArtifactName $evArtifactName != the downloaded Stage A artifact $ExpectedCandidateArtifactName")
+    }
 
     foreach ($gate in @('finalWindowsHumanSmoke', 'physicalMixedDpi')) {
         $g = $evidence.$gate
@@ -266,11 +394,61 @@ function Test-ExternalEvidenceFile {
         if ([string]::IsNullOrWhiteSpace([string]$g.operator)) {
             $failures.Add("external gate '$gate' is missing 'operator'")
         }
-        if ([string]::IsNullOrWhiteSpace([string]$g.completedAt)) {
+        $gateAt = [string]$g.completedAt
+        if ([string]::IsNullOrWhiteSpace($gateAt)) {
             $failures.Add("external gate '$gate' is missing 'completedAt'")
+        }
+        else {
+            $at = Test-CompletedAt $gateAt
+            if (-not $at.Valid) { $failures.Add("external gate '$gate' $($at.Failure)") }
         }
         if ([string]::IsNullOrWhiteSpace([string]$g.evidence)) {
             $failures.Add("external gate '$gate' is missing 'evidence'")
+        }
+    }
+
+    # Windows compatibility gate: v1.0.0 advertises Windows 10 and Windows 11
+    # x64, so both must carry PASS evidence recorded on real machines (build
+    # recorded, native ABI self-test evidence attached) before production
+    # publication. Missing/malformed/FAIL/BLOCKED entries fail closed.
+    $wc = $evidence.windowsCompatibility
+    if ($null -eq $wc) {
+        $failures.Add("external evidence is missing mandatory gate 'windowsCompatibility'")
+    }
+    else {
+        if ([string]$wc.status -ne 'PASS') {
+            $failures.Add("external gate 'windowsCompatibility' status=$($wc.status) (only PASS is acceptable for production publication)")
+        }
+        foreach ($os in @('windows10', 'windows11')) {
+            $osGate = $wc.$os
+            if ($null -eq $osGate) {
+                $failures.Add("windowsCompatibility is missing mandatory entry '$os'")
+                continue
+            }
+            $osStatus = [string]$osGate.status
+            if ($osStatus -ne 'PASS') {
+                $failures.Add("windowsCompatibility.$os status=$osStatus (only PASS is acceptable for production publication)")
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$osGate.build)) {
+                $failures.Add("windowsCompatibility.$os is missing 'build' (OS build must be recorded)")
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$osGate.operator)) {
+                $failures.Add("windowsCompatibility.$os is missing 'operator'")
+            }
+            $osAt = [string]$osGate.completedAt
+            if ([string]::IsNullOrWhiteSpace($osAt)) {
+                $failures.Add("windowsCompatibility.$os is missing 'completedAt'")
+            }
+            else {
+                $at = Test-CompletedAt $osAt
+                if (-not $at.Valid) { $failures.Add("windowsCompatibility.$os $($at.Failure)") }
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$osGate.nativeAbiEvidence)) {
+                $failures.Add("windowsCompatibility.$os is missing 'nativeAbiEvidence' (the --selftest-native-abi environment report must be recorded)")
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$osGate.evidence)) {
+                $failures.Add("windowsCompatibility.$os is missing 'evidence'")
+            }
         }
     }
     return [pscustomobject]@{ Valid = $failures.Count -eq 0; Failures = @($failures); Evidence = $evidence }
@@ -334,12 +512,23 @@ function Test-PublicationEligibility {
         its records:
           - manifest automated qualification == PASS
           - manifest sourceCommitSha == requested SHA
-          - manifest semanticVersion == requested version
+          - manifest semanticVersion == requested version AND is a valid
+            semantic version, with the binary identity recorded in the
+            manifest (buildIdentity.semanticVersion / informationalVersion)
+            agreeing with it (the csproj <Version> is the root authority,
+            enforced at qualification time and re-checked by the publication
+            workflow against the checked-out project file)
+          - manifest releaseMode == PRODUCTION (qualification-only/RC
+            artifacts can never be published)
+          - manifest workflowRunId == the Stage A candidate run id
           - actual file hash == manifest.artifactSha256
           - SHA256SUMS.txt == actual file hash (triple consistency)
-          - external evidence valid, source SHA == requested SHA,
-            artifact SHA == final distributed artifact hash,
-            finalWindowsHumanSmoke == PASS, physicalMixedDpi == PASS
+          - external evidence (schema v2) valid, source SHA == requested SHA,
+            artifact SHA == final distributed artifact hash, candidate
+            workflow run + artifact == the exact Stage A run and artifact
+            being published, finalWindowsHumanSmoke == PASS,
+            physicalMixedDpi == PASS, windowsCompatibility == PASS for
+            Windows 10 and Windows 11
           - when production signing is mandatory: signingStatus == SIGNED,
             signatureVerification == SIGNATURE_VERIFIED,
             finalSignedSha256 == final artifact hash, the artifact is NOT a
@@ -348,6 +537,10 @@ function Test-PublicationEligibility {
         Any failure is returned (never thrown) as a Failures list; the caller
         must refuse to publish when Eligible is $false.
 
+        The Stage B caller MUST supply the exact candidate run id and artifact
+        name it downloaded (mandatory parameters): "artifact-name = something"
+        is never accepted as provenance without the full run binding.
+
         Returns [pscustomobject]@{ Eligible=[bool]; Failures=[string[]] }.
     #>
     param(
@@ -355,6 +548,8 @@ function Test-PublicationEligibility {
         [Parameter(Mandatory = $true)][string]$ExpectedSourceSha,
         [Parameter(Mandatory = $true)][string]$ExpectedVersion,
         [Parameter(Mandatory = $true)][string]$EvidencePath,
+        [Parameter(Mandatory = $true)][string]$ExpectedCandidateRunId,
+        [Parameter(Mandatory = $true)][string]$ExpectedCandidateArtifactName,
         [switch]$RequireSigning
     )
     $failures = [System.Collections.Generic.List[string]]::new()
@@ -384,6 +579,39 @@ function Test-PublicationEligibility {
     }
     if (-not [string]::Equals([string]$manifest.semanticVersion, $ExpectedVersion, [StringComparison]::OrdinalIgnoreCase)) {
         $failures.Add("manifest semanticVersion $($manifest.semanticVersion) != requested version $ExpectedVersion")
+    }
+    if (-not (Test-SemanticVersion ([string]$manifest.semanticVersion))) {
+        $failures.Add("manifest semanticVersion '$($manifest.semanticVersion)' is not a valid semantic version")
+    }
+    if ([string]$manifest.releaseMode -ne 'PRODUCTION') {
+        $failures.Add("manifest releaseMode=$($manifest.releaseMode) (only PRODUCTION candidates from the prepare-release-candidate workflow may be published; qualification-only/RC artifacts are never production releases)")
+    }
+    $manifestRunId = [string]$manifest.workflowRunId
+    if ([string]::IsNullOrWhiteSpace($manifestRunId)) {
+        $failures.Add('manifest workflowRunId is absent; the producing workflow run cannot be bound')
+    }
+    elseif ($manifestRunId -ne $ExpectedCandidateRunId) {
+        $failures.Add("manifest workflowRunId $manifestRunId != the Stage A candidate run $ExpectedCandidateRunId (the artifact must come from the exact run that produced it)")
+    }
+    $buildIdentity = $manifest.buildIdentity
+    if ($null -eq $buildIdentity) {
+        $failures.Add('manifest buildIdentity is absent; the binary version identity cannot be verified')
+    }
+    else {
+        $biSemantic = [string]$buildIdentity.semanticVersion
+        if ([string]::IsNullOrWhiteSpace($biSemantic)) {
+            $failures.Add('manifest buildIdentity.semanticVersion is absent')
+        }
+        elseif ($biSemantic -ne [string]$manifest.semanticVersion) {
+            $failures.Add("manifest buildIdentity.semanticVersion $biSemantic != manifest semanticVersion $($manifest.semanticVersion)")
+        }
+        $biInfo = [string]$buildIdentity.informationalVersion
+        if ([string]::IsNullOrWhiteSpace($biInfo)) {
+            $failures.Add('manifest buildIdentity.informationalVersion is absent')
+        }
+        elseif ((Get-SemanticVersionPart $biInfo) -ne [string]$manifest.semanticVersion) {
+            $failures.Add("manifest buildIdentity.informationalVersion $biInfo does not carry the manifest semantic version $($manifest.semanticVersion)")
+        }
     }
 
     if ($RequireSigning) {
@@ -426,7 +654,9 @@ function Test-PublicationEligibility {
         $failures.Add('cannot verify external evidence without a final artifact hash')
     }
     else {
-        $evidenceResult = Test-ExternalEvidenceFile $EvidencePath $ExpectedSourceSha $finalHash
+        $evidenceResult = Test-ExternalEvidenceFile $EvidencePath $ExpectedSourceSha $finalHash `
+            -ExpectedCandidateRunId $ExpectedCandidateRunId `
+            -ExpectedCandidateArtifactName $ExpectedCandidateArtifactName
         if (-not $evidenceResult.Valid) {
             foreach ($failure in $evidenceResult.Failures) {
                 $failures.Add([string]$failure)

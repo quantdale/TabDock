@@ -33,8 +33,10 @@
     is used and reported. A non-empty mismatch fails the qualification.
 
 .PARAMETER Version
-    Semantic version recorded in the manifest (the csproj Version is the
-    authoritative mechanism; this must agree with it).
+    EXPECTED semantic version only: TabDock.csproj <Version> is the single
+    authoritative version and the manifest always records it. When a version
+    is supplied here it must equal the project version; any disagreement
+    fails the qualification.
 
 .PARAMETER OutDir
     Directory for TabDock.exe, SHA256SUMS.txt, and release-manifest.json.
@@ -55,19 +57,21 @@
     installed and no global openspec exists).
 
 .DESCRIPTION
-    Production policy: when RELEASE_PRODUCTION_GATE=true (the release workflow
-    sets it for create-release=true runs), Authenticode signing becomes
-    mandatory exactly as if RELEASE_SIGNING_REQUIRED=true, test-only mock
-    signing is refused, and the manifest records releaseMode=PRODUCTION.
-    External human gates (final smoke, mixed-DPI) are NEVER verified by this
-    script; productionReleaseEligibility is therefore BLOCKED_EXTERNAL here
-    and the release workflow's publish job independently validates the
-    external evidence file before creating the release.
+    Production policy: when RELEASE_PRODUCTION_GATE=true (the
+    prepare-release-candidate workflow sets it for Stage A production
+    candidates), Authenticode signing becomes mandatory exactly as if
+    RELEASE_SIGNING_REQUIRED=true, test-only mock signing is refused, and the
+    manifest records releaseMode=PRODUCTION.
+    External human gates (final smoke, mixed-DPI, Windows compatibility) are
+    NEVER verified by this script; productionReleaseEligibility is therefore
+    BLOCKED_EXTERNAL here and the publish-release workflow (Stage B)
+    independently validates the external evidence file before creating the
+    release.
 #>
 [CmdletBinding()]
 param(
     [string]$Sha = '',
-    [string]$Version = '1.0.0',
+    [string]$Version = '',
     [string]$OutDir = '',
     [switch]$Ci,
     [switch]$Sign,
@@ -145,7 +149,7 @@ $failureReason = ''
 $productionGate = [string]::Equals($env:RELEASE_PRODUCTION_GATE, 'true', [StringComparison]::OrdinalIgnoreCase)
 $manifest = [ordered]@{
     product             = 'TabDock'
-    semanticVersion     = $Version
+    semanticVersion     = 'unavailable'
     sourceCommitSha     = 'unavailable'
     artifactFileName    = 'TabDock.exe'
     artifactSha256      = 'unavailable'
@@ -153,7 +157,7 @@ $manifest = [ordered]@{
     finalSignedSha256   = $null
     targetRuntimeIdentifier = 'win-x64'
     configuration       = 'Release'
-    buildIdentity       = [ordered]@{ informationalVersion = 'unavailable'; selfReportedSha256 = 'unavailable' }
+    buildIdentity       = [ordered]@{ semanticVersion = 'unavailable'; informationalVersion = 'unavailable'; selfReportedSha256 = 'unavailable' }
     signingStatus       = 'NOT_CONFIGURED'
     signatureVerification = 'NOT_PERFORMED'
     signingMock         = $null
@@ -199,6 +203,22 @@ try {
         throw "Dirty working tree: a release candidate must be qualified from a clean exact commit. Commit or stash the $($dirty.Count) changed path(s) first."
     }
 
+    # --- Version authority ---------------------------------------------------
+    # TabDock.csproj <Version> is the single authoritative semantic version.
+    # The workflow -Version input is only an EXPECTED value and must agree
+    # with the project version; the manifest records the project version, so
+    # version=9.9.9 can never be recorded while the project still declares
+    # 1.0.0. Fails fast, before any restore/build work.
+    $projectVersion = Get-ProjectSemanticVersion $MainProject
+    if (-not [string]::IsNullOrWhiteSpace($Version) -and $Version -ne $projectVersion) {
+        throw "Version authority mismatch: workflow expected version '$Version' != project <Version> '$projectVersion' (TabDock.csproj is authoritative)."
+    }
+    $manifest.semanticVersion = $projectVersion
+    Write-Host "authoritative project version: $projectVersion (from $MainProject)" -ForegroundColor Green
+    if (-not [string]::IsNullOrWhiteSpace($Version)) {
+        Write-Host "workflow expected version:     $Version (agrees)" -ForegroundColor Green
+    }
+
     # --- Audited restore ------------------------------------------------------
     if ($Ci) {
         Invoke-Step 'Restore with NuGet audit' {
@@ -226,15 +246,35 @@ try {
     }
     $selfSha = [regex]::Match($versionRun.Stdout, '(?im)^sha256:\s*([0-9A-Fa-f]{64})').Groups[1].Value
     $commitLine = [regex]::Match($versionRun.Stdout, '(?im)^commit:\s*([0-9a-f]{40})').Groups[1].Value
-    $manifest.buildIdentity.informationalVersion = [regex]::Match($versionRun.Stdout, '(?im)^informationalVersion:\s*(\S+)').Groups[1].Value
+    $binarySemanticVersion = [regex]::Match($versionRun.Stdout, '(?im)^TabDock\s+(\S+)').Groups[1].Value
+    $infoVersion = [regex]::Match($versionRun.Stdout, '(?im)^informationalVersion:\s*(\S+)').Groups[1].Value
+    $manifest.buildIdentity.semanticVersion = $binarySemanticVersion
+    $manifest.buildIdentity.informationalVersion = $infoVersion
     $manifest.buildIdentity.selfReportedSha256 = $selfSha
     if ($commitLine -ne $actualSha) {
         throw "Published executable reports commit $commitLine but the candidate SHA is $actualSha"
+    }
+    # Binary -> project version authority: the published executable must
+    # report the same semantic version the project declares. The informational
+    # version must carry that same semantic version plus source identity.
+    if ($binarySemanticVersion -ne $projectVersion) {
+        throw "Published executable reports semantic version '$binarySemanticVersion' but the authoritative project version is '$projectVersion'"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($infoVersion)) {
+        $infoSemantic = Get-SemanticVersionPart $infoVersion
+        if ($infoSemantic -ne $projectVersion) {
+            throw "Published executable informational version '$infoVersion' does not carry the authoritative semantic version '$projectVersion'"
+        }
+    }
+    else {
+        throw 'Published executable did not report an informationalVersion'
     }
     if ([string]::IsNullOrWhiteSpace($selfSha)) {
         throw 'Published executable did not report its own SHA-256'
     }
     Write-Host "published exe source identity: $commitLine (matches HEAD)" -ForegroundColor Green
+    Write-Host "published exe semantic version: $binarySemanticVersion (matches project <Version>)" -ForegroundColor Green
+    Write-Host "published exe informational version: $infoVersion" -ForegroundColor Green
     Write-Host "published exe self-reported sha256: $selfSha" -ForegroundColor Green
 
     Invoke-Executable 'Published geometry self-test (exact artifact)' $ArtifactExe @('--selftest-geometry')
@@ -278,8 +318,8 @@ try {
     Write-Host "SHA-256($($ArtifactExe)) pre-sign = $unsignedSha (matches self-report)" -ForegroundColor Green
 
     # --- Optional Authenticode signing ---------------------------------------
-    # Production runs (RELEASE_PRODUCTION_GATE=true, set by the release
-    # workflow for create-release=true) make signing mandatory: a production
+    # Production candidates (RELEASE_PRODUCTION_GATE=true, set by the
+    # prepare-release-candidate workflow) make signing mandatory: a production
     # release is never silently defaulted to unsigned.
     $signingRequired = [string]::Equals($env:RELEASE_SIGNING_REQUIRED, 'true', [StringComparison]::OrdinalIgnoreCase) -or $productionGate
     $signScript = Join-Path $PSScriptRoot 'sign-release.ps1'

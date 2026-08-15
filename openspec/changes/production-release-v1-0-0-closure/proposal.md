@@ -21,14 +21,31 @@ still missing.
   states, secret-based material only, timestamping configuration, and no
   repository-stored credentials.
 - Add a fail-closed `release.yml` workflow (dispatch-only, exact commit,
-  canonical qualification, artifact retention, optional intentional
-  publication consuming the preserved artifact with re-verification).
+  canonical qualification, artifact retention) restricted to RC
+  qualification; publication moves to the two-stage chain.
+- Add the two-stage production chain: `prepare-release-candidate.yml`
+  (Stage A) builds once, Authenticode-signs once (mandatory, `BLOCKED_EXTERNAL`
+  without credentials), and retains the immutable candidate; `publish-release.yml`
+  (Stage B) takes the Stage A run id, downloads the EXACT retained artifact
+  cross-run, re-verifies every production condition against those bytes, and
+  publishes them with the derived tag `v<semanticVersion>` — no rebuild, no
+  re-sign, no tag input, and the published SHA equals the evidence
+  `artifactSha256`.
 - Add an auditable external-gate evidence mechanism:
-  `release-external-evidence.json` records the final human Windows smoke and
-  the physical mixed-DPI qualification, bound to the exact candidate SHA and
-  the FINAL artifact hash; production publication is refused until the record
-  is schema-valid and both gates PASS. Qualification-only runs never need
-  evidence.
+  `release-external-evidence.json` (schemaVersion 2) records the final human
+  Windows smoke, the physical mixed-DPI qualification, and the Windows 10/11
+  x64 compatibility qualification, bound to the exact candidate SHA, the
+  FINAL artifact hash, the Stage A run id, and the candidate artifact name;
+  production publication is refused until the record is schema-valid and all
+  gates PASS. Qualification-only runs never need evidence.
+- Make the project version the single authority: `TabDock.csproj <Version>`
+  is read from the exact candidate source, workflow version inputs are
+  EXPECTED values that must agree, the binary's reported and informational
+  versions must carry it, and the manifest records it.
+- Add the physical mixed-DPI qualification procedure, the final manual
+  Windows smoke procedure, and the Windows 10/11 compatibility gate as
+  required human gates that remain explicitly unperformed until real
+  evidence exists.
 - Correct the final-hash checksum contract: `artifactSha256` and
   `SHA256SUMS.txt` always describe the FINAL distributed executable (after
   signing, when signing occurs), `unsignedQualifiedSha256` retains the

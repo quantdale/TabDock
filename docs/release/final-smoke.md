@@ -137,13 +137,16 @@ item PASS; anything unexecuted is `BLOCKED_EXTERNAL` and is recorded as such
 in `release-manifest.json` (`externalGates.finalWindowsHumanSmoke`).
 
 A PASS smoke must additionally be recorded in the production evidence file
-`release-external-evidence.json` (see `docs/release/publication-gates.md`):
+`release-external-evidence.json` (schemaVersion 2, see
+`docs/release/publication-gates.md`):
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "sourceCommitSha": "<exact 40-char candidate SHA>",
   "artifactSha256": "<exact FINAL artifact SHA-256>",
+  "candidateWorkflowRunId": "<Stage A prepare-release-candidate run ID>",
+  "candidateArtifactName": "tabdock-candidate-<sha>-<run-id>",
   "finalWindowsHumanSmoke": {
     "status": "PASS",
     "completedAt": "<ISO-8601 timestamp>",
@@ -155,10 +158,30 @@ A PASS smoke must additionally be recorded in the production evidence file
     "completedAt": "...",
     "operator": "...",
     "evidence": "..."
+  },
+  "windowsCompatibility": {
+    "status": "PASS",
+    "windows10": {
+      "status": "PASS",
+      "build": "<Windows 10 x64 build, e.g. 10.0.19045.x>",
+      "operator": "...",
+      "completedAt": "...",
+      "nativeAbiEvidence": "<--selftest-native-abi PASS ... environment report>",
+      "evidence": "..."
+    },
+    "windows11": {
+      "status": "PASS",
+      "build": "<Windows 11 build, e.g. 10.0.26200>",
+      "operator": "...",
+      "completedAt": "...",
+      "nativeAbiEvidence": "<--selftest-native-abi PASS ... environment report>",
+      "evidence": "..."
+    }
   }
 }
 ```
 
 The smoke gate can never be marked PASS by a boolean or by an assertion in
-tooling: only this schema-validated record, bound to the exact source SHA and
-the exact final artifact hash, is accepted by the publication gate.
+tooling: only this schema-validated record, bound to the exact source SHA,
+the exact final artifact hash, and the exact Stage A run and artifact, is
+accepted by the publication gate.

@@ -274,15 +274,15 @@ not dictate the semantic version contract.
 
 ### Release chain
 
-Release engineering is exact-SHA and immutable:
+Release engineering is exact-SHA, immutable, and two-stage:
 
 ```
-intended SHA -> clean exact checkout -> audited restore -> publish ->
-execute and qualify THE PUBLISHED EXE -> optional Authenticode signing ->
+SOURCE SHA -> clean exact checkout -> audited restore -> publish ONCE ->
+execute and qualify THE PUBLISHED EXE -> Authenticode sign ONCE ->
 signature verification -> FINAL SHA-256 -> release-manifest.json +
 SHA256SUMS.txt (both describe the FINAL distributed bytes) -> immutable
-artifact retention -> human gates (evidence record) -> intentional GitHub
-Release
+candidate retention -> human gates (evidence record) -> publish THE SAME
+retained bytes (no build, no sign)
 ```
 
 - `scripts/release-qualify.ps1` enforces the exact SHA, refuses dirty
@@ -295,33 +295,48 @@ Release
   signing changed the bytes), and `artifactSha256` + `SHA256SUMS.txt` always
   describe the FINAL distributed executable — enforced by
   `scripts/release-tooling.ps1` (file == manifest == checksums).
-- `.github/workflows/release.yml` is dispatch-only (never runs on a push) and
-  requires an explicit commit SHA. Publication is a separate explicit
-  decision that re-verifies provenance, checksums, external evidence, and
-  the Authenticode signature before consuming the preserved artifact — a
-  stable release can never silently substitute a different binary, and it is
-  IMPOSSIBLE to publish while the required human gates or the signature are
-  missing.
+- **STAGE A — `prepare-release-candidate.yml`** (production candidate): a
+  manually dispatched workflow that builds ONCE, Authenticode-signs ONCE
+  (mandatory; `BLOCKED_EXTERNAL` without credentials), verifies the
+  signature, computes the final distributed hash, and retains the immutable
+  candidate artifact `tabdock-candidate-<sha>-<run-id>`. It NEVER creates a
+  GitHub Release.
+- **STAGE B — `publish-release.yml`** (publication): a separate workflow
+  that takes the Stage A run id + the schema-v2 external evidence, downloads
+  the EXACT retained artifact (cross-run `download-artifact@v7` with
+  `run-id`/`repository`/`github-token`), re-verifies every production
+  condition against those downloaded bytes (project version == manifest ==
+  binary `--version`; file == manifest == SHA256SUMS; evidence bound to SHA,
+  hash, run, and artifact; `signtool verify /pa`), and publishes those exact
+  bytes with the DERIVED tag `v<semanticVersion>` — no second compilation,
+  no second signing, no tag input.
+- `release.yml` is the RC qualification-only workflow (dispatch-only, never
+  publishes): it qualifies the exact SHA and retains
+  `tabdock-rc-<sha>-<run-id>`; signing is optional (`NOT_CONFIGURED`
+  allowed); RC artifacts can never be production-published (their manifest
+  records `releaseMode = QUALIFICATION_ONLY`, which Stage B rejects).
 - Qualification vocabulary: `PASS`, `FAIL`, `BLOCKED_EXTERNAL`,
   `BLOCKED_ENVIRONMENT`, `SKIP_NOT_APPLICABLE`. A 0/N scenario run, an
   unavailable browser, or missing mixed-DPI hardware is never `PASS`.
 - Human gates stay explicitly unperformed until real evidence exists:
-  final manual Windows smoke (`docs/release/final-smoke.md`) and physical
-  mixed-DPI qualification (`docs/release/mixed-dpi-qualification.md`). Their
-  PASS results must be recorded in `release-external-evidence.json`, bound to
-  the exact candidate SHA and the final artifact hash
-  (`docs/release/publication-gates.md`); qualification-only runs never need
-  evidence and their manifests honestly report
+  final manual Windows smoke (`docs/release/final-smoke.md`), physical
+  mixed-DPI qualification (`docs/release/mixed-dpi-qualification.md`), and
+  Windows 10/11 compatibility (`docs/release/compatibility-matrix.md`). Their
+  PASS results must be recorded in `release-external-evidence.json`
+  (schemaVersion 2), bound to the exact candidate SHA, final artifact hash,
+  Stage A run id, and candidate artifact name
+  (`docs/release/publication-gates.md`); RC qualification-only runs never
+  need evidence and their manifests honestly report
   `productionReleaseEligibility = BLOCKED_EXTERNAL`.
 - Release-tooling regression tests: `scripts/release-tooling-tests.ps1`
-  (37 deterministic adversarial cases; no real certificates, no publishing).
+  (69 deterministic adversarial cases; no real certificates, no publishing).
 
 ### Signing policy
 
-RC qualification may run unsigned (`NOT_CONFIGURED`). PRODUCTION publication
-(`create-release=true`) makes Authenticode signing mandatory and is enforced
-twice: the qualify job requires it
-(`RELEASE_SIGNING_REQUIRED`/`RELEASE_PRODUCTION_GATE`) and the publish job
+RC qualification may run unsigned (`NOT_CONFIGURED`). PRODUCTION candidates
+(Stage A) make Authenticode signing mandatory: the workflow forces
+`RELEASE_SIGNING_REQUIRED`/`RELEASE_PRODUCTION_GATE`, fails `BLOCKED_EXTERNAL`
+when credentials are missing, and never runs mock signing. Stage B
 independently requires `SIGNED` + `SIGNATURE_VERIFIED` + `finalSignedSha256`
 equal to the final artifact hash, then re-proves the signature with
 `signtool verify /pa`. An unsigned production release is never silently
