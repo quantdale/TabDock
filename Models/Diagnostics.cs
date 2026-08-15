@@ -26,6 +26,10 @@ public sealed class BuildIdentityInfo
 public sealed class WindowsEnvironmentSnapshot
 {
     public string ProductName { get; set; } = "unavailable";
+    /// <summary>Raw registry ProductName evidence, preserved unmodified for forensics.</summary>
+    public string RawProductName { get; set; } = "unavailable";
+    /// <summary>Build-inferred family ("Windows 11" for builds >= 22000, else "Windows 10 or earlier").</summary>
+    public string ProductFamily { get; set; } = "unavailable";
     public string DisplayVersion { get; set; } = "unavailable";
     public string Build { get; set; } = "unavailable";
     public string Revision { get; set; } = "unavailable";

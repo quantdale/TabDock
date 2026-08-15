@@ -350,7 +350,11 @@ first (the index drops it via `CollectionChanged`), then `_shepherd.Release(cw, 
   `SetForegroundWindow` (`WindowShepherdService.cs:357-386`).
 - Normal: `SetWindowPlacement(OriginalPlacement)` (falls back to bounds `SetWindowPos` on
   failure), `ShowWindow(showCmd)`, `SetForegroundWindow`, `JournalClear`
-  (`WindowShepherdService.cs:388-418`).
+  (`WindowShepherdService.cs:388-418`). The `WINDOWPLACEMENT` buffer is the
+  44-byte layout modern Windows 10/11 user32 enforces (`length` must be 44;
+  the SDK header's trailing `rcDevice` is never populated and passing 60 fails
+  `SetWindowPlacement` with `ERROR_INVALID_PARAMETER`) — see
+  `NativeMethods.WINDOWPLACEMENT` and `NativeInteropSelfTest`.
 
 Release-by-reference for WinEvent teardown: `GroupManager.ReleaseMember` (`GroupManager.cs:362-367`)
 via `RemoveDeadMember` (`GuestLifecycleService.cs:226-258`), which prefers
@@ -428,6 +432,21 @@ placeholders until the user repopulates or deletes them.
   evidence. The final check-to-native-call interval is an unavoidable residual
   Win32 race, not an atomicity guarantee. No per-frame path adds executable or
   process-start probes.
+- **DWM transition suppression is retained by design.** Production calls
+  `DwmSetWindowAttribute(DWMWA_TRANSITIONS_FORCEDISABLED)` in exactly three
+  places: capture (after the durable journal commit and the immediate
+  pre-mutation identity recheck), normal release, and crash rescue. Its value
+  is real: guests are hidden/shown continuously during tab switching, and
+  without suppression every switch triggers DWM minimize/restore animations
+  that look like broken rendering. The original attribute value is read before
+  mutation, journaled, and restored exactly on release and on rescue after
+  identity revalidation; an unverifiable or recycled HWND refuses the restore
+  and preserves the journal. The only residual hard-kill behavior is bounded
+  and cosmetic: if TabDock is terminated abruptly after capture, the guest
+  keeps transitions disabled until the next TabDock launch performs journaled
+  rescue. The legacy audit branch removed this mutation entirely; the current
+  reversible, journal-backed design is kept because the benefit is documented
+  and the failure mode is a bounded recoverable cosmetic state.
 - **Monitor-specific maximize bounds** — `WM_GETMINMAXINFO` uses the work area
   of the monitor containing the container. The WPF container has no independent
   primary-monitor `MaxWidth`/`MaxHeight` clamp, so a larger secondary monitor

@@ -106,6 +106,8 @@ public static class DiagnosticReportService
         builder.AppendLine();
         builder.AppendLine("[windows]");
         builder.AppendLine($"product: {report.Windows.ProductName}");
+        builder.AppendLine($"family: {report.Windows.ProductFamily}");
+        builder.AppendLine($"rawProductName: {report.Windows.RawProductName}");
         builder.AppendLine($"displayVersion: {report.Windows.DisplayVersion}");
         builder.AppendLine($"build: {report.Windows.Build}");
         builder.AppendLine($"revision: {report.Windows.Revision}");
@@ -255,7 +257,11 @@ public static class DiagnosticReportService
     private static string FormatEnvironment(DiagnosticReport report)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"windows={report.Windows.ProductName} {report.Windows.DisplayVersion} build={report.Windows.Build}.{report.Windows.Revision}");
+        string windowsLabel = report.Windows.ProductName;
+        string rawSuffix = string.Equals(report.Windows.ProductName, report.Windows.RawProductName, StringComparison.Ordinal)
+            ? string.Empty
+            : $" raw={report.Windows.RawProductName}";
+        builder.AppendLine($"windows={windowsLabel} family={report.Windows.ProductFamily} {report.Windows.DisplayVersion} build={report.Windows.Build}.{report.Windows.Revision}{rawSuffix}");
         builder.AppendLine($"runtime={report.Windows.Runtime} processArchitecture={report.Windows.ProcessArchitecture} osArchitecture={report.Windows.OsArchitecture}");
         builder.AppendLine($"elevation={report.Windows.ElevationStatus} sessionId={report.Windows.SessionId}");
         foreach (MonitorSnapshot monitor in report.Monitors)

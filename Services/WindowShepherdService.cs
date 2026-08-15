@@ -540,7 +540,7 @@ public sealed class WindowShepherdService
         }
 
         var originalPlacement = new NativeMethods.WINDOWPLACEMENT { length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>() };
-        bool hasValidPlacement = NativeMethods.GetWindowPlacement(hwnd, out originalPlacement);
+        bool hasValidPlacement = NativeMethods.GetWindowPlacement(hwnd, ref originalPlacement);
         if (!hasValidPlacement)
         {
             _log.Log($"GetWindowPlacement failed for 0x{hwnd.ToInt64():X}: {NativeMethods.FormatLastError()}");

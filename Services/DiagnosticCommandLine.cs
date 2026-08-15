@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media;
@@ -201,6 +202,21 @@ internal static class DiagnosticSelfTest
         Check(BuildIdentity.ParseSemanticVersion("1.2.3+abcdef", new Version(9, 9)) == "1.2.3");
         Check(BuildIdentity.ParseSemanticVersion(null, new Version(9, 9)) == "9.9");
 
+        // Windows product normalization: a Windows 11 build must never be
+        // mislabeled solely because the registry ProductName says Windows 10,
+        // and a real Windows 10 build must remain identifiable as Windows 10.
+        // The raw registry evidence stays available for forensics.
+        Check(DiagnosticEnvironmentService.NormalizeWindowsProductName("Windows 10 Pro", "19045") == "Windows 10 Pro");
+        Check(DiagnosticEnvironmentService.NormalizeWindowsProductName("Windows 10 Pro", "22631") == "Windows 11 Pro");
+        Check(DiagnosticEnvironmentService.NormalizeWindowsProductName("Windows 11 Pro", "22631") == "Windows 11 Pro");
+        Check(DiagnosticEnvironmentService.NormalizeWindowsProductName("Windows 10 Enterprise LTSC", "26100") == "Windows 11 Enterprise LTSC");
+        Check(DiagnosticEnvironmentService.NormalizeWindowsProductName("Windows 10 Pro", "21996") == "Windows 10 Pro");
+        Check(DiagnosticEnvironmentService.NormalizeWindowsProductName(null, "22631") == "Windows 11 (build 22631; raw ProductName: unavailable)");
+        Check(DiagnosticEnvironmentService.GetWindowsProductFamily("22631", "Windows 10 Pro") == "Windows 11");
+        Check(DiagnosticEnvironmentService.GetWindowsProductFamily("19045", "Windows 10 Pro") == "Windows 10 or earlier");
+        Check(DiagnosticEnvironmentService.GetWindowsProductFamily(null, "Windows 10 Pro") == "Windows 10 (raw registry evidence)");
+        Check(DiagnosticEnvironmentService.GetWindowsProductFamily(null, null) == "unavailable");
+
         Check(DiagnosticCommandLine.TryParse(new[] { "--version" }, out DiagnosticCommandRequest version, out _)
             && version.Kind == DiagnosticCommandKind.Version);
         Check(DiagnosticCommandLine.TryParse(new[] { "--doctor", "--output", "report.txt" }, out DiagnosticCommandRequest doctor, out _)
@@ -268,6 +284,8 @@ internal static class DiagnosticSelfTest
         failures += releaseFailures;
         Check(MonitorDpiSelfTest.CoversProbeAndConversionSeam());
         Check(ShowWindowSemanticsSelfTest.CoversPostStateSemantics());
+        Check(NativeInteropSelfTest.PlacementContractIsStable());
+        Check(NativeInteropSelfTest.PlacementRoundTripThroughUser32());
         Check(ContainerGeometrySelfTest.UsesContainingMonitorWorkArea());
         (int journalChecks, int journalFailures) = RecoveryJournalSelfTest.Run();
         checks += journalChecks;
@@ -327,6 +345,106 @@ internal static class ShowWindowSemanticsSelfTest
             && hiddenNormalStillHidden && stillIconic && stillZoomed
             && hide && releaseShow && intentionalHide && failedVisibility
             && benignFalseDidNotConsumeFailureSlot;
+    }
+}
+
+/// <summary>
+/// Deterministic regression protection for the WINDOWPLACEMENT interop
+/// contract (see the NativeMethods.WINDOWPLACEMENT documentation). Modern
+/// Windows 10/11 user32 accepts only a 44-byte structure with
+/// length = 44: the SDK header's trailing RECT rcDevice is never populated,
+/// and SetWindowPlacement rejects length = 60 with ERROR_INVALID_PARAMETER.
+/// Both tests fail loudly if a supported Windows build ever changes that
+/// contract, which is exactly the signal a placement-restore regression would
+/// need.
+/// </summary>
+internal static class NativeInteropSelfTest
+{
+    public static bool PlacementContractIsStable()
+    {
+        // 44 bytes on both x86 and x64 (4+4+4+8+8+16); rcDevice is
+        // intentionally absent. All offsets are identical on x86 and x64
+        // because every member is a 4-byte-aligned int.
+        bool sizeOk = Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>() == 44;
+        bool offsetsOk =
+            Marshal.OffsetOf<NativeMethods.WINDOWPLACEMENT>("length").ToInt32() == 0
+            && Marshal.OffsetOf<NativeMethods.WINDOWPLACEMENT>("flags").ToInt32() == 4
+            && Marshal.OffsetOf<NativeMethods.WINDOWPLACEMENT>("showCmd").ToInt32() == 8
+            && Marshal.OffsetOf<NativeMethods.WINDOWPLACEMENT>("ptMinPosition").ToInt32() == 12
+            && Marshal.OffsetOf<NativeMethods.WINDOWPLACEMENT>("ptMaxPosition").ToInt32() == 20
+            && Marshal.OffsetOf<NativeMethods.WINDOWPLACEMENT>("rcNormalPosition").ToInt32() == 28;
+        return sizeOk && offsetsOk;
+    }
+
+    /// <summary>
+    /// Native get/set round trip on a window this test creates and destroys
+    /// itself. The window is never shown, so the probe produces no desktop
+    /// artifacts, sends no input, and never touches an existing window.
+    /// The zero-length rejection proves the native function reads length from
+    /// the caller's buffer — the by-reference parameter semantics that keep
+    /// the caller's initialization authoritative.
+    /// </summary>
+    public static bool PlacementRoundTripThroughUser32()
+    {
+        IntPtr hwnd = NativeMethods.CreateWindowEx(
+            0,
+            "STATIC",
+            "TabDock.NativeAbiSelfTest",
+            0,
+            10,
+            10,
+            320,
+            200,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            IntPtr.Zero);
+        if (hwnd == IntPtr.Zero)
+            return false;
+        try
+        {
+            uint length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>();
+
+            // Caller-initialized length is the documented precondition; it
+            // must reach user32 because the structure is passed by ref.
+            var initial = new NativeMethods.WINDOWPLACEMENT { length = length };
+            if (!NativeMethods.GetWindowPlacement(hwnd, ref initial))
+                return false;
+            if (initial.length != 44)
+                return false; // native reports the accepted buffer size
+            if (initial.rcNormalPosition.right <= initial.rcNormalPosition.left
+                || initial.rcNormalPosition.bottom <= initial.rcNormalPosition.top)
+                return false; // the created window rect must be reflected
+
+            var target = new NativeMethods.WINDOWPLACEMENT
+            {
+                length = length,
+                ptMinPosition = new NativeMethods.POINT { x = -32000, y = -32000 },
+                ptMaxPosition = new NativeMethods.POINT { x = -1, y = -1 },
+                rcNormalPosition = new NativeMethods.RECT { left = 120, top = 130, right = 620, bottom = 530 },
+                showCmd = NativeMethods.SW_SHOWNORMAL,
+            };
+            if (!NativeMethods.SetWindowPlacement(hwnd, ref target))
+                return false;
+
+            var readBack = new NativeMethods.WINDOWPLACEMENT { length = length };
+            if (!NativeMethods.GetWindowPlacement(hwnd, ref readBack))
+                return false;
+            if (readBack.showCmd != NativeMethods.SW_SHOWNORMAL)
+                return false;
+            if (readBack.rcNormalPosition.left != 120 || readBack.rcNormalPosition.top != 130
+                || readBack.rcNormalPosition.right != 620 || readBack.rcNormalPosition.bottom != 530)
+                return false;
+
+            // An uninitialized (length = 0) structure must be rejected: the
+            // by-reference length contract is what makes the call succeed.
+            var uninitialized = new NativeMethods.WINDOWPLACEMENT();
+            return !NativeMethods.SetWindowPlacement(hwnd, ref uninitialized);
+        }
+        finally
+        {
+            NativeMethods.DestroyWindow(hwnd);
+        }
     }
 }
 

@@ -240,6 +240,16 @@ The diagnostics self-test also poisons and verifies the synthetic
 between a real USER32 message (which supplies initialized `MINMAXINFO` storage)
 and TabDock's manually allocated probe buffer.
 
+The same self-test locks in the empirically-validated `WINDOWPLACEMENT` interop
+contract (structure size/offsets plus a native get/set round trip on a
+self-created, never-shown window): modern Windows 10/11 user32 requires
+`length == 44` — the SDK header's trailing `rcDevice` (60 bytes on x64) is
+never populated, and `SetWindowPlacement` rejects `length == 60` with
+`ERROR_INVALID_PARAMETER`, so the field is intentionally not declared.
+`GetWindowPlacement` is passed by reference and every caller must initialize
+`length` before the call; the self-test fails loudly if a supported Windows
+build ever changes that contract.
+
 ### Split qualification orchestrator and input provenance
 
 For the focused split closure, use the single repository orchestrator:

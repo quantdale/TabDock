@@ -44,14 +44,18 @@ public static class DiagnosticEnvironmentService
         try
         {
             using RegistryKey? key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
-            result.ProductName = ReadRegistryString(key, "ProductName");
+            result.RawProductName = ReadRegistryString(key, "ProductName");
             result.DisplayVersion = ReadRegistryString(key, "DisplayVersion");
             result.Build = ReadRegistryString(key, "CurrentBuild");
             result.Revision = ReadRegistryString(key, "UBR");
+            result.ProductName = NormalizeWindowsProductName(result.RawProductName, result.Build);
+            result.ProductFamily = GetWindowsProductFamily(result.Build, result.RawProductName);
         }
         catch (Exception ex) when (ex is SecurityException or IOException or UnauthorizedAccessException)
         {
+            result.RawProductName = "unavailable (registry-read-failed)";
             result.ProductName = "unavailable (registry-read-failed)";
+            result.ProductFamily = "unavailable (registry-read-failed)";
         }
 
         if (NativeMethods.IsCurrentProcessElevated(out bool elevated))
@@ -424,6 +428,59 @@ public static class DiagnosticEnvironmentService
 
     private static string ReadRegistryString(RegistryKey? key, string name)
         => key?.GetValue(name)?.ToString() ?? "unavailable";
+
+    /// <summary>
+    /// Windows 11 starts at build 22000. Some Windows 11 installations keep a
+    /// registry ProductName beginning with "Windows 10" (for example Windows 11
+    /// Enterprise LTSC), so the raw value is preserved separately in
+    /// RawProductName while this value supplies an accurate display label.
+    /// A real Windows 10 build is never relabeled because the build number is
+    /// the deciding evidence.
+    /// </summary>
+    internal static string NormalizeWindowsProductName(string? rawProductName, string? build)
+    {
+        string raw = string.IsNullOrWhiteSpace(rawProductName) ? "unavailable" : rawProductName.Trim();
+        if (!TryParseBuild(build, out int buildNumber) || buildNumber < 22000)
+            return raw;
+
+        int windows10Index = raw.IndexOf("Windows 10", StringComparison.OrdinalIgnoreCase);
+        if (windows10Index >= 0)
+        {
+            return raw[..windows10Index] + "Windows 11" + raw[(windows10Index + "Windows 10".Length)..];
+        }
+
+        return raw.Contains("Windows 11", StringComparison.OrdinalIgnoreCase)
+            ? raw
+            : $"Windows 11 (build {buildNumber}; raw ProductName: {raw})";
+    }
+
+    /// <summary>
+    /// Build-inferred family label. The build number is reliable evidence even
+    /// when registry branding is stale; the raw registry value is the fallback
+    /// when no build could be parsed.
+    /// </summary>
+    internal static string GetWindowsProductFamily(string? build, string? rawProductName)
+    {
+        if (TryParseBuild(build, out int buildNumber))
+            return buildNumber >= 22000 ? "Windows 11" : "Windows 10 or earlier";
+        if (!string.IsNullOrWhiteSpace(rawProductName)
+            && rawProductName.Contains("Windows 11", StringComparison.OrdinalIgnoreCase))
+            return "Windows 11 (raw registry evidence)";
+        if (!string.IsNullOrWhiteSpace(rawProductName)
+            && rawProductName.Contains("Windows 10", StringComparison.OrdinalIgnoreCase))
+            return "Windows 10 (raw registry evidence)";
+        return "unavailable";
+    }
+
+    private static bool TryParseBuild(string? build, out int buildNumber)
+    {
+        buildNumber = 0;
+        if (string.IsNullOrWhiteSpace(build))
+            return false;
+        // CurrentBuild is a plain decimal like "22631" on supported targets.
+        return int.TryParse(build.Trim(), System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture, out buildNumber);
+    }
 
     private static string ReadDisplayDriverVersion(string? deviceKey)
     {

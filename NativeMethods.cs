@@ -126,7 +126,11 @@ public static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool DestroyWindow(IntPtr hWnd);
 
-    [DllImport("user32.dll", SetLastError = true)]
+    // ShowWindow's BOOL is the window's PREVIOUS visibility, not a success
+    // flag, and it does not set a reliable last-error value. Callers verify
+    // the resulting visibility/iconic/zoomed post-state instead (see
+    // Services/ShowWindowSemantics.cs), so no SetLastError contract is claimed.
+    [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     [DllImport("user32.dll")]
@@ -138,8 +142,11 @@ public static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
 
+    // WINDOWPLACEMENT.length is caller-initialized and the native function
+    // reads it from the caller's buffer, so the structure is passed by
+    // reference (mirroring SetWindowPlacement), never by out.
     [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool GetWindowPlacement(IntPtr hWnd, out WINDOWPLACEMENT lpwndpl);
+    public static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -758,6 +765,20 @@ public static partial class NativeMethods
         public IntPtr hIconSm;
     }
 
+    /// <summary>
+    /// Layout of the WINDOWPLACEMENT buffer accepted by user32 on the
+    /// supported Windows 10/11 targets. The SDK header declares a trailing
+    /// RECT rcDevice (60 bytes on x64), but modern user32 never populates it
+    /// and GetWindowPlacement writes the accepted size back as 44; more
+    /// importantly, SetWindowPlacement rejects length values other than 44
+    /// with ERROR_INVALID_PARAMETER (empirically verified on Windows 11
+    /// 10.0.26200; consistent with the 44-byte round-trip length reported
+    /// by GetWindowPlacement across Windows 10/11). Declaring rcDevice here
+    /// would silently grow Marshal.SizeOf to 60 and break every placement
+    /// restore, so the field is intentionally omitted and callers must keep
+    /// length = Marshal.SizeOf&lt;WINDOWPLACEMENT&gt;(). NativeInteropSelfTest
+    /// locks this contract in on every qualifying machine.
+    /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct WINDOWPLACEMENT
     {
