@@ -63,11 +63,58 @@ Windows 10 x64 and Windows 11 x64 (build, operator, ISO-8601 completedAt,
 
 ## Evidence
 
-- `scripts/release-tooling-tests.ps1`: 69 deterministic cases (authority
+- `scripts/release-tooling-tests.ps1`: 96 deterministic cases (authority
   chain, tag derivation, cross-run binding, Windows gate, completedAt
-  quality, static workflow guarantees) — all PASS locally.
+  quality, signing-provider policy, static workflow guarantees) — all PASS
+  locally.
 - Official `actions/download-artifact` v7 documentation (run-id/repository/
   github-token cross-run inputs) verified from the action README.
 - `docs/release/publication-gates.md`, `docs/release/compatibility-matrix.md`,
   `docs/release/final-smoke.md`, `README.md`, OpenSpec change
   `production-release-v1-0-0-closure` (section 12).
+
+## Addendum (2026-08-15): provider-abstracted signing with a non-exportable key
+
+The signing implementation is corrected so the production pipeline no longer
+requires the public code-signing private key to exist as an exportable PFX
+(a base64 PFX GitHub Secret written to the runner). Modern publicly trusted
+code-signing keys must remain inside compliant hardware cryptographic
+modules / HSM-backed signing services.
+
+- **Signer abstraction:** `SIGNING_PROVIDER` selects the backend
+  (`not-configured`, `local-pfx`, `digicert-stm`, `mock-test`);
+  `sign-release.ps1` returns ONE structured contract (Status, Verification,
+  FinalSha256, Provider, KeyProtection, TimestampStatus, certificate
+  identity) so release-qualify and the workflows never know or care how
+  signing happens.
+- **Production provider policy:** the allowlist
+  (`Get-ApprovedProductionSigningProviders`) contains exactly `digicert-stm`
+  (DigiCert Software Trust Manager; official action
+  `digicert/code-signing-software-trust-action@v1` setup + the official
+  `smctl sign --simple` invocation, verified against the current official
+  action source) with key protection class `CLOUD_HSM` (non-exportable).
+  Stage A fails `BLOCKED_EXTERNAL` BEFORE any build when the provider is not
+  approved or its credentials are incomplete; Stage B rejects
+  `local-pfx`, `mock`, `not-configured`, unknown, and missing
+  provider/key-protection metadata. Microsoft Artifact Signing is
+  deliberately NOT implemented (geography-restricted Public Trust); the
+  allowlist makes it a future policy change.
+- **local-pfx reclassified:** still supported for development/private/RC
+  use, explicitly documented as NOT the approved public-GA signer, and
+  rejected by production at every layer.
+- **Provider-independent verification:** after signing, Windows tooling
+  verifies the actual EXE — `signtool verify /pa`, RFC3161 timestamp
+  (mandatory, `timestampStatus=VERIFIED`), and the signed certificate
+  identity (subject, thumbprint, issuer, validity, code-signing EKU), which
+  is recorded in the manifest and cross-checked at Stage B. Stage B never
+  contacts the provider and never re-signs.
+- **Mock safety:** mock modes require `SIGNING_PROVIDER=mock-test`, refuse
+  real material, and their results always report Provider=mock-test /
+  KeyProtection=MOCK_TEST — a mock result can never claim an approved
+  provider.
+- Evidence: official DigiCert action README/source captured in
+  `.agent/investigations/digicert-research/`; 96 deterministic regression
+  cases; docs `docs/release/code-signing.md` (new), updated
+  `publication-gates.md`/`final-smoke.md`/README, OpenSpec change section 13.
+  Real production signing remains `BLOCKED_EXTERNAL` (credentials not
+  configured; no candidate exists yet).

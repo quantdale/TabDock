@@ -146,9 +146,16 @@ jobs:
       # with finalWindowsHumanSmoke, physicalMixedDpi, and
       # windowsCompatibility (Windows 10 + 11) all PASS; signingStatus
       # SIGNED + SIGNATURE_VERIFIED + finalSignedSha256 == final artifact
-      # hash, no test-only mock signing, and an independent
-      # `signtool verify /pa` on the downloaded executable. Any failure
-      # aborts before `gh release create`.
+      # hash, no test-only mock signing, an APPROVED production signing
+      # provider with approved non-exportable key protection (CLOUD_HSM),
+      # recorded signed-certificate identity (subject, thumbprint, issuer,
+      # validity, code-signing EKU), timestampStatus VERIFIED, and an
+      # independent `signtool verify /pa` + RFC3161 timestamp verification
+      # on the downloaded executable with the certificate identity
+      # cross-checked against the manifest. Any failure aborts before
+      # `gh release create`. Stage B NEVER contacts the signing provider and
+      # NEVER re-signs: it validates the already-signed immutable artifact
+      # with Windows signature verification and its retained provenance.
       - name: Fail-closed publication gate
         shell: pwsh
         env:
@@ -228,22 +235,26 @@ jobs:
             productionReleaseEligibility = 'ELIGIBLE'
             verifiedAt                   = [DateTimeOffset]::UtcNow.ToString('O')
             checks                       = [ordered]@{
-              automatedQualification   = 'PASS'
-              sourceCommitSha          = 'PASS'
-              semanticVersion          = 'PASS'
-              projectVersionAuthority  = 'PASS'
-              tagBinding               = 'PASS'
+              automatedQualification    = 'PASS'
+              sourceCommitSha           = 'PASS'
+              semanticVersion           = 'PASS'
+              projectVersionAuthority   = 'PASS'
+              tagBinding                = 'PASS'
               artifactTripleConsistency = 'PASS'
-              sha256Sums               = 'PASS'
-              candidateRunBinding      = 'PASS'
-              candidateArtifactBinding = 'PASS'
-              externalEvidenceValid    = 'PASS'
-              finalWindowsHumanSmoke   = 'PASS'
-              physicalMixedDpi         = 'PASS'
-              windowsCompatibility     = 'PASS'
-              authenticodeSigning      = 'PASS'
-              signatureVerification    = 'PASS'
-              binaryIdentity           = 'PASS'
+              sha256Sums                = 'PASS'
+              candidateRunBinding       = 'PASS'
+              candidateArtifactBinding  = 'PASS'
+              externalEvidenceValid     = 'PASS'
+              finalWindowsHumanSmoke    = 'PASS'
+              physicalMixedDpi          = 'PASS'
+              windowsCompatibility      = 'PASS'
+              authenticodeSigning       = 'PASS'
+              signatureVerification     = 'PASS'
+              signingProviderApproved   = 'PASS'
+              signingKeyProtection      = 'PASS'
+              signingCertificateIdentity = 'PASS'
+              timestampVerification     = 'PASS'
+              binaryIdentity            = 'PASS'
             }
           }
           $verification | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $dir 'publication-verification.json') -Encoding utf8
@@ -267,7 +278,8 @@ jobs:
           $lines.Add('')
           $lines.Add("- Source commit: $($manifest.sourceCommitSha)")
           $lines.Add("- Executable SHA-256: $sha")
-          $lines.Add("- Authenticode signing: $($manifest.signingStatus) (verification: $($manifest.signatureVerification))")
+          $lines.Add("- Authenticode signing: $($manifest.signingStatus) (verification: $($manifest.signatureVerification), RFC3161 timestamp: $($manifest.timestampStatus))")
+          $lines.Add("- Signing provider: $($manifest.signingProvider) (key protection $($manifest.signingKeyProtection); signing certificate $($manifest.signingCertificateSubject))")
           $lines.Add('- Runtime: .NET 8 self-contained, win-x64 single file (no install required)')
           $lines.Add('- Supported OS: Windows 10 (recent builds) and Windows 11, 64-bit')
           $lines.Add("- Published from the immutable Stage A candidate artifact (run $($manifest.workflowRunId)); no rebuild, no re-sign")

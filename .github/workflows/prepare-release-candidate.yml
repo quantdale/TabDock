@@ -3,8 +3,9 @@ name: prepare-release-candidate
 # STAGE A of the two-stage production release architecture: prepare an
 # immutable, Authenticode-signed production candidate for human
 # qualification. This workflow NEVER creates a GitHub Release: it builds
-# once, signs once, verifies the signature, computes the final distributed
-# SHA-256, and retains the exact candidate as an immutable Actions artifact.
+# once, signs once through the approved production signer, verifies the
+# signature, computes the final distributed SHA-256, and retains the exact
+# candidate as an immutable Actions artifact.
 #
 # Humans then download THAT exact artifact, run the final Windows smoke, the
 # physical mixed-DPI qualification, and the Windows 10/11 compatibility gates
@@ -13,11 +14,18 @@ name: prepare-release-candidate
 # publish-release workflow (STAGE B) later downloads this same artifact and
 # publishes it WITHOUT rebuilding, re-signing, or touching the executable.
 #
-# Signing is MANDATORY on this path: a production candidate is only created
-# when real Authenticode material is configured (SIGNCERT_BASE64 +
-# SIGNCERT_PASSWORD). Without credentials the run fails with
-# BLOCKED_EXTERNAL and no candidate is produced. Qualification-only RC runs
-# remain possible through release.yml (unsigned or signed, never published).
+# SIGNING IS MANDATORY AND PROVIDER-AWARE ON THIS PATH. The signing backend
+# is selected by the repository variable SIGNING_PROVIDER and must be an
+# APPROVED production provider (currently digicert-stm: DigiCert Software
+# Trust Manager cloud signing, where the production code-signing private key
+# is NON-EXPORTABLE and stays inside the DigiCert service/HSM). The runner
+# only ever holds authentication material for the signing service (API key +
+# client-authentication certificate), never the production private key.
+# Local-PFX signing (exportable private key) is NEVER accepted for
+# production candidates. Without an approved, fully configured provider the
+# run fails with BLOCKED_EXTERNAL and no candidate is produced.
+# Qualification-only RC runs remain possible through release.yml (unsigned
+# or local-PFX signed, never published).
 on:
   workflow_dispatch:
     inputs:
@@ -37,6 +45,10 @@ permissions:
 jobs:
   prepare-candidate:
     runs-on: windows-latest
+    env:
+      # The signing backend selector. Repository variable (not a secret);
+      # for production candidates it must be 'digicert-stm'.
+      SIGNING_PROVIDER: ${{ vars.SIGNING_PROVIDER }}
     steps:
       # Current checkout action: Node 24 action runtime (runner-supported).
       - name: Checkout exact candidate SHA
@@ -69,20 +81,81 @@ jobs:
         working-directory: tools/openspec
         run: npm ci --ignore-scripts
 
-      # Production candidates are only prepared with real signing material.
-      # Without it the run stops here with an explicit BLOCKED_EXTERNAL
-      # reason; nothing is built, signed, or retained.
-      - name: Signing material preflight (BLOCKED_EXTERNAL without credentials)
+      # Provider-aware signing preflight. Production candidates are only
+      # prepared with an APPROVED production signer (non-exportable HSM/cloud
+      # private key) whose authentication material is complete. Anything else
+      # (not-configured, local-pfx, mock, unknown) stops the run here with an
+      # explicit BLOCKED_EXTERNAL reason; nothing is built, signed, or
+      # retained. Only variable NAMES are reported, never values.
+      - name: Signing provider preflight (BLOCKED_EXTERNAL unless approved production signer)
         shell: pwsh
         env:
+          SM_HOST: ${{ vars.SM_HOST }}
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+          SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+          SM_KEYPAIR_ALIAS: ${{ vars.SM_KEYPAIR_ALIAS }}
           SIGNCERT_BASE64: ${{ secrets.SIGNCERT_BASE64 }}
           SIGNCERT_PASSWORD: ${{ secrets.SIGNCERT_PASSWORD }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:SIGNCERT_BASE64) -or [string]::IsNullOrWhiteSpace($env:SIGNCERT_PASSWORD)) {
-            Write-Host '::error::BLOCKED_EXTERNAL: production-candidate preparation requires the Authenticode signing credentials (SIGNCERT_BASE64 + SIGNCERT_PASSWORD). No candidate is produced; configure the production certificate and re-dispatch.'
+          . (Join-Path $env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1')
+          $provider = Get-SigningProvider
+          if (-not (Test-ApprovedProductionSigningProvider $provider)) {
+            Write-Host "::error::BLOCKED_EXTERNAL: production-candidate preparation requires an approved production HSM/cloud signer; SIGNING_PROVIDER=$provider is NOT approved (approved: $((Get-ApprovedProductionSigningProviders) -join ', ')). Local-PFX, mock, and unconfigured signers are never production candidates. No candidate is produced."
             exit 1
           }
-          Write-Host 'Signing material present: production-candidate preparation may proceed.'
+          $missing = [System.Collections.Generic.List[string]]::new()
+          foreach ($name in (Get-SigningProviderCredentialRequirements $provider)) {
+            if ($name -eq 'SM_CLIENT_CERT_FILE') {
+              # The client-authentication certificate is materialized below
+              # from its base64 secret; the secret must be present.
+              if ([string]::IsNullOrWhiteSpace($env:SM_CLIENT_CERT_FILE_B64)) {
+                $missing.Add('SM_CLIENT_CERT_FILE_B64')
+              }
+            }
+            elseif ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              $missing.Add($name)
+            }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Host "::error::BLOCKED_EXTERNAL: production signing provider '$provider' is missing required configuration: $($missing -join ', '). These authenticate to the signing service (the production private key never leaves it). Configure the GitHub Secrets/variables and re-dispatch. No candidate is produced."
+            exit 1
+          }
+          Write-Host "Signing provider approved: $provider (key protection $(Get-SigningProviderKeyProtection $provider)); configuration complete."
+
+      # The DigiCert client-authentication certificate is AUTHENTICATION
+      # material for the signing service, not the production code-signing
+      # private key. It is materialized on the runner from its base64 secret
+      # and passed to the official DigiCert tooling.
+      - name: Materialize DigiCert client-authentication certificate
+        if: env.SIGNING_PROVIDER == 'digicert-stm'
+        shell: bash
+        env:
+          SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+        run: |
+          if [ -z "$SM_CLIENT_CERT_FILE_B64" ]; then
+            echo "::error::SM_CLIENT_CERT_FILE_B64 secret is empty; cannot authenticate to the DigiCert signing service."
+            exit 1
+          fi
+          echo "$SM_CLIENT_CERT_FILE_B64" | base64 --decode > "$RUNNER_TEMP/digicert-client-auth.p12"
+          test -s "$RUNNER_TEMP/digicert-client-auth.p12"
+          echo "Client-authentication certificate materialized: $RUNNER_TEMP/digicert-client-auth.p12"
+
+      # Official DigiCert tooling setup (current action version):
+      # digicert/code-signing-software-trust-action@v1 installs smctl and
+      # adds it to PATH (simple-signing-mode; no input/keypair-alias, so the
+      # action only sets up tooling - the actual signing happens exactly once
+      # inside release-qualify -> sign-release.ps1).
+      - name: Setup DigiCert Software Trust Manager (official tooling)
+        if: env.SIGNING_PROVIDER == 'digicert-stm'
+        uses: digicert/code-signing-software-trust-action@v1
+        env:
+          SM_HOST: ${{ vars.SM_HOST }}
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+          SM_CLIENT_CERT_FILE: ${{ runner.temp }}/digicert-client-auth.p12
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+        with:
+          simple-signing-mode: true
 
       # Canonical hermetic qualification (audited restore, Release builds,
       # self-tests, doctor/version/bundle privacy, OpenSpec validation).
@@ -95,18 +168,27 @@ jobs:
         run: .\scripts\validate.ps1 -Configuration Release -Ci
 
       # The production-candidate chain, exactly once: publish -> execute +
-      # qualify the exact binary -> Authenticode sign -> signature
-      # verification -> FINAL SHA-256 -> release-manifest.json +
+      # qualify the exact binary -> Authenticode sign once through the
+      # approved provider -> independent signature + timestamp verification
+      # -> certificate identity -> FINAL SHA-256 -> release-manifest.json +
       # SHA256SUMS.txt (both describing the FINAL distributed bytes) ->
       # immutable artifact retention. RELEASE_SIGNING_REQUIRED=true and
-      # RELEASE_PRODUCTION_GATE=true make signing mandatory and refuse
-      # test-only mock signing; releaseMode=PRODUCTION is recorded so the
-      # Stage B publication gate can reject qualification-only artifacts.
+      # RELEASE_PRODUCTION_GATE=true make signing mandatory, require the
+      # approved provider, and refuse test-only mock signing;
+      # releaseMode=PRODUCTION is recorded so the Stage B publication gate
+      # can reject qualification-only artifacts.
       - name: Prepare signed production candidate (build once, sign once)
         shell: pwsh
         env:
           OPENSPEC_NO_UPDATE_CHECK: '1'
           OPENSPEC_TELEMETRY: '0'
+          SIGNING_PROVIDER: ${{ vars.SIGNING_PROVIDER }}
+          SM_HOST: ${{ vars.SM_HOST }}
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+          SM_CLIENT_CERT_FILE: ${{ runner.temp }}/digicert-client-auth.p12
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+          SM_KEYPAIR_ALIAS: ${{ vars.SM_KEYPAIR_ALIAS }}
+          SIGNING_EXPECTED_SUBJECT: ${{ vars.SIGNING_EXPECTED_SUBJECT }}
           SIGNCERT_BASE64: ${{ secrets.SIGNCERT_BASE64 }}
           SIGNCERT_PASSWORD: ${{ secrets.SIGNCERT_PASSWORD }}
           SIGNCERT_TIMESTAMP: ${{ secrets.SIGNCERT_TIMESTAMP }}
@@ -139,12 +221,14 @@ jobs:
           $summary = @"
           ## Production candidate ready for human qualification
 
-          - Stage A workflow run: `${{ github.run_id }}`
+          - Stage A workflow run: `${{ github.run_id }}
           - Candidate artifact name: tabdock-candidate-`${{ inputs.sha }}`-`${{ github.run_id }}
-          - Source commit: `${{ inputs.sha }}`
+          - Source commit: `${{ inputs.sha }}
           - Semantic version: `$($manifest.semanticVersion)` (project <Version>, authoritative)
-          - Final distributed SHA-256: `$sha`
-          - Signing: `$($manifest.signingStatus)` / `$($manifest.signatureVerification)`
+          - Final distributed SHA-256: `$sha
+          - Signing: `$($manifest.signingStatus)` / `$($manifest.signatureVerification)` / timestamp `$($manifest.timestampStatus)
+          - Signing provider: `$($manifest.signingProvider)` (key protection `$($manifest.signingKeyProtection)`)
+          - Signing certificate: `$($manifest.signingCertificateSubject)` (thumbprint `$($manifest.signingCertificateThumbprint)`)
 
           Download the artifact from this run, verify TabDock.exe SHA-256 equals the
           final distributed SHA-256, execute the human gates against those exact bytes

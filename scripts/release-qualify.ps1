@@ -47,9 +47,9 @@
     worktree-dirty failure for a fresh checkout.
 
 .PARAMETER Sign
-    Attempt Authenticode signing when SIGNCERT_BASE64/SIGNCERT_PASSWORD are
-    present (see scripts/sign-release.ps1). Without material the manifest
-    records NOT_CONFIGURED; with RELEASE_SIGNING_REQUIRED=true the
+    Attempt Authenticode signing when a signing provider is configured
+    (SIGNING_PROVIDER, see scripts/sign-release.ps1). Without a provider the
+    manifest records NOT_CONFIGURED; with RELEASE_SIGNING_REQUIRED=true the
     qualification fails instead.
 
 .PARAMETER SkipOpenSpec
@@ -60,8 +60,13 @@
     Production policy: when RELEASE_PRODUCTION_GATE=true (the
     prepare-release-candidate workflow sets it for Stage A production
     candidates), Authenticode signing becomes mandatory exactly as if
-    RELEASE_SIGNING_REQUIRED=true, test-only mock signing is refused, and the
-    manifest records releaseMode=PRODUCTION.
+    RELEASE_SIGNING_REQUIRED=true, the signing provider must be an APPROVED
+    production provider (currently digicert-stm, key protection class
+    CLOUD_HSM - a non-exportable private key held by the signing service),
+    the provider's credentials must be complete (BLOCKED_EXTERNAL otherwise,
+    BEFORE any build work), test-only mock signing is refused, and the
+    manifest records releaseMode=PRODUCTION. Local-PFX signing (exportable
+    key) is NEVER approved for production candidates.
     External human gates (final smoke, mixed-DPI, Windows compatibility) are
     NEVER verified by this script; productionReleaseEligibility is therefore
     BLOCKED_EXTERNAL here and the publish-release workflow (Stage B)
@@ -147,6 +152,7 @@ function Invoke-Captured {
 $verdict = 'FAIL'
 $failureReason = ''
 $productionGate = [string]::Equals($env:RELEASE_PRODUCTION_GATE, 'true', [StringComparison]::OrdinalIgnoreCase)
+$signingRequired = [string]::Equals($env:RELEASE_SIGNING_REQUIRED, 'true', [StringComparison]::OrdinalIgnoreCase) -or $productionGate
 $manifest = [ordered]@{
     product             = 'TabDock'
     semanticVersion     = 'unavailable'
@@ -160,6 +166,16 @@ $manifest = [ordered]@{
     buildIdentity       = [ordered]@{ semanticVersion = 'unavailable'; informationalVersion = 'unavailable'; selfReportedSha256 = 'unavailable' }
     signingStatus       = 'NOT_CONFIGURED'
     signatureVerification = 'NOT_PERFORMED'
+    signingProvider     = 'not-configured'
+    signingKeyProtection = 'NOT_CONFIGURED'
+    timestampStatus     = 'NOT_PERFORMED'
+    signingCertificateSubject = $null
+    signingCertificateThumbprint = $null
+    signingCertificateIssuer = $null
+    signingCertificateSerialNumber = $null
+    signingCertificateValidFrom = $null
+    signingCertificateValidTo = $null
+    signingCertificateEku = $null
     signingMock         = $null
     releaseMode         = if ($productionGate) { 'PRODUCTION' } else { 'QUALIFICATION_ONLY' }
     # Qualification-time truth: external human gates are never verified by
@@ -217,6 +233,41 @@ try {
     Write-Host "authoritative project version: $projectVersion (from $MainProject)" -ForegroundColor Green
     if (-not [string]::IsNullOrWhiteSpace($Version)) {
         Write-Host "workflow expected version:     $Version (agrees)" -ForegroundColor Green
+    }
+
+    # --- Signing provider preflight (fails BEFORE any build work) ------------
+    # The signer is selected by SIGNING_PROVIDER and is completely abstract
+    # to this script. Production candidates REQUIRE an approved
+    # non-exportable-key (HSM/cloud) provider with complete credentials;
+    # anything else - local-PFX (exportable key), mock, not-configured,
+    # unknown providers - fails here with BLOCKED_EXTERNAL and nothing is
+    # built. RC runs may stay NOT_CONFIGURED or use local-pfx. Only variable
+    # NAMES are ever reported, never values.
+    $invokeSigning = $Sign -or $signingRequired -or -not [string]::IsNullOrWhiteSpace($env:SIGNING_PROVIDER)
+    if ($invokeSigning) {
+        $signingProvider = Get-SigningProvider
+        if ($signingProvider -eq 'mock-test') {
+            throw 'release-qualify: the test-only mock signing provider (SIGNING_PROVIDER=mock-test) is never valid for release qualification; use the deterministic test suite instead.'
+        }
+        if ($signingRequired) {
+            if ($productionGate) {
+                $preflight = Test-ProductionSigningPreflight
+                if (-not $preflight.Approved -or -not $preflight.Configured) {
+                    throw "BLOCKED_EXTERNAL: production signing preflight failed - $($preflight.BlockedReason). No candidate is built; configure the approved production signer and re-dispatch."
+                }
+                Write-Host "signing provider preflight: $($preflight.Provider) (key protection $($preflight.KeyProtection)) - approved production signer, configuration complete" -ForegroundColor Green
+            }
+            else {
+                $cfg = Test-SigningProviderConfiguration $signingProvider
+                if (-not $cfg.Configured) {
+                    throw "BLOCKED_EXTERNAL: signing is required but provider '$signingProvider' is missing required configuration: $($cfg.Missing -join ', '). No candidate is built."
+                }
+                Write-Host "signing provider preflight: $signingProvider (key protection $($cfg.KeyProtection)) - configuration complete" -ForegroundColor Green
+            }
+        }
+        else {
+            Write-Host "signing provider: $signingProvider (key protection $(Get-SigningProviderKeyProtection $signingProvider))" -ForegroundColor Yellow
+        }
     }
 
     # --- Audited restore ------------------------------------------------------
@@ -317,13 +368,16 @@ try {
     $manifest.unsignedQualifiedSha256 = $unsignedSha.ToLowerInvariant()
     Write-Host "SHA-256($($ArtifactExe)) pre-sign = $unsignedSha (matches self-report)" -ForegroundColor Green
 
-    # --- Optional Authenticode signing ---------------------------------------
+    # --- Authenticode signing (provider-abstracted) --------------------------
     # Production candidates (RELEASE_PRODUCTION_GATE=true, set by the
     # prepare-release-candidate workflow) make signing mandatory: a production
-    # release is never silently defaulted to unsigned.
-    $signingRequired = [string]::Equals($env:RELEASE_SIGNING_REQUIRED, 'true', [StringComparison]::OrdinalIgnoreCase) -or $productionGate
+    # release is never silently defaulted to unsigned. The signer backend is
+    # selected by SIGNING_PROVIDER inside sign-release.ps1; this script only
+    # consumes the structured contract and enforces production policy
+    # (approved provider, approved non-exportable key-protection class,
+    # verified RFC3161 timestamp, signed-certificate identity).
     $signScript = Join-Path $PSScriptRoot 'sign-release.ps1'
-    if ($Sign -or $signingRequired -or $env:SIGNCERT_BASE64) {
+    if ($invokeSigning) {
         $signOutput = & $signScript -ExePath $ArtifactExe
         if ($LASTEXITCODE -ne 0) {
             throw "sign-release.ps1 exited with $LASTEXITCODE; signing infrastructure failure."
@@ -335,6 +389,16 @@ try {
         $manifest.signingStatus = $signResult.Status
         $manifest.signatureVerification = $signResult.Verification
         $manifest.externalGates.signingCredentials = $signResult.Status
+        $manifest.signingProvider = if ($signResult.Provider) { [string]$signResult.Provider } else { 'not-configured' }
+        $manifest.signingKeyProtection = if ($signResult.KeyProtection) { [string]$signResult.KeyProtection } else { 'NOT_CONFIGURED' }
+        $manifest.timestampStatus = if ($signResult.TimestampStatus) { [string]$signResult.TimestampStatus } else { 'NOT_PERFORMED' }
+        $manifest.signingCertificateSubject = $signResult.CertificateSubject
+        $manifest.signingCertificateThumbprint = $signResult.CertificateThumbprint
+        $manifest.signingCertificateIssuer = $signResult.CertificateIssuer
+        $manifest.signingCertificateSerialNumber = $signResult.CertificateSerialNumber
+        $manifest.signingCertificateValidFrom = $signResult.CertificateValidFrom
+        $manifest.signingCertificateValidTo = $signResult.CertificateValidTo
+        $manifest.signingCertificateEku = $signResult.CertificateEku
         if ([bool]$signResult.Mock) {
             $manifest.signingMock = $true
             if ($productionGate) {
@@ -347,12 +411,26 @@ try {
             }
             $manifest.finalSignedSha256 = $signResult.FinalSha256.ToLowerInvariant()
         }
+        if ($productionGate -and $signResult.Status -eq 'SIGNED') {
+            if (-not (Test-ApprovedProductionSigningProvider ([string]$manifest.signingProvider))) {
+                throw "Production policy requires an approved HSM/cloud signing provider but the signer reported '$($manifest.signingProvider)'."
+            }
+            if (-not (Test-ApprovedProductionKeyProtection ([string]$manifest.signingKeyProtection))) {
+                throw "Production policy requires non-exportable/hardware-backed key protection but the signer reported '$($manifest.signingKeyProtection)'."
+            }
+            if ([string]$manifest.timestampStatus -ne 'VERIFIED') {
+                throw "Production policy requires a verified RFC3161 timestamp but timestampStatus=$($manifest.timestampStatus)."
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$manifest.signingCertificateThumbprint)) {
+                throw 'Production policy requires the signed-certificate identity in the manifest but the signer recorded none.'
+            }
+        }
         if ($signingRequired -and $signResult.Status -ne 'SIGNED') {
             throw "Production policy requires signing but the result was $($signResult.Status)"
         }
     }
     elseif ($signingRequired) {
-        throw 'Production policy requires signing (RELEASE_SIGNING_REQUIRED=true or RELEASE_PRODUCTION_GATE=true) but no SIGNCERT_BASE64/SIGNCERT_PASSWORD material is configured.'
+        throw 'Production policy requires signing (RELEASE_SIGNING_REQUIRED=true or RELEASE_PRODUCTION_GATE=true) but no SIGNING_PROVIDER is configured.'
     }
 
     # --- Release manifest and checksums (FINAL distributed hash) -------------
@@ -373,6 +451,10 @@ try {
     Write-Host "Unsigned qualified SHA-256: $($manifest.unsignedQualifiedSha256)" -ForegroundColor Green
     if ($manifest.finalSignedSha256) {
         Write-Host "Final signed SHA-256: $($manifest.finalSignedSha256)" -ForegroundColor Green
+        Write-Host "Signing provider: $($manifest.signingProvider) (key protection $($manifest.signingKeyProtection), timestamp $($manifest.timestampStatus))" -ForegroundColor Green
+        if ($manifest.signingCertificateSubject) {
+            Write-Host "Signing certificate subject: $($manifest.signingCertificateSubject)" -ForegroundColor Green
+        }
     }
     Write-Host "Final distributed SHA-256 (artifactSha256 == SHA256SUMS.txt): $($records.ArtifactSha256)" -ForegroundColor Green
     Write-Host "Manifest: $manifestPath" -ForegroundColor Green

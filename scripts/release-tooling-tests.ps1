@@ -37,14 +37,30 @@
     10/11 compatibility gate (missing/FAIL/BLOCKED/malformed entries fail
     closed), completedAt quality (ISO-8601, not materially in the future),
     and static workflow guarantees (the publish workflow contains no build,
-    sign, or qualification invocation; the candidate-preparation workflow
-    forces signing and never creates a release; the RC workflow has no
-    publication path).
+    sign, or qualification invocation and no signing-provider authentication;
+    the candidate-preparation workflow forces an APPROVED production signer
+    and never creates a release; the RC workflow has no publication path).
 
-    The mock signer (scripts/sign-release.ps1 -MockSign*) models the real
-    fact that Authenticode signing changes the artifact bytes. It performs NO
-    Authenticode operation, is refused when real material is present, is
-    recorded as Mock=true, and can never pass the production gate.
+    Signing-provider policy coverage proves the production chain no longer
+    depends on an exportable PFX: SIGNING_PROVIDER selects the backend
+    (not-configured / local-pfx / digicert-stm / mock-test), production
+    policy approves ONLY the non-exportable HSM/cloud provider class
+    (digicert-stm / CLOUD_HSM), production rejects local-pfx, mock,
+    not-configured, unknown, and missing provider/key-protection metadata,
+    the digicert-stm configuration preflight names missing credentials and
+    fails closed (BLOCKED_EXTERNAL) without them, the signer contract always
+    carries Provider/KeyProtection/TimestampStatus/certificate identity,
+    mock results can never claim an approved provider, a provider-reported
+    success is never trusted without independent Authenticode + RFC3161
+    timestamp verification of the actual bytes, and the certificate identity
+    recorded in the manifest is cross-checked against the file.
+
+    The mock signer (scripts/sign-release.ps1 -MockSign* with
+    SIGNING_PROVIDER=mock-test) models the real fact that Authenticode
+    signing changes the artifact bytes. It performs NO Authenticode
+    operation, is refused when real material is present and when the mock
+    provider is not explicitly selected, is recorded as Mock=true with
+    Provider=mock-test, and can never pass the production gate.
 
     This script NEVER creates a GitHub Release, never contacts the network,
     and never touches signing material.
@@ -113,7 +129,16 @@ function New-TestManifest {
         [string]$ReleaseMode = 'PRODUCTION',
         [string]$WorkflowRunId = '123456789',
         [string]$BuildIdentitySemantic = '',
-        [string]$BuildIdentityInfo = ''
+        [string]$BuildIdentityInfo = '',
+        [string]$Provider = 'not-configured',
+        [string]$KeyProtection = 'NOT_CONFIGURED',
+        [string]$TimestampStatus = 'NOT_PERFORMED',
+        [string]$CertificateSubject = '',
+        [string]$CertificateThumbprint = '',
+        [string]$CertificateIssuer = '',
+        [string]$CertificateValidFrom = '',
+        [string]$CertificateValidTo = '',
+        [string[]]$CertificateEku = @()
     )
     return [ordered]@{
         product                = 'TabDock'
@@ -125,6 +150,16 @@ function New-TestManifest {
         finalSignedSha256      = if ($FinalSignedSha) { $FinalSignedSha } else { $null }
         signingStatus          = $SigningStatus
         signatureVerification  = $SignatureVerification
+        signingProvider        = $Provider
+        signingKeyProtection   = $KeyProtection
+        timestampStatus        = $TimestampStatus
+        signingCertificateSubject = if ($CertificateSubject) { $CertificateSubject } else { $null }
+        signingCertificateThumbprint = if ($CertificateThumbprint) { $CertificateThumbprint } else { $null }
+        signingCertificateIssuer = if ($CertificateIssuer) { $CertificateIssuer } else { $null }
+        signingCertificateSerialNumber = $null
+        signingCertificateValidFrom = if ($CertificateValidFrom) { $CertificateValidFrom } else { $null }
+        signingCertificateValidTo = if ($CertificateValidTo) { $CertificateValidTo } else { $null }
+        signingCertificateEku = if ($CertificateEku.Count -gt 0) { @($CertificateEku) } else { $null }
         signingMock            = if ($Mock) { $true } else { $null }
         qualificationStatus    = $QualificationStatus
         productionReleaseEligibility = 'BLOCKED_EXTERNAL'
@@ -176,6 +211,64 @@ function Update-TestManifest {
         $m.$key = $Values[$key]
     }
     $m | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ManifestPath -Encoding utf8
+}
+
+function Set-SyntheticSignedManifest {
+    <#
+    .SYNOPSIS
+        Marks a synthetic artifact manifest as SIGNED by the APPROVED
+        production provider (digicert-stm / CLOUD_HSM) with a complete,
+        internally consistent signing-provenance record (status,
+        verification, final hash, certificate identity, verified timestamp).
+        The dummy artifact itself is NOT Authenticode-signed, so the
+        independent on-disk checks still fail closed where they run.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$ManifestPath,
+        [Parameter(Mandatory = $true)][string]$FinalSha
+    )
+    Update-TestManifest $ManifestPath @{
+        signingStatus          = 'SIGNED'
+        signatureVerification  = 'SIGNATURE_VERIFIED'
+        finalSignedSha256      = $FinalSha
+        signingProvider        = 'digicert-stm'
+        signingKeyProtection   = 'CLOUD_HSM'
+        timestampStatus        = 'VERIFIED'
+        signingCertificateSubject = 'CN=TabDock Test Publisher, O=TabDock Test, C=US'
+        signingCertificateThumbprint = '1111111111111111111111111111111111111111'
+        signingCertificateIssuer = 'CN=TabDock Test CA, O=TabDock Test, C=US'
+        signingCertificateSerialNumber = '0102030405060708'
+        signingCertificateValidFrom = '2026-01-01T00:00:00Z'
+        signingCertificateValidTo = '2029-01-01T00:00:00Z'
+        signingCertificateEku  = @('1.3.6.1.5.5.7.3.3')
+    }
+}
+
+function Invoke-TestMockSigner {
+    <#
+    .SYNOPSIS
+        Runs sign-release.ps1 in a test-only mock mode with
+        SIGNING_PROVIDER=mock-test explicitly set (mock modes refuse to run
+        without the explicit mock provider) and restores the previous
+        environment afterwards.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$ExePath,
+        [ValidateSet('MockSign', 'MockSignFailure', 'MockVerifyFailure')][string]$Mode = 'MockSign'
+    )
+    $previous = [Environment]::GetEnvironmentVariable('SIGNING_PROVIDER')
+    [Environment]::SetEnvironmentVariable('SIGNING_PROVIDER', 'mock-test')
+    try {
+        switch ($Mode) {
+            'MockSign'          { return & $signScript -ExePath $ExePath -MockSign 2>&1 | Out-String }
+            'MockSignFailure'   { return & $signScript -ExePath $ExePath -MockSignFailure 2>&1 | Out-String }
+            'MockVerifyFailure' { return & $signScript -ExePath $ExePath -MockVerifyFailure 2>&1 | Out-String }
+        }
+    }
+    finally {
+        if ($null -eq $previous) { Remove-Item Env:\SIGNING_PROVIDER -ErrorAction SilentlyContinue }
+        else { [Environment]::SetEnvironmentVariable('SIGNING_PROVIDER', $previous) }
+    }
 }
 
 function Get-TestTimestamp {
@@ -345,7 +438,7 @@ try {
         $exe = Join-Path $testRoot 't-mock-sign.exe'
         New-DummyArtifact $exe
         $preHash = Get-FileSha256Lower $exe
-        $output = & $signScript -ExePath $exe -MockSign 2>&1 | Out-String
+        $output = Invoke-TestMockSigner $exe 'MockSign'
         Assert-True ($LASTEXITCODE -eq 0) "mock signer must exit 0, got $LASTEXITCODE`n$output"
         $postHash = Get-FileSha256Lower $exe
         Assert-True ($postHash -ne $preHash) 'mock signing must change the artifact bytes like real signing does'
@@ -354,6 +447,9 @@ try {
         Assert-True ($result.Verification -eq 'SIGNATURE_VERIFIED') 'mock signer must report SIGNATURE_VERIFIED'
         Assert-True ($result.Mock -eq $true) 'mock signer must mark the result Mock=true'
         Assert-True ($result.FinalSha256 -eq $postHash) 'mock signer FinalSha256 must be the actual post-signature hash'
+        Assert-True ($result.Provider -eq 'mock-test') 'mock signer must report Provider=mock-test and never an approved provider'
+        Assert-True ($result.KeyProtection -eq 'MOCK_TEST') 'mock signer must report KeyProtection=MOCK_TEST and never CLOUD_HSM'
+        Assert-True ($result.TimestampStatus -eq 'NOT_PERFORMED') 'mock signer must never claim a real RFC3161 timestamp'
     }
 
     New-TestCase 'mock-sign-then-finalize-records-end-to-end' {
@@ -363,13 +459,14 @@ try {
         $exe = Join-Path $testRoot 't-mock-sign-finalize.exe'
         New-DummyArtifact $exe
         $unsignedHash = Get-FileSha256Lower $exe
-        $output = & $signScript -ExePath $exe -MockSign 2>&1 | Out-String
+        $output = Invoke-TestMockSigner $exe 'MockSign'
         Assert-True ($LASTEXITCODE -eq 0) "mock signer failed: $output"
         $result = $output | ConvertFrom-Json
         $dir = Join-Path $testRoot 't-mock-sign-finalize'
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         $manifest = New-TestManifest -UnsignedSha $unsignedHash -FinalSignedSha $result.FinalSha256 `
-            -SigningStatus 'SIGNED' -SignatureVerification 'SIGNATURE_VERIFIED' -Mock $true
+            -SigningStatus 'SIGNED' -SignatureVerification 'SIGNATURE_VERIFIED' -Mock $true `
+            -Provider 'mock-test' -KeyProtection 'MOCK_TEST'
         $records = Complete-ReleaseRecords -Manifest $manifest -ArtifactPath $exe -OutDir $dir
         $sums = Read-Sha256Sums $records.SumsPath
         Assert-True ($records.ArtifactSha256 -eq $result.FinalSha256) 'records must finalize on the post-sign hash'
@@ -384,7 +481,7 @@ try {
         $exe = Join-Path $testRoot 't-mock-sign-failure.exe'
         New-DummyArtifact $exe
         $preHash = Get-FileSha256Lower $exe
-        $output = & $signScript -ExePath $exe -MockSignFailure 2>&1 | Out-String
+        $output = Invoke-TestMockSigner $exe 'MockSignFailure'
         Assert-True ($LASTEXITCODE -eq 3) "mock sign failure must exit 3, got $LASTEXITCODE"
         $result = $output | ConvertFrom-Json
         Assert-True ($result.Status -eq 'SIGNING_FAILED') 'mock sign failure must report SIGNING_FAILED'
@@ -394,10 +491,11 @@ try {
     New-TestCase 'mock-verify-failure-exits-nonzero' {
         $exe = Join-Path $testRoot 't-mock-verify-failure.exe'
         New-DummyArtifact $exe
-        $output = & $signScript -ExePath $exe -MockVerifyFailure 2>&1 | Out-String
+        $output = Invoke-TestMockSigner $exe 'MockVerifyFailure'
         Assert-True ($LASTEXITCODE -eq 3) "mock verify failure must exit 3, got $LASTEXITCODE"
         $result = $output | ConvertFrom-Json
         Assert-True ($result.Status -eq 'SIGNED' -and $result.Verification -eq 'FAILED') 'mock verify failure must report SIGNED/FAILED'
+        Assert-True ($result.Provider -eq 'mock-test') 'even a failing mock result must never claim an approved provider'
     }
 
     New-TestCase 'mock-modes-refuse-to-mix-with-real-material' {
@@ -407,15 +505,39 @@ try {
         try {
             $refused = $false
             try {
+                $null = Invoke-TestMockSigner $exe 'MockSign'
+            }
+            catch {
+                $refused = $true
+            }
+            Assert-True $refused 'mock mode must refuse to run while real provider material is present'
+        }
+        finally {
+            Remove-Item Env:\SIGNCERT_BASE64 -ErrorAction SilentlyContinue
+        }
+    }
+
+    New-TestCase 'mock-modes-refuse-without-explicit-mock-provider' {
+        # The mock provider must be selected EXPLICITLY (SIGNING_PROVIDER=
+        # mock-test): a mock flag without the explicit mock provider can never
+        # run, so production configurations can never accidentally invoke it.
+        $exe = Join-Path $testRoot 't-mock-no-provider.exe'
+        New-DummyArtifact $exe
+        $previous = [Environment]::GetEnvironmentVariable('SIGNING_PROVIDER')
+        [Environment]::SetEnvironmentVariable('SIGNING_PROVIDER', '')
+        try {
+            $refused = $false
+            try {
                 & $signScript -ExePath $exe -MockSign 2>&1 | Out-Null
             }
             catch {
                 $refused = $true
             }
-            Assert-True $refused 'mock mode must refuse to run while real material is present'
+            Assert-True $refused 'mock mode without SIGNING_PROVIDER=mock-test must be refused'
         }
         finally {
-            Remove-Item Env:\SIGNCERT_BASE64 -ErrorAction SilentlyContinue
+            if ($null -eq $previous) { Remove-Item Env:\SIGNING_PROVIDER -ErrorAction SilentlyContinue }
+            else { [Environment]::SetEnvironmentVariable('SIGNING_PROVIDER', $previous) }
         }
     }
 
@@ -455,7 +577,8 @@ try {
 
     New-TestCase 'signature-verification-failure-rejected' {
         $art = New-SyntheticArtifactDir $testRoot 'g-verify-failed' -SourceSha $goodSha -Version $goodVersion
-        Update-TestManifest $art.ManifestPath @{ signingStatus = 'SIGNED'; signatureVerification = 'FAILED'; finalSignedSha256 = $art.ArtifactSha256 }
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ signatureVerification = 'FAILED' }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
         $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
@@ -465,7 +588,8 @@ try {
 
     New-TestCase 'mock-signed-artifact-rejected-for-production' {
         $art = New-SyntheticArtifactDir $testRoot 'g-mock' -SourceSha $goodSha -Version $goodVersion
-        Update-TestManifest $art.ManifestPath @{ signingStatus = 'SIGNED'; signatureVerification = 'SIGNATURE_VERIFIED'; finalSignedSha256 = $art.ArtifactSha256; signingMock = $true }
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ signingMock = $true; signingProvider = 'mock-test'; signingKeyProtection = 'MOCK_TEST' }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
         $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
@@ -634,7 +758,7 @@ try {
 
     New-TestCase 'production-eligible-synthetic-happy-path' {
         $art = New-SyntheticArtifactDir $testRoot 'h-production' -SourceSha $goodSha -Version $goodVersion
-        Update-TestManifest $art.ManifestPath @{ signingStatus = 'SIGNED'; signatureVerification = 'SIGNATURE_VERIFIED'; finalSignedSha256 = $art.ArtifactSha256 }
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
         # The synthetic artifact is not really Authenticode-signed, so the
@@ -649,9 +773,10 @@ try {
         # Decomposition: with RequireSigning, the ONLY added failure must be
         # the independent Authenticode verification (the test artifact is
         # intentionally unsigned). This proves the gate does not hide other
-        # defects behind the signing branch.
+        # defects behind the signing branch - the approved-provider manifest
+        # metadata, certificate identity, and timestamp policy all pass.
         $art = New-SyntheticArtifactDir $testRoot 'h-mandatory' -SourceSha $goodSha -Version $goodVersion
-        Update-TestManifest $art.ManifestPath @{ signingStatus = 'SIGNED'; signatureVerification = 'SIGNATURE_VERIFIED'; finalSignedSha256 = $art.ArtifactSha256 }
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
         $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
@@ -802,11 +927,12 @@ try {
 
     New-TestCase 'existing-valid-signed-candidate-accepted-by-non-network-gate' {
         # The Stage B gate accepts a fully consistent production candidate
-        # (PRODUCTION mode, run-bound manifest, schema-v2 evidence) without
-        # any network; the only non-signing gate condition is the independent
-        # Authenticode check, which is exercised with RequireSigning.
+        # (PRODUCTION mode, run-bound manifest, approved-provider signing
+        # provenance, schema-v2 evidence) without any network; the only
+        # non-signing gate condition is the independent Authenticode check,
+        # which is exercised with RequireSigning.
         $art = New-SyntheticArtifactDir $testRoot 'r-happy' -SourceSha $goodSha -Version $goodVersion
-        Update-TestManifest $art.ManifestPath @{ signingStatus = 'SIGNED'; signatureVerification = 'SIGNATURE_VERIFIED'; finalSignedSha256 = $art.ArtifactSha256 }
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
         $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
@@ -923,12 +1049,352 @@ try {
     }
 
     Write-Host ''
+    Write-Host '==> Signing provider policy (production vs development signing)' -ForegroundColor Cyan
+
+    New-TestCase 'signing-provider-policy-approves-only-cloud-hsm' {
+        # The production allowlist: ONLY non-exportable-key backends qualify.
+        Assert-True ((Get-ApprovedProductionSigningProviders -join ',') -eq 'digicert-stm') 'the approved production provider allowlist must be exactly digicert-stm'
+        Assert-True (Test-ApprovedProductionSigningProvider 'digicert-stm') 'digicert-stm must be approved for production'
+        foreach ($rejected in @('local-pfx', 'mock-test', 'not-configured', '', 'mystery-vendor')) {
+            Assert-True (-not (Test-ApprovedProductionSigningProvider $rejected)) "provider '$rejected' must never be approved for production"
+        }
+        Assert-True (Test-ApprovedProductionKeyProtection 'CLOUD_HSM') 'CLOUD_HSM key protection must be approved'
+        foreach ($rejected in @('LOCAL_PFX', 'MOCK_TEST', 'NOT_CONFIGURED', '')) {
+            Assert-True (-not (Test-ApprovedProductionKeyProtection $rejected)) "key protection '$rejected' must never be approved for production"
+        }
+        Assert-True ((Get-SigningProviderKeyProtection 'digicert-stm') -eq 'CLOUD_HSM') 'digicert-stm must classify as CLOUD_HSM'
+        Assert-True ((Get-SigningProviderKeyProtection 'local-pfx') -eq 'LOCAL_PFX') 'local-pfx must classify as LOCAL_PFX (exportable key)'
+        Assert-True ((Get-SigningProviderKeyProtection 'mock-test') -eq 'MOCK_TEST') 'mock-test must classify as MOCK_TEST'
+        Assert-True ((Get-SigningProviderKeyProtection 'not-configured') -eq 'NOT_CONFIGURED') 'not-configured must classify as NOT_CONFIGURED'
+    }
+
+    New-TestCase 'unknown-signing-provider-rejected' {
+        $previous = [Environment]::GetEnvironmentVariable('SIGNING_PROVIDER')
+        [Environment]::SetEnvironmentVariable('SIGNING_PROVIDER', 'mystery-vendor')
+        try {
+            Assert-Throws 'an unknown SIGNING_PROVIDER must throw (never silently fall back)' { $null = Get-SigningProvider }
+        }
+        finally {
+            if ($null -eq $previous) { Remove-Item Env:\SIGNING_PROVIDER -ErrorAction SilentlyContinue }
+            else { [Environment]::SetEnvironmentVariable('SIGNING_PROVIDER', $previous) }
+        }
+    }
+
+    New-TestCase 'sign-release-reports-not-configured-without-provider' {
+        $exe = Join-Path $testRoot 'p-not-configured.exe'
+        New-DummyArtifact $exe
+        $previous = [Environment]::GetEnvironmentVariable('SIGNING_PROVIDER')
+        [Environment]::SetEnvironmentVariable('SIGNING_PROVIDER', '')
+        try {
+            $output = & $signScript -ExePath $exe 2>&1 | Out-String
+            Assert-True ($LASTEXITCODE -eq 0) "no-provider signer must exit 0, got $LASTEXITCODE`n$output"
+            $result = $output | ConvertFrom-Json
+            Assert-True ($result.Status -eq 'NOT_CONFIGURED') 'no provider must report NOT_CONFIGURED'
+            Assert-True ($result.Provider -eq 'not-configured') 'no provider must report Provider=not-configured'
+            Assert-True ($result.KeyProtection -eq 'NOT_CONFIGURED') 'no provider must report KeyProtection=NOT_CONFIGURED'
+        }
+        finally {
+            if ($null -eq $previous) { Remove-Item Env:\SIGNING_PROVIDER -ErrorAction SilentlyContinue }
+            else { [Environment]::SetEnvironmentVariable('SIGNING_PROVIDER', $previous) }
+        }
+    }
+
+    New-TestCase 'digicert-stm-configuration-incomplete-fails-closed' {
+        # Cloud-provider authentication failure: without the SM_* credentials
+        # the provider cannot authenticate to the signing service. The
+        # preflight names ONLY the missing variable names and the signer
+        # exits BLOCKED_EXTERNAL without touching the file.
+        $envNames = @('SM_HOST', 'SM_API_KEY', 'SM_CLIENT_CERT_FILE', 'SM_CLIENT_CERT_PASSWORD', 'SM_KEYPAIR_ALIAS')
+        $saved = @{}
+        foreach ($name in $envNames) { $saved[$name] = [Environment]::GetEnvironmentVariable($name); [Environment]::SetEnvironmentVariable($name, '') }
+        $previousProvider = [Environment]::GetEnvironmentVariable('SIGNING_PROVIDER')
+        [Environment]::SetEnvironmentVariable('SIGNING_PROVIDER', 'digicert-stm')
+        try {
+            $cfg = Test-SigningProviderConfiguration 'digicert-stm'
+            Assert-True (-not $cfg.Configured) 'digicert-stm without credentials must be unconfigured'
+            foreach ($required in $envNames) {
+                Assert-True ($cfg.Missing -contains $required) "missing list must name $required"
+            }
+            $exe = Join-Path $testRoot 'p-stm-nocreds.exe'
+            New-DummyArtifact $exe
+            $preHash = Get-FileSha256Lower $exe
+            $output = & $signScript -ExePath $exe 2>&1 | Out-String
+            Assert-True ($LASTEXITCODE -eq 2) "digicert-stm without credentials must exit 2 (BLOCKED_EXTERNAL), got $LASTEXITCODE`n$output"
+            $result = $output | ConvertFrom-Json
+            Assert-True ($result.Status -eq 'BLOCKED_EXTERNAL') 'the signer must report BLOCKED_EXTERNAL'
+            Assert-True ($result.Provider -eq 'digicert-stm') 'the signer must still report the selected provider'
+            Assert-True ((Get-FileSha256Lower $exe) -eq $preHash) 'a blocked provider must not mutate the artifact'
+        }
+        finally {
+            foreach ($name in $envNames) {
+                if ($null -eq $saved[$name]) { Remove-Item "Env:\$name" -ErrorAction SilentlyContinue }
+                else { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+            }
+            if ($null -eq $previousProvider) { Remove-Item Env:\SIGNING_PROVIDER -ErrorAction SilentlyContinue }
+            else { [Environment]::SetEnvironmentVariable('SIGNING_PROVIDER', $previousProvider) }
+        }
+    }
+
+    New-TestCase 'digicert-stm-configuration-complete-when-all-present' {
+        $p12 = Join-Path $testRoot 'p-fake-client.p12'
+        [IO.File]::WriteAllBytes($p12, [byte[]]::new(64))
+        $envNames = @('SM_HOST', 'SM_API_KEY', 'SM_CLIENT_CERT_FILE', 'SM_CLIENT_CERT_PASSWORD', 'SM_KEYPAIR_ALIAS')
+        $saved = @{}
+        foreach ($name in $envNames) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
+        try {
+            [Environment]::SetEnvironmentVariable('SM_HOST', 'https://example.invalid')
+            [Environment]::SetEnvironmentVariable('SM_API_KEY', 'test-api-key')
+            [Environment]::SetEnvironmentVariable('SM_CLIENT_CERT_FILE', $p12)
+            [Environment]::SetEnvironmentVariable('SM_CLIENT_CERT_PASSWORD', 'test-password')
+            [Environment]::SetEnvironmentVariable('SM_KEYPAIR_ALIAS', 'test-keypair')
+            $cfg = Test-SigningProviderConfiguration 'digicert-stm'
+            Assert-True ($cfg.Configured) "digicert-stm with all credentials must be configured: missing=$($cfg.Missing -join ',')"
+            Assert-True ($cfg.Missing.Count -eq 0) 'no missing credentials expected'
+        }
+        finally {
+            foreach ($name in $envNames) {
+                if ($null -eq $saved[$name]) { Remove-Item "Env:\$name" -ErrorAction SilentlyContinue }
+                else { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+            }
+        }
+    }
+
+    New-TestCase 'cloud-provider-signing-tool-absent-fails-closed' {
+        # A selected cloud provider whose official tooling is unavailable must
+        # fail closed (SIGNING_FAILED, exit 3) - signing can never silently
+        # degrade. SMCTL_PATH points at a nonexistent smctl, which also keeps
+        # the case deterministic on any machine.
+        $p12 = Join-Path $testRoot 'p-tool-client.p12'
+        [IO.File]::WriteAllBytes($p12, [byte[]]::new(64))
+        $envNames = @('SM_HOST', 'SM_API_KEY', 'SM_CLIENT_CERT_FILE', 'SM_CLIENT_CERT_PASSWORD', 'SM_KEYPAIR_ALIAS', 'SMCTL_PATH')
+        $saved = @{}
+        foreach ($name in $envNames) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
+        $previousProvider = [Environment]::GetEnvironmentVariable('SIGNING_PROVIDER')
+        [Environment]::SetEnvironmentVariable('SIGNING_PROVIDER', 'digicert-stm')
+        try {
+            [Environment]::SetEnvironmentVariable('SM_HOST', 'https://example.invalid')
+            [Environment]::SetEnvironmentVariable('SM_API_KEY', 'test-api-key')
+            [Environment]::SetEnvironmentVariable('SM_CLIENT_CERT_FILE', $p12)
+            [Environment]::SetEnvironmentVariable('SM_CLIENT_CERT_PASSWORD', 'test-password')
+            [Environment]::SetEnvironmentVariable('SM_KEYPAIR_ALIAS', 'test-keypair')
+            [Environment]::SetEnvironmentVariable('SMCTL_PATH', (Join-Path $testRoot 'no-such-smctl.exe'))
+            $exe = Join-Path $testRoot 'p-tool-missing.exe'
+            New-DummyArtifact $exe
+            $preHash = Get-FileSha256Lower $exe
+            $output = & $signScript -ExePath $exe 2>&1 | Out-String
+            Assert-True ($LASTEXITCODE -eq 3) "missing smctl must exit 3 (SIGNING_FAILED), got $LASTEXITCODE`n$output"
+            $result = $output | ConvertFrom-Json
+            Assert-True ($result.Status -eq 'SIGNING_FAILED') 'missing tooling must report SIGNING_FAILED'
+            Assert-True ((Get-FileSha256Lower $exe) -eq $preHash) 'a failed cloud signing attempt must not mutate the artifact'
+        }
+        finally {
+            foreach ($name in $envNames) {
+                if ($null -eq $saved[$name]) { Remove-Item "Env:\$name" -ErrorAction SilentlyContinue }
+                else { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+            }
+            if ($null -eq $previousProvider) { Remove-Item Env:\SIGNING_PROVIDER -ErrorAction SilentlyContinue }
+            else { [Environment]::SetEnvironmentVariable('SIGNING_PROVIDER', $previousProvider) }
+        }
+    }
+
+    New-TestCase 'local-pfx-configuration-valid-for-rc-not-for-production' {
+        # local-pfx remains a RECOGNIZED provider for development/private/RC
+        # use, but it is explicitly NOT the approved public-GA signer.
+        $envNames = @('SIGNCERT_BASE64', 'SIGNCERT_PASSWORD')
+        $saved = @{}
+        foreach ($name in $envNames) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
+        try {
+            [Environment]::SetEnvironmentVariable('SIGNCERT_BASE64', 'c2hvdWxkLW5ldmVyLWJlLXVzZWQ=')
+            [Environment]::SetEnvironmentVariable('SIGNCERT_PASSWORD', 'not-a-real-password')
+            $cfg = Test-SigningProviderConfiguration 'local-pfx'
+            Assert-True ($cfg.Configured) "local-pfx with both credentials must be configured: missing=$($cfg.Missing -join ',')"
+            Assert-True ($cfg.KeyProtection -eq 'LOCAL_PFX') 'local-pfx must classify as LOCAL_PFX'
+            Assert-True (-not (Test-ApprovedProductionSigningProvider 'local-pfx')) 'local-pfx must never be an approved production provider'
+            Assert-True (-not (Test-ApprovedProductionKeyProtection 'LOCAL_PFX')) 'LOCAL_PFX key protection must never satisfy production'
+        }
+        finally {
+            foreach ($name in $envNames) {
+                if ($null -eq $saved[$name]) { Remove-Item "Env:\$name" -ErrorAction SilentlyContinue }
+                else { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+            }
+        }
+    }
+
+    New-TestCase 'unsigned-not-configured-manifest-allowed-when-signing-not-required' {
+        # RC qualification may stay NOT_CONFIGURED: the gate without
+        # RequireSigning accepts a not-configured unsigned manifest (Stage B
+        # always passes -RequireSigning; the switch is what makes signing
+        # mandatory, mirroring release-qualify's RELEASE_SIGNING_REQUIRED).
+        $art = New-SyntheticArtifactDir $testRoot 'p-rc-unsigned' -SourceSha $goodSha -Version $goodVersion
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True ($gate.Eligible) "an unsigned not-configured record must pass the non-signing gate: $($gate.Failures -join '; ')"
+        # The same record must fail when production signing is mandatory.
+        $mandatory = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $mandatory.Eligible) 'the same unsigned record must fail under mandatory production signing'
+    }
+
+    New-TestCase 'production-rejects-local-pfx-provider' {
+        $art = New-SyntheticArtifactDir $testRoot 'p-provider-pfx' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ signingProvider = 'local-pfx'; signingKeyProtection = 'LOCAL_PFX' }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $gate.Eligible) 'a local-PFX-signed artifact must never be production-eligible'
+        Assert-True (($gate.Failures -join ';') -match 'local-pfx') 'failure must identify the local-PFX provider'
+    }
+
+    New-TestCase 'production-rejects-not-configured-provider' {
+        $art = New-SyntheticArtifactDir $testRoot 'p-provider-none' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ signingProvider = 'not-configured'; signingKeyProtection = 'NOT_CONFIGURED' }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $gate.Eligible) 'an unconfigured signer must never be production-eligible'
+        Assert-True (($gate.Failures -join ';') -match 'signingProvider') 'failure must cite the provider classification'
+    }
+
+    New-TestCase 'production-rejects-mock-provider' {
+        $art = New-SyntheticArtifactDir $testRoot 'p-provider-mock' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ signingProvider = 'mock-test'; signingKeyProtection = 'MOCK_TEST' }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $gate.Eligible) 'a mock-provider manifest must never be production-eligible'
+        Assert-True (($gate.Failures -join ';') -match 'mock') 'failure must identify the mock provider'
+    }
+
+    New-TestCase 'production-rejects-unknown-provider' {
+        $art = New-SyntheticArtifactDir $testRoot 'p-provider-unknown' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ signingProvider = 'mystery-vendor'; signingKeyProtection = 'CLOUD_HSM' }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $gate.Eligible) 'an unknown signing provider must never be production-eligible'
+        Assert-True (($gate.Failures -join ';') -match 'mystery-vendor') 'failure must cite the unknown provider'
+    }
+
+    New-TestCase 'production-rejects-missing-provider-metadata' {
+        $art = New-SyntheticArtifactDir $testRoot 'p-provider-missing' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ signingProvider = $null }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $gate.Eligible) 'a manifest without signingProvider must fail closed'
+        Assert-True (($gate.Failures -join ';') -match 'signingProvider') 'failure must cite the missing provider metadata'
+    }
+
+    New-TestCase 'production-rejects-missing-key-protection-metadata' {
+        $art = New-SyntheticArtifactDir $testRoot 'p-protection-missing' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ signingKeyProtection = $null }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $gate.Eligible) 'a manifest without signingKeyProtection must fail closed'
+        Assert-True (($gate.Failures -join ';') -match 'signingKeyProtection') 'failure must cite the missing key-protection metadata'
+    }
+
+    New-TestCase 'production-rejects-local-pfx-key-protection' {
+        # An approved provider with an EXPORTABLE key classification is still
+        # rejected: CLOUD_HSM-class protection is required.
+        $art = New-SyntheticArtifactDir $testRoot 'p-protection-pfx' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ signingKeyProtection = 'LOCAL_PFX' }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $gate.Eligible) 'LOCAL_PFX key protection must never satisfy production even with an approved provider name'
+        Assert-True (($gate.Failures -join ';') -match 'signingKeyProtection') 'failure must cite the key-protection class'
+    }
+
+    New-TestCase 'production-manifest-cannot-claim-cloud-hsm-while-mock-used' {
+        # A manifest claiming CLOUD_HSM while mock mode was used is a
+        # contradiction and must fail closed on the mock marker.
+        $art = New-SyntheticArtifactDir $testRoot 'p-mock-claims-hsm' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ signingMock = $true }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $gate.Eligible) 'a manifest that claims CLOUD_HSM while recording mock signing must fail closed'
+        Assert-True (($gate.Failures -join ';') -match 'mock') 'failure must identify mock signing'
+    }
+
+    New-TestCase 'production-rejects-unverified-timestamp' {
+        $art = New-SyntheticArtifactDir $testRoot 'p-timestamp' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ timestampStatus = 'FAILED' }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $gate.Eligible) 'a failed/unverified timestamp must block production when timestamp policy is mandatory'
+        Assert-True (($gate.Failures -join ';') -match 'timestampStatus') 'failure must cite the timestamp status'
+    }
+
+    New-TestCase 'production-rejects-missing-certificate-identity' {
+        $art = New-SyntheticArtifactDir $testRoot 'p-cert-missing' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ signingCertificateThumbprint = $null }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $gate.Eligible) 'a manifest without the signed-certificate identity must fail closed'
+        Assert-True (($gate.Failures -join ';') -match 'signingCertificateThumbprint') 'failure must cite the missing certificate identity'
+    }
+
+    New-TestCase 'production-rejects-certificate-without-code-signing-eku' {
+        $art = New-SyntheticArtifactDir $testRoot 'p-cert-eku' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ signingCertificateEku = @('1.3.6.1.5.5.7.3.2') }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $gate.Eligible) 'a certificate without the code-signing EKU must fail closed'
+        Assert-True (($gate.Failures -join ';') -match '1.3.6.1.5.5.7.3.3') 'failure must cite the code-signing EKU requirement'
+    }
+
+    New-TestCase 'production-rejects-inverted-certificate-validity-window' {
+        $art = New-SyntheticArtifactDir $testRoot 'p-cert-window' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ signingCertificateValidFrom = '2029-01-01T00:00:00Z'; signingCertificateValidTo = '2026-01-01T00:00:00Z' }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $gate.Eligible) 'an inverted certificate validity window must fail closed'
+        Assert-True (($gate.Failures -join ';') -match 'not before') 'failure must cite the validity window ordering'
+    }
+
+    New-TestCase 'timestamp-check-never-faked-on-unsigned-artifact' {
+        # The RFC3161 timestamp gate must fail closed on an unsigned test
+        # artifact: passing /tr is never treated as proof of timestamping.
+        $exe = Join-Path $testRoot 'p-unsigned-ts.exe'
+        New-DummyArtifact $exe
+        Assert-True (-not (Test-AuthenticodeTimestamp $exe)) 'unsigned artifacts must fail timestamp verification (fail closed)'
+    }
+
+    New-TestCase 'certificate-info-never-faked-on-unsigned-artifact' {
+        $exe = Join-Path $testRoot 'p-unsigned-cert.exe'
+        New-DummyArtifact $exe
+        Assert-True ($null -eq (Get-SignerCertificateInfo $exe)) 'unsigned artifacts must yield no certificate identity (fail closed)'
+    }
+
+    Write-Host ''
     Write-Host '==> Two-stage workflow structural guarantees (static workflow review)' -ForegroundColor Cyan
 
     New-TestCase 'publish-workflow-cannot-build-sign-or-qualify' {
         $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
-        foreach ($forbidden in @('dotnet publish', 'sign-release.ps1', 'release-qualify.ps1', 'upload-artifact', 'RELEASE_SIGNING_REQUIRED', 'create-release')) {
-            Assert-True ($yml -notmatch [regex]::Escape($forbidden)) "publish-release.yml must not contain '$forbidden' (Stage B never builds, signs, or qualifies)"
+        foreach ($forbidden in @('dotnet publish', 'sign-release.ps1', 'release-qualify.ps1', 'upload-artifact',
+                'RELEASE_SIGNING_REQUIRED', 'RELEASE_PRODUCTION_GATE', 'create-release',
+                'SIGNING_PROVIDER', 'SIGNCERT_BASE64', 'SIGNCERT_PASSWORD', 'SM_HOST', 'SM_API_KEY',
+                'SM_CLIENT_CERT', 'SM_KEYPAIR_ALIAS', 'digicert', 'smctl')) {
+            Assert-True ($yml -notmatch [regex]::Escape($forbidden)) "publish-release.yml must not contain '$forbidden' (Stage B never builds, signs, qualifies, or contacts a signing provider)"
         }
         Assert-True ($yml -match 'actions/download-artifact@v7') 'Stage B must download the Stage A artifact'
         Assert-True ($yml -match 'run-id') 'Stage B must bind to the Stage A run id'
@@ -937,11 +1403,16 @@ try {
         Assert-True ($yml -match 'Get-ReleaseTagFromVersion') 'Stage B must derive the tag from the semantic version'
     }
 
-    New-TestCase 'prepare-candidate-workflow-forces-signing-and-never-publishes' {
+    New-TestCase 'prepare-candidate-workflow-forces-approved-provider-and-never-publishes' {
         $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\prepare-release-candidate.yml'))
         Assert-True ($yml -match "RELEASE_SIGNING_REQUIRED:\s*'true'") 'Stage A must force signing'
         Assert-True ($yml -match "RELEASE_PRODUCTION_GATE:\s*'true'") 'Stage A must force the production gate'
-        Assert-True ($yml -match 'BLOCKED_EXTERNAL') 'Stage A must block explicitly when signing credentials are missing'
+        Assert-True ($yml -match 'BLOCKED_EXTERNAL') 'Stage A must block explicitly when the production signer is unavailable'
+        Assert-True ($yml -match 'SIGNING_PROVIDER') 'Stage A must select the signing provider explicitly'
+        Assert-True ($yml -match 'Test-ApprovedProductionSigningProvider') 'Stage A must require an APPROVED production provider (reject local-pfx/mock/not-configured)'
+        Assert-True ($yml -match 'Get-SigningProviderCredentialRequirements') 'Stage A must validate the selected provider credentials'
+        Assert-True ($yml -match 'digicert/code-signing-software-trust-action@v1') 'Stage A must use the official DigiCert tooling setup for digicert-stm'
+        Assert-True ($yml -notmatch 'smctl sign') 'Stage A must never invoke smctl directly in the workflow; signing happens exactly once inside sign-release.ps1'
         Assert-True ($yml -notmatch 'gh release create') 'Stage A must never create a GitHub Release'
         Assert-True ($yml -notmatch 'create-release') 'Stage A has no release-creation input'
         Assert-True ($yml -match 'actions/upload-artifact@v7') 'Stage A must retain the candidate artifact'
@@ -1026,6 +1497,74 @@ try {
             $output = & (Join-Path $scratch 'scripts\release-qualify.ps1') -Sha $newSha -Version 1.0.0 -SkipOpenSpec 6>&1 2>&1 | Out-String
             Assert-True ($LASTEXITCODE -ne 0) "an expected version that disagrees with the project version must fail`n$output"
             Assert-True ($output -match 'Version authority mismatch') "failure must cite the authority mismatch`n$output"
+        }
+
+        New-TestCase 'release-qualify-rejects-mock-provider-always' {
+            # The test-only mock provider must never be usable for release
+            # qualification, with or without a production gate.
+            $headSha = (git rev-parse HEAD).Trim()
+            $env:SIGNING_PROVIDER = 'mock-test'
+            try {
+                $output = & (Join-Path $scratch 'scripts\release-qualify.ps1') -Sha $headSha -SkipOpenSpec 6>&1 2>&1 | Out-String
+                Assert-True ($LASTEXITCODE -ne 0) "mock provider must be refused by release-qualify`n$output"
+                Assert-True ($output -match 'mock signing provider') "failure must cite the mock provider`n$output"
+            }
+            finally {
+                Remove-Item Env:\SIGNING_PROVIDER -ErrorAction SilentlyContinue
+            }
+        }
+
+        New-TestCase 'release-qualify-production-gate-rejects-local-pfx-before-build' {
+            $headSha = (git rev-parse HEAD).Trim()
+            $env:SIGNING_PROVIDER = 'local-pfx'
+            $env:RELEASE_PRODUCTION_GATE = 'true'
+            try {
+                $output = & (Join-Path $scratch 'scripts\release-qualify.ps1') -Sha $headSha -SkipOpenSpec 6>&1 2>&1 | Out-String
+                Assert-True ($LASTEXITCODE -ne 0) "local-pfx under the production gate must fail`n$output"
+                Assert-True ($output -match 'not an approved production signer') "failure must cite the approval policy`n$output"
+            }
+            finally {
+                Remove-Item Env:\SIGNING_PROVIDER, Env:\RELEASE_PRODUCTION_GATE -ErrorAction SilentlyContinue
+            }
+        }
+
+        New-TestCase 'release-qualify-production-gate-blocks-incomplete-cloud-provider-before-build' {
+            # digicert-stm selected but its credentials incomplete: the run
+            # must fail BLOCKED_EXTERNAL before any build, naming ONLY the
+            # missing variable names.
+            $headSha = (git rev-parse HEAD).Trim()
+            $env:SIGNING_PROVIDER = 'digicert-stm'
+            $env:RELEASE_PRODUCTION_GATE = 'true'
+            try {
+                $output = & (Join-Path $scratch 'scripts\release-qualify.ps1') -Sha $headSha -SkipOpenSpec 6>&1 2>&1 | Out-String
+                Assert-True ($LASTEXITCODE -ne 0) "incomplete digicert-stm under the production gate must fail`n$output"
+                Assert-True ($output -match 'BLOCKED_EXTERNAL') "failure must be BLOCKED_EXTERNAL`n$output"
+                Assert-True ($output -match 'SM_API_KEY') "failure must name the missing variables`n$output"
+            }
+            finally {
+                Remove-Item Env:\SIGNING_PROVIDER, Env:\RELEASE_PRODUCTION_GATE -ErrorAction SilentlyContinue
+            }
+        }
+
+        New-TestCase 'release-qualify-rc-local-pfx-preflight-passes-then-proceeds' {
+            # RC (no production gate) with signing required and complete
+            # local-pfx credentials: the provider preflight must PASS and the
+            # run must proceed past it (the minimal scratch project then
+            # fails at publish - expected - which proves the preflight did
+            # not block the RC path).
+            $headSha = (git rev-parse HEAD).Trim()
+            $env:SIGNING_PROVIDER = 'local-pfx'
+            $env:SIGNCERT_BASE64 = 'c2hvdWxkLW5ldmVyLWJlLXVzZWQ='
+            $env:SIGNCERT_PASSWORD = 'pw'
+            $env:RELEASE_SIGNING_REQUIRED = 'true'
+            try {
+                $output = & (Join-Path $scratch 'scripts\release-qualify.ps1') -Sha $headSha -SkipOpenSpec 6>&1 2>&1 | Out-String
+                Assert-True ($output -match 'signing provider preflight: local-pfx') "RC local-pfx preflight must pass`n$output"
+                Assert-True ($output -notmatch 'BLOCKED_EXTERNAL') "RC local-pfx must not be blocked by the preflight`n$output"
+            }
+            finally {
+                Remove-Item Env:\SIGNING_PROVIDER, Env:\SIGNCERT_BASE64, Env:\SIGNCERT_PASSWORD, Env:\RELEASE_SIGNING_REQUIRED -ErrorAction SilentlyContinue
+            }
         }
     }
     finally {

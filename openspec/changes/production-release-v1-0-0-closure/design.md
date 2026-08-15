@@ -12,8 +12,11 @@ SOURCE SHA
         self-reported SHA-256; --selftest-geometry; --selftest-diagnostics;
         --selftest-native-abi for placement ABI environment evidence)
   -> UNSIGNED provenance SHA-256 (unsignedQualifiedSha256)
-  -> optional Authenticode signing (scripts/sign-release.ps1)
-  -> signature verification (signtool verify /pa)
+  -> provider-abstracted Authenticode signing (scripts/sign-release.ps1;
+     SIGNING_PROVIDER selects the backend; production requires the approved
+     non-exportable HSM/cloud provider digicert-stm / CLOUD_HSM)
+  -> signature verification (signtool verify /pa) + RFC3161 timestamp
+     verification (timestampStatus=VERIFIED) + certificate identity record
   -> FINAL SHA-256 of the bytes as they will be distributed
   -> release-manifest.json + SHA256SUMS.txt (FINAL distributed hash only;
      file == manifest == checksums enforced by Complete-ReleaseRecords)
@@ -48,9 +51,40 @@ real evidence exists.
 
 ### Signing readiness
 
-Material arrives only through CI secrets (`SIGNCERT_BASE64`,
-`SIGNCERT_PASSWORD`, optional `SIGNCERT_TIMESTAMP`). The PFX is decoded to a
-random temp file, used once, and deleted. Without material the status is
+The signer is provider-abstracted: `SIGNING_PROVIDER` selects the backend
+(`not-configured` / `local-pfx` / `digicert-stm` / `mock-test`) and
+`sign-release.ps1` reports ONE structured contract — Status, Verification,
+FinalSha256, Provider, KeyProtection, TimestampStatus, and the signed
+certificate identity — so release-qualify and the workflows never know or
+care how signing happens. Provider selection and credential validation are
+fail-closed and provider-aware: only the variables the selected provider
+requires are checked, only variable NAMES are ever reported.
+
+The PRODUCTION backend is the approved non-exportable-key class
+(`CLOUD_HSM`): `digicert-stm` (DigiCert Software Trust Manager). Stage A
+runs the official `digicert/code-signing-software-trust-action@v1` setup
+step (simple-signing-mode, setup-only) and `sign-release.ps1` performs the
+single signing operation with the official invocation
+(`smctl sign --simple --input <exe> --keypair-alias <alias> --digalg sha256
+--exit-non-zero-on-fail`). The production code-signing private key never
+exists on the runner or in GitHub Secrets — it stays inside the DigiCert
+service/HSM; the runner only holds service-authentication material (API key,
+client-authentication certificate, host URL, keypair alias). After signing,
+verification is provider-independent Windows tooling: `signtool verify /pa`,
+RFC3161 timestamp verification (`timestampStatus=VERIFIED` is mandatory; a
+missing/invalid timestamp fails the run), and the signed certificate
+identity (subject, thumbprint, issuer, serial number, validity window, EKU
+including code signing `1.3.6.1.5.5.7.3.3`), with an optional
+`SIGNING_EXPECTED_SUBJECT` publisher allowlist. All of it is recorded in the
+manifest (`signingProvider`, `signingKeyProtection`, `timestampStatus`,
+`signingCertificate*`).
+
+`local-pfx` (`SIGNCERT_BASE64` + `SIGNCERT_PASSWORD`, optional
+`SIGNCERT_TIMESTAMP`; exportable key decoded to a random temp file, used
+once, deleted) remains available for development/private/RC use but is
+explicitly reclassified as NOT the approved public-GA signer and rejected by
+production at every layer (Stage A preflight `BLOCKED_EXTERNAL`, production
+policy in release-qualify, Stage B gate). Without a provider the status is
 `NOT_CONFIGURED` and RC qualification is unaffected; with
 `RELEASE_SIGNING_REQUIRED=true` (or the production gate) a missing/invalid
 signature fails the qualification. `unsignedQualifiedSha256` (pre-sign
@@ -62,18 +96,28 @@ conflated.
 
 Production signing policy is explicit: the Stage A candidate-preparation
 workflow (`prepare-release-candidate.yml`) forces `RELEASE_SIGNING_REQUIRED=true`
-and `RELEASE_PRODUCTION_GATE=true`, and the Stage B publication workflow
-additionally requires `SIGNED` + `SIGNATURE_VERIFIED` + `finalSignedSha256`
-equal to the final artifact hash plus an independent `signtool verify /pa`
-on the downloaded executable. A production release is never silently
+and `RELEASE_PRODUCTION_GATE=true`, and its preflight + `release-qualify.ps1`
+fail `BLOCKED_EXTERNAL` BEFORE any build when `SIGNING_PROVIDER` is not an
+approved production provider or its credentials are incomplete. The Stage B
+publication workflow additionally requires `SIGNED` + `SIGNATURE_VERIFIED` +
+`finalSignedSha256` equal to the final artifact hash, an APPROVED production
+provider (`signingProvider` in the allowlist), approved non-exportable key
+protection (`signingKeyProtection == CLOUD_HSM`), the recorded certificate
+identity, `timestampStatus == VERIFIED`, and an independent `signtool verify
+/pa` + RFC3161 timestamp verification on the downloaded executable with the
+certificate identity cross-checked against the manifest — with zero provider
+contact and zero re-signing. A production release is never silently
 unsigned; an unsigned GA would require an explicit documented policy change.
-RC qualification keeps its `NOT_CONFIGURED` allowance.
+RC qualification keeps its `NOT_CONFIGURED` allowance and may use
+`local-pfx`.
 
 Test-only mock signer modes (`-MockSign`, `-MockSignFailure`,
-`-MockVerifyFailure`) model the byte-mutation semantics for the regression
-suite. They never run while real material is configured, are recorded as
-`Mock=true`, are refused under the production gate, and their artifacts can
-never pass the publication gate.
+`-MockVerifyFailure`, requiring `SIGNING_PROVIDER=mock-test`) model the
+byte-mutation semantics for the regression suite. They never run while real
+provider material is configured, are recorded as `Mock=true` with
+`Provider=mock-test` / `KeyProtection=MOCK_TEST` (a mock result can never
+claim an approved provider), are refused under the production gate, and
+their artifacts can never pass the publication gate.
 
 ### External production evidence
 

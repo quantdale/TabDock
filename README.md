@@ -297,10 +297,12 @@ retained bytes (no build, no sign)
   `scripts/release-tooling.ps1` (file == manifest == checksums).
 - **STAGE A — `prepare-release-candidate.yml`** (production candidate): a
   manually dispatched workflow that builds ONCE, Authenticode-signs ONCE
-  (mandatory; `BLOCKED_EXTERNAL` without credentials), verifies the
-  signature, computes the final distributed hash, and retains the immutable
-  candidate artifact `tabdock-candidate-<sha>-<run-id>`. It NEVER creates a
-  GitHub Release.
+  through the approved production signer (`digicert-stm`, non-exportable
+  HSM/cloud key; mandatory — `BLOCKED_EXTERNAL` without an approved
+  configured signer), verifies the signature + RFC3161 timestamp +
+  certificate identity, computes the final distributed hash, and retains
+  the immutable candidate artifact
+  `tabdock-candidate-<sha>-<run-id>`. It NEVER creates a GitHub Release.
 - **STAGE B — `publish-release.yml`** (publication): a separate workflow
   that takes the Stage A run id + the schema-v2 external evidence, downloads
   the EXACT retained artifact (cross-run `download-artifact@v7` with
@@ -329,27 +331,56 @@ retained bytes (no build, no sign)
   need evidence and their manifests honestly report
   `productionReleaseEligibility = BLOCKED_EXTERNAL`.
 - Release-tooling regression tests: `scripts/release-tooling-tests.ps1`
-  (69 deterministic adversarial cases; no real certificates, no publishing).
+  (96 deterministic adversarial cases, including signing-provider policy;
+  no real certificates, no publishing, no provider contact).
 
 ### Signing policy
 
-RC qualification may run unsigned (`NOT_CONFIGURED`). PRODUCTION candidates
-(Stage A) make Authenticode signing mandatory: the workflow forces
-`RELEASE_SIGNING_REQUIRED`/`RELEASE_PRODUCTION_GATE`, fails `BLOCKED_EXTERNAL`
-when credentials are missing, and never runs mock signing. Stage B
-independently requires `SIGNED` + `SIGNATURE_VERIFIED` + `finalSignedSha256`
-equal to the final artifact hash, then re-proves the signature with
-`signtool verify /pa`. An unsigned production release is never silently
-defaulted. Material is supplied exclusively through CI secrets
-(`SIGNCERT_BASE64`, `SIGNCERT_PASSWORD`, optional `SIGNCERT_TIMESTAMP`); no
-certificate or password is ever committed. `scripts/sign-release.ps1`
-records one of `NOT_CONFIGURED`, `SIGNED`, `SIGNATURE_VERIFIED`, or
-`SIGNING_FAILED` in the release manifest, and when signing changes the bytes
+Signing is provider-based and provider-abstracted: `SIGNING_PROVIDER`
+selects the backend and `scripts/sign-release.ps1` reports one structured
+result regardless of the backend. See `docs/release/code-signing.md` for the
+full architecture.
+
+| Provider | Use | Production-approved |
+|---|---|---|
+| `digicert-stm` (DigiCert Software Trust Manager, official DigiCert tooling; non-exportable key inside the service/HSM) | **public-GA production** | **yes** (`CLOUD_HSM`) |
+| `local-pfx` (exportable PFX + password) | local/private/RC development only | no — **LOCAL PFX SIGNING IS NOT THE APPROVED PUBLIC-GA SIGNER** |
+| `mock-test` (`-MockSign*` test flags only) | deterministic regression tests | no |
+| *(empty)* | unsigned RC qualification | no |
+
+RC qualification may run unsigned (`not-configured`) or with `local-pfx`.
+PRODUCTION candidates (Stage A, `prepare-release-candidate.yml`) make
+signing mandatory through the APPROVED production provider: the workflow and
+`release-qualify.ps1` fail `BLOCKED_EXTERNAL` BEFORE any build when
+`SIGNING_PROVIDER` is not an approved provider or its credentials are
+incomplete, and mock signing can never run. Stage A signs once through the
+signing service (the production private key never exists on the runner —
+only service-authentication material), then independently verifies with
+`signtool verify /pa`, verifies the RFC3161 timestamp
+(`timestampStatus=VERIFIED` is mandatory), and records the signed
+certificate identity. Stage B independently requires `SIGNED` +
+`SIGNATURE_VERIFIED` + `finalSignedSha256` equal to the final artifact hash,
+an APPROVED production provider with approved non-exportable key protection
+(`signingProvider=digicert-stm`, `signingKeyProtection=CLOUD_HSM`), the
+recorded certificate identity, `timestampStatus=VERIFIED`, and re-proves the
+signature + timestamp with Windows tooling on the downloaded bytes — with
+zero provider access and zero re-signing. An unsigned production release is
+never silently defaulted.
+
+Material is supplied exclusively through CI secrets/variables
+(`SIGNING_PROVIDER`, `SM_HOST`, `SM_API_KEY`, `SM_CLIENT_CERT_FILE_B64`,
+`SM_CLIENT_CERT_PASSWORD`, `SM_KEYPAIR_ALIAS` for digicert-stm;
+`SIGNCERT_BASE64`, `SIGNCERT_PASSWORD`, optional `SIGNCERT_TIMESTAMP` for
+local-pfx); no certificate or password is ever committed. `scripts/
+sign-release.ps1` records one of `NOT_CONFIGURED`, `BLOCKED_EXTERNAL`,
+`SIGNED`, `SIGNATURE_VERIFIED`, or `SIGNING_FAILED` in the release manifest
+together with `signingProvider`, `signingKeyProtection`, `timestampStatus`,
+and the signing certificate identity, and when signing changes the bytes
 both `unsignedQualifiedSha256` and `finalSignedSha256` are recorded. An
 unsigned executable is never described as signed. Test-only mock signing
-(`-MockSign*`, used by the regression tests) never runs with real material
-and can never pass the production gate. Git commit signatures are unrelated
-to Authenticode and are never conflated.
+(`-MockSign*`, `SIGNING_PROVIDER=mock-test`, used by the regression tests)
+never runs with real material and can never pass the production gate. Git
+commit signatures are unrelated to Authenticode and are never conflated.
 
 ### Reproducibility
 

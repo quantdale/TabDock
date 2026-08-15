@@ -15,11 +15,18 @@
       - release-manifest.json / SHA256SUMS.txt / on-disk triple consistency
       - external production evidence (release-external-evidence.json)
         validation and the fail-closed publication eligibility gate
-    and the signtool discovery / Authenticode verification helpers shared
+    and the signing-provider policy:
+      - SIGNING_PROVIDER vocabulary and classification
+        (not-configured / local-pfx / digicert-stm / mock-test)
+      - the approved production provider allowlist (non-exportable
+        HSM/cloud private keys only) and the fail-closed provider
+        configuration preflight (names missing variables, never values)
+    plus the signtool discovery, Authenticode verification, RFC3161
+    timestamp verification, and signed-certificate identity helpers shared
     with scripts/sign-release.ps1.
 
-    Nothing in this file reads signing material, performs signing, or creates
-    a GitHub Release; it is safe to run anywhere, including tests.
+    Nothing in this file reads signing material values, performs signing, or
+    creates a GitHub Release; it is safe to run anywhere, including tests.
 
 .NOTES
     Hash vocabulary (see docs/release/publication-gates.md):
@@ -501,6 +508,277 @@ function Test-AuthenticodeSignature {
     return $ok
 }
 
+function Test-AuthenticodeTimestamp {
+    <#
+    .SYNOPSIS
+        Independently proves the executable carries a valid RFC3161 timestamp
+        in addition to its Authenticode signature. Fail-closed: returns
+        $false when the file is unsigned, the signature is not valid, no
+        timestamp certificate is present, signtool is unavailable, or
+        `signtool verify /pa /v` does not pass (the Authenticode policy
+        validates the timestamp chain when one is present).
+
+    .DESCRIPTION
+        Passing /tr to a signer is NOT treated as proof of timestamping: the
+        timestamp is only accepted after Windows tooling validates it and a
+        timestamp certificate is visible on the signature. Verification is
+        provider-independent and never faked.
+    #>
+    param([Parameter(Mandatory = $true)][string]$ExePath)
+    if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) {
+        Write-Host "Test-AuthenticodeTimestamp: executable not found: $ExePath" -ForegroundColor Yellow
+        return $false
+    }
+    $sig = Get-AuthenticodeSignature -LiteralPath $ExePath
+    if ($null -eq $sig -or $sig.Status -ne 'Valid') {
+        Write-Host 'Test-AuthenticodeTimestamp: no valid Authenticode signature found; timestamp cannot be verified (fail closed)' -ForegroundColor Yellow
+        return $false
+    }
+    if ($null -eq $sig.TimeStamperCertificate) {
+        Write-Host 'Test-AuthenticodeTimestamp: no RFC3161 timestamp certificate is present on the signature (fail closed)' -ForegroundColor Red
+        return $false
+    }
+    $signtool = Find-Signtool
+    if ($null -eq $signtool) {
+        Write-Host 'Test-AuthenticodeTimestamp: signtool.exe not found; timestamp chain cannot be validated (fail closed)' -ForegroundColor Yellow
+        return $false
+    }
+    & $signtool @('verify', '/pa', '/v', $ExePath) 2>&1 | Out-Null
+    $ok = $LASTEXITCODE -eq 0
+    if (-not $ok) {
+        Write-Host "Test-AuthenticodeTimestamp: signtool verify /pa failed (exit $LASTEXITCODE); the timestamp/signature chain is not valid" -ForegroundColor Red
+    }
+    return $ok
+}
+
+function Get-SignerCertificateInfo {
+    <#
+    .SYNOPSIS
+        Extracts the signing certificate identity from an Authenticode-signed
+        executable using Windows' own signature reader (Get-AuthenticodeSignature):
+        subject, thumbprint, issuer, serial number, validity period, EKU OIDs,
+        and the timestamp certificate when present.
+
+    .DESCRIPTION
+        Returns $null when the file is unsigned, the signature is not
+        Status=Valid, or no signer certificate can be read (fail closed:
+        absence is never reported as an identity). Used by
+        scripts/sign-release.ps1 for the signer contract and by the Stage B
+        gate to cross-check the manifest's recorded certificate identity
+        against the actual bytes.
+    #>
+    param([Parameter(Mandatory = $true)][string]$ExePath)
+    if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) {
+        return $null
+    }
+    $sig = Get-AuthenticodeSignature -LiteralPath $ExePath
+    if ($null -eq $sig -or $sig.Status -ne 'Valid' -or $null -eq $sig.SignerCertificate) {
+        return $null
+    }
+    $cert = $sig.SignerCertificate
+    $eku = [System.Collections.Generic.List[string]]::new()
+    $ekuExt = $cert.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' } | Select-Object -First 1
+    if ($null -ne $ekuExt) {
+        # Typed X509EnhancedKeyUsageExtension exposes EnhancedKeyUsages; fall
+        # back to parsing Format() output when the typed property is absent.
+        if ($null -ne $ekuExt.EnhancedKeyUsages) {
+            foreach ($oid in $ekuExt.EnhancedKeyUsages) { $eku.Add([string]$oid.Value) }
+        }
+        else {
+            foreach ($m in [regex]::Matches([string]$ekuExt.Format($true), '\(([0-9]+(?:\.[0-9]+)+)\)')) {
+                $eku.Add($m.Groups[1].Value)
+            }
+        }
+    }
+    return [pscustomobject]@{
+        Subject               = [string]$cert.Subject
+        Thumbprint            = [string]$cert.Thumbprint
+        Issuer                = [string]$cert.Issuer
+        SerialNumber          = [string]$cert.SerialNumber
+        ValidFrom             = $cert.NotBefore.ToString('O')
+        ValidTo               = $cert.NotAfter.ToString('O')
+        Eku                   = @($eku)
+        TimestamperSubject    = if ($null -ne $sig.TimeStamperCertificate) { [string]$sig.TimeStamperCertificate.Subject } else { $null }
+        TimestamperThumbprint = if ($null -ne $sig.TimeStamperCertificate) { [string]$sig.TimeStamperCertificate.Thumbprint } else { $null }
+    }
+}
+
+function Test-CertificateEkuIncludesCodeSigning {
+    <#
+    .SYNOPSIS
+        True when the certificate's EKU OID list includes the code-signing EKU
+        (1.3.6.1.5.5.7.3.3). An empty or absent EKU list is never accepted.
+    #>
+    param($Eku)
+    $oids = @($Eku | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    return $oids -contains '1.3.6.1.5.5.7.3.3'
+}
+
+# --- Signing provider policy ------------------------------------------------
+# The signer abstraction: release-qualify.ps1 and the Stage A workflow never
+# know or care HOW signing happens. SIGNING_PROVIDER selects the backend and
+# every provider reports the SAME structured contract (Status, Verification,
+# FinalSha256, Provider, KeyProtection, TimestampStatus, certificate
+# identity). Production policy accepts ONLY providers whose private signing
+# key is non-exportable (CLOUD_HSM class); local-PFX (exportable key),
+# mock, and unconfigured signers are development/RC-only.
+
+function Get-SigningProvider {
+    <#
+    .SYNOPSIS
+        Returns the normalized signing provider selected by the
+        SIGNING_PROVIDER environment variable. Empty/absent means
+        'not-configured'. Any unrecognized value throws so that a typo can
+        never silently fall back to unsigned or to another provider.
+    #>
+    $value = [string]$env:SIGNING_PROVIDER
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return 'not-configured'
+    }
+    $normalized = $value.Trim().ToLowerInvariant()
+    $known = @('not-configured', 'local-pfx', 'digicert-stm', 'mock-test')
+    if ($known -notcontains $normalized) {
+        throw "Unknown SIGNING_PROVIDER '$value'; supported providers: $($known -join ', '). Production candidates require an approved HSM/cloud signing provider (currently 'digicert-stm')."
+    }
+    return $normalized
+}
+
+function Get-SigningProviderKeyProtection {
+    <#
+    .SYNOPSIS
+        The private-key protection classification for a signing provider.
+        CLOUD_HSM = non-exportable key held by a signing service/HSM
+        (production-approved class); LOCAL_PFX = exportable PFX key;
+        MOCK_TEST = deterministic test scaffolding; NOT_CONFIGURED = none.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Provider)
+    switch ($Provider) {
+        'local-pfx'      { return 'LOCAL_PFX' }
+        'digicert-stm'   { return 'CLOUD_HSM' }
+        'mock-test'      { return 'MOCK_TEST' }
+        'not-configured' { return 'NOT_CONFIGURED' }
+        default { throw "Unknown signing provider '$Provider'; cannot classify key protection." }
+    }
+}
+
+function Get-ApprovedProductionSigningProviders {
+    <#
+    .SYNOPSIS
+        The allowlist of signing providers approved for PRODUCTION Stage A
+        candidates. Only non-exportable-key backends belong here. Future
+        providers (for example Microsoft Artifact Signing, which is optional
+        and geography-restricted for Public Trust) must be added here
+        EXPLICITLY by repository policy before they can satisfy production.
+    #>
+    return @('digicert-stm')
+}
+
+function Test-ApprovedProductionSigningProvider {
+    # [AllowEmptyString]: an empty provider is meaningfully 'not configured'
+    # and must return $false rather than fail binding.
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Provider
+    )
+    return (Get-ApprovedProductionSigningProviders) -contains $Provider
+}
+
+function Get-ApprovedProductionKeyProtection {
+    <#
+    .SYNOPSIS
+        The key-protection classifications that satisfy production policy.
+        Only the non-exportable/hardware-backed class is approved.
+    #>
+    return @('CLOUD_HSM')
+}
+
+function Test-ApprovedProductionKeyProtection {
+    # [AllowEmptyString]: an empty protection value is meaningfully
+    # 'unclassified' and must return $false rather than fail binding.
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$KeyProtection
+    )
+    return (Get-ApprovedProductionKeyProtection) -contains $KeyProtection
+}
+
+function Get-SigningProviderCredentialRequirements {
+    <#
+    .SYNOPSIS
+        The environment-variable NAMES (never values) a provider needs.
+        digicert-stm credentials authenticate to the DigiCert Software Trust
+        Manager signing service (API key + client-authentication certificate)
+        and identify the keypair alias; they NEVER contain or export the
+        production code-signing private key, which stays inside the
+        service/HSM. local-pfx needs the exportable PFX and its password.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Provider)
+    switch ($Provider) {
+        'local-pfx'    { return @('SIGNCERT_BASE64', 'SIGNCERT_PASSWORD') }
+        'digicert-stm' { return @('SM_HOST', 'SM_API_KEY', 'SM_CLIENT_CERT_FILE', 'SM_CLIENT_CERT_PASSWORD', 'SM_KEYPAIR_ALIAS') }
+        default        { return @() }
+    }
+}
+
+function Test-SigningProviderConfiguration {
+    <#
+    .SYNOPSIS
+        Fail-closed provider preflight: checks that ONLY the variables the
+        selected provider requires are present. Returns a structured result
+        with the missing variable NAMES; never prints or returns their
+        values. SM_CLIENT_CERT_FILE additionally must name an existing file
+        (a client-authentication certificate path that does not exist cannot
+        authenticate).
+    #>
+    param([Parameter(Mandatory = $true)][string]$Provider)
+    $missing = [System.Collections.Generic.List[string]]::new()
+    foreach ($name in (Get-SigningProviderCredentialRequirements $Provider)) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        $present = switch ($name) {
+            'SM_CLIENT_CERT_FILE' {
+                (-not [string]::IsNullOrWhiteSpace($value)) -and (Test-Path -LiteralPath $value -PathType Leaf)
+            }
+            default { -not [string]::IsNullOrWhiteSpace($value) }
+        }
+        if (-not $present) { $missing.Add($name) }
+    }
+    return [pscustomobject]@{
+        Provider      = $Provider
+        KeyProtection = (Get-SigningProviderKeyProtection $Provider)
+        Configured    = $missing.Count -eq 0
+        Missing       = @($missing)
+    }
+}
+
+function Test-ProductionSigningPreflight {
+    <#
+    .SYNOPSIS
+        The production-ready preflight used by the Stage A workflow and by
+        release-qualify.ps1 BEFORE any build work: resolves the provider,
+        requires an APPROVED production provider, and requires its
+        credentials to be complete. Returns a structured verdict; the caller
+        fails the run (BLOCKED_EXTERNAL) when Approved or Configured is
+        $false. Never prints secrets - only provider names and the missing
+        variable names.
+    #>
+    $provider = Get-SigningProvider
+    $cfg = Test-SigningProviderConfiguration $provider
+    $approved = Test-ApprovedProductionSigningProvider $provider
+    $blocked = ''
+    if (-not $approved) {
+        $blocked = "signing provider '$provider' is not an approved production signer (approved: $((Get-ApprovedProductionSigningProviders) -join ', ')); local-PFX, mock, and unconfigured signers are never production candidates"
+    }
+    elseif (-not $cfg.Configured) {
+        $blocked = "signing provider '$provider' is missing required configuration: $($cfg.Missing -join ', ')"
+    }
+    return [pscustomobject]@{
+        Provider      = $provider
+        KeyProtection = $cfg.KeyProtection
+        Approved      = $approved
+        Configured    = $cfg.Configured
+        Missing       = $cfg.Missing
+        BlockedReason = $blocked
+    }
+}
+
 function Test-PublicationEligibility {
     <#
     .SYNOPSIS
@@ -532,8 +810,15 @@ function Test-PublicationEligibility {
           - when production signing is mandatory: signingStatus == SIGNED,
             signatureVerification == SIGNATURE_VERIFIED,
             finalSignedSha256 == final artifact hash, the artifact is NOT a
-            test-only mock-signed artifact, and `signtool verify /pa`
-            independently confirms the Authenticode signature on disk
+            test-only mock-signed artifact, the manifest records an APPROVED
+            production signing provider (non-exportable HSM/cloud key class;
+            local-PFX, mock, not-configured, and unknown providers are
+            rejected), the manifest records the signed certificate identity
+            (subject, thumbprint, issuer, validity window, code-signing EKU)
+            and timestampStatus == VERIFIED, and `signtool verify /pa` +
+            RFC3161 timestamp verification independently confirm the
+            signature on disk and cross-check the recorded certificate
+            identity against the actual bytes
         Any failure is returned (never thrown) as a Failures list; the caller
         must refuse to publish when Eligible is $false.
 
@@ -615,6 +900,31 @@ function Test-PublicationEligibility {
     }
 
     if ($RequireSigning) {
+        # --- Signing provenance classification (P0): a manifest that merely
+        # says SIGNED is NOT enough. The provider and the private-key
+        # protection class must be APPROVED production policy (non-exportable
+        # HSM/cloud key). local-pfx (exportable key), mock, not-configured,
+        # and unknown signers never satisfy production, even when the
+        # artifact is genuinely Authenticode-signed.
+        $provider = [string]$manifest.signingProvider
+        if ([string]::IsNullOrWhiteSpace($provider)) {
+            $failures.Add('production signing is mandatory but manifest signingProvider is absent; the signer cannot be classified')
+        }
+        elseif (-not (Test-ApprovedProductionSigningProvider $provider)) {
+            $failures.Add("signingProvider '$provider' is not an approved production signing provider (approved: $((Get-ApprovedProductionSigningProviders) -join ', ')); local-PFX, mock, and unconfigured signers never satisfy production policy")
+        }
+        if ([string]$provider -eq 'mock-test') {
+            $failures.Add('signingProvider is the test-only mock provider; mock signing can never be a production release')
+        }
+        $keyProtection = [string]$manifest.signingKeyProtection
+        if ([string]::IsNullOrWhiteSpace($keyProtection)) {
+            $failures.Add('production signing is mandatory but manifest signingKeyProtection is absent; private-key protection cannot be classified')
+        }
+        elseif (-not (Test-ApprovedProductionKeyProtection $keyProtection)) {
+            $failures.Add("signingKeyProtection '$keyProtection' is not an approved non-exportable/hardware-backed classification (approved: $((Get-ApprovedProductionKeyProtection) -join ', '))")
+        }
+
+        # --- Signing state (existing contract)
         if ([string]$manifest.signingStatus -ne 'SIGNED') {
             $failures.Add("production signing is mandatory but manifest signingStatus=$($manifest.signingStatus)")
         }
@@ -627,9 +937,71 @@ function Test-PublicationEligibility {
         if ([string]::Equals([string]$manifest.signingMock, 'true', [StringComparison]::OrdinalIgnoreCase)) {
             $failures.Add('the artifact was produced with test-only mock signing; mock-signed artifacts can never be production releases')
         }
+
+        # --- Certificate identity (P1): the manifest records the signed
+        # certificate so the final release evidence has forensic value. The
+        # thumbprint is NOT hard-coded (certificates rotate); the recorded
+        # identity is required and is cross-checked against the actual bytes
+        # below.
+        foreach ($identityField in @('signingCertificateSubject', 'signingCertificateThumbprint', 'signingCertificateIssuer', 'signingCertificateValidFrom', 'signingCertificateValidTo')) {
+            if ([string]::IsNullOrWhiteSpace([string]$manifest.$identityField)) {
+                $failures.Add("production signing is mandatory but manifest $identityField is absent; signed-certificate identity is required provenance")
+            }
+        }
+        $eku = @($manifest.signingCertificateEku | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        if ($eku.Count -eq 0) {
+            $failures.Add('production signing is mandatory but manifest signingCertificateEku is absent; the code-signing EKU cannot be confirmed')
+        }
+        elseif (-not (Test-CertificateEkuIncludesCodeSigning $eku)) {
+            $failures.Add("manifest signingCertificateEku does not include the code-signing EKU (1.3.6.1.5.5.7.3.3): $($eku -join ', ')")
+        }
+        $validFrom = [DateTime]::MinValue
+        $validTo = [DateTime]::MinValue
+        $fromParsed = [DateTime]::TryParse([string]$manifest.signingCertificateValidFrom, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref]$validFrom)
+        $toParsed = [DateTime]::TryParse([string]$manifest.signingCertificateValidTo, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref]$validTo)
+        if (-not $fromParsed -or -not $toParsed) {
+            $failures.Add('manifest signingCertificateValidFrom/signingCertificateValidTo are not parseable dates; the certificate validity window cannot be verified')
+        }
+        elseif ($validFrom -ge $validTo) {
+            $failures.Add("manifest signingCertificateValidFrom $($manifest.signingCertificateValidFrom) is not before signingCertificateValidTo $($manifest.signingCertificateValidTo)")
+        }
+
+        # --- Timestamp policy (P1): RFC3161 timestamping is mandatory and the
+        # result must be explicitly verified, not assumed from /tr.
+        if ([string]$manifest.timestampStatus -ne 'VERIFIED') {
+            $failures.Add("production signing is mandatory and RFC3161 timestamping policy requires timestampStatus=VERIFIED, got '$($manifest.timestampStatus)'")
+        }
+
+        # --- Independent on-disk verification (P0): the provider reporting
+        # success is never sufficient. Windows must independently validate the
+        # Authenticode signature, the RFC3161 timestamp, and the certificate
+        # identity of the ACTUAL bytes being published.
         $signatureOk = Test-AuthenticodeSignature $exe
         if (-not $signatureOk) {
             $failures.Add('production signing is mandatory but the final executable is not Authenticode-verified on disk (signtool verify /pa)')
+        }
+        else {
+            $certInfo = Get-SignerCertificateInfo $exe
+            if ($null -eq $certInfo) {
+                $failures.Add('production signing is mandatory but no valid signed certificate could be read from the final executable')
+            }
+            else {
+                if (-not (Test-CertificateEkuIncludesCodeSigning $certInfo.Eku)) {
+                    $failures.Add("the signed certificate on the final executable does not include the code-signing EKU (1.3.6.1.5.5.7.3.3): $($certInfo.Eku -join ', ')")
+                }
+                if (-not [string]::IsNullOrWhiteSpace([string]$manifest.signingCertificateThumbprint) -and
+                    $certInfo.Thumbprint -ne [string]$manifest.signingCertificateThumbprint) {
+                    $failures.Add("signed certificate thumbprint on disk $($certInfo.Thumbprint) != manifest signingCertificateThumbprint $($manifest.signingCertificateThumbprint)")
+                }
+                if (-not [string]::IsNullOrWhiteSpace([string]$manifest.signingCertificateSubject) -and
+                    $certInfo.Subject -ne [string]$manifest.signingCertificateSubject) {
+                    $failures.Add("signed certificate subject on disk '$($certInfo.Subject)' != manifest signingCertificateSubject '$($manifest.signingCertificateSubject)'")
+                }
+            }
+            $timestampOk = Test-AuthenticodeTimestamp $exe
+            if (-not $timestampOk) {
+                $failures.Add('production signing is mandatory but the RFC3161 timestamp could not be verified on the final executable (timestamp certificate absent or signtool verification failed)')
+            }
         }
     }
 

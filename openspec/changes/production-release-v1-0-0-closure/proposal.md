@@ -56,6 +56,20 @@ still missing.
 - Make the production signing policy explicit: production publication
   requires Authenticode `SIGNED` + `SIGNATURE_VERIFIED` with an independent
   `signtool verify /pa`; RC qualification may remain unsigned.
+- Replace the PFX-only production signing architecture with a
+  provider-abstracted signer: `SIGNING_PROVIDER` selects the backend
+  (`not-configured` / `local-pfx` / `digicert-stm` / `mock-test`) and every
+  provider reports one structured contract. Production candidates require
+  the APPROVED non-exportable-key backend (currently `digicert-stm`, DigiCert
+  Software Trust Manager, key protection class `CLOUD_HSM`) with a
+  provider-aware preflight that fails `BLOCKED_EXTERNAL` before any build;
+  local-PFX (exportable key) is reclassified as development/private/RC-only
+  and is NEVER the approved public-GA signer. Signing is verified
+  provider-independently (signtool Authenticode + RFC3161 timestamp +
+  certificate identity with code-signing EKU), and the manifest records
+  `signingProvider`, `signingKeyProtection`, `timestampStatus`, and the
+  signed certificate identity; Stage B requires the approved provider class
+  and never contacts the provider or re-signs.
 - Pin the .NET SDK via `global.json` (8.0 feature band, roll-forward within
   .NET 8 only) without reintroducing the deliberately-avoided NuGet lock
   mode; document the reproducibility policy.

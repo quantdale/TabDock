@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=https://www.schemastore.org/github-action.json
+
+# Sample action yaml files
+# https://github.com/microsoft/action-python/blob/main/action.yml
+name: 'DigiCert Binary Signing'
+author: DigiCert
+description: 'Code signing for Win/Linux/Mac. Includes private key security, MFA, easy automation and bulk signing for high volume releases'
+branding:
+  color: blue
+  icon: check-circle
+inputs:
+  digicert-cdn:
+    description: |
+      DigiCert CDN or STM environment to download the required STM tools.
+      Default https://pki-downloads.digicert.com/stm/latest
+    default: 'https://pki-downloads.digicert.com/stm/latest'
+    required: false
+  keypair-alias:
+    description: 'Keypair alias'
+    required: false
+  input:
+    description: 'File or Directory(files) to sign'
+    required: false
+  digest-alg:
+    description: 'Digest(Hash) algorithm'
+    default: ''
+    required: false
+  diegest-alg:
+    description: '[DEPRECATED] Use digest-alg instead. This parameter has a typo and will be removed in a future version.'
+    required: false
+  fail-fast:
+    description: | 
+      Continue signing all the files even if there are errors in some.
+      Applies only if input is a directory with mulitple supported files.
+    required: false
+    default: 'true'
+  zero-exit-code-on-failure:
+    description: |
+      Return 0 exit code from the process even if there are errors (Not recommended).
+    default: 'false'
+  unsigned:
+    description: Sign only unsigned files.
+    default: 'false'
+    required: false
+  timestamp:
+    description: 'Timestamping'
+    required: false
+    default: 'true'
+  use-binary-sha256-checksum:
+    description: |
+      Use the SHA-256 checksum file provided on the CDN to handle caching.
+      This ensures that new versions are automatically downloaded when they are available.
+      If this option is not enabled, the system instead relies on cache-version
+      to determine whether a new download is needed.
+      This workflow functions when cache-version is updated and 'use-github-caching-service' is enabled.
+    required: false
+    default: 'true'
+  cache-version:
+    description: |
+      Makes use of Github tool cache feature, useful only with self-hosted runners.
+      Change this to make Github runner download the next latest version of the tool.
+      This is not the actual version of the tool but is only used for caching to avoid redundant downloads.
+      The default value uses a semantic version format with a '-0' suffix (e.g., '0.0.0-0') to ensure
+      compatibility with caching mechanisms that expect semantic versioning.
+      This value is arbitrary and does not reflect the tool's actual version.
+    default: '0.0.0-0'
+    required: false
+  simple-signing-mode: 
+    description: |
+      Setup Software Trust Manager for simplified signing. Only installs smctl.
+    required: false
+    default: 'false'
+  use-github-caching-service:
+    description: |
+      Default tool caching doesn't work on Github runners. So use this to enable
+      Github provided caching service to cache Software Trust Manager tools across runs.
+    required: false
+    default: 'true'
+  bulk-sign-mode:
+    description: |
+      Sign multiple files in a single operation. This action only works when you are simple signing.
+    required: false
+    default: 'false'
+outputs:
+  PKCS11_CONFIG:
+    description: 'Absolute path to the generated pkcs11Properties.cfg file used for PKCS#11 configuration'
+runs:
+  using: node24
+  main: 'dist/index.js'
+  post-if: success()

@@ -127,6 +127,90 @@ defaulted.
 - **THEN** the qualification still passes with `signingStatus =
   NOT_CONFIGURED` and external gates stay `BLOCKED_EXTERNAL`
 
+### Requirement: Signing is provider-abstracted with an approved production provider class
+Release signing SHALL be selected by a `SIGNING_PROVIDER` variable with an
+explicit vocabulary (`not-configured`, `local-pfx`, `digicert-stm`,
+`mock-test`); an unknown value SHALL fail rather than silently fall back.
+Every provider SHALL report one structured signer contract (Status,
+Verification, FinalSha256, Provider, KeyProtection, TimestampStatus,
+certificate identity). Production candidates (Stage A) SHALL require an
+APPROVED production provider — currently `digicert-stm` (DigiCert Software
+Trust Manager, non-exportable `CLOUD_HSM` private key held by the signing
+service) — with complete provider credentials; anything else
+(`not-configured`, `local-pfx`, `mock-test`, unknown) SHALL fail with
+`BLOCKED_EXTERNAL` BEFORE any build work, and only variable NAMES SHALL be
+reported. The production code-signing private key SHALL NOT exist as an
+exportable PFX in GitHub Secrets or on the runner; the runner SHALL hold
+only service-authentication material. `local-pfx` SHALL remain available
+for development/private/RC use and SHALL be rejected by production policy
+at every layer.
+
+#### Scenario: Production candidate with an unapproved provider is refused before build
+- **WHEN** a production candidate is requested with `SIGNING_PROVIDER` =
+  `local-pfx`, `mock-test`, `not-configured`, or an unknown value
+- **THEN** the run fails `BLOCKED_EXTERNAL` before any build and no
+  candidate is produced
+
+#### Scenario: An approved provider with incomplete credentials is refused before build
+- **WHEN** a production candidate is requested with `SIGNING_PROVIDER` =
+  `digicert-stm` but its credentials are incomplete
+- **THEN** the run fails `BLOCKED_EXTERNAL` naming the missing variable
+  names (never values) before any build
+
+#### Scenario: The mock provider is structurally isolated
+- **WHEN** a test-only mock signing mode is invoked
+- **THEN** it requires `SIGNING_PROVIDER=mock-test`, refuses to run while
+  real provider material is configured, reports `Provider=mock-test` /
+  `KeyProtection=MOCK_TEST` / `Mock=true`, and can never be selected by a
+  production configuration
+
+### Requirement: Production signing verification is provider-independent
+After ANY provider signs, the production chain SHALL verify the actual
+executable with provider-independent Windows tooling: `signtool verify /pa`
+(Authenticode), RFC3161 timestamp verification (a valid timestamp
+certificate on the signature; `timestampStatus=VERIFIED` is mandatory and a
+missing/invalid timestamp fails the run), and signed-certificate identity
+(subject, thumbprint, issuer, serial number, validity window, and the
+code-signing EKU `1.3.6.1.5.5.7.3.3`), with an optional expected-publisher
+allowlist. A provider reporting success SHALL NOT be sufficient. The final
+SHA-256 SHALL be computed only after signing and verification.
+
+#### Scenario: The provider claims success but the signature is invalid
+- **WHEN** a provider reports a successful signing operation but
+  independent Authenticode verification of the actual EXE fails
+- **THEN** the run fails and no candidate is produced
+
+#### Scenario: The timestamp is absent or invalid
+- **WHEN** an artifact is signed but the RFC3161 timestamp cannot be
+  verified
+- **THEN** production Stage A fails (`timestampStatus != VERIFIED`) and the
+  publication gate rejects the artifact
+
+### Requirement: Signing provenance is recorded and required at publication
+The release manifest SHALL record `signingProvider`, `signingKeyProtection`,
+`timestampStatus`, and the signed-certificate identity (subject, thumbprint,
+issuer, validity window, EKU) for a signed artifact; the thumbprint SHALL be
+recorded, not hard-coded (certificates rotate). The Stage B publication gate
+SHALL require the APPROVED provider class and approved non-exportable key
+protection (`CLOUD_HSM`), the recorded certificate identity with the
+code-signing EKU, `timestampStatus=VERIFIED`, and SHALL independently
+re-verify the signature, timestamp, and certificate identity of the
+downloaded bytes. Stage B SHALL NOT contact the signing provider, SHALL NOT
+require provider credentials, and SHALL NOT re-sign.
+
+#### Scenario: A locally signed or mock artifact cannot satisfy production
+- **WHEN** a manifest records `signingProvider=local-pfx`,
+  `signingProvider=mock-test`, `signingProvider=not-configured`, an unknown
+  provider, or no provider/key-protection metadata
+- **THEN** the publication gate refuses the artifact even when the file is
+  genuinely Authenticode-signed
+
+#### Scenario: Publication never depends on the signing provider
+- **WHEN** Stage B validates an already-signed candidate
+- **THEN** it uses only Windows signature verification and the retained
+  provenance, with no provider credentials, no provider contact, and no
+  signing operation
+
 ### Requirement: External production evidence is an auditable record
 Production publication SHALL require a `release-external-evidence.json`
 record with `schemaVersion`, `sourceCommitSha` (exact 40-character candidate

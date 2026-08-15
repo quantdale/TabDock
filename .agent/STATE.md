@@ -89,6 +89,55 @@ this text.
     static workflow guarantees (Stage B contains no build/sign/qualify
     invocation; Stage A forces signing and never publishes; RC workflow has
     no publication path).
+- Campaign E (production signing architecture correction, this session):
+  - The signing implementation is now provider-abstracted and the production
+    chain no longer requires an exportable PFX: `SIGNING_PROVIDER` selects
+    the backend (`not-configured` / `local-pfx` / `digicert-stm` /
+    `mock-test`); `sign-release.ps1` returns ONE structured contract (Status,
+    Verification, FinalSha256, Provider, KeyProtection, TimestampStatus,
+    certificate identity) to release-qualify and the workflows.
+  - Approved production provider policy: allowlist == `digicert-stm`
+    (DigiCert Software Trust Manager; official
+    `digicert/code-signing-software-trust-action@v1` setup-only step +
+    official `smctl sign --simple ...` invocation, verified against the
+    current official action source captured in
+    `.agent/investigations/digicert-research/`), key protection class
+    `CLOUD_HSM` (non-exportable). Production Stage A rejects
+    NOT_CONFIGURED/MOCK/LOCAL_PFX/unknown via a provider-aware preflight
+    that fails BEFORE any build (`BLOCKED_EXTERNAL`, variable names only).
+    Microsoft Artifact Signing deliberately NOT implemented
+    (geography-restricted Public Trust); the allowlist functions make any
+    future provider an explicit policy change.
+  - local-pfx reclassified (still available for dev/private/RC, never the
+    approved public-GA signer, rejected at every production layer). Mock
+    modes now require `SIGNING_PROVIDER=mock-test`, refuse real material,
+    and their results can never claim an approved provider.
+  - Verification is provider-independent and mandatory: `signtool verify
+    /pa`, RFC3161 timestamp verification (`timestampStatus=VERIFIED`; a
+    missing/invalid timestamp fails Stage A), and signed-certificate
+    identity (subject, thumbprint, issuer, serial, validity, code-signing
+    EKU) recorded in the manifest (`signingProvider`,
+    `signingKeyProtection`, `timestampStatus`, `signingCertificate*`,
+    optional `SIGNING_EXPECTED_SUBJECT` publisher allowlist). Stage B
+    requires the approved provider class + key protection + certificate
+    identity + verified timestamp, re-runs signtool/timestamp verification
+    on the downloaded bytes, cross-checks the certificate identity, and
+    NEVER contacts the provider or re-signs.
+  - Manifest provenance extended; `release.yml` gained a `signing-provider`
+    input (`not-configured`/`local-pfx`/`digicert-stm`, default
+    not-configured); `publication-verification.json` gained
+    signingProviderApproved / signingKeyProtection /
+    signingCertificateIdentity / timestampVerification checks.
+  - `scripts/release-tooling-tests.ps1` extended to 96 deterministic cases
+    (provider policy, BLOCKED_EXTERNAL config failures, tool-absent failure,
+    production rejection matrix, timestamp/certificate policy, mock provider
+    discipline, static workflow guarantees incl. no provider auth in Stage B)
+    — all PASS locally. New `docs/release/code-signing.md` (9 required
+    sections); `publication-gates.md`, `final-smoke.md`, README, decision
+    record and OpenSpec change updated.
+  - Real production signing remains `BLOCKED_EXTERNAL`: the approved signer
+    credentials are not configured and NO real signed candidate exists yet.
+    Release status stays GO FOR RELEASE CANDIDATE / BETA ONLY.
 - Campaign B release engineering (repository side complete, with Campaign C
   corrections):
   - `scripts/release-qualify.ps1` — exact-SHA + clean-tree enforcement,
@@ -140,8 +189,9 @@ this text.
   identity. Hosted Actions evidence is always resolved dynamically for the
   exact SHA; it is not persisted here.
 - Release-tooling regression suite:
-  `scripts/release-tooling-tests.ps1` (69 cases; no real certificates, no
-  publishing) — run before every release-pipeline change.
+  `scripts/release-tooling-tests.ps1` (96 cases; no real certificates, no
+  publishing, no provider contact) — run before every release-pipeline
+  change.
 - The release chain is `scripts/release-qualify.ps1 -Ci -Sha <sha> -Version
   1.0.0 -Sign` (locally: without `-Ci`); it fails on SHA mismatch, dirty
   trees, published-exe identity mismatch, expected-version disagreement with
@@ -168,10 +218,15 @@ this text.
    reset/clean/force-push published `main`. `v*` tags are protected by the
    `release-tags` ruleset.
 3. The remaining v1.0.0 work is external-gate evidence (human smoke,
-   mixed-DPI hardware, signing credentials, Windows 10 x64 compatibility),
-   then the two-stage production dispatch: obtain/configure the production
-   Authenticode credential, dispatch `prepare-release-candidate.yml` against
-   the exact final SHA (produces the ONE signed immutable candidate),
+   mixed-DPI hardware, production signing credentials, Windows 10 x64
+   compatibility), then the two-stage production dispatch: configure the
+   approved production signer (repository variables/secrets per
+   `docs/release/code-signing.md` section 4: `SIGNING_PROVIDER=digicert-stm`,
+   `SM_HOST`, `SM_API_KEY`, `SM_CLIENT_CERT_FILE_B64`,
+   `SM_CLIENT_CERT_PASSWORD`, `SM_KEYPAIR_ALIAS`, optional
+   `SIGNING_EXPECTED_SUBJECT`), dispatch `prepare-release-candidate.yml`
+   against the exact final SHA (produces the ONE signed immutable candidate
+   with `signingProvider=digicert-stm` / `signingKeyProtection=CLOUD_HSM`),
    download that exact candidate, run the human/mixed-DPI/Windows
    compatibility gates against those exact bytes, author
    `release-external-evidence.json` (schemaVersion 2) with the run id and

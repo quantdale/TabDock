@@ -13,7 +13,10 @@ when production signing is in effect. Signing changes the bytes, so smoke
 testing an unsigned artifact and then publishing the signed one is NOT
 acceptable: the evidence must describe the exact bytes that will be
 distributed. See `docs/release/publication-gates.md` for the trust model and
-the evidence schema.
+the evidence schema, and `docs/release/code-signing.md` for the signing
+provider architecture (the candidate is signed once by the approved
+HSM/cloud signer in Stage A; the manifest records `signingProvider`,
+`signingKeyProtection`, and the signing certificate identity).
 
 Result vocabulary per item: `PASS`, `FAIL`, `SKIP_NOT_APPLICABLE`,
 `BLOCKED_ENVIRONMENT`. The overall smoke is PASS only when all applicable

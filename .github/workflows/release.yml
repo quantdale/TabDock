@@ -12,8 +12,9 @@ name: release
 #            retains the immutable PRODUCTION candidate (signing mandatory).
 #   STAGE B  publish-release.yml - downloads the retained Stage A artifact
 #            and publishes those EXACT bytes (no rebuild, no re-sign).
-# RC qualification may run unsigned (NOT_CONFIGURED) or signed, and never
-# requires external evidence.
+# RC qualification may run unsigned (NOT_CONFIGURED) or signed with the
+# local-pfx provider (development/private certificates only - never the
+# approved public-GA signer), and never requires external evidence.
 on:
   workflow_dispatch:
     inputs:
@@ -31,6 +32,15 @@ on:
         required: false
         default: false
         type: boolean
+      signing-provider:
+        description: 'Signing backend: not-configured (default, unsigned) or local-pfx (development/private certificate; NEVER the approved public-GA signer). digicert-stm is not supported on this RC-only path (no DigiCert tooling setup) and is never needed here.'
+        required: false
+        default: 'not-configured'
+        type: choice
+        options:
+          - not-configured
+          - local-pfx
+          - digicert-stm
 
 permissions:
   contents: read
@@ -81,17 +91,22 @@ jobs:
         run: .\scripts\validate.ps1 -Configuration Release -Ci
 
       # Exact-SHA artifact chain: publish -> execute + qualify the exact
-      # binary -> optional signing -> signature verification -> SHA-256 ->
+      # binary -> optional signing (SIGNING_PROVIDER selects the backend:
+      # not-configured = unsigned RC, local-pfx = development/private
+      # certificate) -> signature verification -> SHA-256 ->
       # release-manifest.json + SHA256SUMS.txt (both describing the FINAL
       # distributed bytes) -> immutable artifact retention. The qualified
       # artifact is uploaded without any rebuild. Signing is optional here:
-      # the manifest records NOT_CONFIGURED without material unless
-      # signing-required=true.
+      # the manifest records NOT_CONFIGURED without a provider unless
+      # signing-required=true. LOCAL-PFX IS NOT THE APPROVED PUBLIC-GA
+      # SIGNER; production candidates come only from
+      # prepare-release-candidate.yml.
       - name: Release qualification and artifact provenance
         shell: pwsh
         env:
           OPENSPEC_NO_UPDATE_CHECK: '1'
           OPENSPEC_TELEMETRY: '0'
+          SIGNING_PROVIDER: ${{ inputs.signing-provider }}
           SIGNCERT_BASE64: ${{ secrets.SIGNCERT_BASE64 }}
           SIGNCERT_PASSWORD: ${{ secrets.SIGNCERT_PASSWORD }}
           SIGNCERT_TIMESTAMP: ${{ secrets.SIGNCERT_TIMESTAMP }}
