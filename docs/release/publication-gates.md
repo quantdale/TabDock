@@ -15,28 +15,45 @@ The signing architecture (provider abstraction, the approved non-exportable
 HSM/cloud signer, and why local-PFX is not the public-GA signer) is defined in
 `docs/release/code-signing.md`.
 
-## Trust model: prepare the signed candidate once, publish the SAME bytes
+## Trust model: the CURRENT trusted policy evaluates an inert candidate
 
 Authenticode signing with RFC3161 timestamping mutates the executable and is
 not expected to reproduce an identical signed file on a later run, and even
 an unsigned publish may not be byte-reproducible across runner/SDK changes.
 The production chain therefore NEVER rebuilds or re-signs after the final
-artifact exists:
+artifact exists, and Stage B NEVER executes the candidate: a program under
+evaluation is not an independent authority for its own release eligibility.
 
 ```
-CURRENT TRUSTED RELEASE POLICY P (the workflow revision being executed)
-   |
-   +----------------+----------------+
-   |                |                |
-   v                v                v
-Stage A source   candidate source  candidate artifact
-(trusted main     S (data only)     H (signed immutable bytes)
-revision)
+CURRENT TRUSTED POLICY P
+        |
+        +----------------------------+
+        |                            |
+        v                            v
+candidate source S              candidate artifact H
+READ/PARSE ONLY                 READ/HASH/VERIFY ONLY
+NO EXECUTION                    NO APPLICATION EXECUTION
+        |                            |
+        +-------------+--------------+
+                      |
+                      v
+              CURRENT POLICY P
+                evaluates H
+                      |
+              human evidence
+                      |
+                      v
+                 ALLOW/DENY
+                      |
+                      v
+               publish exact H
 ```
 
 The candidate NEVER supplies the policy that decides whether it may be
-published (P0 trust boundary). In Stage B the three trust domains are
-physically separated:
+published (P0 trust boundary), and Stage B NEVER executes the candidate (P0
+trust-boundary closure): candidate source and candidate artifact are DATA
+ONLY in both Stage B jobs. In Stage B the three trust domains are physically
+separated:
 
 - `$GITHUB_WORKSPACE/policy` — TRUSTED release policy: the revision of
   `publish-release.yml` being executed, checked out explicitly
@@ -45,16 +62,57 @@ physically separated:
   the dispatched branch = the revision whose workflow file GitHub executes).
   All release-policy code is dot-sourced exclusively from
   `policy/scripts/release-tooling.ps1`.
-- `$GITHUB_WORKSPACE/candidate-source` — CANDIDATE SOURCE (data only):
+- `$GITHUB_WORKSPACE/candidate-source` — CANDIDATE SOURCE (DATA ONLY):
   readable for `TabDock.csproj`/product metadata/source identity; its
-  scripts are NEVER executed, dot-sourced, or imported.
-- `$GITHUB_WORKSPACE/candidate-artifact` — CANDIDATE ARTIFACT (data only):
-  the downloaded immutable bytes; the executable is run ONLY for
-  intentionally defined read-only product identity/self-tests.
+  scripts are NEVER executed, dot-sourced, or imported, and no path under it
+  appears in an execution position.
+- `$GITHUB_WORKSPACE/candidate-artifact` — CANDIDATE ARTIFACT (DATA ONLY):
+  the downloaded immutable bytes are hashed, parsed,
+  certificate-inspected, and Authenticode/RFC3161-verified — NEVER launched
+  (no version self-report, no native-ABI self-test, no helper process).
 
 All policy evaluation is performed by CURRENT trusted policy code, and the
 release-policy schema contract (`releasePolicySchemaVersion`, minimum 3)
 rejects candidates produced under older policy generations (fail closed).
+
+### Why Stage B does not execute the candidate
+
+The identity chain is complete WITHOUT running the candidate:
+
+```
+TRUSTED STAGE A POLICY
+    -> authoritative TabDock.csproj <Version>
+    -> build exact source SHA
+    -> execute/qualify the UNSIGNED built executable while Stage A is
+       already the trusted build environment
+    -> record buildIdentity in the manifest
+    -> sign the same executable in place
+    -> independent Authenticode verification
+    -> RFC3161 timestamp verification
+    -> final signed SHA H
+    -> manifest + SHA256SUMS describe H
+    -> retain immutable H
+```
+
+Stage B then validates the manifest contract from TRUSTED RECORDS and data
+reads — it never asks the candidate binary to self-report:
+
+- `manifest.sourceCommitSha == run head SHA == candidate-source checkout SHA`;
+- candidate-source `TabDock.csproj <Version>` (parsed as XML data) ==
+  `manifest.semanticVersion`;
+- `manifest.buildIdentity.semanticVersion` and
+  `.informationalVersion` == `manifest.semanticVersion` (the `buildIdentity`
+  record was generated and verified by TRUSTED Stage A);
+- on-disk SHA == `manifest.artifactSha256` == `SHA256SUMS.txt` ==
+  `finalSignedSha256`;
+- `workflowRunId` and artifact-name bindings;
+- independent Authenticode + RFC3161 verification and certificate identity
+  of the downloaded bytes.
+
+Every one of these is enforced by the fail-closed gate
+(`Test-PublicationEligibility`) in the verify job; the final hash identity
+check in the publish job re-proves the byte identity. No candidate code is
+executed in either job.
 
 ```
 SOURCE SHA
@@ -168,8 +226,9 @@ A separate, manually dispatched publication workflow split into TWO jobs
    touching `TabDock.exe`;
 4. **JOB 1 gate** (exclusively from `policy/scripts/release-tooling.ps1`):
    source SHA (run head SHA == manifest == evidence), semantic version
-   (project `<Version>` at the candidate SHA == manifest == binary
-   `--version`), final artifact hash (file == manifest == SHA256SUMS),
+   (project `<Version>` at the candidate SHA == manifest == recorded binary
+   identity `buildIdentity`; the binary is NEVER executed), final artifact
+   hash (file == manifest == SHA256SUMS),
    manifest provenance (`releaseMode == PRODUCTION`,
    `workflowRunId == run-id`), CURRENT release-policy schema contract
    (`releasePolicySchemaVersion >= 3`), signing provenance (approved
@@ -180,9 +239,10 @@ A separate, manually dispatched publication workflow split into TWO jobs
    verification of the downloaded bytes, certificate identity cross-checked
    against the manifest), schema-v2 external evidence, and Windows 10/11
    compatibility evidence;
-5. **JOB 1 handoff:** runs the read-only binary identity/self-tests and
-   writes `publication-verification.json` + `RELEASE_NOTES.md` (the verified
-   same-run handoff, uploaded as `tabdock-verified-<run-id>`);
+5. **JOB 1 handoff:** writes `publication-verification.json` +
+   `RELEASE_NOTES.md` (the verified same-run handoff, uploaded as
+   `tabdock-verified-<run-id>`); no candidate code is executed anywhere in
+   this job or in Stage B;
 6. **JOB 2 `publish`** (`needs: verify`, permissions `contents: write`,
    `actions: read`; NO candidate execution, NO build/sign): downloads the
    handoff and re-downloads the EXACT Stage A bytes, performs the final
@@ -255,6 +315,19 @@ Binding chain: run-id input -> GitHub run (`path`/`status`/`conclusion`/
 triple + `signtool verify /pa /v /tw`) -> CURRENT trusted policy
 (`policy/scripts/release-tooling.ps1` at the executing workflow revision) ->
 verified same-run handoff (final hash identity check in the publish job).
+
+## Checkout credential hardening
+
+Every `actions/checkout@v7` step in the release workflows
+(`publish-release.yml` — both trusted-policy checkouts and the
+candidate-source checkout; `prepare-release-candidate.yml`; `release.yml`;
+`build.yml`) sets `persist-credentials: false`: none of these workflows
+performs an authenticated git push from a checkout, so no credentials are
+persisted in `.git/config` on the runner. This is a static, tested property
+of every release-sensitive checkout. The explicitly passed `github-token`
+inputs used by the cross-run `actions/download-artifact@v7` steps remain —
+that mechanism genuinely requires them — and `gh`/artifact operations use
+the per-job `github.token` as before.
 
 ## Evidence schema (`release-external-evidence.json`, v2)
 
@@ -381,7 +454,8 @@ passes and attached to the release alongside `release-external-evidence.json`.
    the exact artifact (candidate source checked out as data only),
    re-verifies everything against the downloaded bytes using ONLY the
    trusted policy module (project version at the candidate SHA == manifest
-   == binary `--version`; file == manifest == SHA256SUMS; CURRENT policy
+   == recorded binary identity `buildIdentity` — the candidate is never
+   executed; file == manifest == SHA256SUMS; CURRENT policy
    schema; publisher identity == manifest == actual certificate; evidence
    bound to SHA, hash, run, and artifact; Authenticode re-proven with
    `signtool verify /pa /v /tw`), writes the verified same-run handoff, and
@@ -399,11 +473,12 @@ artifact retained by Stage A — byte-identical, never rebuilt, never re-signed.
   input is only an EXPECTED value and the qualification fails on any
   disagreement (`version=9.9.9` cannot be recorded while the project
   declares `1.0.0`).
-- The published executable must report the same semantic version, and its
-  informational version must carry that semantic version plus the source
-  identity. The manifest records the binary identity; the Stage B gate
-  requires manifest == binary identity == project version, and Stage B
-  re-runs the downloaded `--version` to prove it.
+- The published executable's reported semantic version and its
+  informational version were verified by trusted Stage A and recorded as
+  `buildIdentity` in the manifest; the Stage B gate requires manifest ==
+  recorded binary identity == project version. Stage B validates this
+  contract from the trusted records and NEVER executes the downloaded
+  binary to re-ask it.
 - The release tag is DERIVED as `v<semanticVersion>`; Stage B accepts no tag
   input, so arbitrary tags (`stable-final`, `v2.0.0` for version `1.0.0`,
   ...) are structurally impossible, and the protected `v*` tag namespace
@@ -469,8 +544,10 @@ silently merely to pass the gate.
   candidate-source checkout as data only, cross-run run/artifact resolution
   via the GitHub API, download of the EXACT artifact
   (`download-artifact@v7` `run-id`/`repository`/`github-token`), fail-closed
-  gate loaded ONLY from `policy/scripts/release-tooling.ps1`, read-only
-  binary identity self-tests, verified same-run handoff) and `publish`
+  gate loaded ONLY from `policy/scripts/release-tooling.ps1`, ZERO candidate
+  execution — binary identity is validated from the trusted manifest
+  `buildIdentity` record, never by running the candidate; verified same-run
+  handoff) and `publish`
   (needs: verify; contents: write; final hash identity check; derived tag;
   release asset verification; no candidate execution, no build, no sign,
   no signing-provider authentication).
@@ -478,7 +555,7 @@ silently merely to pass the gate.
   `local-pfx`); no publication path.
 - `.github/workflows/build.yml`: hosted CI gates the release-control
   regression suite (`scripts/release-tooling-tests.ps1`).
-- `scripts/release-tooling-tests.ps1`: 118 deterministic regression cases
+- `scripts/release-tooling-tests.ps1`: 134 deterministic regression cases
   including every adversarial condition (missing/malformed evidence, wrong
   SHA, wrong artifact hash, wrong run, wrong artifact name, `FAIL`,
   `BLOCKED_EXTERNAL`, unsigned artifact under mandatory signing,
@@ -496,5 +573,10 @@ silently merely to pass the gate.
   consistent-publisher fails, Stage A dispatch contract ordering, Stage B
   run-head-SHA binding, no PFX secrets in production Stage A, DigiCert
   action pin, verify job without contents: write, publish job without
-  build/sign/candidate execution, timestamp missing/warned fails) — none of
+  build/sign/candidate execution, timestamp missing/warned fails,
+  Stage B executes ZERO candidate code (no version self-report, no
+  native-ABI self-test, no Start-Process, no candidate scripts, no path
+  under candidate-source/ or candidate-artifact/ in an execution position;
+  identity validated from trusted records; every release-workflow checkout
+  sets `persist-credentials: false`)) — none of
   which publishes anything or contacts a signing provider.

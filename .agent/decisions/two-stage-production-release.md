@@ -39,7 +39,9 @@ signing step:
 reads it from the exact candidate, workflow `version` inputs are
 expected-only, the manifest records the project version, and the binary's
 semantic + informational versions must carry it; Stage B re-checks project
-version at the candidate SHA == manifest == downloaded binary `--version`.
+version at the candidate SHA == manifest == recorded binary identity
+(`buildIdentity`, produced by trusted Stage A) without executing the
+downloaded binary.
 
 The evidence schema moves to v2: it gains `candidateWorkflowRunId` and
 `candidateArtifactName` (evidence is run/artifact-bound, not hash-bound
@@ -163,12 +165,13 @@ policy. This addendum records the hardening.
   subject == actual certificate subject ("actual == manifest" alone is never
   sufficient).
 - **Least privilege (P1):** Stage B splits into JOB 1 `verify` (contents:
-  read; all gates + all read-only candidate identity execution; documented
+  read; all gates; candidate files handled strictly as DATA — no candidate
+  execution anywhere in Stage B, see the round-4 addendum; documented
   deviation: actions: write solely to upload the same-run verification
   handoff artifact) and JOB 2 `publish` (needs: verify; contents: write; no
   candidate execution, no build/sign; only the final hash identity check and
-  the release mutation). All untrusted/candidate execution happens before
-  write credentials exist.
+  the release mutation). No write-capable credential exists while the
+  candidate is being evaluated.
 - **DigiCert action pin (P1):** `digicert/code-signing-software-trust-action`
   pinned to the full immutable SHA `fae23a455ba4bde62b64fd7cb2f81ade788f5a95`
   (v1.2.1; verified via the GitHub API that v1.2.1 and v1 both resolve to
@@ -195,3 +198,69 @@ policy. This addendum records the hardening.
   (old-pre-HSM candidate rejection, policy-schema contract, candidate-policy
   isolation, publisher policy, Stage A/B dispatch contracts, action pin, job
   split, hosted gate, timestamp policy) — all PASS locally.
+
+## Addendum (2026-08-15): candidate execution eliminated from Stage B
+
+Independent review (round 4) found the final trust-boundary inconsistency:
+Stage B still EXECUTED the candidate (`candidate-artifact/TabDock.exe
+--version` and `--selftest-native-abi`) inside the trusted verify job — the
+same job holding the trusted policy checkout, the candidate source/artifact,
+the job's `GITHUB_TOKEN` context, `actions: write`, and the filesystem later
+used to build the trusted verification handoff. The candidate no longer
+supplies policy code, but executing it still gave arbitrary native candidate
+code a place inside the trusted publication job. This addendum records the
+closure: **STAGE B NEVER EXECUTES THE CANDIDATE — in either job.**
+
+- **P0 candidate-execution removal:** the "Verify downloaded executable
+  identity" step (candidate `--version` + `--selftest-native-abi`) is
+  removed from `publish-release.yml`. The workflow now contains no `& $exe`,
+  no `Start-Process`, no `--version`, no `--selftest-*`, no candidate
+  script, and no path under `candidate-source/` or `candidate-artifact/` in
+  an execution position. A program under evaluation is not an independent
+  authority for its own release eligibility.
+- **P0 identity retained without execution:** the full identity chain is
+  proven from TRUSTED RECORDS and DATA READS: `sourceCommitSha` == Stage A
+  run head SHA == candidate-source checkout SHA (git metadata); the
+  candidate-source `TabDock.csproj <Version>` parsed as XML ==
+  `manifest.semanticVersion`; the manifest `buildIdentity`
+  semantic/informational version contract (generated and verified by
+  trusted Stage A) == manifest version; on-disk SHA ==
+  `manifest.artifactSha256` == `SHA256SUMS.txt` == `finalSignedSha256`;
+  `workflowRunId` and artifact-name bindings; and independent
+  Authenticode + RFC3161 verification of the bytes. Native ABI coverage
+  remains where it belongs: exact-SHA `build.yml` (`windows-2022`
+  native-abi-evidence), Stage A qualification, and the external Windows
+  10/11 gates — never in production publication.
+- **P1 checkout credential hardening:** every `actions/checkout` in
+  `publish-release.yml` (trusted policy ×2, candidate-source),
+  `prepare-release-candidate.yml`, `release.yml`, and `build.yml` sets
+  `persist-credentials: false` (no release workflow performs an
+  authenticated git push); the cross-run `actions/download-artifact@v7`
+  `github-token` inputs are preserved.
+- **P1 static regression tests:** `scripts/release-tooling-tests.ps1`
+  extended from 118 to 134 deterministic cases with 16 named tests:
+  `stage-b-executes-zero-candidate-code`,
+  `stage-b-does-not-run-candidate-version`,
+  `stage-b-does-not-run-candidate-native-abi-selftest`,
+  `stage-b-does-not-use-start-process-on-candidate-artifact`,
+  `stage-b-does-not-invoke-candidate-source-scripts`,
+  `stage-b-does-not-invoke-candidate-artifact-scripts`,
+  `stage-b-candidate-artifact-is-data-only`,
+  `stage-b-source-identity-is-validated-from-trusted-records-not-self-report`,
+  `trusted-stage-a-build-identity-contract-remains-required`,
+  `stage-b-policy-checkout-persist-credentials-false`,
+  `stage-b-candidate-source-checkout-persist-credentials-false`,
+  `stage-b-publish-policy-checkout-persist-credentials-false`,
+  `production-stage-a-checkout-persist-credentials-false`,
+  `release-workflow-checkouts-have-no-unnecessary-persisted-credentials`,
+  `stage-b-final-hash-and-signature-gates-remain-present`,
+  `stage-b-publish-job-still-does-zero-build-and-zero-sign`. The execution-
+  position invariant is enforced by extracting every `run:` step and
+  classifying every candidate reference as data (Get-Content, Get-FileHash,
+  Get-FileSha256Lower, Test-Path, Get-AuthenticodeSignature, signtool
+  verify, gh release create asset upload) or forbidden execution. All 134
+  PASS locally; hosted in `build.yml`.
+- **Documentation:** `docs/release/publication-gates.md` (final trust-model
+  diagram, "why Stage B does not execute the candidate", checkout credential
+  hardening), `docs/release/code-signing.md` section 8, OpenSpec change
+  section 15, `.agent/STATE.md` checkpoint (Campaign G).

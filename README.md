@@ -319,13 +319,16 @@ retained bytes (no build, no sign)
   `download-artifact@v7` with `run-id`/`repository`/`github-token`),
   re-verifies every production condition against those downloaded bytes
   using ONLY the trusted policy module (project version == manifest ==
-  binary `--version`; file == manifest == SHA256SUMS; CURRENT policy schema;
+  recorded binary identity `buildIdentity` — the candidate is NEVER
+  executed; file == manifest == SHA256SUMS; CURRENT policy schema;
   CURRENT publisher policy == manifest subject == actual certificate; evidence
   bound to SHA, hash, run, and artifact; `signtool verify /pa /v /tw`), and
   produces the verified same-run handoff. JOB 2 `publish` (needs: verify;
   contents: write) performs only the final hash identity check and publishes
   those exact bytes with the DERIVED tag `v<semanticVersion>` — no second
-  compilation, no second signing, no tag input, no candidate execution.
+  compilation, no second signing, no tag input, no candidate execution
+  anywhere in Stage B (candidate source and candidate artifact are DATA ONLY
+  in both jobs).
 - `release.yml` is the RC qualification-only workflow (dispatch-only, never
   publishes): it qualifies the exact SHA and retains
   `tabdock-rc-<sha>-<run-id>`; signing is optional (`NOT_CONFIGURED`
@@ -345,10 +348,13 @@ retained bytes (no build, no sign)
   need evidence and their manifests honestly report
   `productionReleaseEligibility = BLOCKED_EXTERNAL`.
 - Release-tooling regression tests: `scripts/release-tooling-tests.ps1`
-  (118 deterministic adversarial cases, including signing-provider policy,
+  (134 deterministic adversarial cases, including signing-provider policy,
   the release-policy trust boundary (old candidates rejected under CURRENT
   policy, policy-schema contract, candidate-policy isolation, publisher
-  identity policy, Stage A/B dispatch contracts), and static workflow
+  identity policy, Stage A/B dispatch contracts), Stage B zero candidate
+  execution (identity validated from trusted records; no candidate path in
+  any execution position), checkout credential hardening
+  (`persist-credentials: false` everywhere), and static workflow
   guarantees; no real certificates, no publishing, no provider contact).
   The suite is an exact-SHA hosted-CI gate in `build.yml`.
 

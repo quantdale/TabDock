@@ -202,9 +202,13 @@ whether it may be published. Stage B physically separates the trust domains:
   github.sha`). All policy code is dot-sourced exclusively from
   `policy/scripts/release-tooling.ps1`.
 - `candidate-source/` — candidate source, DATA ONLY (project version,
-  product metadata, source identity; scripts never executed/imported).
-- `candidate-artifact/` — the immutable signed bytes; run only for
-  read-only product identity/self-tests.
+  product metadata, source identity; scripts never executed/imported; no
+  path under it appears in an execution position).
+- `candidate-artifact/` — the immutable signed bytes, READ/HASH/VERIFY ONLY:
+  hashed, parsed, certificate-inspected, and Authenticode/RFC3161-verified,
+  but NEVER launched (no version self-report, no native-ABI self-test, no
+  helper process) — a program under evaluation is not an independent
+  authority for its own release eligibility.
 
 The release-policy schema contract (`releasePolicySchemaVersion`, current
 minimum 3) makes the CURRENT policy reject candidates produced under older
@@ -223,12 +227,43 @@ the DigiCert action is pinned to its full immutable SHA
 materialized with PowerShell/.NET to a random private temp path with an
 always-run cleanup.
 
-Stage B is split into a `verify` job (contents: read; all gates + read-only
-candidate identity execution; documented `actions: write` deviation solely
-for the same-run verification handoff upload) and a `publish` job (needs:
-verify; contents: write; no candidate execution; final hash identity check
-+ release mutation only). The release-control regression suite
-(`scripts/release-tooling-tests.ps1`, 118 cases) is an exact-SHA hosted-CI
+Stage B is split into a `verify` job (contents: read; all gates; candidate
+files handled strictly as DATA — zero candidate execution; documented
+`actions: write` deviation solely for the same-run verification handoff
+upload) and a `publish` job (needs: verify; contents: write; no candidate
+execution; final hash identity check + release mutation only). The
+release-control regression suite
+(`scripts/release-tooling-tests.ps1`, 134 cases) is an exact-SHA hosted-CI
 gate in `build.yml`. Signtool verification uses `verify /pa /v /tw`; the
 RFC3161 timestamper identity is recorded in the manifest and cross-checked
 at Stage B.
+
+### Candidate-execution elimination (P0 final trust-boundary closure)
+
+Stage B NEVER executes the candidate, in either job. The identity chain is
+complete without execution: trusted Stage A builds the exact source SHA,
+executes and qualifies the UNSIGNED built executable while it is already
+the trusted build environment, records `buildIdentity` in the manifest,
+signs in place, independently verifies Authenticode + RFC3161, computes the
+final signed SHA H, and retains the immutable artifact. Stage B then
+validates the manifest contract from TRUSTED RECORDS and data reads —
+`sourceCommitSha` == Stage A run head SHA == candidate-source checkout SHA;
+candidate-source `TabDock.csproj <Version>` (parsed as XML data) ==
+`manifest.semanticVersion`; `manifest.buildIdentity` semantic/informational
+versions == `manifest.semanticVersion`; on-disk SHA ==
+`manifest.artifactSha256` == `SHA256SUMS.txt` == `finalSignedSha256`;
+run-id/artifact-name bindings — plus independent Authenticode + RFC3161
+verification of the bytes. Native ABI coverage remains outside publication:
+exact-SHA `build.yml`, the `windows-2022` native-abi-evidence job, Stage A
+qualification, and the external Windows 10/11 gates.
+
+### Checkout credential hardening (P1)
+
+Every `actions/checkout` in the release workflows
+(`publish-release.yml` — trusted policy ×2 + candidate-source,
+`prepare-release-candidate.yml`, `release.yml`, `build.yml`) sets
+`persist-credentials: false`: none of these workflows performs an
+authenticated git push, so no credentials are persisted in `.git/config`.
+The cross-run `actions/download-artifact@v7` `github-token` inputs are
+preserved (that mechanism genuinely requires them). Both properties are
+enforced by static regression tests.

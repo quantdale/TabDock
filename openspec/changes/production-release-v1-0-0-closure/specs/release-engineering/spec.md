@@ -388,8 +388,14 @@ branch — the revision whose workflow file GitHub executes). The candidate
 source SHALL be checked out into a separate `candidate-source/` tree used
 only as data (project version, product metadata, source identity), and its
 scripts SHALL NEVER be executed, dot-sourced, or imported. The candidate
-executable SHALL be run only for intentionally defined read-only product
-identity/self-tests.
+executable SHALL NOT be executed by Stage B in either job: candidate source
+and candidate artifact SHALL be handled strictly as data (read, parse, hash,
+certificate/signature verification, asset upload), no path under them SHALL
+occur in an execution position, and binary identity SHALL be validated from
+the trusted manifest `buildIdentity` record produced by trusted Stage A and
+from independent Authenticode/RFC3161 verification of the bytes — never by
+running the candidate (no version self-report, no native-ABI self-test, no
+candidate helper).
 
 #### Scenario: An old candidate is not evaluated under its own policy
 - **WHEN** a candidate was produced by an older release-policy generation
@@ -401,6 +407,19 @@ identity/self-tests.
   publication gate
 - **THEN** the verdict is unchanged because the candidate files are never
   loaded by Stage B
+
+#### Scenario: Stage B never executes the candidate
+- **WHEN** the publish workflow runs
+- **THEN** no candidate process is launched in either job; identity is
+  validated from trusted records (Stage A run head SHA, candidate-source
+  checkout SHA, the manifest `buildIdentity` record), on-disk hashes, and
+  signature verification — never by executing the candidate
+
+#### Scenario: Candidate paths never occur in an execution position
+- **WHEN** the publish workflow is statically inspected
+- **THEN** no path under `candidate-source/` or `candidate-artifact/` occurs
+  in a `run:` step except as data (hash, parse, certificate inspection,
+  signature verification, asset upload)
 
 ### Requirement: Release-policy schema contract rejects old policy generations
 Stage A production manifests SHALL record `releasePolicySchemaVersion` (the
@@ -478,19 +497,36 @@ the new full SHA, and run the release-tooling regression suite.
 
 ### Requirement: Stage B publication is least-privilege job-split
 Stage B SHALL separate verification from publication: JOB 1 (`verify`,
-permissions `contents: read`) SHALL perform all release gates and all
-read-only candidate identity execution and SHALL NOT hold `contents: write`;
+permissions `contents: read`) SHALL perform all release gates (candidate
+files handled strictly as data — NO candidate execution) and SHALL NOT hold
+`contents: write`;
 JOB 2 (`publish`, `needs: verify`, permissions `contents: write`) SHALL
 obtain the verified same-run handoff, re-download the exact Stage A bytes,
 perform the final hash identity check, and create the release, and SHALL NOT
-execute candidate code, build, sign, or contact a signing provider. All
-untrusted/candidate execution SHALL happen before write credentials exist.
+execute candidate code, build, sign, or contact a signing provider. No
+candidate execution SHALL occur in Stage B; the verify job holds no
+write-capable credential while it evaluates the candidate.
 
 #### Scenario: The write-capable job cannot execute candidate code
 - **WHEN** the publication job runs
 - **THEN** it performs only the final hash identity check and the release
   mutation; the static workflow tests prove it contains no build, sign,
   candidate-script execution, or provider contact
+
+### Requirement: Release checkouts do not persist credentials
+Every `actions/checkout` step in the release workflows
+(`publish-release.yml` — the trusted policy checkouts and the
+candidate-source checkout — `prepare-release-candidate.yml`, `release.yml`,
+and `build.yml`) SHALL set `persist-credentials: false`, because none of
+these workflows performs an authenticated git push from a checkout and no
+credentials SHALL be persisted in `.git/config` on the runner. The cross-run
+`actions/download-artifact@v7` steps SHALL keep their explicitly passed
+`github-token` inputs (that mechanism genuinely requires them).
+
+#### Scenario: A release checkout never persists credentials
+- **WHEN** a release workflow checkout step is statically inspected
+- **THEN** it sets `persist-credentials: false` and no workflow sets
+  `persist-credentials: true`
 
 ### Requirement: The release-tooling regression suite is a hosted-CI gate
 The build workflow SHALL invoke `scripts/release-tooling-tests.ps1`; the

@@ -79,6 +79,20 @@
     performs no build/sign/candidate execution; timestamp policy failures
     (missing/warned) fail closed.
 
+    Candidate-execution elimination (P0 final trust-boundary closure) proves
+    Stage B NEVER executes the candidate in EITHER job: no candidate version
+    self-report, no native-ABI self-test, no Start-Process, no candidate
+    scripts, and no path under candidate-source/ or candidate-artifact/ in
+    any EXECUTION position (run steps may reference the candidate only as
+    data: hash, parse, certificate/signature verification, asset upload);
+    source identity is validated from trusted records (Stage A run head SHA,
+    candidate-source checkout SHA, the manifest buildIdentity record produced
+    by trusted Stage A, and the csproj <Version> parsed as data) instead of
+    binary self-report; and every actions/checkout step in the release
+    workflows (Stage B policy + candidate-source, Stage A production, RC,
+    build) sets persist-credentials: false (the cross-run
+    actions/download-artifact github-token inputs remain untouched).
+
     This script NEVER creates a GitHub Release, never contacts the network,
     and never touches signing material.
 
@@ -361,6 +375,99 @@ function Save-TestEvidence {
     param([string]$Path, $Evidence)
     $Evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Path -Encoding utf8
 }
+
+function Get-WorkflowRunBlocks {
+    <#
+    .SYNOPSIS
+        Extracts the script text of every run: step (inline or block) from a
+        workflow YAML, preserving order. Used by the static no-execution tests
+        to distinguish EXECUTION positions from data positions.
+    #>
+    param([Parameter(Mandatory = $true)][string]$YamlText)
+    $blocks = [System.Collections.Generic.List[string]]::new()
+    $lines = $YamlText -split "`r?`n"
+    $inBlock = $false
+    $current = [System.Text.StringBuilder]::new()
+    foreach ($line in $lines) {
+        if (-not $inBlock) {
+            if ($line -match '^\s*run:\s*\|') {
+                $inBlock = $true
+                [void]$current.Clear()
+            }
+            elseif ($line -match '^\s*run:\s*(.+)$') {
+                $blocks.Add($Matches[1].Trim())
+            }
+        }
+        else {
+            # A line indented less than the 10-space run content ends the
+            # block; blank lines and 10+-space content lines continue it.
+            if ($line -match '^ {0,9}\S') {
+                $blocks.Add($current.ToString())
+                $inBlock = $false
+                if ($line -match '^\s*run:\s*\|') {
+                    $inBlock = $true
+                    [void]$current.Clear()
+                }
+            }
+            else {
+                [void]$current.AppendLine($line)
+            }
+        }
+    }
+    if ($inBlock) { $blocks.Add($current.ToString()) }
+    return $blocks
+}
+
+function Get-CheckoutSteps {
+    <#
+    .SYNOPSIS
+        Extracts every actions/checkout step (the uses line plus its with:
+        block) from a workflow YAML, preserving order.
+    #>
+    param([Parameter(Mandatory = $true)][string]$YamlText)
+    $steps = [System.Collections.Generic.List[string]]::new()
+    $lines = $YamlText -split "`r?`n"
+    $i = 0
+    while ($i -lt $lines.Count) {
+        if ($lines[$i] -match '^\s*(?:-\s+)?uses: actions/checkout@v7\s*$') {
+            $step = [System.Text.StringBuilder]::new()
+            [void]$step.AppendLine($lines[$i])
+            $j = $i + 1
+            while ($j -lt $lines.Count -and $lines[$j].Trim() -ne '' -and $lines[$j] -match '^ {8,}\S') {
+                [void]$step.AppendLine($lines[$j])
+                $j++
+            }
+            $steps.Add($step.ToString())
+            $i = $j
+        }
+        else {
+            $i++
+        }
+    }
+    return $steps
+}
+
+# Execution-position patterns that are FORBIDDEN in the Stage B run steps.
+# Data operations (Get-Content, Get-FileHash, Get-FileSha256Lower, Test-Path,
+# Get-AuthenticodeSignature, signtool verify, gh release create asset upload,
+# release-notes text rendering) are allowed and never match these.
+$script:stageBCandidateExecutionForbiddenPatterns = @(
+    '&\s*\$exe',
+    '&\s*\$candidate',
+    'Start-Process',
+    'Invoke-Expression',
+    'Invoke-Item',
+    'Import-Module',
+    'System\.Diagnostics\.Process',
+    'pwsh\s*-File',
+    'powershell\s*-File',
+    'cmd\s*/c',
+    '\.\s*\(Join-Path\s+\$env:GITHUB_WORKSPACE\s+''candidate-',
+    '&\s*\(Join-Path\s+\$env:GITHUB_WORKSPACE\s+''candidate-',
+    '\.\s*\(Join-Path\s+\$dir\s+''scripts',
+    '--version',
+    '--selftest'
+)
 
 try {
     Write-Host ''
@@ -1815,6 +1922,208 @@ try {
         Assert-True ($yml -notmatch 'external-evidence') 'the RC workflow never consumes external evidence'
         Assert-True ($yml -notmatch 'download-artifact') 'the RC workflow never downloads artifacts'
         Assert-True ($yml -match 'tabdock-rc-') 'RC artifacts use the rc naming scheme'
+    }
+
+    Write-Host ''
+    Write-Host '==> Candidate execution elimination (P0 final trust-boundary closure)' -ForegroundColor Cyan
+
+    New-TestCase 'stage-b-executes-zero-candidate-code' {
+        # Strong static invariant: no path under candidate-source/ or
+        # candidate-artifact/ may occur in an EXECUTION position in
+        # publish-release.yml. Data positions (hash, parse, certificate
+        # inspection, signature verification, asset upload) are allowed;
+        # launching/loading the candidate is forbidden.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        $blocks = Get-WorkflowRunBlocks $yml
+        Assert-True ($blocks.Count -ge 10) "expected every run step to be extracted as an execution position (got $($blocks.Count))"
+        $hits = [System.Collections.Generic.List[string]]::new()
+        foreach ($block in $blocks) {
+            foreach ($pattern in $script:stageBCandidateExecutionForbiddenPatterns) {
+                if ($block -match $pattern) {
+                    $sample = (($block -split "`r?`n") | Where-Object { $_ -match $pattern } | Select-Object -First 1)
+                    $hits.Add("pattern '$pattern' matched: $sample")
+                }
+            }
+        }
+        Assert-True ($hits.Count -eq 0) "Stage B must execute zero candidate code, but found: $($hits -join ' | ')"
+    }
+
+    New-TestCase 'stage-b-does-not-run-candidate-version' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        Assert-True ($yml -notmatch [regex]::Escape('--version')) 'publish-release.yml must not contain --version anywhere (the candidate is never asked to self-report)'
+        Assert-True ($yml -notmatch '& .*TabDock\.exe') 'no run step may invoke the candidate executable'
+        Assert-True ($yml -notmatch [regex]::Escape('Verify downloaded executable identity')) 'the old execute-the-binary identity step must be gone'
+    }
+
+    New-TestCase 'stage-b-does-not-run-candidate-native-abi-selftest' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        Assert-True ($yml -notmatch [regex]::Escape('--selftest-native-abi')) 'Stage B must never run the native ABI self-test on the candidate'
+        Assert-True ($yml -notmatch [regex]::Escape('--selftest')) 'Stage B must never run any candidate self-test'
+        Assert-True ($yml -notmatch [regex]::Escape('& $exe')) 'the call-operator launch pattern must be gone'
+    }
+
+    New-TestCase 'stage-b-does-not-use-start-process-on-candidate-artifact' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        Assert-True ($yml -notmatch 'Start-Process') 'Start-Process must never be used in Stage B'
+        Assert-True ($yml -notmatch 'System\.Diagnostics') 'no .NET process-launch API may be used in Stage B'
+        Assert-True ($yml -notmatch 'Invoke-Expression') 'no invocation of candidate code may be constructed dynamically'
+    }
+
+    New-TestCase 'stage-b-does-not-invoke-candidate-source-scripts' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        Assert-True ($yml -notmatch [regex]::Escape('candidate-source/scripts')) 'candidate-source/scripts must not be referenced anywhere'
+        Assert-True ($yml -notmatch [regex]::Escape('candidate-source') + '[^\r\n]*\.ps1') 'no PowerShell script under candidate-source may be referenced'
+        # candidate-source may be referenced in a run step ONLY as the data
+        # read of the authoritative project version (TabDock.csproj, parsed
+        # as XML - never executed).
+        foreach ($block in (Get-WorkflowRunBlocks $yml)) {
+            foreach ($m in [regex]::Matches($block, 'candidate-source[^\r\n]*')) {
+                # Allowed data references: the csproj <Version> parse and the
+                # git metadata read (rev-parse proves the checkout SHA).
+                Assert-True (($m.Value -match '^candidate-source/TabDock\.csproj') -or ($m.Value -match '^candidate-source rev-parse HEAD')) "candidate-source may appear in a run step only as a data read, got: '$($m.Value)'"
+            }
+        }
+    }
+
+    New-TestCase 'stage-b-does-not-invoke-candidate-artifact-scripts' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        Assert-True ($yml -notmatch [regex]::Escape('candidate-artifact/scripts')) 'candidate-artifact/scripts must not be referenced anywhere'
+        Assert-True ($yml -notmatch [regex]::Escape('candidate-artifact') + '[^\r\n]*\.ps1') 'no PowerShell script under candidate-artifact may be referenced'
+        # Every dot-source in Stage B must be the trusted policy module.
+        foreach ($m in [regex]::Matches($yml, '\.\s*\(Join-Path\s+\$env:GITHUB_WORKSPACE\s+''[^'']*''\)')) {
+            Assert-True ($m.Value -match 'policy/scripts/release-tooling\.ps1') "every dot-source must be the trusted policy module, got: $($m.Value)"
+        }
+    }
+
+    New-TestCase 'stage-b-candidate-artifact-is-data-only' {
+        # Strong static invariant: the candidate artifact appears in run
+        # steps ONLY as data - hashed, parsed, certificate/signature-verified,
+        # or uploaded as release assets. Never launched, never loaded.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        $dataOp = 'Get-Content|Get-FileHash|Get-FileSha256Lower|Test-Path|ConvertFrom-Json|Read-Sha256Sums|Get-AuthenticodeSignature|signtool|gh release create|Set-Content|lines\.Add|required = @|WriteAllText'
+        foreach ($block in (Get-WorkflowRunBlocks $yml)) {
+            foreach ($m in [regex]::Matches($block, 'TabDock\.exe')) {
+                $line = (($block -split "`r?`n") | Where-Object { $_ -match 'TabDock\.exe' } | Select-Object -First 1)
+                # A line may be a data operation itself, or a continuation
+                # line of an allowed data command in the same run step (the
+                # gh release create asset upload list).
+                Assert-True (($line -match $dataOp) -or ($block -match 'gh release create')) "candidate artifact in a run step must be a DATA operation, got: $line"
+            }
+            foreach ($pattern in $script:stageBCandidateExecutionForbiddenPatterns) {
+                Assert-True ($block -notmatch $pattern) "run step contains forbidden execution pattern '$pattern'"
+            }
+        }
+        Assert-True ($yml -match [regex]::Escape('path: candidate-artifact')) 'the artifact must be downloaded into the candidate-artifact data tree'
+    }
+
+    New-TestCase 'stage-b-source-identity-is-validated-from-trusted-records-not-self-report' {
+        # Identity is proven from trusted records and data reads: the Stage A
+        # run head SHA, the candidate-source checkout SHA, the manifest
+        # (sourceCommitSha + buildIdentity, produced by trusted Stage A), and
+        # the project <Version> parsed as data. The candidate binary never
+        # self-reports.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        Assert-True ($yml -match 'git -C candidate-source rev-parse HEAD') 'the candidate-source checkout SHA must be verified against the Stage A run head SHA'
+        Assert-True ($yml -match 'Get-ProjectSemanticVersion') 'the project version must be read from the candidate-source csproj as data'
+        Assert-True ($yml -match [regex]::Escape('candidate-source/TabDock.csproj')) 'the csproj data read must target the candidate source tree'
+        Assert-True ($yml -match [regex]::Escape('-ExpectedSourceSha')) 'the gate must bind the manifest sourceCommitSha to the run head SHA'
+        Assert-True ($yml -match 'Test-PublicationEligibility') 'the trusted policy gate must validate the manifest contract'
+        Assert-True ($yml -notmatch [regex]::Escape('--version')) 'no binary version self-report may exist in Stage B'
+        Assert-True ($yml -notmatch [regex]::Escape('Verify downloaded executable identity')) 'the execute-the-binary step must be gone'
+    }
+
+    New-TestCase 'trusted-stage-a-build-identity-contract-remains-required' {
+        # The buildIdentity record (generated and verified by trusted Stage A)
+        # is the binary-identity contract Stage B validates instead of
+        # executing the candidate; a manifest whose recorded buildIdentity
+        # disagrees with the manifest version must fail the gate.
+        $art = New-SyntheticArtifactDir $testRoot 'id-forge-sem' -SourceSha $goodSha -Version $goodVersion
+        Update-TestManifest $art.ManifestPath @{ buildIdentity = [ordered]@{ semanticVersion = '9.9.9'; informationalVersion = '1.0.0+abcdef1'; selfReportedSha256 = 'unavailable' } }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate.Eligible) 'a manifest with a forged buildIdentity semanticVersion must fail the gate'
+        Assert-True (($gate.Failures -join ';') -match 'buildIdentity\.semanticVersion') 'failure must cite the buildIdentity semantic version binding'
+
+        $art2 = New-SyntheticArtifactDir $testRoot 'id-forge-info' -SourceSha $goodSha -Version $goodVersion
+        Update-TestManifest $art2.ManifestPath @{ buildIdentity = [ordered]@{ semanticVersion = '1.0.0'; informationalVersion = '2.0.0+abcdef1'; selfReportedSha256 = 'unavailable' } }
+        $evidencePath2 = Join-Path $art2.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath2 (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art2.ArtifactSha256)
+        $gate2 = Test-PublicationEligibility -ArtifactDir $art2.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath2 -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate2.Eligible) 'a manifest with a forged buildIdentity informationalVersion must fail the gate'
+        Assert-True (($gate2.Failures -join ';') -match 'informationalVersion') 'failure must cite the informational version binding'
+    }
+
+    New-TestCase 'stage-b-policy-checkout-persist-credentials-false' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        $policy = @((Get-CheckoutSteps $yml) | Where-Object { $_ -match 'path: policy' })
+        Assert-True ($policy.Count -eq 2) "expected two trusted policy checkouts (verify + publish), got $($policy.Count)"
+        foreach ($step in $policy) {
+            Assert-True ($step -match 'persist-credentials: false') "the trusted policy checkout must not persist credentials: $step"
+        }
+    }
+
+    New-TestCase 'stage-b-candidate-source-checkout-persist-credentials-false' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        $candidate = @((Get-CheckoutSteps $yml) | Where-Object { $_ -match 'path: candidate-source' })
+        Assert-True ($candidate.Count -eq 1) "expected one candidate-source checkout, got $($candidate.Count)"
+        Assert-True ($candidate[0] -match 'persist-credentials: false') "the candidate-source checkout must not persist credentials: $($candidate[0])"
+    }
+
+    New-TestCase 'stage-b-publish-policy-checkout-persist-credentials-false' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        $publishIdx = $yml.IndexOf('  publish:')
+        Assert-True ($publishIdx -ge 0) 'Stage B must contain the publish job'
+        $publishCheckouts = @(Get-CheckoutSteps ($yml.Substring($publishIdx)))
+        $policy = @($publishCheckouts | Where-Object { $_ -match 'path: policy' })
+        Assert-True ($policy.Count -eq 1) "expected the publish job to hold one trusted policy checkout, got $($policy.Count)"
+        Assert-True ($policy[0] -match 'persist-credentials: false') "the publish-job policy checkout must not persist credentials: $($policy[0])"
+    }
+
+    New-TestCase 'production-stage-a-checkout-persist-credentials-false' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\prepare-release-candidate.yml'))
+        $checkouts = @(Get-CheckoutSteps $yml)
+        Assert-True ($checkouts.Count -eq 1) "expected exactly one Stage A checkout, got $($checkouts.Count)"
+        Assert-True ($checkouts[0] -match 'persist-credentials: false') "the Stage A production checkout must not persist credentials: $($checkouts[0])"
+    }
+
+    New-TestCase 'release-workflow-checkouts-have-no-unnecessary-persisted-credentials' {
+        foreach ($wf in @('.github\workflows\publish-release.yml', '.github\workflows\prepare-release-candidate.yml', '.github\workflows\release.yml', '.github\workflows\build.yml')) {
+            $yml = [IO.File]::ReadAllText((Join-Path $repoRoot $wf))
+            $checkouts = @(Get-CheckoutSteps $yml)
+            Assert-True ($checkouts.Count -ge 1) "$wf must contain at least one checkout step"
+            foreach ($step in $checkouts) {
+                Assert-True ($step -match 'persist-credentials: false') "checkout in $wf must not persist credentials: $step"
+            }
+            Assert-True ($yml -notmatch 'persist-credentials: true') "no workflow may enable credential persistence: $wf"
+        }
+    }
+
+    New-TestCase 'stage-b-final-hash-and-signature-gates-remain-present' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        Assert-True ($yml -match 'Test-PublicationEligibility') 'the fail-closed publication gate must remain'
+        Assert-True ($yml -match '-RequireSigning') 'the gate must still require production signing'
+        Assert-True ($yml -match 'signtool verify') 'independent Authenticode verification must remain'
+        Assert-True ($yml -match 'Get-FileSha256Lower') 'the final hash identity check must remain in the publish job'
+        Assert-True ($yml -match 'SHA256SUMS') 'the checksum gate must remain'
+        Assert-True ($yml -match 'Get-ProjectSemanticVersion') 'the project version authority read must remain'
+        Assert-True ($yml -match '-ExpectedPublisherSubject') 'the current publisher identity policy must remain bound to the gate'
+        Assert-True ($yml -match 'finalSignedSha256') 'the final-signed-hash gate must remain'
+        Assert-True ($yml -match 'tabdock-verified-') 'the same-run verified handoff must remain'
+    }
+
+    New-TestCase 'stage-b-publish-job-still-does-zero-build-and-zero-sign' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        $publishIdx = $yml.IndexOf('  publish:')
+        Assert-True ($publishIdx -ge 0) 'Stage B must contain the publish job'
+        $publishSection = $yml.Substring($publishIdx)
+        foreach ($forbidden in @('dotnet', 'sign-release', 'release-qualify', 'signtool', 'smctl', 'SIGNING_PROVIDER', '--version', '--selftest', 'Start-Process', '& $exe', 'candidate-source', 'digicert')) {
+            Assert-True ($publishSection -notmatch [regex]::Escape($forbidden)) "the Stage B publish job must not contain '$forbidden'"
+        }
+        Assert-True ($publishSection -match 'gh release create') 'the publish job must create the release'
+        Assert-True ($publishSection -match 'final hash identity') 'the final hash identity check must remain'
+        Assert-True ($publishSection -match 'Get-FileSha256Lower') 'the publish job must hash the exact Stage A bytes'
+        Assert-True ($publishSection -match 'Read-Sha256Sums') 'the publish job must cross-check SHA256SUMS.txt'
     }
 
     Write-Host ''

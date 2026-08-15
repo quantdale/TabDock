@@ -73,6 +73,13 @@ still missing.
 - Pin the .NET SDK via `global.json` (8.0 feature band, roll-forward within
   .NET 8 only) without reintroducing the deliberately-avoided NuGet lock
   mode; document the reproducibility policy.
+- Eliminate candidate execution from the publication trust boundary: Stage B
+  (both jobs) never executes the candidate — no `--version`, no
+  `--selftest-native-abi`, no helper — source/version/artifact identity is
+  validated from trusted records (Stage A run head SHA, candidate-source
+  checkout SHA, the Stage A-produced `buildIdentity` manifest record) and
+  independent Authenticode/RFC3161 verification; every release-workflow
+  checkout sets `persist-credentials: false`.
 - Add the physical mixed-DPI qualification procedure and the final manual
   Windows smoke procedure as required human gates that remain explicitly
   unperformed until real evidence exists.

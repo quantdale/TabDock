@@ -249,7 +249,13 @@ TRUSTED policy checkout (`policy/scripts/release-tooling.ps1` at the
 executing workflow revision) — the candidate's own files are data only and
 never supply release-policy code; the verification job (contents: read)
 runs all gates, and the publish job (contents: write, after `needs: verify`)
-performs only the final hash identity check and the release mutation:
+performs only the final hash identity check and the release mutation.
+**Stage B NEVER executes the candidate executable** (no version self-report,
+no native-ABI self-test, no helper, in either job): binary identity is
+validated from the trusted manifest `buildIdentity` record produced by
+trusted Stage A and from independent Authenticode/RFC3161 verification of
+the bytes — a program under evaluation is not an independent authority for
+its own release eligibility. The Stage B gate enforces:
 
 - run/artifact/SHA/version/hash binding (unchanged);
 - manifest `signingProvider` must be an approved production provider and

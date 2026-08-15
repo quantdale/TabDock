@@ -14,7 +14,10 @@ jobs:
     runs-on: windows-latest
     steps:
       # Current checkout action: Node 24 action runtime (runner-supported).
+      # Least privilege: no authenticated git operation is performed here.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # Current setup action: Node 24 action runtime; SDK remains .NET 8.
       - uses: actions/setup-dotnet@v6
@@ -71,7 +74,10 @@ jobs:
   native-abi-evidence:
     runs-on: windows-2022
     steps:
+      # Least privilege: no authenticated git operation is performed here.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-dotnet@v6
         with:

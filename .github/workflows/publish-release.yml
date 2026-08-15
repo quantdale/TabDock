@@ -3,7 +3,7 @@ name: publish-release
 # STAGE B of the two-stage production release architecture: publish the
 # EXISTING immutable production candidate produced by the
 # prepare-release-candidate workflow (STAGE A). This workflow NEVER builds,
-# NEVER signs, and NEVER touches the candidate executable: it downloads the
+# NEVER signs, and NEVER executes the candidate executable: it downloads the
 # exact artifact retained by the Stage A run, re-verifies every production
 # condition against those exact bytes, and only then creates the GitHub
 # Release from the downloaded bytes.
@@ -25,17 +25,21 @@ name: publish-release
 # the policy checkout can only be the trusted revision. All publication
 # policy functions (Test-PublicationEligibility and the release-tooling
 # module) are dot-sourced EXCLUSIVELY from policy/scripts; files under
-# candidate-source/ and candidate-artifact/ are data and are never
-# dot-sourced, executed, or imported. An old candidate that was valid under
+# candidate-source/ and candidate-artifact/ are DATA ONLY and are never
+# dot-sourced, imported, or executed - Stage B NEVER launches the candidate
+# executable or any candidate helper (no candidate version self-report, no
+# candidate native-ABI self-test, no candidate script), in either job. An
+# old candidate that was valid under
 # an old policy is rejected whenever it no longer satisfies the CURRENT
 # policy (releasePolicySchemaVersion >= current minimum, current provider
 # allowlist, current key-protection policy, current publisher-identity
 # policy, current timestamp/certificate policy).
 #
 # LEAST PRIVILEGE: publication is split into two jobs.
-#   JOB 1 (verify): contents: read - all candidate execution (read-only
-#       product identity/self-tests) and ALL release gates happen here,
-#       before any write-capable credential exists in the run.
+#   JOB 1 (verify): contents: read - ALL release gates happen here. Candidate
+#       files are READ/PARSED/HASHED/VERIFIED strictly as DATA; NO candidate
+#       process ever runs in this job or anywhere in Stage B, and no
+#       write-capable credential exists in this job.
 #   JOB 2 (publish): contents: write - obtains ONLY the verified same-run
 #       handoff (publication-verification.json + RELEASE_NOTES.md), performs
 #       the final hash identity check against the exact Stage A bytes, and
@@ -44,8 +48,9 @@ name: publish-release
 # JOB 1 additionally holds actions: write (documented deviation from the
 # strict "actions: read" ideal) solely to upload the same-run verification
 # handoff artifact; it cannot create releases or tags (no contents: write).
-# All untrusted/candidate execution happens in JOB 1, BEFORE JOB 2 acquires
-# contents: write.
+# STAGE B NEVER EXECUTES THE CANDIDATE: candidate source and candidate
+# artifact are DATA ONLY in BOTH jobs (the verify job gates them strictly as
+# data before the publish job acquires contents: write).
 #
 # The tag is DERIVED as "v" + the authoritative semantic version recorded in
 # the candidate manifest; no free-form tag input exists, so arbitrary or
@@ -70,7 +75,9 @@ permissions:
 jobs:
   # ---------------------------------------------------------------------------
   # JOB 1 - VERIFY: resolve, locate, download, and gate the candidate. NO
-  # contents: write. The trusted policy module is loaded ONLY from policy/.
+  # contents: write. NO candidate execution: candidate source and candidate
+  # artifact are handled strictly as data. The trusted policy module is
+  # loaded ONLY from policy/.
   # ---------------------------------------------------------------------------
   verify:
     runs-on: windows-latest
@@ -79,9 +86,9 @@ jobs:
       # Documented deviation: actions: write is held here ONLY so this job can
       # upload the same-run verification handoff artifact that the publish job
       # consumes. It grants no release/tag capability (contents stays read)
-      # and expires with the run. All candidate execution and all release
-      # gates happen in this job, before the publish job acquires the
-      # release-mutation (contents write) permission.
+      # and expires with the run. All release gates (candidate files handled
+      # strictly as DATA - never executed) happen in this job, before the
+      # publish job acquires the release-mutation (contents write) permission.
       actions: write
     outputs:
       head_sha: ${{ steps.resolve-run.outputs.head_sha }}
@@ -122,6 +129,9 @@ jobs:
       - name: Checkout trusted release policy (current workflow revision)
         uses: actions/checkout@v7
         with:
+          # Least privilege: this checkout performs no authenticated git
+          # operation (push/merge); no credentials are persisted in .git.
+          persist-credentials: false
           ref: ${{ github.sha }}
           path: policy
 
@@ -215,6 +225,9 @@ jobs:
       - name: Checkout candidate source (data only)
         uses: actions/checkout@v7
         with:
+          # Least privilege: no authenticated git operation is performed on
+          # the candidate tree; no credentials are persisted in .git.
+          persist-credentials: false
           ref: ${{ steps.resolve-run.outputs.head_sha }}
           path: candidate-source
 
@@ -246,7 +259,10 @@ jobs:
       # exact SHA and version; releaseMode PRODUCTION; manifest workflowRunId
       # == the Stage A run; CURRENT release-policy schema contract
       # (releasePolicySchemaVersion >= minimum); binary identity in the
-      # manifest agrees with the semantic version; on-disk SHA == manifest
+      # manifest agrees with the semantic version (the buildIdentity record
+      # was generated and verified by TRUSTED Stage A; Stage B validates the
+      # manifest contract but NEVER executes the candidate binary to re-ask
+      # it); on-disk SHA == manifest
       # artifactSha256 == SHA256SUMS.txt; schema-v2 external evidence bound
       # to this SHA, the final artifact hash, and this exact run + artifact,
       # with finalWindowsHumanSmoke, physicalMixedDpi, and
@@ -298,30 +314,22 @@ jobs:
           }
           Write-Host 'Publication gate: PASS (evaluated exclusively by the CURRENT trusted policy)' -ForegroundColor Green
 
-      # Execute the DOWNLOADED binary read-only to prove the published bytes
-      # themselves report the authoritative identity: the same semantic
-      # version, the same source commit, and the same SHA-256 recorded in the
-      # manifest and evidence. The native ABI self-test also runs here as an
-      # extra hosted-CI sanity check on the exact published bytes. This is
-      # the only candidate execution in Stage B and it happens in the
-      # read-only verify job, BEFORE the publish job acquires contents: write.
-      - name: Verify downloaded executable identity (read-only, verify job)
-        shell: pwsh
-        run: |
-          $dir = Join-Path $env:GITHUB_WORKSPACE 'candidate-artifact'
-          $exe = Join-Path $dir 'TabDock.exe'
-          $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
-          $versionRun = & $exe --version 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0) { throw "downloaded candidate --version failed: $versionRun" }
-          $sem = [regex]::Match($versionRun, '(?im)^TabDock\s+(\S+)').Groups[1].Value
-          $commit = [regex]::Match($versionRun, '(?im)^commit:\s*([0-9a-f]{40})').Groups[1].Value
-          $sha = [regex]::Match($versionRun, '(?im)^sha256:\s*([0-9A-Fa-f]{64})').Groups[1].Value
-          if ($sem -ne [string]$manifest.semanticVersion) { throw "downloaded binary reports version '$sem' != manifest '$($manifest.semanticVersion)'" }
-          if ($commit -ne [string]$manifest.sourceCommitSha) { throw "downloaded binary reports commit '$commit' != manifest '$($manifest.sourceCommitSha)'" }
-          if ($sha -ne [string]$manifest.artifactSha256) { throw "downloaded binary reports sha256 '$sha' != manifest artifactSha256 '$($manifest.artifactSha256)'" }
-          Write-Host "Downloaded binary identity: version=$sem commit=$commit sha256=$sha (all match the manifest)" -ForegroundColor Green
-          & $exe --selftest-native-abi 2>&1 | Out-String | Write-Host
-          if ($LASTEXITCODE -ne 0) { throw "downloaded candidate --selftest-native-abi failed (exit $LASTEXITCODE)" }
+      # NO CANDIDATE EXECUTION IN STAGE B (trust-boundary closure): the
+      # downloaded executable is NEVER launched - no version self-report, no
+      # native-ABI self-test, no helper process, in EITHER job. A program
+      # under evaluation is not an independent authority for its own release
+      # eligibility. The identity guarantees are proven WITHOUT execution:
+      #   - sourceCommitSha == run head SHA == candidate-source checkout SHA
+      #   - candidate-source TabDock.csproj <Version> (parsed as data)
+      #     == manifest.semanticVersion
+      #   - manifest buildIdentity.semanticVersion / informationalVersion
+      #     contract (generated + verified by TRUSTED Stage A) == manifest
+      #     semanticVersion
+      #   - on-disk SHA == manifest artifactSha256 == SHA256SUMS.txt ==
+      #     finalSignedSha256 (the fail-closed gate above)
+      #   - independent Authenticode + RFC3161 verification of the bytes
+      # The gate above enforces all of this; the manifest contract is
+      # validated here without re-running the candidate.
 
       # Auditable publication record: the publish-time eligibility verdict
       # computed by the CURRENT trusted policy from the downloaded bytes and
@@ -438,10 +446,10 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # JOB 2 - PUBLISH: contents: write exists ONLY here, and only AFTER the
-  # verify job completed every gate and all candidate execution. This job
-  # executes NO candidate code and NO candidate scripts: it obtains the
-  # verified handoff, re-downloads the exact Stage A bytes, performs the
-  # final hash identity check, and creates the release.
+  # verify job completed every gate (Stage B executes NO candidate code in
+  # any job). This job executes NO candidate code and NO candidate scripts:
+  # it obtains the verified handoff, re-downloads the exact Stage A bytes,
+  # performs the final hash identity check, and creates the release.
   # ---------------------------------------------------------------------------
   publish:
     needs: verify
@@ -472,6 +480,9 @@ jobs:
       - name: Checkout trusted release policy (current workflow revision)
         uses: actions/checkout@v7
         with:
+          # Least privilege: this checkout performs no authenticated git
+          # operation (push/merge); no credentials are persisted in .git.
+          persist-credentials: false
           ref: ${{ github.sha }}
           path: policy
 

@@ -111,6 +111,9 @@ jobs:
       - name: Checkout exact candidate SHA (== trusted dispatch SHA)
         uses: actions/checkout@v7
         with:
+          # Least privilege: this checkout performs no authenticated git
+          # operation (push/merge); no credentials are persisted in .git.
+          persist-credentials: false
           ref: ${{ inputs.sha }}
 
       # The workflow must operate on the exact requested commit; a mismatch

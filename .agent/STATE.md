@@ -64,8 +64,8 @@ this text.
     this repo, must be the candidate workflow, completed/successful, artifact
     live and unique), downloads the EXACT artifact cross-run
     (`download-artifact@v7` `run-id`/`repository`/`github-token`), re-verifies
-    everything (project version at candidate SHA == manifest == downloaded
-    binary `--version`; file == manifest == SHA256SUMS; evidence bound to
+    everything (project version at candidate SHA == manifest == recorded
+    binary identity; file == manifest == SHA256SUMS; evidence bound to
     SHA/hash/run/artifact; signtool verify /pa), and publishes those exact
     bytes with the DERIVED tag `v<semanticVersion>` (no tag input exists).
     `release.yml` is now RC qualification-only with no publication path
@@ -75,7 +75,8 @@ this text.
     input is EXPECTED-only (any disagreement fails), the manifest records the
     project version, and the published binary's semantic + informational
     versions must carry it; the Stage B gate requires manifest == recorded
-    binary identity == project version and re-runs the downloaded `--version`.
+    binary identity == project version and never executes the downloaded
+    binary to re-ask it.
   - Windows compatibility is now a machine-enforced production gate: evidence
     schema v2 requires `windowsCompatibility` with PASS entries for real
     Windows 10 x64 and Windows 11 x64 (status, build, operator, ISO-8601
@@ -162,7 +163,8 @@ this text.
     sufficient).
   - Stage B least privilege: JOB 1 `verify` (contents: read; documented
     `actions: write` deviation solely for the same-run verification handoff
-    upload; all gates + read-only candidate identity execution) and JOB 2
+    upload; all gates; candidate files handled strictly as DATA — never
+    executed) and JOB 2
     `publish` (needs: verify; contents: write; NO candidate execution, NO
     build/sign; final hash identity check + release mutation + asset
     verification).
@@ -183,6 +185,44 @@ this text.
     operations, timestamp missing/warned) — all PASS locally. Docs
     (`publication-gates.md`, `code-signing.md`), decision record, and
     OpenSpec change (section 14) updated.
+  - Real production signing remains `BLOCKED_EXTERNAL`; v1.0.0 is PREPARED
+    BUT INTENTIONALLY NOT PUBLISHED; verdict stays GO FOR RELEASE CANDIDATE
+    / BETA ONLY.
+- Campaign G (candidate-execution elimination — final release-control
+  hardening, independent review round 4, this session):
+  - P0 trust-boundary closure: Stage B now executes ZERO candidate code in
+    EITHER job. The verify job's `--version` / `--selftest-native-abi`
+    execution step ("Verify downloaded executable identity") is REMOVED;
+    publish-release.yml contains no `--version`, no `--selftest`, no
+    `Start-Process`, no candidate-script invocation, and no path under
+    `candidate-source/` or `candidate-artifact/` in an execution position
+    (candidate source and candidate artifact are DATA ONLY: read/parse/hash/
+    Authenticode-verify/asset-upload).
+  - Identity retained WITHOUT execution: sourceCommitSha == Stage A run head
+    SHA == candidate-source checkout SHA; candidate-source
+    TabDock.csproj <Version> (parsed as data) == manifest.semanticVersion;
+    manifest buildIdentity semantic/informational versions (generated +
+    verified by trusted Stage A) == manifest version; on-disk SHA ==
+    manifest artifactSha256 == SHA256SUMS == finalSignedSha256; run-id and
+    artifact-name bindings; independent Authenticode + RFC3161 verification.
+    Native ABI coverage stays outside publication: exact-SHA build.yml,
+    windows-2022 native-abi-evidence, Stage A qualification, and the external
+    Windows 10/11 gates.
+  - P1 checkout credential hardening: `persist-credentials: false` on every
+    actions/checkout in publish-release.yml (policy ×2 + candidate-source),
+    prepare-release-candidate.yml, release.yml, and build.yml (×2); the
+    cross-run download-artifact `github-token` inputs are preserved.
+  - `scripts/release-tooling-tests.ps1` extended from 118 to 134
+    deterministic cases: the 16 named candidate-execution-elimination and
+    checkout-credential tests (execution-position invariant via run-block
+    extraction, whole-file absence of candidate flags, data-only artifact
+    classification, trusted-record identity, persist-credentials checks,
+    final hash/signature gates and publish-job zero-build/zero-sign
+    retained) — all PASS locally.
+  - Docs updated: publication-gates.md (final trust-model diagram, why
+    Stage B does not execute the candidate, checkout credential hardening),
+    code-signing.md section 8, decision record addendum, OpenSpec change
+    section 15, STATE.md checkpoint.
   - Real production signing remains `BLOCKED_EXTERNAL`; v1.0.0 is PREPARED
     BUT INTENTIONALLY NOT PUBLISHED; verdict stays GO FOR RELEASE CANDIDATE
     / BETA ONLY.
@@ -237,7 +277,7 @@ this text.
   identity. Hosted Actions evidence is always resolved dynamically for the
   exact SHA; it is not persisted here.
 - Release-tooling regression suite:
-  `scripts/release-tooling-tests.ps1` (118 cases; no real certificates, no
+  `scripts/release-tooling-tests.ps1` (134 cases; no real certificates, no
   publishing, no provider contact) — run before every release-pipeline
   change AND gated by hosted CI in `build.yml` (exact-SHA gate).
 - The release chain is `scripts/release-qualify.ps1 -Ci -Sha <sha> -Version
