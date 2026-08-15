@@ -151,47 +151,46 @@ jobs:
           $manifest = Get-Content (Join-Path 'release-artifacts' 'release-manifest.json') -Raw | ConvertFrom-Json
           $signed = $manifest.signingStatus
           $sha = if ($manifest.finalSignedSha256) { $manifest.finalSignedSha256 } else { $manifest.artifactSha256 }
-          $notes = @"
-TabDock $($manifest.semanticVersion)
-
-## Release identity
-
-- Source commit: ``$($manifest.sourceCommitSha)``
-- Executable SHA-256: ``$sha``
-- Authenticode signing: $signed (verification: $($manifest.signatureVerification))
-- Runtime: .NET 8 self-contained, win-x64 single file (no install required)
-- Supported OS: Windows 10 (recent builds) and Windows 11, 64-bit
-
-## Qualification
-
-- Automated qualification: $($manifest.qualificationStatus) (hermetic: builds, geometry/diagnostics/privacy/persistence self-tests, doctor/version, support-bundle privacy, OpenSpec validation)
-- Exact-SHA provenance: artifact produced by and qualified against commit $($manifest.sourceCommitSha)
-
-## External gates NOT performed for this release
-
-- Final human Windows smoke: $($manifest.externalGates.finalWindowsHumanSmoke)
-- Physical mixed-DPI hardware qualification: $($manifest.externalGates.physicalMixedDpi)
-- Browser coverage: $($manifest.externalGates.browserCoverage)
-- Destructive logoff/shutdown testing: $($manifest.externalGates.destructiveLogoffTesting)
-
-These gates require real hardware/human evidence; their absence does not reduce the PASS status of the automated chain.
-
-## Known limitations
-
-See the repository README "Known limitations" section. The most important ones:
-
-- Maximizing a docked guest window itself fills the whole monitor (cosmetic UX gap).
-- Elevated (admin) applications cannot be captured by a standard-user TabDock (UIPI).
-- HWNDs are not stable across reboots; persisted state is layout intent, not live windows.
-- Physical mixed-DPI and unavailable-browser qualification are NOT claimed.
-- Force-killing TabDock is safe (guests are never reparented); the journaled recovery restores identity-valid guests on next launch.
-
-## Support
-
-- Read-only diagnostics: ``TabDock.exe --doctor``, ``--support-bundle``
-- Privacy: support bundles are sanitized; raw logs are local-only and must be redacted before sharing.
-"@
-          $notes | Set-Content -Path 'RELEASE_NOTES.md' -Encoding utf8
+          $lines = [System.Collections.Generic.List[string]]::new()
+          $lines.Add("TabDock $($manifest.semanticVersion)")
+          $lines.Add('')
+          $lines.Add('## Release identity')
+          $lines.Add('')
+          $lines.Add("- Source commit: $($manifest.sourceCommitSha)")
+          $lines.Add("- Executable SHA-256: $sha")
+          $lines.Add("- Authenticode signing: $signed (verification: $($manifest.signatureVerification))")
+          $lines.Add('- Runtime: .NET 8 self-contained, win-x64 single file (no install required)')
+          $lines.Add('- Supported OS: Windows 10 (recent builds) and Windows 11, 64-bit')
+          $lines.Add('')
+          $lines.Add('## Qualification')
+          $lines.Add('')
+          $lines.Add("- Automated qualification: $($manifest.qualificationStatus) (hermetic: builds, geometry/diagnostics/privacy/persistence self-tests, doctor/version, support-bundle privacy, OpenSpec validation)")
+          $lines.Add("- Exact-SHA provenance: artifact produced by and qualified against commit $($manifest.sourceCommitSha)")
+          $lines.Add('')
+          $lines.Add('## External gates NOT performed for this release')
+          $lines.Add('')
+          $lines.Add("- Final human Windows smoke: $($manifest.externalGates.finalWindowsHumanSmoke)")
+          $lines.Add("- Physical mixed-DPI hardware qualification: $($manifest.externalGates.physicalMixedDpi)")
+          $lines.Add("- Browser coverage: $($manifest.externalGates.browserCoverage)")
+          $lines.Add("- Destructive logoff/shutdown testing: $($manifest.externalGates.destructiveLogoffTesting)")
+          $lines.Add('')
+          $lines.Add('These gates require real hardware/human evidence; their absence does not reduce the PASS status of the automated chain.')
+          $lines.Add('')
+          $lines.Add('## Known limitations')
+          $lines.Add('')
+          $lines.Add('See the repository README "Known limitations" section. The most important ones:')
+          $lines.Add('')
+          $lines.Add('- Maximizing a docked guest window itself fills the whole monitor (cosmetic UX gap).')
+          $lines.Add('- Elevated (admin) applications cannot be captured by a standard-user TabDock (UIPI).')
+          $lines.Add('- HWNDs are not stable across reboots; persisted state is layout intent, not live windows.')
+          $lines.Add('- Physical mixed-DPI and unavailable-browser qualification are NOT claimed.')
+          $lines.Add('- Force-killing TabDock is safe (guests are never reparented); the journaled recovery restores identity-valid guests on next launch.')
+          $lines.Add('')
+          $lines.Add('## Support')
+          $lines.Add('')
+          $lines.Add('- Read-only diagnostics: TabDock.exe --doctor, --support-bundle')
+          $lines.Add('- Privacy: support bundles are sanitized; raw logs are local-only and must be redacted before sharing.')
+          $lines -join "`n" | Set-Content -Path 'RELEASE_NOTES.md' -Encoding utf8
 
       # Intentional publication of the exact qualified artifact. The tag is
       # created at the exact candidate SHA; no source modification and no
