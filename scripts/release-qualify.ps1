@@ -64,9 +64,12 @@
     production provider (currently digicert-stm, key protection class
     CLOUD_HSM - a non-exportable private key held by the signing service),
     the provider's credentials must be complete (BLOCKED_EXTERNAL otherwise,
-    BEFORE any build work), test-only mock signing is refused, and the
-    manifest records releaseMode=PRODUCTION. Local-PFX signing (exportable
-    key) is NEVER approved for production candidates.
+    BEFORE any build work), test-only mock signing is refused, the manifest
+    records releaseMode=PRODUCTION, and the CURRENT publisher identity policy
+    (SIGNING_EXPECTED_SUBJECT) must be configured and must equal the signed
+    certificate subject (the manifest also records the current
+    releasePolicySchemaVersion, which the Stage B gate requires). Local-PFX
+    signing (exportable key) is NEVER approved for production candidates.
     External human gates (final smoke, mixed-DPI, Windows compatibility) are
     NEVER verified by this script; productionReleaseEligibility is therefore
     BLOCKED_EXTERNAL here and the publish-release workflow (Stage B)
@@ -176,8 +179,15 @@ $manifest = [ordered]@{
     signingCertificateValidFrom = $null
     signingCertificateValidTo = $null
     signingCertificateEku = $null
+    timestampCertificateSubject = $null
+    timestampCertificateThumbprint = $null
     signingMock         = $null
     releaseMode         = if ($productionGate) { 'PRODUCTION' } else { 'QUALIFICATION_ONLY' }
+    # The release-policy schema generation of the CURRENT trusted policy under
+    # which this candidate is being produced. Stage B (the CURRENT policy)
+    # rejects candidates whose schema is absent or below the minimum, so an
+    # old candidate is never evaluated under its own historical policy.
+    releasePolicySchemaVersion = Get-ReleasePolicySchemaVersion
     # Qualification-time truth: external human gates are never verified by
     # this script, so production eligibility is BLOCKED_EXTERNAL here. The
     # release workflow's publish job validates the external evidence file and
@@ -399,6 +409,8 @@ try {
         $manifest.signingCertificateValidFrom = $signResult.CertificateValidFrom
         $manifest.signingCertificateValidTo = $signResult.CertificateValidTo
         $manifest.signingCertificateEku = $signResult.CertificateEku
+        $manifest.timestampCertificateSubject = $signResult.TimestamperSubject
+        $manifest.timestampCertificateThumbprint = $signResult.TimestamperThumbprint
         if ([bool]$signResult.Mock) {
             $manifest.signingMock = $true
             if ($productionGate) {
@@ -423,6 +435,21 @@ try {
             }
             if ([string]::IsNullOrWhiteSpace([string]$manifest.signingCertificateThumbprint)) {
                 throw 'Production policy requires the signed-certificate identity in the manifest but the signer recorded none.'
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$manifest.timestampCertificateSubject) -or
+                [string]::IsNullOrWhiteSpace([string]$manifest.timestampCertificateThumbprint)) {
+                throw 'Production policy requires the RFC3161 timestamper identity in the manifest but the signer recorded none.'
+            }
+            # The CURRENT trusted publisher policy must equal the signed
+            # certificate subject: an artifact cannot carry a publisher the
+            # current policy does not approve, even when the manifest
+            # consistently records that same publisher.
+            $expectedPublisher = [string]$env:SIGNING_EXPECTED_SUBJECT
+            if ([string]::IsNullOrWhiteSpace($expectedPublisher)) {
+                throw 'Production policy requires the current publisher identity policy (SIGNING_EXPECTED_SUBJECT) but it is not configured.'
+            }
+            if (-not [string]::Equals([string]$manifest.signingCertificateSubject, $expectedPublisher, [StringComparison]::Ordinal)) {
+                throw "Production policy requires the signed certificate subject to equal the current publisher identity policy; manifest records '$($manifest.signingCertificateSubject)' but SIGNING_EXPECTED_SUBJECT is '$expectedPublisher'."
             }
         }
         if ($signingRequired -and $signResult.Status -ne 'SIGNED') {

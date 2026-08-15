@@ -138,6 +138,54 @@ this text.
   - Real production signing remains `BLOCKED_EXTERNAL`: the approved signer
     credentials are not configured and NO real signed candidate exists yet.
     Release status stays GO FOR RELEASE CANDIDATE / BETA ONLY.
+- Campaign F (release-policy trust-boundary hardening, independent review
+  round 3, this session):
+  - P0 trust boundary eliminated: the candidate being evaluated NO LONGER
+    supplies the policy that decides whether it may be published. Stage B
+    physically separates `policy/` (TRUSTED policy = the executing
+    `publish-release.yml` revision; requires `github.ref == refs/heads/main`
+    AND `github.workflow_sha == github.sha`; all policy code dot-sourced
+    exclusively from `policy/scripts/release-tooling.ps1`),
+    `candidate-source/` (data only), and `candidate-artifact/` (data only).
+    Stage A production preparation requires the same dispatch contract
+    (`inputs.sha == github.sha == main HEAD`) as its FIRST step, before any
+    credentials/build; RC qualification still supports arbitrary SHAs.
+  - Release-policy schema contract: `releasePolicySchemaVersion` (current 3)
+    recorded by Stage A; `Get-MinimumAcceptedProductionPolicySchema` (3)
+    makes the CURRENT policy reject absent/stale schemas (old candidates
+    fail closed, never evaluated under their own historical policy).
+  - Publisher identity policy MANDATORY for production:
+    `SIGNING_EXPECTED_SUBJECT` (stable subject identity, not a rotating
+    thumbprint) required by Stage A preflight, `sign-release.ps1` under the
+    production gate, and the Stage B gate (CURRENT policy == manifest
+    subject == actual certificate subject; "actual == manifest" alone never
+    sufficient).
+  - Stage B least privilege: JOB 1 `verify` (contents: read; documented
+    `actions: write` deviation solely for the same-run verification handoff
+    upload; all gates + read-only candidate identity execution) and JOB 2
+    `publish` (needs: verify; contents: write; NO candidate execution, NO
+    build/sign; final hash identity check + release mutation + asset
+    verification).
+  - DigiCert action pinned to the full immutable SHA
+    `fae23a455ba4bde62b64fd7cb2f81ade788f5a95` (v1.2.1, verified via the
+    GitHub API); legacy local-PFX secrets removed from production Stage A;
+    client-auth P12 materialized with PowerShell/.NET to a random private
+    runner.temp path with an always-run cleanup; signtool verification now
+    `verify /pa /v /tw`; RFC3161 timestamper identity recorded in the
+    manifest and cross-checked at Stage B; `build.yml` gates
+    `scripts/release-tooling-tests.ps1` (exact-SHA hosted-CI gate).
+  - `scripts/release-tooling-tests.ps1` extended to 118 deterministic cases
+    (old-pre-HSM candidate rejected by current policy, policy-schema
+    missing/stale/current, candidate-policy isolation + hostile-tooling
+    immunity, publisher policy missing/mismatch/consistent-wrong, Stage A
+    dispatch contract, Stage B run-head-SHA binding, no PFX secrets in
+    Stage A, DigiCert pin, verify-job permissions, publish-job forbidden
+    operations, timestamp missing/warned) — all PASS locally. Docs
+    (`publication-gates.md`, `code-signing.md`), decision record, and
+    OpenSpec change (section 14) updated.
+  - Real production signing remains `BLOCKED_EXTERNAL`; v1.0.0 is PREPARED
+    BUT INTENTIONALLY NOT PUBLISHED; verdict stays GO FOR RELEASE CANDIDATE
+    / BETA ONLY.
 - Campaign B release engineering (repository side complete, with Campaign C
   corrections):
   - `scripts/release-qualify.ps1` — exact-SHA + clean-tree enforcement,
@@ -189,9 +237,9 @@ this text.
   identity. Hosted Actions evidence is always resolved dynamically for the
   exact SHA; it is not persisted here.
 - Release-tooling regression suite:
-  `scripts/release-tooling-tests.ps1` (96 cases; no real certificates, no
+  `scripts/release-tooling-tests.ps1` (118 cases; no real certificates, no
   publishing, no provider contact) — run before every release-pipeline
-  change.
+  change AND gated by hosted CI in `build.yml` (exact-SHA gate).
 - The release chain is `scripts/release-qualify.ps1 -Ci -Sha <sha> -Version
   1.0.0 -Sign` (locally: without `-Ci`); it fails on SHA mismatch, dirty
   trees, published-exe identity mismatch, expected-version disagreement with

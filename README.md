@@ -296,22 +296,36 @@ retained bytes (no build, no sign)
   describe the FINAL distributed executable — enforced by
   `scripts/release-tooling.ps1` (file == manifest == checksums).
 - **STAGE A — `prepare-release-candidate.yml`** (production candidate): a
-  manually dispatched workflow that builds ONCE, Authenticode-signs ONCE
+  manually dispatched workflow (from `main`; the FIRST step verifies the
+  trusted dispatch contract — `github.ref == refs/heads/main`,
+  `inputs.sha == github.sha`, `github.workflow_sha == github.sha` — before
+  any credentials/build) that builds ONCE, Authenticode-signs ONCE
   through the approved production signer (`digicert-stm`, non-exportable
   HSM/cloud key; mandatory — `BLOCKED_EXTERNAL` without an approved
-  configured signer), verifies the signature + RFC3161 timestamp +
-  certificate identity, computes the final distributed hash, and retains
-  the immutable candidate artifact
-  `tabdock-candidate-<sha>-<run-id>`. It NEVER creates a GitHub Release.
-- **STAGE B — `publish-release.yml`** (publication): a separate workflow
-  that takes the Stage A run id + the schema-v2 external evidence, downloads
-  the EXACT retained artifact (cross-run `download-artifact@v7` with
-  `run-id`/`repository`/`github-token`), re-verifies every production
-  condition against those downloaded bytes (project version == manifest ==
-  binary `--version`; file == manifest == SHA256SUMS; evidence bound to SHA,
-  hash, run, and artifact; `signtool verify /pa`), and publishes those exact
-  bytes with the DERIVED tag `v<semanticVersion>` — no second compilation,
-  no second signing, no tag input.
+  configured signer or without the mandatory publisher identity policy
+  `SIGNING_EXPECTED_SUBJECT`; the official DigiCert action is pinned to its
+  full immutable SHA), verifies the signature + RFC3161 timestamp +
+  certificate identity, computes the final distributed hash, records the
+  current `releasePolicySchemaVersion` in the manifest, and retains the
+  immutable candidate artifact `tabdock-candidate-<sha>-<run-id>`. It NEVER
+  creates a GitHub Release, and it never receives the legacy local-PFX
+  secrets.
+- **STAGE B — `publish-release.yml`** (publication): a separate workflow,
+  split into two least-privilege jobs. JOB 1 `verify` (contents: read)
+  checks out the TRUSTED release policy at the executing workflow revision
+  (`policy/`; the candidate can never replace it), the candidate source
+  (`candidate-source/`, data only), takes the Stage A run id + the schema-v2
+  external evidence, downloads the EXACT retained artifact (cross-run
+  `download-artifact@v7` with `run-id`/`repository`/`github-token`),
+  re-verifies every production condition against those downloaded bytes
+  using ONLY the trusted policy module (project version == manifest ==
+  binary `--version`; file == manifest == SHA256SUMS; CURRENT policy schema;
+  CURRENT publisher policy == manifest subject == actual certificate; evidence
+  bound to SHA, hash, run, and artifact; `signtool verify /pa /v /tw`), and
+  produces the verified same-run handoff. JOB 2 `publish` (needs: verify;
+  contents: write) performs only the final hash identity check and publishes
+  those exact bytes with the DERIVED tag `v<semanticVersion>` — no second
+  compilation, no second signing, no tag input, no candidate execution.
 - `release.yml` is the RC qualification-only workflow (dispatch-only, never
   publishes): it qualifies the exact SHA and retains
   `tabdock-rc-<sha>-<run-id>`; signing is optional (`NOT_CONFIGURED`
@@ -331,8 +345,12 @@ retained bytes (no build, no sign)
   need evidence and their manifests honestly report
   `productionReleaseEligibility = BLOCKED_EXTERNAL`.
 - Release-tooling regression tests: `scripts/release-tooling-tests.ps1`
-  (96 deterministic adversarial cases, including signing-provider policy;
-  no real certificates, no publishing, no provider contact).
+  (118 deterministic adversarial cases, including signing-provider policy,
+  the release-policy trust boundary (old candidates rejected under CURRENT
+  policy, policy-schema contract, candidate-policy isolation, publisher
+  identity policy, Stage A/B dispatch contracts), and static workflow
+  guarantees; no real certificates, no publishing, no provider contact).
+  The suite is an exact-SHA hosted-CI gate in `build.yml`.
 
 ### Signing policy
 

@@ -374,3 +374,146 @@ be materially in the future.
 - **WHEN** an evidence gate carries a non-ISO-8601 `completedAt` or one in
   the future beyond the clock-skew tolerance
 - **THEN** the evidence is invalid and publication is refused
+
+### Requirement: Publication policy is trusted-policy isolated from the candidate
+Stage B publication SHALL evaluate the candidate exclusively with release-policy
+code loaded from a TRUSTED policy checkout of the workflow revision being
+executed (`policy/scripts/release-tooling.ps1`), never from the candidate
+source, the candidate artifact, the candidate manifest, or old Stage A policy
+code. The trusted policy checkout SHALL be the revision of the executing
+`publish-release.yml`: the workflow SHALL require `github.ref ==
+refs/heads/main` and `github.workflow_sha == github.sha` (for
+`workflow_dispatch`, `github.sha` is the last commit on the dispatched
+branch — the revision whose workflow file GitHub executes). The candidate
+source SHALL be checked out into a separate `candidate-source/` tree used
+only as data (project version, product metadata, source identity), and its
+scripts SHALL NEVER be executed, dot-sourced, or imported. The candidate
+executable SHALL be run only for intentionally defined read-only product
+identity/self-tests.
+
+#### Scenario: An old candidate is not evaluated under its own policy
+- **WHEN** a candidate was produced by an older release-policy generation
+- **THEN** it is evaluated exclusively under the CURRENT trusted policy and
+  is rejected whenever it no longer satisfies the CURRENT requirements
+
+#### Scenario: Hostile candidate tooling cannot change the verdict
+- **WHEN** the candidate tree contains scripts that would redefine the
+  publication gate
+- **THEN** the verdict is unchanged because the candidate files are never
+  loaded by Stage B
+
+### Requirement: Release-policy schema contract rejects old policy generations
+Stage A production manifests SHALL record `releasePolicySchemaVersion` (the
+CURRENT trusted policy schema under which the candidate was produced). The
+CURRENT Stage B policy SHALL require a manifest schema at least the current
+minimum (`Get-MinimumAcceptedProductionPolicySchema`, currently 3) and SHALL
+reject candidates with an absent or stale schema (fail closed). An old
+candidate SHALL NOT become valid merely because its old policy would have
+accepted itself. Current production policy SHALL additionally require all
+mandatory production fields: `signingProvider`, `signingKeyProtection`,
+`timestampStatus`, `signingCertificateSubject`, `signingCertificateThumbprint`,
+`signingCertificateIssuer`, `signingCertificateValidFrom`,
+`signingCertificateValidTo`, `signingCertificateEku`, `releaseMode ==
+PRODUCTION`, `finalSignedSha256`, and `workflowRunId`.
+
+#### Scenario: Missing or stale schema is rejected
+- **WHEN** a manifest has no `releasePolicySchemaVersion` or a schema below
+  the current minimum
+- **THEN** the publication gate rejects the candidate
+
+### Requirement: Stage A production preparation uses the trusted dispatch contract
+Production candidate preparation SHALL be dispatched from `main` with the
+requested SHA equal to the trusted dispatch SHA (`github.ref ==
+refs/heads/main`, `inputs.sha == github.sha`) and the workflow-file revision
+equal to the dispatch commit (`github.workflow_sha == github.sha`); any
+disagreement SHALL fail BEFORE any credentials are materialized and BEFORE
+any restore/build, so release-policy code and candidate source start from
+the same trusted release-policy generation. RC qualification SHALL continue
+to support arbitrary SHAs.
+
+#### Scenario: A mismatched production SHA is refused before build
+- **WHEN** `inputs.sha != github.sha` (or the workflow is not dispatched
+  from main, or the workflow-file revision differs)
+- **THEN** the run fails before any signing credentials, restore, or build
+
+### Requirement: Production publisher identity policy is mandatory
+Production Stage A SHALL require the CURRENT expected publisher identity
+(`SIGNING_EXPECTED_SUBJECT`, a stable subject/publisher identity — never a
+hard-coded rotating thumbprint): the preflight SHALL block without it, the
+signer SHALL fail on mismatch, and the signed certificate subject SHALL
+equal it. Stage B SHALL independently require CURRENT trusted publisher
+policy == manifest `signingCertificateSubject` == the certificate subject
+read from the actual downloaded bytes; matching manifest and file that
+consistently record the WRONG publisher SHALL fail.
+
+#### Scenario: Wrong publisher fails against current policy
+- **WHEN** the manifest and the file agree on a publisher the CURRENT
+  policy does not approve
+- **THEN** publication is refused
+
+### Requirement: Production Stage A receives no exportable-PFX secrets
+The production Stage A workflow SHALL NOT expose the legacy local-PFX
+secrets to its job (least privilege: the production HSM job must not receive
+unused exportable-PFX secrets); local-PFX support SHALL remain only in RC
+qualification and local/private development workflows and tests.
+
+#### Scenario: The production HSM job has no PFX secrets
+- **WHEN** a production Stage A run executes
+- **THEN** the legacy local-PFX secrets are not among the environment
+  variables of any production job step (asserted statically), while RC and
+  local workflows keep them
+
+### Requirement: The signing control-plane action is pinned to an immutable SHA
+The DigiCert signing action (`digicert/code-signing-software-trust-action`)
+SHALL be pinned to its full immutable commit SHA
+(`fae23a455ba4bde62b64fd7cb2f81ade788f5a95`, v1.2.1) and SHALL NOT use a
+mutable major tag. Updates SHALL be intentional: review the new version, pin
+the new full SHA, and run the release-tooling regression suite.
+
+#### Scenario: The signing action is never floated on a mutable tag
+- **WHEN** the production Stage A workflow is inspected
+- **THEN** the DigiCert action reference is the full 40-character immutable
+  commit SHA, never `@v1` or another mutable ref, and the human-readable
+  release version is recorded beside the pin
+
+### Requirement: Stage B publication is least-privilege job-split
+Stage B SHALL separate verification from publication: JOB 1 (`verify`,
+permissions `contents: read`) SHALL perform all release gates and all
+read-only candidate identity execution and SHALL NOT hold `contents: write`;
+JOB 2 (`publish`, `needs: verify`, permissions `contents: write`) SHALL
+obtain the verified same-run handoff, re-download the exact Stage A bytes,
+perform the final hash identity check, and create the release, and SHALL NOT
+execute candidate code, build, sign, or contact a signing provider. All
+untrusted/candidate execution SHALL happen before write credentials exist.
+
+#### Scenario: The write-capable job cannot execute candidate code
+- **WHEN** the publication job runs
+- **THEN** it performs only the final hash identity check and the release
+  mutation; the static workflow tests prove it contains no build, sign,
+  candidate-script execution, or provider contact
+
+### Requirement: The release-tooling regression suite is a hosted-CI gate
+The build workflow SHALL invoke `scripts/release-tooling-tests.ps1`; the
+suite SHALL be deterministic, require no network beyond ordinary restore,
+require no production credentials, perform no publication and no real
+signing, and SHALL block the build workflow on any failure, so the
+release-control suite is an exact-SHA hosted-CI gate.
+
+#### Scenario: A release-policy regression blocks the build
+- **WHEN** any release-tooling regression case fails on a hosted CI run
+- **THEN** the build workflow fails at that exact commit, making the
+  release-control suite a machine-enforced gate
+
+### Requirement: Timestamp verification is explicit and provenance-bound
+Signature verification SHALL use `signtool verify /pa /v /tw` (an
+untimestamped file yields a warning result — non-zero — and fails closed).
+The RFC3161 timestamper identity (subject, thumbprint) SHALL be recorded in
+the production manifest and SHALL be cross-checked against the actual bytes
+at Stage B; `timestampStatus == VERIFIED` remains mandatory.
+
+#### Scenario: An untimestamped or warned timestamp never passes
+- **WHEN** the signature has no valid RFC3161 timestamp, the manifest
+  records a non-VERIFIED timestamp status, or the timestamper identity is
+  absent or disagrees with the actual bytes
+- **THEN** Stage A fails and the Stage B publication gate rejects the
+  artifact

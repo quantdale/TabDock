@@ -85,9 +85,15 @@ geographically restricted service.
 
 ### 3.1 DigiCert Software Trust Manager (`digicert-stm`)
 
-Implemented against the **current official DigiCert tooling** (verified
-against `digicert/code-signing-software-trust-action@v1`, release v1.2.1,
-August 2026):
+Implemented against the **current official DigiCert tooling**, PINNED to its
+full immutable commit SHA (release-policy hardening, P1): the workflow uses
+`digicert/code-signing-software-trust-action@fae23a455ba4bde62b64fd7cb2f81ade788f5a95`
+(v1.2.1; verified 2026-08-15 via the GitHub API that the `v1.2.1` and `v1`
+refs both resolve to that commit). This action receives highly sensitive
+signing-service authentication material, so a mutable major tag is never
+trusted for the production signing control plane. Updates are intentional:
+review the new release, pin the new full SHA, and run
+`scripts/release-tooling-tests.ps1` (hosted in `build.yml`).
 
 - the workflow runs the official action in **setup-only** mode
   (`simple-signing-mode: true`, no `input`/`keypair-alias`), which installs
@@ -127,7 +133,7 @@ runner, never exists in GitHub Secrets, and is never committed.
 | `SM_CLIENT_CERT_FILE_B64` | secret | base64 of the client-authentication `.p12` (materialized on the runner by the workflow; **authentication** material, not the code-signing key) |
 | `SM_CLIENT_CERT_PASSWORD` | secret | password of that `.p12` |
 | `SM_KEYPAIR_ALIAS` | repository variable | keypair alias to sign with |
-| `SIGNING_EXPECTED_SUBJECT` | repository variable, optional | expected publisher identity (certificate subject); when set it must match exactly, adding a publisher allowlist without hard-coding a thumbprint |
+| `SIGNING_EXPECTED_SUBJECT` | repository variable, **MANDATORY for production** | the CURRENT trusted publisher identity (certificate subject); a stable publisher/subject identity that survives certificate rotation (deliberately NOT a hard-coded thumbprint). Stage A blocks without it, the signer fails on mismatch, and Stage B requires CURRENT policy == manifest subject == actual certificate subject |
 | `SIGNCERT_TIMESTAMP` | secret, optional | timestamp URL override (default DigiCert RFC3161) |
 
 ### `local-pfx` (development/private/RC only — NOT the public-GA signer)
@@ -145,25 +151,43 @@ Never commit any of these values. The pipeline prints only variable **names**.
 
 Stage A (`prepare-release-candidate.yml`) after the canonical qualification:
 
-1. **Preflight (provider-aware, before any build):** resolves
+1. **Trusted dispatch contract (first step):** the workflow must be
+   dispatched from `main` (`github.ref == refs/heads/main`), the requested
+   SHA must equal the trusted dispatch SHA (`inputs.sha == github.sha`), and
+   the workflow-file revision must be the dispatch commit
+   (`github.workflow_sha == github.sha`). Policy code and candidate source
+   therefore start from the SAME trusted release-policy generation; any
+   disagreement fails before any checkout, credentials, restore, or build.
+2. **Preflight (provider-aware, before any build):** resolves
    `SIGNING_PROVIDER`, requires an **approved** production provider
    (`digicert-stm`) and complete provider credentials — otherwise the run
    fails with `BLOCKED_EXTERNAL` and no candidate is produced. Only missing
-   variable names are reported, never values.
-2. **DigiCert tooling setup** (conditional on `digicert-stm`): materializes
-   the client-authentication certificate from `SM_CLIENT_CERT_FILE_B64` and
-   runs the official `digicert/code-signing-software-trust-action@v1`
-   setup step.
-3. `release-qualify.ps1` publishes the exact source SHA once, qualifies the
+   variable names are reported, never values. The CURRENT publisher identity
+   policy (`SIGNING_EXPECTED_SUBJECT`) is MANDATORY here: without it the run
+   fails `BLOCKED_EXTERNAL` before any build.
+3. **Client-authentication material (hygiene, P2):** the client-auth `.p12`
+   is decoded with PowerShell/.NET (`[Convert]::FromBase64String`) into a
+   RANDOM private path under `runner.temp` (never bash base64, never the
+   workspace), its contents are never printed/uploaded/logged, and an
+   always-run cleanup step deletes it regardless of job outcome. It is
+   AUTHENTICATION material for the signing service — not the production
+   code-signing private key, which never leaves the service/HSM — but it is
+   still sensitive and treated as such.
+4. **DigiCert tooling setup** (conditional on `digicert-stm`): runs the
+   official `digicert/code-signing-software-trust-action` setup step,
+   pinned to the full immutable commit SHA
+   `fae23a455ba4bde62b64fd7cb2f81ade788f5a95` (v1.2.1).
+5. `release-qualify.ps1` publishes the exact source SHA once, qualifies the
    exact binary, then calls `sign-release.ps1` **once** with
    `SIGNING_PROVIDER=digicert-stm`, which invokes `smctl` against the
    signing service. The private key stays inside the service.
-4. The signer result (structured JSON: status, verification, final hash,
-   provider, key protection, timestamp status, certificate identity) is
-   folded into `release-manifest.json`.
+6. The signer result (structured JSON: status, verification, final hash,
+   provider, key protection, timestamp status, certificate identity,
+   timestamper identity) is folded into `release-manifest.json`.
 
 Production candidates are never built or signed twice, and Stage A never
-creates a GitHub Release.
+creates a GitHub Release. The legacy local-PFX secrets are NOT exposed to
+this production job at all (least privilege).
 
 ## 6. How Stage A verifies
 
@@ -171,17 +195,22 @@ The provider reporting success is **never sufficient**. After the signing
 operation, provider-independent Windows verification runs against the actual
 EXE:
 
-- `signtool verify /pa /v` — Windows independently validates the
-  Authenticode signature and its certificate chain;
-- RFC3161 timestamp verification — `signtool verify /pa` plus a visible
-  timestamp certificate on the signature (`Test-AuthenticodeTimestamp`);
+- `signtool verify /pa /v /tw` — Windows independently validates the
+  Authenticode signature and its certificate chain; `/tw` additionally makes
+  an UNTIMESTAMPED signature a warning result (signtool exit code 2), which
+  fails the check like any non-zero exit;
+- RFC3161 timestamp verification — `signtool verify /pa /v /tw` plus a
+  visible timestamp certificate on the signature (`Test-AuthenticodeTimestamp`);
   passing `/tr` is never treated as proof of timestamping; a missing or
   invalid timestamp **fails** Stage A (`timestampStatus=FAILED`);
 - signed-certificate identity — subject, thumbprint, issuer, serial number,
   validity window, and EKU are read from the file with
   `Get-AuthenticodeSignature`; the code-signing EKU
-  (`1.3.6.1.5.5.7.3.3`) is mandatory; when `SIGNING_EXPECTED_SUBJECT` is
-  configured it must match;
+  (`1.3.6.1.5.5.7.3.3`) is mandatory; the subject MUST equal the CURRENT
+  publisher identity policy (`SIGNING_EXPECTED_SUBJECT`, mandatory for
+  production);
+- RFC3161 timestamper identity — the timestamp certificate's subject and
+  thumbprint are recorded for provenance and cross-checked at Stage B;
 - only then is the FINAL SHA-256 computed (`finalSignedSha256`), the
   manifest finalized, and `SHA256SUMS.txt` written from the final bytes.
 
@@ -203,6 +232,8 @@ distributed bytes:
 | `signingCertificateSubject` / `Thumbprint` / `Issuer` / `SerialNumber` | certificate identity (forensic value; the thumbprint is recorded, not hard-coded) |
 | `signingCertificateValidFrom` / `ValidTo` | certificate validity window |
 | `signingCertificateEku` | EKU OIDs (must include code signing) |
+| `timestampCertificateSubject` / `timestampCertificateThumbprint` | RFC3161 timestamper identity (forensic timestamp provenance) |
+| `releasePolicySchemaVersion` | the CURRENT release-policy schema generation under which the candidate was produced (Stage B rejects absent/stale schemas) |
 | `signingMock` | `true` only for test-only mock runs (never production) |
 
 `release-tooling.ps1` enforces file == manifest == `SHA256SUMS.txt` and the
@@ -213,7 +244,12 @@ Stage B gate (section 8) requires the approved provider class.
 Stage B (`publish-release.yml`) **never contacts the signing provider and
 never re-signs**. It downloads the exact Stage A artifact and validates the
 already-signed immutable bytes using only Windows signature verification and
-the retained provenance:
+the retained provenance. The policy that evaluates the candidate is the
+TRUSTED policy checkout (`policy/scripts/release-tooling.ps1` at the
+executing workflow revision) — the candidate's own files are data only and
+never supply release-policy code; the verification job (contents: read)
+runs all gates, and the publish job (contents: write, after `needs: verify`)
+performs only the final hash identity check and the release mutation:
 
 - run/artifact/SHA/version/hash binding (unchanged);
 - manifest `signingProvider` must be an approved production provider and
@@ -222,11 +258,21 @@ the retained provenance:
 - `signingStatus=SIGNED`, `signatureVerification=SIGNATURE_VERIFIED`,
   `finalSignedSha256` == final artifact hash, no `signingMock`;
 - certificate identity recorded in the manifest (subject, thumbprint,
-  issuer, validity window, code-signing EKU);
-- `timestampStatus=VERIFIED`;
-- independent `signtool verify /pa` + RFC3161 timestamp verification of the
-  downloaded bytes, with the certificate identity cross-checked against the
-  manifest.
+  issuer, validity window, code-signing EKU) and RFC3161 timestamper
+  identity (subject, thumbprint);
+- the CURRENT release-policy schema contract: the manifest must record
+  `releasePolicySchemaVersion >= 3` (older candidates fail closed — they
+  are never evaluated under their own historical policy);
+- the CURRENT trusted publisher policy (`SIGNING_EXPECTED_SUBJECT`): the
+  Stage B gate requires CURRENT policy == manifest `signingCertificateSubject`
+  == the certificate subject read from the actual downloaded bytes. Merely
+  checking "actual cert == manifest cert" is never sufficient: an artifact
+  and its manifest can consistently record the WRONG publisher;
+- `timestampStatus=VERIFIED`; the RFC3161 timestamper identity recorded in
+  the manifest must equal the timestamper read from the actual bytes;
+- independent `signtool verify /pa /v /tw` + RFC3161 timestamp verification
+  of the downloaded bytes, with the certificate identity cross-checked
+  against the manifest.
 
 No signing credentials are required in Stage B, so publication never depends
 on live access to the provider.

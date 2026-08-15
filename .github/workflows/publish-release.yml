@@ -5,10 +5,47 @@ name: publish-release
 # prepare-release-candidate workflow (STAGE A). This workflow NEVER builds,
 # NEVER signs, and NEVER touches the candidate executable: it downloads the
 # exact artifact retained by the Stage A run, re-verifies every production
-# condition against those exact bytes (provenance, version authority, final
-# hash triple, Authenticode signature, schema-v2 external evidence including
-# the Windows 10/11 compatibility gate), and only then creates the GitHub
+# condition against those exact bytes, and only then creates the GitHub
 # Release from the downloaded bytes.
+#
+# TRUST BOUNDARY (release-policy hardening): the policy that decides whether
+# the candidate may be published NEVER comes from the candidate. The three
+# trust domains are physically separated:
+#
+#   $GITHUB_WORKSPACE/policy            TRUSTED RELEASE POLICY
+#   $GITHUB_WORKSPACE/candidate-source  CANDIDATE SOURCE (DATA ONLY)
+#   $GITHUB_WORKSPACE/candidate-artifact CANDIDATE ARTIFACT (DATA ONLY)
+#
+# The trusted policy checkout is the revision of THIS workflow being
+# executed: for a workflow_dispatch on main, github.sha is the last commit on
+# main (the dispatch revision, i.e. exactly the revision of
+# publish-release.yml that GitHub is executing) and github.workflow_sha is
+# the commit SHA of the workflow file. The workflow FAILS unless
+# github.ref == refs/heads/main AND github.workflow_sha == github.sha, so
+# the policy checkout can only be the trusted revision. All publication
+# policy functions (Test-PublicationEligibility and the release-tooling
+# module) are dot-sourced EXCLUSIVELY from policy/scripts; files under
+# candidate-source/ and candidate-artifact/ are data and are never
+# dot-sourced, executed, or imported. An old candidate that was valid under
+# an old policy is rejected whenever it no longer satisfies the CURRENT
+# policy (releasePolicySchemaVersion >= current minimum, current provider
+# allowlist, current key-protection policy, current publisher-identity
+# policy, current timestamp/certificate policy).
+#
+# LEAST PRIVILEGE: publication is split into two jobs.
+#   JOB 1 (verify): contents: read - all candidate execution (read-only
+#       product identity/self-tests) and ALL release gates happen here,
+#       before any write-capable credential exists in the run.
+#   JOB 2 (publish): contents: write - obtains ONLY the verified same-run
+#       handoff (publication-verification.json + RELEASE_NOTES.md), performs
+#       the final hash identity check against the exact Stage A bytes, and
+#       creates the release. It never executes candidate code and never runs
+#       candidate scripts.
+# JOB 1 additionally holds actions: write (documented deviation from the
+# strict "actions: read" ideal) solely to upload the same-run verification
+# handoff artifact; it cannot create releases or tags (no contents: write).
+# All untrusted/candidate execution happens in JOB 1, BEFORE JOB 2 acquires
+# contents: write.
 #
 # The tag is DERIVED as "v" + the authoritative semantic version recorded in
 # the candidate manifest; no free-form tag input exists, so arbitrary or
@@ -31,12 +68,76 @@ permissions:
   contents: read
 
 jobs:
-  publish:
+  # ---------------------------------------------------------------------------
+  # JOB 1 - VERIFY: resolve, locate, download, and gate the candidate. NO
+  # contents: write. The trusted policy module is loaded ONLY from policy/.
+  # ---------------------------------------------------------------------------
+  verify:
     runs-on: windows-latest
     permissions:
-      contents: write
-      actions: read
+      contents: read
+      # Documented deviation: actions: write is held here ONLY so this job can
+      # upload the same-run verification handoff artifact that the publish job
+      # consumes. It grants no release/tag capability (contents stays read)
+      # and expires with the run. All candidate execution and all release
+      # gates happen in this job, before the publish job acquires the
+      # release-mutation (contents write) permission.
+      actions: write
+    outputs:
+      head_sha: ${{ steps.resolve-run.outputs.head_sha }}
+      candidate_artifact_name: ${{ steps.locate-candidate.outputs.artifact_name }}
     steps:
+      # The trusted policy revision is the revision of THIS workflow being
+      # executed. GitHub Actions semantics (official documentation):
+      #   github.ref         - fully-formed ref the workflow was dispatched
+      #                        from (workflow_dispatch: the selected branch)
+      #   github.sha         - the commit SHA that triggered the workflow
+      #                        (workflow_dispatch: last commit on the branch)
+      #   github.workflow_sha - the commit SHA of the workflow file
+      # The workflow must run from main, and the workflow-file revision must
+      # be the dispatch commit; anything else fails closed before any policy
+      # evaluation, so the policy checkout below is exactly the trusted
+      # revision of publish-release.yml being executed.
+      - name: Verify trusted dispatch contract (policy revision == running workflow revision)
+        shell: pwsh
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          if ($env:WORKFLOW_REF -ne 'refs/heads/main') {
+            throw "this workflow must be dispatched from main (got '$env:WORKFLOW_REF'); the trusted release policy is the main revision being executed"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WORKFLOW_SHA)) {
+            throw 'github.workflow_sha is empty; the trusted policy revision cannot be bound to the workflow file being executed'
+          }
+          if ($env:WORKFLOW_SHA -ne $env:DISPATCH_SHA) {
+            throw "github.workflow_sha '$env:WORKFLOW_SHA' != github.sha '$env:DISPATCH_SHA'; the workflow-file revision being executed is not the dispatch commit - refusing to guess a trusted policy revision"
+          }
+          Write-Host "Trusted dispatch contract verified: ref=$env:WORKFLOW_REF workflow_sha=$env:WORKFLOW_SHA sha=$env:DISPATCH_SHA (policy revision == the revision of publish-release.yml being executed)" -ForegroundColor Green
+
+      # TRUSTED RELEASE POLICY: checkout the workflow/policy revision into
+      # policy/. This tree supplies ALL release-policy code; the candidate
+      # can never replace it.
+      - name: Checkout trusted release policy (current workflow revision)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: policy
+
+      - name: Verify trusted policy checkout revision
+        shell: pwsh
+        run: |
+          $actual = (git -C policy rev-parse HEAD).Trim()
+          if ($actual -ne '${{ github.sha }}') {
+            throw "Trusted policy checkout is at $actual but the trusted policy revision is ${{ github.sha }}"
+          }
+          $workflow = Join-Path 'policy' '.github\workflows\publish-release.yml'
+          if (-not (Test-Path -LiteralPath $workflow -PathType Leaf)) {
+            throw 'The trusted policy checkout does not contain .github/workflows/publish-release.yml; refusing to evaluate candidates under an untrusted policy tree'
+          }
+          Write-Host "Trusted policy revision verified: $actual (contains the executing publish-release.yml)" -ForegroundColor Green
+
       # The publication target is the Stage A run, not this run: the source
       # run must exist, must belong to this repository (gh resolves it
       # against ${{ github.repository }}), must be the
@@ -106,22 +207,25 @@ jobs:
           "artifact_name=$($live[0].name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "artifact_id=$($live[0].id)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      # Read-only checkout of the exact candidate SHA: needed for the shared
-      # release-tooling module and for re-reading the authoritative project
-      # version at that exact commit.
-      - name: Checkout exact candidate SHA
+      # CANDIDATE SOURCE (DATA ONLY): read-only checkout of the exact
+      # candidate SHA. It is used ONLY to re-read the authoritative project
+      # version at that exact commit and to prove the candidate SHA. Its
+      # scripts are NEVER executed, dot-sourced, or imported: all release
+      # policy comes from the trusted policy/ checkout above.
+      - name: Checkout candidate source (data only)
         uses: actions/checkout@v7
         with:
           ref: ${{ steps.resolve-run.outputs.head_sha }}
+          path: candidate-source
 
-      - name: Verify exact candidate SHA
+      - name: Verify exact candidate source SHA
         shell: pwsh
         run: |
-          $actual = (git rev-parse HEAD).Trim()
+          $actual = (git -C candidate-source rev-parse HEAD).Trim()
           if ($actual -ne '${{ steps.resolve-run.outputs.head_sha }}') {
-            throw "Checked out $actual but the Stage A run head SHA is ${{ steps.resolve-run.outputs.head_sha }}"
+            throw "Candidate source is at $actual but the Stage A run head SHA is ${{ steps.resolve-run.outputs.head_sha }}"
           }
-          Write-Host "Candidate SHA verified: $actual"
+          Write-Host "Candidate source SHA verified: $actual"
 
       # Download the EXACT artifact from the Stage A run using the supported
       # cross-run mechanism (run-id + repository + github-token). The artifact
@@ -137,9 +241,11 @@ jobs:
           path: candidate-artifact
 
       # Fail-closed publication gate before any release mutation. The shared
-      # release-tooling gate re-verifies against the DOWNLOADED bytes:
-      # manifest PASS for this exact SHA and version; releaseMode PRODUCTION;
-      # manifest workflowRunId == the Stage A run; binary identity in the
+      # release-tooling gate runs from the TRUSTED POLICY checkout and
+      # re-verifies against the DOWNLOADED bytes: manifest PASS for this
+      # exact SHA and version; releaseMode PRODUCTION; manifest workflowRunId
+      # == the Stage A run; CURRENT release-policy schema contract
+      # (releasePolicySchemaVersion >= minimum); binary identity in the
       # manifest agrees with the semantic version; on-disk SHA == manifest
       # artifactSha256 == SHA256SUMS.txt; schema-v2 external evidence bound
       # to this SHA, the final artifact hash, and this exact run + artifact,
@@ -149,19 +255,22 @@ jobs:
       # hash, no test-only mock signing, an APPROVED production signing
       # provider with approved non-exportable key protection (CLOUD_HSM),
       # recorded signed-certificate identity (subject, thumbprint, issuer,
-      # validity, code-signing EKU), timestampStatus VERIFIED, and an
-      # independent `signtool verify /pa` + RFC3161 timestamp verification
-      # on the downloaded executable with the certificate identity
-      # cross-checked against the manifest. Any failure aborts before
-      # `gh release create`. Stage B NEVER contacts the signing provider and
-      # NEVER re-signs: it validates the already-signed immutable artifact
-      # with Windows signature verification and its retained provenance.
-      - name: Fail-closed publication gate
+      # validity, code-signing EKU) AND the CURRENT trusted publisher policy
+      # (SIGNING_EXPECTED_SUBJECT) equal to the manifest subject AND the
+      # actual certificate subject, timestampStatus VERIFIED with recorded
+      # RFC3161 timestamper identity cross-checked against the bytes, and an
+      # independent `signtool verify /pa /v /tw` + RFC3161 timestamp
+      # verification on the downloaded executable. Any failure aborts before
+      # any handoff is produced and before `gh release create`. Stage B
+      # NEVER contacts the signing provider and NEVER re-signs: it validates
+      # the already-signed immutable artifact with Windows signature
+      # verification and its retained provenance.
+      - name: Fail-closed publication gate (trusted policy only)
         shell: pwsh
         env:
           RELEASE_EXTERNAL_EVIDENCE: ${{ inputs.external-evidence }}
         run: |
-          . (Join-Path $env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1')
+          . (Join-Path $env:GITHUB_WORKSPACE 'policy/scripts/release-tooling.ps1')
           $dir = Join-Path $env:GITHUB_WORKSPACE 'candidate-artifact'
           $evidencePath = Join-Path $dir 'release-external-evidence.json'
           [IO.File]::WriteAllText($evidencePath, $env:RELEASE_EXTERNAL_EVIDENCE, [Text.UTF8Encoding]::new($false))
@@ -169,9 +278,9 @@ jobs:
           $expectedSha = '${{ steps.resolve-run.outputs.head_sha }}'
           $expectedVersion = [string]$manifest.semanticVersion
 
-          # Project -> manifest version authority: the candidate's checked-out
-          # project file is still the root authority for the version.
-          $projectVersion = Get-ProjectSemanticVersion (Join-Path $env:GITHUB_WORKSPACE 'TabDock.csproj')
+          # Project -> manifest version authority: read from the CANDIDATE
+          # SOURCE checkout (data only), never from the trusted policy tree.
+          $projectVersion = Get-ProjectSemanticVersion (Join-Path $env:GITHUB_WORKSPACE 'candidate-source/TabDock.csproj')
           if ($projectVersion -ne $expectedVersion) {
             throw "Version authority mismatch: project <Version> '$projectVersion' at the candidate SHA != manifest semanticVersion '$expectedVersion'"
           }
@@ -180,20 +289,23 @@ jobs:
           $gate = Test-PublicationEligibility -ArtifactDir $dir -ExpectedSourceSha $expectedSha -ExpectedVersion $expectedVersion `
             -EvidencePath $evidencePath -RequireSigning `
             -ExpectedCandidateRunId '${{ inputs.run-id }}' `
-            -ExpectedCandidateArtifactName '${{ steps.locate-candidate.outputs.artifact_name }}'
+            -ExpectedCandidateArtifactName '${{ steps.locate-candidate.outputs.artifact_name }}' `
+            -ExpectedPublisherSubject '${{ vars.SIGNING_EXPECTED_SUBJECT }}'
           if (-not $gate.Eligible) {
-            Write-Host 'Publication gate FAILED - refusing to create the GitHub Release:' -ForegroundColor Red
+            Write-Host 'Publication gate FAILED - refusing to publish the candidate:' -ForegroundColor Red
             $gate.Failures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-            throw "Refusing to create the GitHub Release: $($gate.Failures.Count) gate failure(s)"
+            throw "Refusing to publish the candidate: $($gate.Failures.Count) gate failure(s)"
           }
-          Write-Host 'Publication gate: PASS' -ForegroundColor Green
+          Write-Host 'Publication gate: PASS (evaluated exclusively by the CURRENT trusted policy)' -ForegroundColor Green
 
       # Execute the DOWNLOADED binary read-only to prove the published bytes
       # themselves report the authoritative identity: the same semantic
       # version, the same source commit, and the same SHA-256 recorded in the
       # manifest and evidence. The native ABI self-test also runs here as an
-      # extra hosted-CI sanity check on the exact published bytes.
-      - name: Verify downloaded executable identity (no mutation)
+      # extra hosted-CI sanity check on the exact published bytes. This is
+      # the only candidate execution in Stage B and it happens in the
+      # read-only verify job, BEFORE the publish job acquires contents: write.
+      - name: Verify downloaded executable identity (read-only, verify job)
         shell: pwsh
         run: |
           $dir = Join-Path $env:GITHUB_WORKSPACE 'candidate-artifact'
@@ -212,13 +324,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "downloaded candidate --selftest-native-abi failed (exit $LASTEXITCODE)" }
 
       # Auditable publication record: the publish-time eligibility verdict
-      # computed from the downloaded bytes and the validated evidence (the
-      # manifest itself keeps the qualification-time BLOCKED_EXTERNAL value).
-      - name: Write publication verification record
+      # computed by the CURRENT trusted policy from the downloaded bytes and
+      # the validated evidence, plus the rendered release notes. This record
+      # is the verified same-run handoff the publish job consumes; the
+      # publish job trusts it ONLY for the final hash identity check and the
+      # derived tag - it never re-evaluates or executes candidate code.
+      - name: Write publication verification record and release notes (verified handoff)
         shell: pwsh
         run: |
-          . (Join-Path $env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1')
+          . (Join-Path $env:GITHUB_WORKSPACE 'policy/scripts/release-tooling.ps1')
           $dir = Join-Path $env:GITHUB_WORKSPACE 'candidate-artifact'
+          $handoff = Join-Path $env:GITHUB_WORKSPACE 'verified-handoff'
+          New-Item -ItemType Directory -Path $handoff -Force | Out-Null
           $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
           $evidence = Get-Content (Join-Path $dir 'release-external-evidence.json') -Raw | ConvertFrom-Json
           $tag = Get-ReleaseTagFromVersion ([string]$manifest.semanticVersion)
@@ -234,8 +351,10 @@ jobs:
             releaseTag                   = $tag
             productionReleaseEligibility = 'ELIGIBLE'
             verifiedAt                   = [DateTimeOffset]::UtcNow.ToString('O')
+            trustedPolicyRevision        = '${{ github.sha }}'
             checks                       = [ordered]@{
               automatedQualification    = 'PASS'
+              releasePolicySchema       = 'PASS'
               sourceCommitSha           = 'PASS'
               semanticVersion           = 'PASS'
               projectVersionAuthority   = 'PASS'
@@ -253,23 +372,17 @@ jobs:
               signingProviderApproved   = 'PASS'
               signingKeyProtection      = 'PASS'
               signingCertificateIdentity = 'PASS'
+              publisherIdentityPolicy   = 'PASS'
               timestampVerification     = 'PASS'
+              timestamperIdentity       = 'PASS'
               binaryIdentity            = 'PASS'
             }
           }
-          $verification | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $dir 'publication-verification.json') -Encoding utf8
-          Write-Host 'Publication verification record written: publication-verification.json' -ForegroundColor Green
+          $verification | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $handoff 'publication-verification.json') -Encoding utf8
 
-      # Render release notes from the manifest and the validated evidence
-      # (never from a rebuild). The tag is derived as v<semanticVersion>;
-      # there is no tag input to disagree with the version.
-      - name: Render release notes
-        shell: pwsh
-        run: |
-          . (Join-Path $env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1')
-          $manifest = Get-Content (Join-Path 'candidate-artifact' 'release-manifest.json') -Raw | ConvertFrom-Json
-          $evidence = Get-Content (Join-Path 'candidate-artifact' 'release-external-evidence.json') -Raw | ConvertFrom-Json
-          $tag = Get-ReleaseTagFromVersion ([string]$manifest.semanticVersion)
+          # Render release notes from the manifest and the validated evidence
+          # (never from a rebuild). The tag is derived as v<semanticVersion>;
+          # there is no tag input to disagree with the version.
           $sha = if ($manifest.finalSignedSha256) { $manifest.finalSignedSha256 } else { $manifest.artifactSha256 }
           $lines = [System.Collections.Generic.List[string]]::new()
           $lines.Add("TabDock $($manifest.semanticVersion)")
@@ -309,39 +422,159 @@ jobs:
           $lines.Add('')
           $lines.Add('- Read-only diagnostics: TabDock.exe --doctor, --support-bundle')
           $lines.Add('- Privacy: support bundles are sanitized; raw logs are local-only and must be redacted before sharing.')
-          $lines -join "`n" | Set-Content -Path 'RELEASE_NOTES.md' -Encoding utf8
-          Write-Host "Derived release tag: $tag (v<semanticVersion>; no free-form tag input exists)"
+          $lines -join "`n" | Set-Content -Path (Join-Path $handoff 'RELEASE_NOTES.md') -Encoding utf8
+          Write-Host "Verified handoff written: publication-verification.json + RELEASE_NOTES.md (derived tag $tag)" -ForegroundColor Green
 
-      # Intentional publication of the EXACT downloaded artifact. The derived
-      # tag is created at the exact candidate SHA; no source modification, no
-      # second compilation, and no signing occurs here. The evidence and the
-      # publication verification record travel with the release as assets.
+      # The verified same-run handoff is the ONLY thing the publish job
+      # consumes from this job. It is small (verdict record + release notes);
+      # the publish job re-downloads the EXACT Stage A bytes itself.
+      - name: Upload verified same-run handoff
+        uses: actions/upload-artifact@v7
+        with:
+          name: tabdock-verified-${{ github.run_id }}
+          path: verified-handoff
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # JOB 2 - PUBLISH: contents: write exists ONLY here, and only AFTER the
+  # verify job completed every gate and all candidate execution. This job
+  # executes NO candidate code and NO candidate scripts: it obtains the
+  # verified handoff, re-downloads the exact Stage A bytes, performs the
+  # final hash identity check, and creates the release.
+  # ---------------------------------------------------------------------------
+  publish:
+    needs: verify
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Verify trusted dispatch contract (policy revision == running workflow revision)
+        shell: pwsh
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          if ($env:WORKFLOW_REF -ne 'refs/heads/main') {
+            throw "this workflow must be dispatched from main (got '$env:WORKFLOW_REF'); the trusted release policy is the main revision being executed"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WORKFLOW_SHA)) {
+            throw 'github.workflow_sha is empty; the trusted policy revision cannot be bound to the workflow file being executed'
+          }
+          if ($env:WORKFLOW_SHA -ne $env:DISPATCH_SHA) {
+            throw "github.workflow_sha '$env:WORKFLOW_SHA' != github.sha '$env:DISPATCH_SHA'; the workflow-file revision being executed is not the dispatch commit - refusing to guess a trusted policy revision"
+          }
+          Write-Host "Trusted dispatch contract verified: ref=$env:WORKFLOW_REF workflow_sha=$env:WORKFLOW_SHA sha=$env:DISPATCH_SHA" -ForegroundColor Green
+
+      # Trusted policy module for tag derivation - never candidate code.
+      - name: Checkout trusted release policy (current workflow revision)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: policy
+
+      - name: Download the verified same-run handoff
+        uses: actions/download-artifact@v7
+        with:
+          name: tabdock-verified-${{ github.run_id }}
+          path: verified-handoff
+
+      # Re-download the EXACT Stage A bytes (not the handoff's copy - the
+      # published bytes always come from the immutable Stage A artifact).
+      - name: Download the EXACT Stage A candidate artifact (cross-run)
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ needs.verify.outputs.candidate_artifact_name }}
+          run-id: ${{ inputs.run-id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: candidate-artifact
+
+      # Final hash identity check: the exact Stage A bytes must be identical
+      # to the bytes the verify job gated (the handoff record's
+      # artifactSha256), and the manifest must agree on SHA, version, and the
+      # derived tag. No candidate code runs here.
+      - name: Verify handoff and final artifact hash identity
+        shell: pwsh
+        run: |
+          . (Join-Path $env:GITHUB_WORKSPACE 'policy/scripts/release-tooling.ps1')
+          $recordPath = Join-Path 'verified-handoff' 'publication-verification.json'
+          if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf)) {
+            throw 'the verified same-run handoff (publication-verification.json) is missing; the verify job must have completed every gate first'
+          }
+          $record = Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json
+          if ([string]$record.recordKind -ne 'publication-verification') { throw 'handoff record kind is not publication-verification' }
+          if ([int]$record.schemaVersion -ne 1) { throw "handoff record schemaVersion=$($record.schemaVersion) (expected 1)" }
+          if ([string]$record.productionReleaseEligibility -ne 'ELIGIBLE') { throw "handoff record productionReleaseEligibility=$($record.productionReleaseEligibility) (expected ELIGIBLE after the verify job gate)" }
+          if ([string]$record.candidateWorkflowRunId -ne '${{ inputs.run-id }}') { throw "handoff candidateWorkflowRunId $($record.candidateWorkflowRunId) != the requested Stage A run ${{ inputs.run-id }}" }
+          if ([string]$record.candidateArtifactName -ne '${{ needs.verify.outputs.candidate_artifact_name }}') { throw "handoff candidateArtifactName $($record.candidateArtifactName) != the located artifact ${{ needs.verify.outputs.candidate_artifact_name }}" }
+          if ([string]$record.sourceCommitSha -notmatch '^[0-9a-f]{40}$') { throw 'handoff sourceCommitSha is malformed' }
+          if ([string]$record.artifactSha256 -notmatch '^[0-9a-f]{64}$') { throw 'handoff artifactSha256 is malformed' }
+
+          $dir = Join-Path $env:GITHUB_WORKSPACE 'candidate-artifact'
+          $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
+          if (-not [string]::Equals([string]$manifest.sourceCommitSha, [string]$record.sourceCommitSha, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "manifest sourceCommitSha $($manifest.sourceCommitSha) != handoff sourceCommitSha $($record.sourceCommitSha)"
+          }
+          if (-not [string]::Equals([string]$manifest.semanticVersion, [string]$record.semanticVersion, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "manifest semanticVersion $($manifest.semanticVersion) != handoff semanticVersion $($record.semanticVersion)"
+          }
+          if (-not [string]::Equals([string]$manifest.artifactSha256, [string]$record.artifactSha256, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "manifest artifactSha256 $($manifest.artifactSha256) != handoff artifactSha256 $($record.artifactSha256)"
+          }
+
+          # Final hash identity: the bytes this job is about to publish must
+          # be byte-identical to the bytes the verify job gated.
+          $actual = Get-FileSha256Lower (Join-Path $dir 'TabDock.exe')
+          if ($actual -ne [string]$record.artifactSha256) {
+            throw "final hash identity check FAILED: on-disk TabDock.exe SHA-256 $actual != verified handoff artifactSha256 $($record.artifactSha256)"
+          }
+          $sums = Read-Sha256Sums (Join-Path $dir 'SHA256SUMS.txt')
+          if ($sums.Hash -ne [string]$record.artifactSha256) {
+            throw "final hash identity check FAILED: SHA256SUMS.txt $($sums.Hash) != verified handoff artifactSha256 $($record.artifactSha256)"
+          }
+
+          # Tag identity: the derived tag recorded by the verify job must be
+          # exactly v<semanticVersion> - the publish job performs NO build,
+          # NO sign, and NO candidate execution; only this hash identity
+          # check and the release mutation.
+          $derived = Get-ReleaseTagFromVersion ([string]$record.semanticVersion)
+          if ([string]$record.releaseTag -ne $derived) {
+            throw "handoff releaseTag $($record.releaseTag) != derived v<semanticVersion> tag $derived"
+          }
+          Write-Host "Final hash identity check: PASS (SHA-256 $($record.artifactSha256); tag $derived at $($record.sourceCommitSha))" -ForegroundColor Green
+
+      # Intentional publication of the EXACT verified bytes. The derived tag
+      # is created at the exact candidate SHA; no source modification, no
+      # second compilation, no signing, and no candidate execution occur here.
+      # The evidence and the publication verification record travel with the
+      # release as assets.
       - name: Publish GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          . (Join-Path $env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1')
-          $manifest = Get-Content (Join-Path 'candidate-artifact' 'release-manifest.json') -Raw | ConvertFrom-Json
-          $tag = Get-ReleaseTagFromVersion ([string]$manifest.semanticVersion)
+          $record = Get-Content (Join-Path 'verified-handoff' 'publication-verification.json') -Raw | ConvertFrom-Json
+          $tag = [string]$record.releaseTag
           gh release create $tag --repo ${{ github.repository }} `
-            --target '${{ steps.resolve-run.outputs.head_sha }}' `
-            --title "TabDock $($manifest.semanticVersion)" `
-            --notes-file RELEASE_NOTES.md `
+            --target $([string]$record.sourceCommitSha) `
+            --title "TabDock $($record.semanticVersion)" `
+            --notes-file verified-handoff/RELEASE_NOTES.md `
             candidate-artifact/TabDock.exe `
             candidate-artifact/SHA256SUMS.txt `
             candidate-artifact/release-manifest.json `
             candidate-artifact/release-external-evidence.json `
-            candidate-artifact/publication-verification.json
+            verified-handoff/publication-verification.json
 
       - name: Verify release assets
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          . (Join-Path $env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1')
-          $manifest = Get-Content (Join-Path 'candidate-artifact' 'release-manifest.json') -Raw | ConvertFrom-Json
-          $tag = Get-ReleaseTagFromVersion ([string]$manifest.semanticVersion)
+          $record = Get-Content (Join-Path 'verified-handoff' 'publication-verification.json') -Raw | ConvertFrom-Json
+          $tag = [string]$record.releaseTag
           $assets = gh release view $tag --repo ${{ github.repository }} --json assets --jq '.assets[].name'
           $required = @('TabDock.exe', 'SHA256SUMS.txt', 'release-manifest.json', 'release-external-evidence.json', 'publication-verification.json')
           foreach ($name in $required) {

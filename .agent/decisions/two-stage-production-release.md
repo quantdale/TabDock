@@ -118,3 +118,80 @@ modules / HSM-backed signing services.
   `publication-gates.md`/`final-smoke.md`/README, OpenSpec change section 13.
   Real production signing remains `BLOCKED_EXTERNAL` (credentials not
   configured; no candidate exists yet).
+
+## Addendum (2026-08-15): release-policy trust-boundary hardening
+
+Independent review (round 3) found a HIGH-severity trust-boundary defect: the
+candidate being evaluated supplied the policy code that decided whether it
+may be published. Stage B checked out the candidate SHA into the default
+workspace and dot-sourced `scripts/release-tooling.ps1` from that candidate
+checkout, so an old candidate could be evaluated under its own (old) release
+policy. This addendum records the hardening.
+
+- **Trusted policy isolation (P0):** Stage B now physically separates three
+  trust domains — `policy/` (TRUSTED release policy), `candidate-source/`
+  (candidate source, DATA ONLY), `candidate-artifact/` (candidate bytes, DATA
+  ONLY). All release-policy code is dot-sourced EXCLUSIVELY from
+  `policy/scripts/release-tooling.ps1`. The policy checkout is the revision
+  of `publish-release.yml` being executed: for `workflow_dispatch` on main,
+  `github.sha` is the last commit on main (the revision whose workflow file
+  GitHub executes) and `github.workflow_sha` is the commit SHA of the
+  workflow file; Stage B FAILS unless `github.ref == refs/heads/main` AND
+  `github.workflow_sha == github.sha`, so the policy revision can never be
+  replaced by the candidate. Candidate scripts are never executed,
+  dot-sourced, or imported for release approval (static tests assert the
+  trusted module paths).
+- **Policy schema contract (P0):** `releasePolicySchemaVersion` (current = 3)
+  is recorded by Stage A in the production manifest;
+  `Get-MinimumAcceptedProductionPolicySchema` (3) makes the CURRENT policy
+  reject candidates with an absent or older schema. Schema generations: 1 =
+  pre-provider two-stage era (51f7001: candidate-controlled policy), 2 =
+  provider-allowlist era (no schema/publisher/timestamper contract), 3 =
+  current. An old candidate that its old policy would have accepted is
+  rejected whenever it no longer satisfies the current policy (fail closed).
+- **Stage A policy trust boundary (P0):** production candidate preparation
+  requires `github.ref == refs/heads/main`, `inputs.sha == github.sha`, and
+  `github.workflow_sha == github.sha` — the first step, BEFORE any checkout,
+  credentials, restore, or build. Policy code and candidate source therefore
+  start from the same trusted release-policy generation. RC qualification
+  still supports arbitrary SHAs.
+- **Mandatory publisher identity (P1):** `SIGNING_EXPECTED_SUBJECT` (current
+  publisher policy, repository variable; stable subject identity, never a
+  rotating thumbprint) is REQUIRED for production: Stage A preflight blocks
+  without it, `sign-release.ps1` fails without/on mismatch under the
+  production gate, and the Stage B gate requires CURRENT policy == manifest
+  subject == actual certificate subject ("actual == manifest" alone is never
+  sufficient).
+- **Least privilege (P1):** Stage B splits into JOB 1 `verify` (contents:
+  read; all gates + all read-only candidate identity execution; documented
+  deviation: actions: write solely to upload the same-run verification
+  handoff artifact) and JOB 2 `publish` (needs: verify; contents: write; no
+  candidate execution, no build/sign; only the final hash identity check and
+  the release mutation). All untrusted/candidate execution happens before
+  write credentials exist.
+- **DigiCert action pin (P1):** `digicert/code-signing-software-trust-action`
+  pinned to the full immutable SHA `fae23a455ba4bde62b64fd7cb2f81ade788f5a95`
+  (v1.2.1; verified via the GitHub API that v1.2.1 and v1 both resolve to
+  it). Updates are intentional: review, pin the new full SHA, run the
+  release-tooling regression suite.
+- **Hosted release-tooling gate (P1):** `build.yml` now invokes
+  `scripts/release-tooling-tests.ps1`, making the release-control suite an
+  exact-SHA hosted-CI gate (118 cases, deterministic, no credentials, no
+  publication).
+- **Legacy PFX removal (P1):** production Stage A no longer receives the
+  legacy local-PFX secrets; least-privilege invariant: the production HSM
+  job must not receive unused exportable-PFX secrets.
+- **Timestamp hardening (P2):** signtool verification now uses
+  `verify /pa /v /tw` (untimestamped => warning result => non-zero => fail
+  closed); the RFC3161 timestamper identity (subject/thumbprint) is recorded
+  in the manifest and cross-checked against the bytes at Stage B.
+- **Client-auth hygiene (P2):** the DigiCert client-authentication P12 is
+  materialized with PowerShell/.NET into a random private path under
+  runner.temp (never bash base64), never printed/uploaded/logged, and
+  deleted by an always-run cleanup step.
+- **Documentation:** `docs/release/publication-gates.md` and
+  `docs/release/code-signing.md` updated; OpenSpec change section 14;
+  `scripts/release-tooling-tests.ps1` extended from 96 to 118 cases
+  (old-pre-HSM candidate rejection, policy-schema contract, candidate-policy
+  isolation, publisher policy, Stage A/B dispatch contracts, action pin, job
+  split, hosted gate, timestamp policy) — all PASS locally.

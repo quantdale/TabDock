@@ -188,3 +188,47 @@ in `release-external-evidence.json`; until then their status stays
 model and the production dispatch walkthrough; `docs/release/compatibility-matrix.md`
 tracks which Windows environments have ABI evidence (hosted CI builds and
 the local Windows 11 build) versus which remain external (Windows 10 x64).
+
+### Release-policy trust boundary (independent review round 3, P0/P1/P2)
+
+The candidate being evaluated can never supply the policy that decides
+whether it may be published. Stage B physically separates the trust domains:
+
+- `policy/` — TRUSTED release policy: the revision of the executing
+  `publish-release.yml` (for `workflow_dispatch` on main, `github.sha` is
+  the last commit on the branch whose workflow file GitHub executes;
+  `github.workflow_sha` is the workflow-file commit SHA; the workflow fails
+  unless `github.ref == refs/heads/main` and `github.workflow_sha ==
+  github.sha`). All policy code is dot-sourced exclusively from
+  `policy/scripts/release-tooling.ps1`.
+- `candidate-source/` — candidate source, DATA ONLY (project version,
+  product metadata, source identity; scripts never executed/imported).
+- `candidate-artifact/` — the immutable signed bytes; run only for
+  read-only product identity/self-tests.
+
+The release-policy schema contract (`releasePolicySchemaVersion`, current
+minimum 3) makes the CURRENT policy reject candidates produced under older
+policy generations (absent or stale schema -> fail closed). The CURRENT
+trusted publisher policy (`SIGNING_EXPECTED_SUBJECT`, mandatory for
+production) must equal both the manifest subject and the actual certificate
+subject — "actual == manifest" alone is never sufficient.
+
+Stage A production preparation requires the trusted dispatch contract
+(`github.ref == refs/heads/main`, `inputs.sha == github.sha`,
+`github.workflow_sha == github.sha`) as the FIRST step, before any
+credentials or build; policy code and candidate source start from the same
+trusted generation. Stage A no longer receives the legacy local-PFX secrets;
+the DigiCert action is pinned to its full immutable SHA
+(`fae23a455ba4bde62b64fd7cb2f81ade788f5a95`, v1.2.1); the client-auth P12 is
+materialized with PowerShell/.NET to a random private temp path with an
+always-run cleanup.
+
+Stage B is split into a `verify` job (contents: read; all gates + read-only
+candidate identity execution; documented `actions: write` deviation solely
+for the same-run verification handoff upload) and a `publish` job (needs:
+verify; contents: write; no candidate execution; final hash identity check
++ release mutation only). The release-control regression suite
+(`scripts/release-tooling-tests.ps1`, 118 cases) is an exact-SHA hosted-CI
+gate in `build.yml`. Signtool verification uses `verify /pa /v /tw`; the
+RFC3161 timestamper identity is recorded in the manifest and cross-checked
+at Stage B.

@@ -24,13 +24,46 @@ The production chain therefore NEVER rebuilds or re-signs after the final
 artifact exists:
 
 ```
+CURRENT TRUSTED RELEASE POLICY P (the workflow revision being executed)
+   |
+   +----------------+----------------+
+   |                |                |
+   v                v                v
+Stage A source   candidate source  candidate artifact
+(trusted main     S (data only)     H (signed immutable bytes)
+revision)
+```
+
+The candidate NEVER supplies the policy that decides whether it may be
+published (P0 trust boundary). In Stage B the three trust domains are
+physically separated:
+
+- `$GITHUB_WORKSPACE/policy` — TRUSTED release policy: the revision of
+  `publish-release.yml` being executed, checked out explicitly
+  (`github.ref == refs/heads/main` and `github.workflow_sha == github.sha`
+  are required; for `workflow_dispatch`, `github.sha` is the last commit on
+  the dispatched branch = the revision whose workflow file GitHub executes).
+  All release-policy code is dot-sourced exclusively from
+  `policy/scripts/release-tooling.ps1`.
+- `$GITHUB_WORKSPACE/candidate-source` — CANDIDATE SOURCE (data only):
+  readable for `TabDock.csproj`/product metadata/source identity; its
+  scripts are NEVER executed, dot-sourced, or imported.
+- `$GITHUB_WORKSPACE/candidate-artifact` — CANDIDATE ARTIFACT (data only):
+  the downloaded immutable bytes; the executable is run ONLY for
+  intentionally defined read-only product identity/self-tests.
+
+All policy evaluation is performed by CURRENT trusted policy code, and the
+release-policy schema contract (`releasePolicySchemaVersion`, minimum 3)
+rejects candidates produced under older policy generations (fail closed).
+
+```
 SOURCE SHA
 -> build once
 -> automated qualification
 -> APPROVED HSM/CLOUD signer signs once (non-exportable private key)
 -> signature verify (provider-independent)
 -> RFC3161 timestamp verify
--> certificate identity record
+-> certificate identity record (== current publisher policy)
 -> FINAL distributed hash
 -> immutably retain signed candidate
 -> humans download THAT EXACT artifact
@@ -51,9 +84,17 @@ hash appears in the external evidence.
 
 A manually dispatched workflow that:
 
-1. accepts the exact source SHA (and an EXPECTED semantic version that must
-   agree with `TabDock.csproj <Version>`, which is authoritative);
-2. checks out the exact SHA and verifies it;
+1. FIRST verifies the trusted production dispatch contract (before any
+   checkout, credentials, restore, or build): the workflow must be
+   dispatched from `main` (`github.ref == refs/heads/main`), the requested
+   SHA must equal the trusted dispatch SHA (`inputs.sha == github.sha`, the
+   last commit on the dispatched branch), and the workflow-file revision
+   must be the dispatch commit (`github.workflow_sha == github.sha`).
+   Policy code and candidate source therefore start from the SAME trusted
+   release-policy generation; production candidates are never prepared from
+   arbitrary historical SHAs (RC qualification in `release.yml` still
+   supports arbitrary SHAs);
+2. checks out the exact SHA (== the trusted dispatch SHA) and verifies it;
 3. runs the canonical hermetic qualification;
 4. provider-aware signing preflight — the run requires an APPROVED
    production signer (`SIGNING_PROVIDER=digicert-stm`, key protection class
@@ -61,23 +102,32 @@ A manually dispatched workflow that:
    service/HSM). `not-configured`, `local-pfx`, `mock`, and unknown
    providers fail with `BLOCKED_EXTERNAL` BEFORE any build, as does an
    approved provider with incomplete credentials (only variable NAMES are
-   reported);
-5. sets up the official DigiCert Software Trust Manager tooling
-   (`digicert/code-signing-software-trust-action@v1`, setup-only) and
-   builds/publishes exactly once;
+   reported) or a missing publisher identity policy
+   (`SIGNING_EXPECTED_SUBJECT`, mandatory for production);
+5. materializes the DigiCert client-authentication certificate with
+   PowerShell/.NET into a random private path under `runner.temp` (never
+   printed, never uploaded, removed by an always-run cleanup step), sets up
+   the official DigiCert Software Trust Manager tooling (the action is
+   PINNED to its full immutable commit SHA
+   `fae23a455ba4bde62b64fd7cb2f81ade788f5a95`, v1.2.1 — a mutable major tag
+   is never trusted for the signing control plane), and builds/publishes
+   exactly once;
 6. Authenticode-signs exactly once through `sign-release.ps1`
    (`smctl sign --simple ...`, the official simple-signing invocation);
    the production private key never exists on the runner — the runner only
    holds service-authentication material;
 7. RFC3161-timestamps exactly once and VERIFIES the timestamp
    (`timestampStatus=VERIFIED` required; a missing/invalid timestamp fails);
-8. verifies the signature (`signtool verify /pa`) and records the signed
-   certificate identity (subject, thumbprint, issuer, validity, EKU);
+8. verifies the signature (`signtool verify /pa /v /tw`) and records the
+   signed certificate identity (subject, thumbprint, issuer, validity, EKU)
+   — the subject must equal the CURRENT publisher identity policy — and
+   the RFC3161 timestamper identity;
 9. computes the final distributed SHA-256;
 10. generates `release-manifest.json` + `SHA256SUMS.txt` describing the FINAL
     bytes (file == manifest == checksums), including the signing provenance
     (`signingProvider`, `signingKeyProtection`, `timestampStatus`,
-    certificate identity);
+    certificate + timestamper identity, `releasePolicySchemaVersion` =
+    current schema);
 11. uploads the immutable Actions artifact
     `tabdock-candidate-<sha>-<run-id>` (90-day retention);
 12. records/prints: workflow run ID, artifact name, source SHA, semantic
@@ -87,37 +137,60 @@ A manually dispatched workflow that:
 
 Signing is mandatory on this path. Without an approved, fully configured
 production signer the run fails with `BLOCKED_EXTERNAL` and no candidate is
-produced. Qualification-only unsigned RC workflows (`release.yml`) remain
-separate and continue to work (`not-configured` or `local-pfx`).
+produced. The legacy local-PFX secrets are NOT exposed to this production
+job at all (least privilege: the production HSM job must not receive unused
+exportable-PFX secrets). Qualification-only unsigned RC workflows
+(`release.yml`) remain separate and continue to work (`not-configured` or
+`local-pfx`).
 
 ### STAGE B — `publish-release.yml` (publish existing qualified candidate)
 
-A separate, manually dispatched publication workflow that:
+A separate, manually dispatched publication workflow split into TWO jobs
+(least privilege; see the job description below) that:
 
 1. accepts the Stage A **workflow run ID** (and the schema-v2 evidence
    record) — never a version or tag input;
-2. verifies the source run with the GitHub API: it must exist in THIS
-   repository, must be the `prepare-release-candidate` workflow, must be
-   `completed` with `conclusion=success`, and its `head_sha` becomes the
-   candidate SHA;
-3. locates the exact candidate artifact via the artifacts API (name
-   `tabdock-candidate-<head-sha>-<run-id>`, not expired, unique);
-4. downloads that existing artifact with the supported cross-run mechanism
+2. verifies the trusted dispatch contract (both jobs): `github.ref ==
+   refs/heads/main` and `github.workflow_sha == github.sha`, then checks out
+   the TRUSTED release policy at `github.sha` into `policy/` (the revision
+   of this workflow being executed; the candidate can never replace it);
+3. **JOB 1 `verify`** (permissions `contents: read`; `actions: write` held
+   ONLY to upload the same-run verification handoff — documented deviation,
+   no release/tag capability): verifies the source run with the GitHub API
+   (exists in THIS repository, is the `prepare-release-candidate` workflow,
+   `completed` with `conclusion=success`; its `head_sha` becomes the
+   candidate SHA), locates the exact candidate artifact via the artifacts
+   API (name `tabdock-candidate-<head-sha>-<run-id>`, not expired, unique),
+   checks out the CANDIDATE SOURCE (data only) at that SHA, and downloads
+   the existing artifact with the supported cross-run mechanism
    (`actions/download-artifact@v7` with `run-id`, `repository`, and
    `github-token`) — WITHOUT rebuilding, republishing, re-signing, or
    touching `TabDock.exe`;
-5. validates: source SHA (run head SHA == manifest == evidence), semantic
-   version (project `<Version>` at the candidate SHA == manifest == binary
+4. **JOB 1 gate** (exclusively from `policy/scripts/release-tooling.ps1`):
+   source SHA (run head SHA == manifest == evidence), semantic version
+   (project `<Version>` at the candidate SHA == manifest == binary
    `--version`), final artifact hash (file == manifest == SHA256SUMS),
    manifest provenance (`releaseMode == PRODUCTION`,
-   `workflowRunId == run-id`), signing provenance (approved production
-   provider + approved non-exportable key protection, certificate identity,
-   verified timestamp), Authenticode (`signtool verify /pa` + RFC3161
-   timestamp verification of the downloaded bytes, certificate identity
-   cross-checked against the manifest), schema-v2 external evidence, and
-   Windows 10/11 compatibility evidence;
-6. publishes those exact existing bytes as the GitHub Release with the
-   DERIVED tag `v<semanticVersion>` at the exact candidate SHA.
+   `workflowRunId == run-id`), CURRENT release-policy schema contract
+   (`releasePolicySchemaVersion >= 3`), signing provenance (approved
+   production provider + approved non-exportable key protection, certificate
+   identity, CURRENT trusted publisher policy == manifest subject == actual
+   certificate subject, verified timestamp + timestamper identity),
+   Authenticode (`signtool verify /pa /v /tw` + RFC3161 timestamp
+   verification of the downloaded bytes, certificate identity cross-checked
+   against the manifest), schema-v2 external evidence, and Windows 10/11
+   compatibility evidence;
+5. **JOB 1 handoff:** runs the read-only binary identity/self-tests and
+   writes `publication-verification.json` + `RELEASE_NOTES.md` (the verified
+   same-run handoff, uploaded as `tabdock-verified-<run-id>`);
+6. **JOB 2 `publish`** (`needs: verify`, permissions `contents: write`,
+   `actions: read`; NO candidate execution, NO build/sign): downloads the
+   handoff and re-downloads the EXACT Stage A bytes, performs the final
+   hash identity check (on-disk `TabDock.exe` + `SHA256SUMS.txt` == handoff
+   `artifactSha256`), re-derives the tag from the trusted policy module, and
+   publishes those exact bytes as the GitHub Release with the DERIVED tag
+   `v<semanticVersion>` at the exact candidate SHA, then verifies the
+   release assets.
 
 Stage B requires NO signing-provider credentials and never contacts the
 signing provider: it validates the already-signed immutable artifact using
@@ -133,7 +206,8 @@ PUBLISHED TabDock.exe SHA
 
 No second compilation. No second signing. The publish workflow contains no
 build, sign, or qualification invocation at all (a deterministic static test
-enforces this).
+enforces this), and candidate scripts are never executed or imported for
+release approval (the policy module is loaded only from `policy/`).
 
 ## Provenance binding (why "artifact-name = something" is never enough)
 
@@ -158,7 +232,15 @@ Stage B fails closed when ANY of these is untrue:
 - the manifest key-protection classification is missing or not the approved
   non-exportable class (`CLOUD_HSM`);
 - the manifest lacks the signed-certificate identity (subject, thumbprint,
-  issuer, validity window, code-signing EKU) or `timestampStatus != VERIFIED`;
+  issuer, validity window, code-signing EKU), the RFC3161 timestamper
+  identity, or `timestampStatus != VERIFIED`;
+- the manifest records an absent or stale `releasePolicySchemaVersion`
+  (older than the current minimum): an old candidate that its old policy
+  would have accepted is NEVER evaluated under its own historical policy;
+- the CURRENT trusted publisher policy (`SIGNING_EXPECTED_SUBJECT`) is not
+  configured, does not equal the manifest subject, or does not equal the
+  signed certificate subject on the actual bytes (a manifest+file that
+  consistently record the WRONG publisher still fail);
 - the signed certificate on the downloaded file differs from the manifest
   record, lacks the code-signing EKU, or its RFC3161 timestamp cannot be
   verified;
@@ -167,9 +249,12 @@ Stage B fails closed when ANY of these is untrue:
 
 Binding chain: run-id input -> GitHub run (`path`/`status`/`conclusion`/
 `headSha`) -> artifact name (embeds SHA + run id) -> manifest (`sourceCommitSha`,
-`workflowRunId`, `releaseMode`, version, binary identity) -> evidence
-(`candidateWorkflowRunId`, `candidateArtifactName`, `sourceCommitSha`,
-`artifactSha256`) -> bytes (hash triple + `signtool verify /pa`).
+`workflowRunId`, `releaseMode`, version, binary identity,
+`releasePolicySchemaVersion`) -> evidence (`candidateWorkflowRunId`,
+`candidateArtifactName`, `sourceCommitSha`, `artifactSha256`) -> bytes (hash
+triple + `signtool verify /pa /v /tw`) -> CURRENT trusted policy
+(`policy/scripts/release-tooling.ps1` at the executing workflow revision) ->
+verified same-run handoff (final hash identity check in the publish job).
 
 ## Evidence schema (`release-external-evidence.json`, v2)
 
@@ -263,18 +348,24 @@ passes and attached to the release alongside `release-external-evidence.json`.
    approved production signer are configured (see
    `docs/release/code-signing.md` section 4: `SIGNING_PROVIDER=digicert-stm`
    plus `SM_HOST`, `SM_API_KEY`, `SM_CLIENT_CERT_FILE_B64`,
-   `SM_CLIENT_CERT_PASSWORD`, `SM_KEYPAIR_ALIAS`), then dispatch
-   `prepare-release-candidate.yml` with `sha=<candidate>` (and the expected
-   `version`, default `1.0.0`). The run builds once, signs once through the
-   signing service (non-exportable key), verifies the signature, timestamp,
-   and certificate identity, computes the final distributed hash, and
-   retains `tabdock-candidate-<sha>-<run-id>` (manifest `artifactSha256` =
+   `SM_CLIENT_CERT_PASSWORD`, `SM_KEYPAIR_ALIAS`, and the MANDATORY
+   `SIGNING_EXPECTED_SUBJECT` publisher policy), then dispatch
+   `prepare-release-candidate.yml` from `main` with
+   `sha=<current main HEAD == the trusted dispatch SHA>` (and the expected
+   `version`, default `1.0.0`). The run verifies the trusted dispatch
+   contract first (ref == main, requested SHA == dispatch SHA,
+   workflow SHA == dispatch SHA), builds once, signs once through the
+   signing service (non-exportable key, certificate subject == current
+   publisher policy), verifies the signature, timestamp, and certificate
+   identity, computes the final distributed hash, and retains
+   `tabdock-candidate-<sha>-<run-id>` (manifest `artifactSha256` =
    final signed hash, `SHA256SUMS.txt` = final signed hash,
    `releaseMode = PRODUCTION`, `signingProvider = digicert-stm`,
-   `signingKeyProtection = CLOUD_HSM`). The run summary prints the run id,
-   artifact name, source SHA, semantic version, final SHA-256, and the
-   signing certificate. Without an approved, configured production signer
-   the run fails `BLOCKED_EXTERNAL` before any build.
+   `signingKeyProtection = CLOUD_HSM`, `releasePolicySchemaVersion` =
+   current schema). The run summary prints the run id, artifact name, source
+   SHA, semantic version, final SHA-256, and the signing certificate.
+   Without an approved, configured production signer (or without the
+   publisher policy) the run fails `BLOCKED_EXTERNAL` before any build.
 2. **Human gates on the exact artifact:** download the retained artifact,
    verify `TabDock.exe` SHA-256 == manifest `artifactSha256` ==
    `SHA256SUMS.txt`, run the final manual Windows smoke
@@ -283,14 +374,20 @@ passes and attached to the release alongside `release-external-evidence.json`.
    compatibility qualification (`docs/release/compatibility-matrix.md`)
    against THAT executable, and fill in `release-external-evidence.json`
    (schemaVersion 2) with the exact SHA, hash, run id, and artifact name.
-3. **Stage B — publish:** dispatch `publish-release.yml` with
+3. **Stage B — publish:** dispatch `publish-release.yml` from `main` with
    `run-id=<Stage A run id>` and `external-evidence=<the record>`. Stage B
-   verifies the run, locates and downloads the exact artifact, re-verifies
-   everything against the downloaded bytes (project version at the candidate
-   SHA == manifest == binary `--version`; file == manifest == SHA256SUMS;
-   evidence bound to SHA, hash, run, and artifact; Authenticode re-proven),
-   then creates the release with the DERIVED tag `v<semanticVersion>` at the
-   exact candidate SHA.
+   verifies the trusted dispatch contract, checks out the trusted policy at
+   the executing workflow revision, verifies the run, locates and downloads
+   the exact artifact (candidate source checked out as data only),
+   re-verifies everything against the downloaded bytes using ONLY the
+   trusted policy module (project version at the candidate SHA == manifest
+   == binary `--version`; file == manifest == SHA256SUMS; CURRENT policy
+   schema; publisher identity == manifest == actual certificate; evidence
+   bound to SHA, hash, run, and artifact; Authenticode re-proven with
+   `signtool verify /pa /v /tw`), writes the verified same-run handoff, and
+   the publish job performs the final hash identity check and creates the
+   release with the DERIVED tag `v<semanticVersion>` at the exact candidate
+   SHA.
 
 There is no "Run 2 rebuild": the artifact published by Stage B is the
 artifact retained by Stage A — byte-identical, never rebuilt, never re-signed.
@@ -344,27 +441,44 @@ silently merely to pass the gate.
   `Get-ReleaseTagFromVersion`, `Assert-ReleaseTagMatchesVersion`),
   `Complete-ReleaseRecords` (final-hash records + triple consistency),
   `Test-ExternalEvidenceFile` (schema v2 + SHA + artifact + run + artifact
-  name binding + gates + completedAt quality), signing-provider policy
+  name binding + gates + completedAt quality), the release-policy schema
+  contract (`Get-ReleasePolicySchemaVersion` / `Get-MinimumAcceptedProductionPolicySchema` /
+  `Test-ReleasePolicySchema`), the current publisher-identity policy
+  (`Get-PublisherIdentityPolicy`), signing-provider policy
   (`Get-SigningProvider`, `Test-ApprovedProductionSigningProvider`,
   `Test-ApprovedProductionKeyProtection`, `Test-SigningProviderConfiguration`,
   `Test-ProductionSigningPreflight`), `Test-AuthenticodeSignature` and
-  `Test-AuthenticodeTimestamp` (independent `signtool verify /pa` + RFC3161),
-  `Get-SignerCertificateInfo` (certificate identity), and
-  `Test-PublicationEligibility` (the full gate — including the approved
-  provider class, key-protection class, certificate identity, and timestamp
-  policy — bound to the candidate run id and artifact name).
-- `.github/workflows/prepare-release-candidate.yml` (Stage A): provider-aware
-  `BLOCKED_EXTERNAL` preflight requiring the approved production signer,
-  official DigiCert tooling setup, single build/sign, immutable retention,
-  candidate identity summary; never creates a release.
-- `.github/workflows/publish-release.yml` (Stage B): cross-run run/artifact
-  resolution via the GitHub API, download of the EXACT artifact
+  `Test-AuthenticodeTimestamp` (independent `signtool verify /pa /v /tw` +
+  RFC3161), `Get-SignerCertificateInfo` (certificate + timestamper
+  identity), and `Test-PublicationEligibility` (the full gate — including
+  the approved provider class, key-protection class, certificate identity,
+  timestamper identity, current publisher policy, policy-schema contract,
+  and timestamp policy — bound to the candidate run id and artifact name).
+- `.github/workflows/prepare-release-candidate.yml` (Stage A): trusted
+  production dispatch contract (ref == main, requested SHA == dispatch SHA,
+  workflow SHA == dispatch SHA) as the FIRST step; provider-aware
+  `BLOCKED_EXTERNAL` preflight requiring the approved production signer AND
+  the mandatory publisher identity policy; official DigiCert tooling setup
+  PINNED to the full immutable action SHA; PowerShell-materialized
+  client-authentication certificate with always-run cleanup; NO legacy
+  local-PFX secrets; single build/sign; immutable retention; candidate
+  identity summary; never creates a release.
+- `.github/workflows/publish-release.yml` (Stage B): two jobs — `verify`
+  (contents: read + documented actions: write for the same-run handoff
+  upload; trusted policy checkout at the executing workflow revision,
+  candidate-source checkout as data only, cross-run run/artifact resolution
+  via the GitHub API, download of the EXACT artifact
   (`download-artifact@v7` `run-id`/`repository`/`github-token`), fail-closed
-  gate, derived tag, release asset verification; contains no build, sign,
-  signing-provider authentication, or qualification invocation.
+  gate loaded ONLY from `policy/scripts/release-tooling.ps1`, read-only
+  binary identity self-tests, verified same-run handoff) and `publish`
+  (needs: verify; contents: write; final hash identity check; derived tag;
+  release asset verification; no candidate execution, no build, no sign,
+  no signing-provider authentication).
 - `.github/workflows/release.yml`: RC qualification-only (unsigned or
   `local-pfx`); no publication path.
-- `scripts/release-tooling-tests.ps1`: 96 deterministic regression cases
+- `.github/workflows/build.yml`: hosted CI gates the release-control
+  regression suite (`scripts/release-tooling-tests.ps1`).
+- `scripts/release-tooling-tests.ps1`: 118 deterministic regression cases
   including every adversarial condition (missing/malformed evidence, wrong
   SHA, wrong artifact hash, wrong run, wrong artifact name, `FAIL`,
   `BLOCKED_EXTERNAL`, unsigned artifact under mandatory signing,
@@ -374,5 +488,13 @@ silently merely to pass the gate.
   local-pfx/mock/not-configured/unknown/missing provider metadata and
   key-protection metadata, mock never claims an approved provider,
   cloud-provider configuration and tooling failures fail closed, timestamp
-  and certificate identity policy, static workflow guarantees) — none of
+  and certificate identity policy, static workflow guarantees, and the
+  release-policy trust boundary: old pre-HSM candidates rejected under the
+  CURRENT policy, missing/stale policy schema fails, hostile candidate
+  tooling cannot change the Stage B verdict, the policy module is loaded
+  only from `policy/`, publisher-identity policy missing/mismatch/wrong-
+  consistent-publisher fails, Stage A dispatch contract ordering, Stage B
+  run-head-SHA binding, no PFX secrets in production Stage A, DigiCert
+  action pin, verify job without contents: write, publish job without
+  build/sign/candidate execution, timestamp missing/warned fails) — none of
   which publishes anything or contacts a signing provider.

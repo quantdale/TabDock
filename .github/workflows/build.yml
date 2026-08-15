@@ -49,6 +49,18 @@ jobs:
           OPENSPEC_TELEMETRY: '0'
         run: .\scripts\validate.ps1 -Configuration Release -Ci -Publish
 
+      # The release-control regression suite (P1): deterministic adversarial
+      # tests of the two-stage release chain, the signing-provider policy,
+      # the trusted-policy trust boundary, the policy-schema contract, and
+      # the static workflow guarantees. It is hermetic (no real certificates,
+      # no signing, no provider contact, no publication, no network beyond
+      # ordinary restore), fails the build on any regression, and makes the
+      # release-control suite an exact-SHA hosted-CI gate. It never depends
+      # on DigiCert credentials.
+      - name: Run release-tooling regression suite
+        shell: pwsh
+        run: .\scripts\release-tooling-tests.ps1
+
   # Independent native-ABI evidence on a second Windows OS build (the
   # windows-2022 runner image): proves the WINDOWPLACEMENT 44-byte user32
   # contract on a Windows version different from windows-latest and prints the

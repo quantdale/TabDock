@@ -25,6 +25,15 @@
     timestamp verification, and signed-certificate identity helpers shared
     with scripts/sign-release.ps1.
 
+    Trust boundary: this module IS the current trusted release policy. Stage B
+    loads it exclusively from the trusted policy checkout
+    (policy/scripts/release-tooling.ps1) of the workflow revision being
+    executed - NEVER from the candidate source, the candidate artifact, or the
+    candidate manifest. The publication verdict can therefore never be supplied
+    by the candidate being evaluated. The release-policy schema contract
+    (Get-ReleasePolicySchemaVersion / Get-MinimumAcceptedProductionPolicySchema)
+    additionally rejects candidates produced under older policy generations.
+
     Nothing in this file reads signing material values, performs signing, or
     creates a GitHub Release; it is safe to run anywhere, including tests.
 
@@ -486,9 +495,11 @@ function Test-AuthenticodeSignature {
     <#
     .SYNOPSIS
         Independently proves the executable carries a valid Authenticode
-        signature by running `signtool verify /pa /v` (no signing material is
-        needed to verify). Fail-closed: returns $false when signtool is
+        signature by running `signtool verify /pa /v /tw` (no signing material
+        is needed to verify). Fail-closed: returns $false when signtool is
         unavailable or verification fails. Verification is never faked.
+        /tw additionally makes an untimestamped signature a WARNING result
+        (signtool exit code 2), which fails this check like any non-zero exit.
     #>
     param([Parameter(Mandatory = $true)][string]$ExePath)
     if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) {
@@ -500,7 +511,7 @@ function Test-AuthenticodeSignature {
         Write-Host 'Test-AuthenticodeSignature: signtool.exe not found; treating the artifact as unsigned (fail closed)' -ForegroundColor Yellow
         return $false
     }
-    & $signtool @('verify', '/pa', '/v', $ExePath) 2>&1 | Out-Null
+    & $signtool @('verify', '/pa', '/v', '/tw', $ExePath) 2>&1 | Out-Null
     $ok = $LASTEXITCODE -eq 0
     if (-not $ok) {
         Write-Host "Test-AuthenticodeSignature: signtool verify /pa failed (exit $LASTEXITCODE) for $ExePath" -ForegroundColor Red
@@ -515,8 +526,10 @@ function Test-AuthenticodeTimestamp {
         in addition to its Authenticode signature. Fail-closed: returns
         $false when the file is unsigned, the signature is not valid, no
         timestamp certificate is present, signtool is unavailable, or
-        `signtool verify /pa /v` does not pass (the Authenticode policy
-        validates the timestamp chain when one is present).
+        `signtool verify /pa /v /tw` does not pass (the Authenticode policy
+        validates the timestamp chain when one is present, and /tw makes a
+        missing timestamp a warning result - exit code 2 - which fails this
+        check like any non-zero exit).
 
     .DESCRIPTION
         Passing /tr to a signer is NOT treated as proof of timestamping: the
@@ -543,7 +556,7 @@ function Test-AuthenticodeTimestamp {
         Write-Host 'Test-AuthenticodeTimestamp: signtool.exe not found; timestamp chain cannot be validated (fail closed)' -ForegroundColor Yellow
         return $false
     }
-    & $signtool @('verify', '/pa', '/v', $ExePath) 2>&1 | Out-Null
+    & $signtool @('verify', '/pa', '/v', '/tw', $ExePath) 2>&1 | Out-Null
     $ok = $LASTEXITCODE -eq 0
     if (-not $ok) {
         Write-Host "Test-AuthenticodeTimestamp: signtool verify /pa failed (exit $LASTEXITCODE); the timestamp/signature chain is not valid" -ForegroundColor Red
@@ -762,6 +775,7 @@ function Test-ProductionSigningPreflight {
     $provider = Get-SigningProvider
     $cfg = Test-SigningProviderConfiguration $provider
     $approved = Test-ApprovedProductionSigningProvider $provider
+    $publisher = Get-PublisherIdentityPolicy
     $blocked = ''
     if (-not $approved) {
         $blocked = "signing provider '$provider' is not an approved production signer (approved: $((Get-ApprovedProductionSigningProviders) -join ', ')); local-PFX, mock, and unconfigured signers are never production candidates"
@@ -769,14 +783,98 @@ function Test-ProductionSigningPreflight {
     elseif (-not $cfg.Configured) {
         $blocked = "signing provider '$provider' is missing required configuration: $($cfg.Missing -join ', ')"
     }
-    return [pscustomobject]@{
-        Provider      = $provider
-        KeyProtection = $cfg.KeyProtection
-        Approved      = $approved
-        Configured    = $cfg.Configured
-        Missing       = $cfg.Missing
-        BlockedReason = $blocked
+    elseif ([string]::IsNullOrWhiteSpace($publisher)) {
+        $blocked = 'the current production publisher identity policy is not configured (SIGNING_EXPECTED_SUBJECT); production candidates require the expected publisher subject so the signed certificate is bound to the CURRENT publisher policy, never merely to the manifest'
     }
+    return [pscustomobject]@{
+        Provider          = $provider
+        KeyProtection     = $cfg.KeyProtection
+        Approved          = $approved
+        Configured        = $cfg.Configured
+        Missing           = $cfg.Missing
+        PublisherIdentity = $publisher
+        BlockedReason     = $blocked
+    }
+}
+
+# --- Release-policy schema and publisher-identity policy ---------------------
+# The release policy is versioned so a candidate is NEVER evaluated under the
+# policy generation that produced it. Stage A records the CURRENT schema in
+# the production manifest; Stage B (running the CURRENT module revision from
+# the trusted policy checkout) requires manifest schema >= the minimum and
+# evaluates every condition with CURRENT policy code.
+
+function Get-ReleasePolicySchemaVersion {
+    <#
+    .SYNOPSIS
+        The release-policy schema version of the CURRENT trusted policy
+        implementation (this module revision). Stage A records it in the
+        production manifest (release-manifest.json releasePolicySchemaVersion)
+        so the schema contract is part of the candidate's provenance.
+    #>
+    return 3
+}
+
+function Get-MinimumAcceptedProductionPolicySchema {
+    <#
+    .SYNOPSIS
+        The oldest release-policy schema generation the CURRENT trusted policy
+        accepts for production publication. Older candidates (schema absent or
+        below the minimum) fail closed: they were produced under an older
+        release policy and are never silently re-evaluated under their own
+        historical rules.
+
+        Schema generations:
+          1 = pre-provider two-stage era (candidate-controlled publication
+              policy; no provider allowlist, no key-protection policy, no
+              publisher-identity policy)
+          2 = provider-allowlist era (approved-provider + CLOUD_HSM key
+              protection policy, but no schema contract, no mandatory
+              publisher identity, no timestamper identity)
+          3 = current: schema contract + mandatory publisher identity +
+              timestamper identity + trusted-policy isolation
+    #>
+    return 3
+}
+
+function Test-ReleasePolicySchema {
+    <#
+    .SYNOPSIS
+        Fail-closed check that a release manifest records a production policy
+        schema the CURRENT policy accepts: present, numeric, and >=
+        Get-MinimumAcceptedProductionPolicySchema. Returns
+        [pscustomobject]@{ Valid=[bool]; Failure=[string] }.
+    #>
+    param([Parameter(Mandatory = $true)]$Manifest)
+    $raw = [string]$Manifest.releasePolicySchemaVersion
+    if ($raw -notmatch '^\d+$') {
+        return [pscustomobject]@{
+            Valid   = $false
+            Failure = "manifest releasePolicySchemaVersion is absent or malformed ('$raw'); a candidate produced before the current release-policy schema contract is never evaluated under the CURRENT policy"
+        }
+    }
+    $schema = [int]$raw
+    $minimum = Get-MinimumAcceptedProductionPolicySchema
+    if ($schema -lt $minimum) {
+        return [pscustomobject]@{
+            Valid   = $false
+            Failure = "manifest releasePolicySchemaVersion $schema < minimum accepted production policy schema $minimum; the candidate was produced under an older release policy and is rejected under the CURRENT policy (an old candidate does not become valid because its old policy would have accepted itself)"
+        }
+    }
+    return [pscustomobject]@{ Valid = $true; Failure = '' }
+}
+
+function Get-PublisherIdentityPolicy {
+    <#
+    .SYNOPSIS
+        The CURRENT expected publisher identity (SIGNING_EXPECTED_SUBJECT, a
+        repository variable - only the NAME is ever discussed, never a value)
+        that every production signed certificate must match. It is a stable
+        publisher/subject identity, deliberately NOT a rotating certificate
+        thumbprint, so certificate renewal does not require source changes.
+        Empty when the current policy is not configured.
+    #>
+    return [string]$env:SIGNING_EXPECTED_SUBJECT
 }
 
 function Test-PublicationEligibility {
@@ -815,10 +913,21 @@ function Test-PublicationEligibility {
             local-PFX, mock, not-configured, and unknown providers are
             rejected), the manifest records the signed certificate identity
             (subject, thumbprint, issuer, validity window, code-signing EKU)
-            and timestampStatus == VERIFIED, and `signtool verify /pa` +
-            RFC3161 timestamp verification independently confirm the
-            signature on disk and cross-check the recorded certificate
-            identity against the actual bytes
+            and the RFC3161 timestamper identity (subject, thumbprint), and
+            timestampStatus == VERIFIED
+          - the CURRENT release-policy schema contract: the manifest must
+            record releasePolicySchemaVersion >= the current minimum, so a
+            candidate produced under an older policy generation (or with no
+            schema at all) is never evaluated under its own historical rules
+          - the CURRENT trusted publisher policy: when production signing is
+            mandatory, ExpectedPublisherSubject (SIGNING_EXPECTED_SUBJECT from
+            the trusted policy revision) must be configured and must equal the
+            manifest signingCertificateSubject AND the signed certificate
+            subject read from the actual bytes - an artifact and its manifest
+            that consistently record the WRONG publisher still fail
+          - `signtool verify /pa /v /tw` + RFC3161 timestamp verification
+            independently confirm the signature on disk and cross-check the
+            recorded certificate identity against the actual bytes
         Any failure is returned (never thrown) as a Failures list; the caller
         must refuse to publish when Eligible is $false.
 
@@ -835,6 +944,7 @@ function Test-PublicationEligibility {
         [Parameter(Mandatory = $true)][string]$EvidencePath,
         [Parameter(Mandatory = $true)][string]$ExpectedCandidateRunId,
         [Parameter(Mandatory = $true)][string]$ExpectedCandidateArtifactName,
+        [string]$ExpectedPublisherSubject = '',
         [switch]$RequireSigning
     )
     $failures = [System.Collections.Generic.List[string]]::new()
@@ -858,6 +968,15 @@ function Test-PublicationEligibility {
 
     if ([string]$manifest.qualificationStatus -ne 'PASS') {
         $failures.Add("manifest qualificationStatus=$($manifest.qualificationStatus) (expected PASS)")
+    }
+    # --- Release-policy schema contract (P0): the manifest must carry the
+    # policy schema generation under which Stage A produced it, and the
+    # CURRENT policy only accepts schema >= the minimum. An old candidate
+    # (schema absent or lower) is rejected even when everything else looks
+    # valid - it must never be evaluated under its own historical policy.
+    $schemaCheck = Test-ReleasePolicySchema $manifest
+    if (-not $schemaCheck.Valid) {
+        $failures.Add($schemaCheck.Failure)
     }
     if (-not [string]::Equals([string]$manifest.sourceCommitSha, $ExpectedSourceSha, [StringComparison]::OrdinalIgnoreCase)) {
         $failures.Add("manifest sourceCommitSha $($manifest.sourceCommitSha) != requested SHA $ExpectedSourceSha")
@@ -955,6 +1074,32 @@ function Test-PublicationEligibility {
         elseif (-not (Test-CertificateEkuIncludesCodeSigning $eku)) {
             $failures.Add("manifest signingCertificateEku does not include the code-signing EKU (1.3.6.1.5.5.7.3.3): $($eku -join ', ')")
         }
+
+        # --- Current trusted publisher policy (P1): the CURRENT policy must
+        # independently require the actual publisher. Merely checking
+        # actual-cert == manifest-cert is not enough: an artifact and its
+        # manifest can consistently record the WRONG publisher. The chain is
+        #   CURRENT TRUSTED PUBLISHER POLICY (SIGNING_EXPECTED_SUBJECT from
+        #   the trusted policy revision) == manifest signingCertificateSubject
+        #   == signed certificate subject on the actual bytes.
+        if ([string]::IsNullOrWhiteSpace($ExpectedPublisherSubject)) {
+            $failures.Add('current trusted publisher policy is not configured (SIGNING_EXPECTED_SUBJECT); production publication requires the CURRENT expected publisher identity, not merely the publisher recorded in the candidate manifest')
+        }
+        elseif (-not [string]::Equals([string]$manifest.signingCertificateSubject, $ExpectedPublisherSubject, [StringComparison]::Ordinal)) {
+            $failures.Add("manifest signingCertificateSubject '$($manifest.signingCertificateSubject)' != current trusted publisher policy '$ExpectedPublisherSubject'; the candidate records a publisher the CURRENT policy does not approve")
+        }
+
+        # --- RFC3161 timestamper identity (P2): the manifest records the
+        # timestamper subject/thumbprint so the timestamp provenance has
+        # forensic value; absence fails closed and the on-disk timestamper is
+        # cross-checked below.
+        if ([string]::IsNullOrWhiteSpace([string]$manifest.timestampCertificateSubject)) {
+            $failures.Add('production signing is mandatory but manifest timestampCertificateSubject is absent; RFC3161 timestamper identity is required provenance')
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$manifest.timestampCertificateThumbprint)) {
+            $failures.Add('production signing is mandatory but manifest timestampCertificateThumbprint is absent; RFC3161 timestamper identity is required provenance')
+        }
+
         $validFrom = [DateTime]::MinValue
         $validTo = [DateTime]::MinValue
         $fromParsed = [DateTime]::TryParse([string]$manifest.signingCertificateValidFrom, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref]$validFrom)
@@ -996,6 +1141,30 @@ function Test-PublicationEligibility {
                 if (-not [string]::IsNullOrWhiteSpace([string]$manifest.signingCertificateSubject) -and
                     $certInfo.Subject -ne [string]$manifest.signingCertificateSubject) {
                     $failures.Add("signed certificate subject on disk '$($certInfo.Subject)' != manifest signingCertificateSubject '$($manifest.signingCertificateSubject)'")
+                }
+                # CURRENT trusted publisher policy must equal the ACTUAL bytes
+                # (not merely equal the manifest): an artifact whose manifest
+                # consistently records the wrong publisher still fails.
+                if (-not [string]::IsNullOrWhiteSpace($ExpectedPublisherSubject) -and
+                    $certInfo.Subject -ne $ExpectedPublisherSubject) {
+                    $failures.Add("signed certificate subject on disk '$($certInfo.Subject)' != current trusted publisher policy '$ExpectedPublisherSubject'; the ACTUAL publisher does not satisfy the CURRENT policy")
+                }
+                # RFC3161 timestamper identity on disk must equal the manifest
+                # record (and must exist - Test-AuthenticodeTimestamp already
+                # fails when no timestamp certificate is present).
+                if ([string]::IsNullOrWhiteSpace([string]$certInfo.TimestamperSubject)) {
+                    $failures.Add('no RFC3161 timestamper subject could be read from the final executable; timestamp provenance cannot be bound')
+                }
+                elseif (-not [string]::IsNullOrWhiteSpace([string]$manifest.timestampCertificateSubject) -and
+                    $certInfo.TimestamperSubject -ne [string]$manifest.timestampCertificateSubject) {
+                    $failures.Add("timestamper subject on disk '$($certInfo.TimestamperSubject)' != manifest timestampCertificateSubject '$($manifest.timestampCertificateSubject)'")
+                }
+                if ([string]::IsNullOrWhiteSpace([string]$certInfo.TimestamperThumbprint)) {
+                    $failures.Add('no RFC3161 timestamper thumbprint could be read from the final executable; timestamp provenance cannot be bound')
+                }
+                elseif (-not [string]::IsNullOrWhiteSpace([string]$manifest.timestampCertificateThumbprint) -and
+                    $certInfo.TimestamperThumbprint -ne [string]$manifest.timestampCertificateThumbprint) {
+                    $failures.Add("timestamper thumbprint on disk '$($certInfo.TimestamperThumbprint)' != manifest timestampCertificateThumbprint '$($manifest.timestampCertificateThumbprint)'")
                 }
             }
             $timestampOk = Test-AuthenticodeTimestamp $exe

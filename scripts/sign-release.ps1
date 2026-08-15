@@ -48,10 +48,15 @@
                     SM_CLIENT_CERT_PASSWORD  password of that .p12 (secret)
                     SM_KEYPAIR_ALIAS keypair alias to sign with
                                      (repository variable)
-                    SIGNING_EXPECTED_SUBJECT optional expected publisher
-                                     identity (repository variable); when
-                                     set, the signed certificate subject
-                                     must match it exactly
+                    SIGNING_EXPECTED_SUBJECT expected publisher identity
+                                     (repository variable); MANDATORY for
+                                     production candidates
+                                     (RELEASE_PRODUCTION_GATE=true) and, when
+                                     configured on any path, the signed
+                                     certificate subject must match it
+                                     exactly; stable across certificate
+                                     rotation (subject identity, never a
+                                     hard-coded thumbprint)
 
       digicert-stm signing uses the official DigiCert smctl tooling
       (installed by the digicert/code-signing-software-trust-action@v1
@@ -79,7 +84,8 @@
       Status, Verification, FinalSha256, Provider, KeyProtection,
       TimestampStatus, CertificateSubject, CertificateThumbprint,
       CertificateIssuer, CertificateSerialNumber, CertificateValidFrom,
-      CertificateValidTo, CertificateEku, [Mock]
+      CertificateValidTo, CertificateEku, TimestamperSubject,
+      TimestamperThumbprint, [Mock]
 
     TEST-ONLY MOCK MODES (never used by production):
       -MockSign           appends deterministic bytes to the executable
@@ -142,6 +148,8 @@ $certSerialNumber = $null
 $certValidFrom = $null
 $certValidTo = $null
 $certEku = $null
+$timestampSubject = $null
+$timestampThumbprint = $null
 
 function Emit-Result {
     $result = [ordered]@{
@@ -158,6 +166,8 @@ function Emit-Result {
         CertificateValidFrom  = $certValidFrom
         CertificateValidTo    = $certValidTo
         CertificateEku        = $certEku
+        TimestamperSubject    = $timestampSubject
+        TimestamperThumbprint = $timestampThumbprint
     }
     if ($mockMode) {
         $result['Mock'] = $true
@@ -210,9 +220,26 @@ function Complete-RealSignerValidation {
         return 3
     }
     $expectedSubject = [string]$env:SIGNING_EXPECTED_SUBJECT
+    $productionGate = [string]::Equals($env:RELEASE_PRODUCTION_GATE, 'true', [StringComparison]::OrdinalIgnoreCase)
+    if ($productionGate -and [string]::IsNullOrWhiteSpace($expectedSubject)) {
+        # Mandatory for the production signer path: the CURRENT publisher
+        # identity policy must be configured so the signed certificate is
+        # bound to current policy, never merely to whatever the manifest says.
+        $script:status = 'SIGNING_FAILED'
+        Write-Host 'sign-release: SIGNING_EXPECTED_SUBJECT (the current production publisher identity policy) is not configured; production signing requires the expected publisher subject.' -ForegroundColor Red
+        Emit-Result
+        return 3
+    }
     if (-not [string]::IsNullOrWhiteSpace($expectedSubject) -and $certInfo.Subject -ne $expectedSubject) {
         $script:status = 'SIGNING_FAILED'
         Write-Host 'sign-release: SIGNING_EXPECTED_SUBJECT does not match the signing certificate subject.' -ForegroundColor Red
+        Emit-Result
+        return 3
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$certInfo.TimestamperSubject) -or
+        [string]::IsNullOrWhiteSpace([string]$certInfo.TimestamperThumbprint)) {
+        $script:status = 'SIGNING_FAILED'
+        Write-Host 'sign-release: no RFC3161 timestamper identity could be read from the signed executable; timestamp provenance cannot be recorded.' -ForegroundColor Red
         Emit-Result
         return 3
     }
@@ -224,6 +251,8 @@ function Complete-RealSignerValidation {
     $script:certValidFrom = $certInfo.ValidFrom
     $script:certValidTo = $certInfo.ValidTo
     $script:certEku = @($certInfo.Eku)
+    $script:timestampSubject = $certInfo.TimestamperSubject
+    $script:timestampThumbprint = $certInfo.TimestamperThumbprint
     $script:finalSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $ExePath).Hash.ToLowerInvariant()
     $script:status = 'SIGNED'
     return 0

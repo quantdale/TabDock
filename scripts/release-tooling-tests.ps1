@@ -62,6 +62,23 @@
     provider is not explicitly selected, is recorded as Mock=true with
     Provider=mock-test, and can never pass the production gate.
 
+    Release-policy trust-boundary coverage (P0/P1) proves the candidate can
+    never supply the policy that decides whether it may be published: the
+    old pre-HSM candidate shape (SIGNED + verified + hash + no mock + valid
+    evidence but no current provider/schema metadata) is rejected by the
+    CURRENT policy; a manifest without releasePolicySchemaVersion or with a
+    stale schema fails; hostile candidate release-tooling files can never
+    change the Stage B verdict; Stage B loads the policy module exclusively
+    from policy/ (never candidate-source/ or candidate-artifact/); the
+    current trusted publisher policy (SIGNING_EXPECTED_SUBJECT) is
+    mandatory, and a manifest+file that consistently record the wrong
+    publisher still fail against the current policy; production Stage A
+    receives no SIGNCERT_* PFX secrets; the DigiCert action is pinned to its
+    full immutable SHA; the hosted build workflow gates the regression
+    suite; the Stage B verify job has no contents: write and the publish job
+    performs no build/sign/candidate execution; timestamp policy failures
+    (missing/warned) fail closed.
+
     This script NEVER creates a GitHub Release, never contacts the network,
     and never touches signing material.
 
@@ -160,10 +177,13 @@ function New-TestManifest {
         signingCertificateValidFrom = if ($CertificateValidFrom) { $CertificateValidFrom } else { $null }
         signingCertificateValidTo = if ($CertificateValidTo) { $CertificateValidTo } else { $null }
         signingCertificateEku = if ($CertificateEku.Count -gt 0) { @($CertificateEku) } else { $null }
+        timestampCertificateSubject = $null
+        timestampCertificateThumbprint = $null
         signingMock            = if ($Mock) { $true } else { $null }
         qualificationStatus    = $QualificationStatus
         productionReleaseEligibility = 'BLOCKED_EXTERNAL'
         releaseMode            = $ReleaseMode
+        releasePolicySchemaVersion = 3
         workflowRunId          = $WorkflowRunId
         buildIdentity          = [ordered]@{
             semanticVersion      = if ($BuildIdentitySemantic) { $BuildIdentitySemantic } else { $Version }
@@ -241,6 +261,8 @@ function Set-SyntheticSignedManifest {
         signingCertificateValidFrom = '2026-01-01T00:00:00Z'
         signingCertificateValidTo = '2029-01-01T00:00:00Z'
         signingCertificateEku  = @('1.3.6.1.5.5.7.3.3')
+        timestampCertificateSubject = 'CN=DigiCert Timestamp Responder, O=DigiCert Inc, C=US'
+        timestampCertificateThumbprint = '2222222222222222222222222222222222222222'
     }
 }
 
@@ -556,12 +578,15 @@ try {
     $goodVersion = '1.0.0'
     $goodRunId = '123456789'
     $goodArtifactName = Get-CandidateArtifactName -SourceSha $goodSha -RunId $goodRunId
+    # The CURRENT trusted publisher policy used by the gate tests: must equal
+    # the manifest signingCertificateSubject set by Set-SyntheticSignedManifest.
+    $goodPublisherSubject = 'CN=TabDock Test Publisher, O=TabDock Test, C=US'
 
     New-TestCase 'unsigned-artifact-rejected-when-production-signing-mandatory' {
         $art = New-SyntheticArtifactDir $testRoot 'g-unsigned-mandatory' -SourceSha $goodSha -Version $goodVersion
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'unsigned artifact must be ineligible under mandatory production signing'
         Assert-True (($gate.Failures -join ';') -match 'signing') 'failure must identify the signing policy'
     }
@@ -571,7 +596,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ signingStatus = 'SIGNING_FAILED'; signatureVerification = 'FAILED' }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a SIGNING_FAILED manifest must never be production-eligible'
     }
 
@@ -581,7 +606,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ signatureVerification = 'FAILED' }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'an unverified signature must never be treated as valid for production'
         Assert-True (($gate.Failures -join ';') -match 'signatureVerification') 'failure must cite signature verification'
     }
@@ -592,14 +617,14 @@ try {
         Update-TestManifest $art.ManifestPath @{ signingMock = $true; signingProvider = 'mock-test'; signingKeyProtection = 'MOCK_TEST' }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a test-only mock-signed artifact must never be production-eligible'
         Assert-True (($gate.Failures -join ';') -match 'mock') 'failure must identify mock signing'
     }
 
     New-TestCase 'missing-external-evidence-fails-closed' {
         $art = New-SyntheticArtifactDir $testRoot 'g-missing-evidence' -SourceSha $goodSha -Version $goodVersion
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath (Join-Path $art.Dir 'does-not-exist.json') -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath (Join-Path $art.Dir 'does-not-exist.json') -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'missing external evidence must fail closed'
     }
 
@@ -607,7 +632,7 @@ try {
         $art = New-SyntheticArtifactDir $testRoot 'g-malformed-evidence' -SourceSha $goodSha -Version $goodVersion
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         [IO.File]::WriteAllText($evidencePath, '{ not json', [Text.UTF8Encoding]::new($false))
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'malformed external evidence must fail closed'
     }
 
@@ -615,7 +640,7 @@ try {
         $art = New-SyntheticArtifactDir $testRoot 'g-wrong-sha' -SourceSha $goodSha -Version $goodVersion
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha ('d' * 40) -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'evidence bound to another source SHA must fail closed'
         Assert-True (($gate.Failures -join ';') -match 'sourceCommitSha') 'failure must cite the SHA binding'
     }
@@ -624,7 +649,7 @@ try {
         $art = New-SyntheticArtifactDir $testRoot 'g-wrong-hash' -SourceSha $goodSha -Version $goodVersion
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha ('e' * 64))
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'evidence bound to another artifact must fail closed'
         Assert-True (($gate.Failures -join ';') -match 'artifactSha256') 'failure must cite the artifact binding'
     }
@@ -635,7 +660,7 @@ try {
         $evidence.finalWindowsHumanSmoke.status = 'FAIL'
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath $evidence
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'finalWindowsHumanSmoke=FAIL must fail closed'
     }
 
@@ -645,7 +670,7 @@ try {
         $evidence.finalWindowsHumanSmoke.status = 'BLOCKED_EXTERNAL'
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath $evidence
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'finalWindowsHumanSmoke=BLOCKED_EXTERNAL must fail closed'
     }
 
@@ -655,7 +680,7 @@ try {
         $evidence.physicalMixedDpi.status = 'FAIL'
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath $evidence
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'physicalMixedDpi=FAIL must fail closed'
     }
 
@@ -665,7 +690,7 @@ try {
         $evidence.physicalMixedDpi.status = 'BLOCKED_NO_MIXED_DPI_HARDWARE'
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath $evidence
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'physicalMixedDpi=BLOCKED_NO_MIXED_DPI_HARDWARE must fail closed for production'
     }
 
@@ -675,7 +700,7 @@ try {
         $evidence.Remove('physicalMixedDpi')
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath $evidence
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'evidence without a mandatory gate must fail closed'
     }
 
@@ -685,7 +710,7 @@ try {
         $evidence.finalWindowsHumanSmoke.operator = ''
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath $evidence
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'evidence without an operator must fail closed'
     }
 
@@ -695,7 +720,7 @@ try {
         $evidence.schemaVersion = 99
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath $evidence
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'wrong evidence schema version must fail closed'
     }
 
@@ -704,7 +729,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ artifactSha256 = ('f' * 64) }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'manifest hash disagreement must fail closed'
     }
 
@@ -713,7 +738,7 @@ try {
         [IO.File]::WriteAllText($art.SumsPath, ('0' * 64) + "  TabDock.exe`r`n", [Text.UTF8Encoding]::new($false))
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'SHA256SUMS disagreement must fail closed'
     }
 
@@ -724,7 +749,7 @@ try {
         [IO.File]::WriteAllBytes($art.Exe, $bytes)
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a tampered final executable must fail closed'
     }
 
@@ -732,7 +757,7 @@ try {
         $art = New-SyntheticArtifactDir $testRoot 'g-version' -SourceSha $goodSha -Version $goodVersion
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion '9.9.9' -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion '9.9.9' -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a version disagreement must fail closed'
     }
 
@@ -740,7 +765,7 @@ try {
         $art = New-SyntheticArtifactDir $testRoot 'g-sha' -SourceSha $goodSha -Version $goodVersion
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha ('c' * 40) -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha ('c' * 40) -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a requested-SHA disagreement must fail closed'
     }
 
@@ -749,7 +774,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ qualificationStatus = 'FAIL' }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a FAIL manifest must fail closed'
     }
 
@@ -764,7 +789,7 @@ try {
         # The synthetic artifact is not really Authenticode-signed, so the
         # independent signtool re-verification is exercised as the signing
         # branch; policy-declared signing is covered by the negative cases.
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True ($gate.Eligible) "production-eligible synthetic records must pass all non-signing gates: $($gate.Failures -join '; ')"
         Assert-True ($gate.Failures.Count -eq 0) 'no failures expected on the synthetic happy path'
     }
@@ -779,7 +804,7 @@ try {
         Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'unsigned synthetic artifact must fail mandatory signing'
         Assert-True ($gate.Failures.Count -eq 1) "expected exactly one signing failure, got: $($gate.Failures -join '; ')"
         Assert-True (($gate.Failures[0] -match 'Authenticode') -or ($gate.Failures[0] -match 'signtool')) 'the single failure must be the Authenticode re-verification'
@@ -788,9 +813,9 @@ try {
     New-TestCase 'evidence-direct-validation-binds-sha-and-hash' {
         $evidencePath = Join-Path $testRoot 'h-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha ('b' * 64))
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
         Assert-True ($result.Valid) "valid evidence must pass: $($result.Failures -join '; ')"
-        $wrong = Test-ExternalEvidenceFile $evidencePath $goodSha ('c' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $wrong = Test-ExternalEvidenceFile $evidencePath $goodSha ('c' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
         Assert-True (-not $wrong.Valid) 'the same evidence must fail against a different artifact hash'
     }
 
@@ -837,7 +862,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ semanticVersion = '9.9' }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion '9.9' -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion '9.9' -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a malformed manifest semantic version must fail closed'
         Assert-True (($gate.Failures -join ';') -match 'not a valid semantic version') 'failure must cite the malformed semantic version'
     }
@@ -850,7 +875,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ buildIdentity = [ordered]@{ semanticVersion = '9.9.9'; informationalVersion = '9.9.9+abcdef1'; selfReportedSha256 = 'unavailable' } }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a forged binary semantic version must fail closed'
         Assert-True (($gate.Failures -join ';') -match 'buildIdentity.semanticVersion') 'failure must cite the binary version binding'
     }
@@ -860,7 +885,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ buildIdentity = [ordered]@{ semanticVersion = '1.0.0'; informationalVersion = '2.0.0+abcdef1'; selfReportedSha256 = 'unavailable' } }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'an informational version without the manifest semantic version must fail closed'
         Assert-True (($gate.Failures -join ';') -match 'informationalVersion') 'failure must cite the informational version binding'
     }
@@ -869,7 +894,7 @@ try {
         $art = New-SyntheticArtifactDir $testRoot 'v-rc-mode' -SourceSha $goodSha -Version $goodVersion -ReleaseMode 'QUALIFICATION_ONLY'
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a qualification-only artifact must never be production-publishable'
         Assert-True (($gate.Failures -join ';') -match 'releaseMode') 'failure must cite the release mode'
     }
@@ -884,7 +909,7 @@ try {
         $evidence = New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256 -RunId '999999999'
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath $evidence
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'evidence naming another Stage A run must fail closed'
         Assert-True (($gate.Failures -join ';') -match 'candidateWorkflowRunId') 'failure must cite the run binding'
     }
@@ -893,7 +918,7 @@ try {
         $art = New-SyntheticArtifactDir $testRoot 'r-manifest-run' -SourceSha $goodSha -Version $goodVersion -WorkflowRunId '555555555'
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a manifest produced by another run must fail closed'
         Assert-True (($gate.Failures -join ';') -match 'workflowRunId') 'failure must cite the manifest run binding'
     }
@@ -904,7 +929,7 @@ try {
         $evidence.candidateArtifactName = 'tabdock-candidate-' + ('c' * 40) + '-123456789'
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath $evidence
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'evidence naming another artifact must fail closed'
         Assert-True (($gate.Failures -join ';') -match 'candidateArtifactName') 'failure must cite the artifact-name binding'
     }
@@ -915,12 +940,12 @@ try {
         $evidence.candidateWorkflowRunId = 'not-a-number'
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath $evidence
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a malformed candidate run id must fail closed'
     }
 
     New-TestCase 'missing-artifact-directory-fails-closed' {
-        $gate = Test-PublicationEligibility -ArtifactDir (Join-Path $testRoot 'does-not-exist') -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath (Join-Path $testRoot 'nope.json') -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir (Join-Path $testRoot 'does-not-exist') -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath (Join-Path $testRoot 'nope.json') -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a missing/expired artifact directory must fail closed'
         Assert-True (($gate.Failures -join ';') -match 'final artifact missing') 'failure must cite the missing artifact'
     }
@@ -935,7 +960,7 @@ try {
         Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True ($gate.Eligible) "a fully bound production candidate must pass the non-network gate: $($gate.Failures -join '; ')"
     }
 
@@ -947,7 +972,7 @@ try {
         $evidence.Remove('windowsCompatibility')
         $evidencePath = Join-Path $testRoot 'w-missing.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
         Assert-True (-not $result.Valid) 'evidence without windowsCompatibility must fail closed'
         Assert-True (($result.Failures -join ';') -match 'windowsCompatibility') 'failure must cite the missing gate'
     }
@@ -957,7 +982,7 @@ try {
         $evidence.windowsCompatibility.status = 'FAIL'
         $evidencePath = Join-Path $testRoot 'w-fail.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
         Assert-True (-not $result.Valid) 'windowsCompatibility status FAIL must fail closed'
     }
 
@@ -966,7 +991,7 @@ try {
         $evidence.windowsCompatibility.Remove('windows10')
         $evidencePath = Join-Path $testRoot 'w-no10.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
         Assert-True (-not $result.Valid) 'evidence without Windows 10 entry must fail closed'
         Assert-True (($result.Failures -join ';') -match 'windows10') 'failure must cite the Windows 10 entry'
     }
@@ -976,7 +1001,7 @@ try {
         $evidence.windowsCompatibility.windows10.status = 'BLOCKED_EXTERNAL'
         $evidencePath = Join-Path $testRoot 'w-10blocked.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
         Assert-True (-not $result.Valid) 'Windows 10 BLOCKED_EXTERNAL must fail closed for production'
     }
 
@@ -985,7 +1010,7 @@ try {
         $evidence.windowsCompatibility.windows10.build = ''
         $evidencePath = Join-Path $testRoot 'w-10build.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
         Assert-True (-not $result.Valid) 'Windows 10 evidence without a recorded build must fail closed'
         Assert-True (($result.Failures -join ';') -match 'build') 'failure must cite the missing OS build'
     }
@@ -995,7 +1020,7 @@ try {
         $evidence.windowsCompatibility.windows10.nativeAbiEvidence = ''
         $evidencePath = Join-Path $testRoot 'w-10abi.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
         Assert-True (-not $result.Valid) 'Windows 10 evidence without the native ABI selftest report must fail closed'
         Assert-True (($result.Failures -join ';') -match 'nativeAbiEvidence') 'failure must cite the native ABI evidence'
     }
@@ -1005,14 +1030,14 @@ try {
         $evidence.windowsCompatibility.windows11.status = 'FAIL'
         $evidencePath = Join-Path $testRoot 'w-11fail.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
         Assert-True (-not $result.Valid) 'Windows 11 status FAIL must fail closed'
     }
 
     New-TestCase 'windows-compatibility-happy-path-passes' {
         $evidencePath = Join-Path $testRoot 'w-happy.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha ('b' * 64))
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
         Assert-True ($result.Valid) "valid Windows 10/11 evidence must pass: $($result.Failures -join '; ')"
     }
 
@@ -1024,7 +1049,7 @@ try {
         $evidence.finalWindowsHumanSmoke.completedAt = 'tomorrow-ish'
         $evidencePath = Join-Path $testRoot 'c-not-iso.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
         Assert-True (-not $result.Valid) 'a non-ISO completedAt must fail closed'
         Assert-True (($result.Failures -join ';') -match 'ISO-8601') 'failure must cite the timestamp format'
     }
@@ -1034,7 +1059,7 @@ try {
         $evidence.physicalMixedDpi.completedAt = [DateTimeOffset]::UtcNow.AddHours(1).ToString('O')
         $evidencePath = Join-Path $testRoot 'c-future.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
         Assert-True (-not $result.Valid) 'a future completedAt must fail closed'
         Assert-True (($result.Failures -join ';') -match 'future') 'failure must cite the future timestamp'
     }
@@ -1044,7 +1069,7 @@ try {
         $evidence.windowsCompatibility.windows10.completedAt = 'not-a-date'
         $evidencePath = Join-Path $testRoot 'c-wc.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
         Assert-True (-not $result.Valid) 'a malformed Windows 10 completedAt must fail closed'
     }
 
@@ -1228,10 +1253,10 @@ try {
         $art = New-SyntheticArtifactDir $testRoot 'p-rc-unsigned' -SourceSha $goodSha -Version $goodVersion
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True ($gate.Eligible) "an unsigned not-configured record must pass the non-signing gate: $($gate.Failures -join '; ')"
         # The same record must fail when production signing is mandatory.
-        $mandatory = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $mandatory = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $mandatory.Eligible) 'the same unsigned record must fail under mandatory production signing'
     }
 
@@ -1241,7 +1266,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ signingProvider = 'local-pfx'; signingKeyProtection = 'LOCAL_PFX' }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a local-PFX-signed artifact must never be production-eligible'
         Assert-True (($gate.Failures -join ';') -match 'local-pfx') 'failure must identify the local-PFX provider'
     }
@@ -1252,7 +1277,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ signingProvider = 'not-configured'; signingKeyProtection = 'NOT_CONFIGURED' }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'an unconfigured signer must never be production-eligible'
         Assert-True (($gate.Failures -join ';') -match 'signingProvider') 'failure must cite the provider classification'
     }
@@ -1263,7 +1288,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ signingProvider = 'mock-test'; signingKeyProtection = 'MOCK_TEST' }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a mock-provider manifest must never be production-eligible'
         Assert-True (($gate.Failures -join ';') -match 'mock') 'failure must identify the mock provider'
     }
@@ -1274,7 +1299,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ signingProvider = 'mystery-vendor'; signingKeyProtection = 'CLOUD_HSM' }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'an unknown signing provider must never be production-eligible'
         Assert-True (($gate.Failures -join ';') -match 'mystery-vendor') 'failure must cite the unknown provider'
     }
@@ -1285,7 +1310,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ signingProvider = $null }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a manifest without signingProvider must fail closed'
         Assert-True (($gate.Failures -join ';') -match 'signingProvider') 'failure must cite the missing provider metadata'
     }
@@ -1296,7 +1321,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ signingKeyProtection = $null }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a manifest without signingKeyProtection must fail closed'
         Assert-True (($gate.Failures -join ';') -match 'signingKeyProtection') 'failure must cite the missing key-protection metadata'
     }
@@ -1309,7 +1334,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ signingKeyProtection = 'LOCAL_PFX' }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'LOCAL_PFX key protection must never satisfy production even with an approved provider name'
         Assert-True (($gate.Failures -join ';') -match 'signingKeyProtection') 'failure must cite the key-protection class'
     }
@@ -1322,7 +1347,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ signingMock = $true }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a manifest that claims CLOUD_HSM while recording mock signing must fail closed'
         Assert-True (($gate.Failures -join ';') -match 'mock') 'failure must identify mock signing'
     }
@@ -1333,7 +1358,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ timestampStatus = 'FAILED' }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a failed/unverified timestamp must block production when timestamp policy is mandatory'
         Assert-True (($gate.Failures -join ';') -match 'timestampStatus') 'failure must cite the timestamp status'
     }
@@ -1344,7 +1369,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ signingCertificateThumbprint = $null }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a manifest without the signed-certificate identity must fail closed'
         Assert-True (($gate.Failures -join ';') -match 'signingCertificateThumbprint') 'failure must cite the missing certificate identity'
     }
@@ -1355,7 +1380,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ signingCertificateEku = @('1.3.6.1.5.5.7.3.2') }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'a certificate without the code-signing EKU must fail closed'
         Assert-True (($gate.Failures -join ';') -match '1.3.6.1.5.5.7.3.3') 'failure must cite the code-signing EKU requirement'
     }
@@ -1366,7 +1391,7 @@ try {
         Update-TestManifest $art.ManifestPath @{ signingCertificateValidFrom = '2029-01-01T00:00:00Z'; signingCertificateValidTo = '2026-01-01T00:00:00Z' }
         $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
-        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'an inverted certificate validity window must fail closed'
         Assert-True (($gate.Failures -join ';') -match 'not before') 'failure must cite the validity window ordering'
     }
@@ -1386,11 +1411,363 @@ try {
     }
 
     Write-Host ''
+    Write-Host '==> Release-policy trust boundary and schema contract (P0/P1)' -ForegroundColor Cyan
+
+    New-TestCase 'old-pre-hsm-production-candidate-is-rejected-by-current-policy' {
+        # Adversarial model of the 51f7001-era production candidate: it looks
+        # valid under its OWN old policy (releaseMode PRODUCTION, SIGNED,
+        # SIGNATURE_VERIFIED, finalSignedSha256 present, no mock, valid
+        # external evidence, valid hash) but carries NO current HSM provider
+        # metadata and NO release-policy schema. Under the CURRENT policy this
+        # shape must fail: an old candidate does not become valid merely
+        # because its old policy would have accepted itself.
+        $art = New-SyntheticArtifactDir $testRoot 'tb-old-pre-hsm' -SourceSha $goodSha -Version $goodVersion
+        Update-TestManifest $art.ManifestPath @{
+            signingStatus         = 'SIGNED'
+            signatureVerification = 'SIGNATURE_VERIFIED'
+            finalSignedSha256     = $art.ArtifactSha256
+            signingProvider       = $null
+            signingKeyProtection  = $null
+            timestampStatus       = 'NOT_PERFORMED'
+            signingCertificateSubject = $null
+            signingCertificateThumbprint = $null
+            signingCertificateIssuer = $null
+            signingCertificateValidFrom = $null
+            signingCertificateValidTo = $null
+            signingCertificateEku = $null
+            timestampCertificateSubject = $null
+            timestampCertificateThumbprint = $null
+            releasePolicySchemaVersion = $null
+        }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate.Eligible) 'the old pre-HSM candidate shape must be rejected by the CURRENT production policy'
+        Assert-True (($gate.Failures -join ';') -match 'signingProvider') 'failure must cite the missing current HSM provider metadata'
+        Assert-True (($gate.Failures -join ';') -match 'releasePolicySchemaVersion') 'failure must cite the missing policy schema contract'
+        Assert-True (($gate.Failures -join ';') -match 'publisher policy') 'failure must cite the current publisher policy'
+    }
+
+    New-TestCase 'candidate-policy-module-is-never-loaded-by-stage-b' {
+        # Static policy-isolation guarantee: Stage B dot-sources the release
+        # policy module EXCLUSIVELY from the trusted policy checkout
+        # (policy/scripts/release-tooling.ps1). No file from
+        # candidate-source/scripts or candidate-artifact/ is ever imported.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        Assert-True ($yml -match 'policy/scripts/release-tooling.ps1') 'Stage B must load the trusted policy module from policy/'
+        Assert-True ($yml -notmatch [regex]::Escape('candidate-source/scripts')) 'Stage B must never reference candidate-source/scripts'
+        Assert-True ($yml -notmatch [regex]::Escape('candidate-artifact/scripts')) 'Stage B must never reference candidate-artifact/scripts'
+        Assert-True ($yml -notmatch [regex]::Escape("`$env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1'")) 'Stage B must never dot-source the workspace-root scripts (the old candidate-controlled pattern)'
+    }
+
+    New-TestCase 'malicious-lax-candidate-release-tooling-cannot-change-stage-b-verdict' {
+        # A hostile/lax candidate tree (scripts that would redefine the gate to
+        # return ELIGIBLE) must never change the verdict: Stage B never loads
+        # anything from the candidate. The behavioral proof: with a malicious
+        # release-tooling.ps1 planted inside the artifact and source dirs, the
+        # trusted gate function produces exactly the same verdict as without
+        # it (unsigned artifact under mandatory signing -> ineligible with
+        # exactly the Authenticode failure).
+        $art = New-SyntheticArtifactDir $testRoot 'tb-malicious' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        # Plant hostile policy files exactly where the OLD vulnerable Stage B
+        # would have dot-sourced them.
+        New-Item -ItemType Directory -Path (Join-Path $art.Dir 'scripts') -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $art.Dir 'scripts\release-tooling.ps1'),
+            "function Test-PublicationEligibility { return [pscustomobject]@{ Eligible = `$true; Failures = @() } }`n",
+            [Text.UTF8Encoding]::new($false))
+        New-Item -ItemType Directory -Path (Join-Path $testRoot 'tb-malicious-src\scripts') -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $testRoot 'tb-malicious-src\scripts\release-tooling.ps1'),
+            "function Test-PublicationEligibility { return [pscustomobject]@{ Eligible = `$true; Failures = @() } }`n",
+            [Text.UTF8Encoding]::new($false))
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate.Eligible) 'hostile candidate tooling must not be able to flip the Stage B verdict'
+        Assert-True ($gate.Failures.Count -eq 1) "hostile candidate tooling must not alter the gate: expected exactly the Authenticode failure, got: $($gate.Failures -join '; ')"
+        Assert-True (($gate.Failures[0] -match 'Authenticode') -or ($gate.Failures[0] -match 'signtool')) 'the single failure must remain the independent Authenticode re-verification'
+    }
+
+    New-TestCase 'missing-release-policy-schema-fails-production' {
+        $art = New-SyntheticArtifactDir $testRoot 'tb-no-schema' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ releasePolicySchemaVersion = $null }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate.Eligible) 'a manifest without releasePolicySchemaVersion must fail production'
+        Assert-True (($gate.Failures -join ';') -match 'releasePolicySchemaVersion') 'failure must cite the schema contract'
+    }
+
+    New-TestCase 'stale-policy-schema-fails-production' {
+        $art = New-SyntheticArtifactDir $testRoot 'tb-stale-schema' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ releasePolicySchemaVersion = 2 }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate.Eligible) 'a manifest with a stale policy schema must fail production'
+        Assert-True (($gate.Failures -join ';') -match 'minimum accepted production policy schema') 'failure must cite the minimum schema requirement'
+    }
+
+    New-TestCase 'current-policy-schema-accepted' {
+        Assert-True ((Get-ReleasePolicySchemaVersion) -eq 3) 'the CURRENT policy schema must be 3'
+        Assert-True ((Get-MinimumAcceptedProductionPolicySchema) -eq 3) 'the minimum accepted production policy schema must be 3'
+        $art = New-SyntheticArtifactDir $testRoot 'tb-current-schema' -SourceSha $goodSha -Version $goodVersion
+        $onDisk = Get-Content -LiteralPath $art.ManifestPath -Raw | ConvertFrom-Json
+        Assert-True ([int]$onDisk.releasePolicySchemaVersion -eq 3) 'synthetic manifests must record the current schema'
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True ($gate.Eligible) "a manifest with the current policy schema must pass the non-signing gate: $($gate.Failures -join '; ')"
+    }
+
+    New-TestCase 'stage-a-production-sha-mismatch-fails-before-credentials-build' {
+        # Static ordering guarantee: the trusted production dispatch contract
+        # (inputs.sha == github.sha) is the FIRST step, before checkout,
+        # before any signing credentials, before restore/build.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\prepare-release-candidate.yml'))
+        $contract = $yml.IndexOf('Verify trusted production dispatch contract')
+        $checkout = $yml.IndexOf('actions/checkout')
+        $apiKey = $yml.IndexOf('SM_API_KEY')
+        $dotnet = $yml.IndexOf('actions/setup-dotnet')
+        Assert-True ($contract -ge 0) 'Stage A must contain the trusted dispatch contract step'
+        Assert-True ($contract -lt $checkout) 'the dispatch contract must run before any checkout'
+        Assert-True ($contract -lt $apiKey) 'the dispatch contract must run before signing credentials are referenced'
+        Assert-True ($contract -lt $dotnet) 'the dispatch contract must run before restore/build tooling'
+        Assert-True ($yml -match 'if \(\$env:REQUESTED_SHA -ne \$env:DISPATCH_SHA\)') 'Stage A must fail when the requested SHA differs from the trusted dispatch SHA'
+        Assert-True ($yml -match 'no credentials are touched and nothing is built') 'Stage A must document the fail-before-credentials/build contract'
+    }
+
+    New-TestCase 'stage-a-production-ref-not-main-fails' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\prepare-release-candidate.yml'))
+        Assert-True ($yml -match 'refs/heads/main') 'Stage A must require the trusted ref main'
+        Assert-True ($yml -match 'WORKFLOW_REF') 'Stage A must inspect the dispatched ref'
+        Assert-True ($yml -match 'if \(\$env:WORKFLOW_REF -ne ''refs/heads/main''\)') 'Stage A must fail when dispatched from anything other than main'
+        Assert-True ($yml -match 'github.workflow_sha') 'Stage A must bind the trusted policy revision to the workflow file being executed'
+    }
+
+    New-TestCase 'stage-b-run-head-sha-vs-manifest-source-commit-mismatch-fails' {
+        # Stage B semantics: the run head SHA is the candidate SHA; the
+        # manifest must agree. A Stage A run whose head SHA differs from the
+        # manifest's recorded source commit must fail closed.
+        $art = New-SyntheticArtifactDir $testRoot 'tb-headsha' -SourceSha $goodSha -Version $goodVersion
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha ('d' * 40) -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha ('d' * 40) -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate.Eligible) 'a run-head-SHA/manifest sourceCommitSha disagreement must fail closed'
+        Assert-True (($gate.Failures -join ';') -match 'sourceCommitSha') 'failure must cite the source SHA binding'
+    }
+
+    New-TestCase 'publisher-identity-missing-fails-production' {
+        $art = New-SyntheticArtifactDir $testRoot 'tb-pub-missing' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        # Deliberately no -ExpectedPublisherSubject: the CURRENT policy must
+        # refuse to evaluate production publication without its publisher
+        # identity policy.
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $gate.Eligible) 'production publication without the current publisher policy must fail'
+        Assert-True (($gate.Failures -join ';') -match 'SIGNING_EXPECTED_SUBJECT') 'failure must name the missing publisher policy'
+    }
+
+    New-TestCase 'publisher-identity-mismatch-fails-production' {
+        $art = New-SyntheticArtifactDir $testRoot 'tb-pub-mismatch' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ signingCertificateSubject = 'CN=Wrong Publisher, O=Wrong, C=US' }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate.Eligible) 'a manifest recording a publisher the CURRENT policy does not approve must fail'
+        Assert-True (($gate.Failures -join ';') -match 'publisher policy') 'failure must cite the current publisher policy'
+    }
+
+    New-TestCase 'manifest-and-file-consistent-but-wrong-against-current-publisher-policy-fails' {
+        # The dangerous case: the artifact and its manifest consistently
+        # record the WRONG publisher (a valid-looking complete certificate
+        # identity that is internally consistent). The CURRENT publisher
+        # policy must reject it - "actual cert == manifest cert" is never
+        # sufficient; both must equal the CURRENT policy.
+        $art = New-SyntheticArtifactDir $testRoot 'tb-pub-consistent-wrong' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{
+            signingCertificateSubject    = 'CN=Wrong Publisher, O=Wrong, C=US'
+            signingCertificateThumbprint = '3333333333333333333333333333333333333333'
+            signingCertificateIssuer     = 'CN=Wrong CA, O=Wrong, C=US'
+        }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate.Eligible) 'an internally consistent wrong-publisher candidate must fail the CURRENT publisher policy'
+        Assert-True (($gate.Failures -join ';') -match 'publisher policy') 'failure must cite the current publisher policy, not merely a manifest-internal mismatch'
+    }
+
+    New-TestCase 'publisher-policy-required-in-production-preflight' {
+        # Stage A layer: Test-ProductionSigningPreflight must block an
+        # approved, fully-credentialed provider when the publisher identity
+        # policy is missing, and pass when it is configured.
+        $p12 = Join-Path $testRoot 'tb-preflight-client.p12'
+        [IO.File]::WriteAllBytes($p12, [byte[]]::new(64))
+        $envNames = @('SM_HOST', 'SM_API_KEY', 'SM_CLIENT_CERT_FILE', 'SM_CLIENT_CERT_PASSWORD', 'SM_KEYPAIR_ALIAS', 'SIGNING_EXPECTED_SUBJECT')
+        $saved = @{}
+        foreach ($name in $envNames) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
+        $previousProvider = [Environment]::GetEnvironmentVariable('SIGNING_PROVIDER')
+        [Environment]::SetEnvironmentVariable('SIGNING_PROVIDER', 'digicert-stm')
+        try {
+            [Environment]::SetEnvironmentVariable('SM_HOST', 'https://example.invalid')
+            [Environment]::SetEnvironmentVariable('SM_API_KEY', 'test-api-key')
+            [Environment]::SetEnvironmentVariable('SM_CLIENT_CERT_FILE', $p12)
+            [Environment]::SetEnvironmentVariable('SM_CLIENT_CERT_PASSWORD', 'test-password')
+            [Environment]::SetEnvironmentVariable('SM_KEYPAIR_ALIAS', 'test-keypair')
+            [Environment]::SetEnvironmentVariable('SIGNING_EXPECTED_SUBJECT', '')
+            $blocked = Test-ProductionSigningPreflight
+            Assert-True (-not $blocked.Approved -or $blocked.BlockedReason -match 'SIGNING_EXPECTED_SUBJECT') 'preflight must block an approved provider without the publisher policy'
+            [Environment]::SetEnvironmentVariable('SIGNING_EXPECTED_SUBJECT', 'CN=TabDock Test Publisher, O=TabDock Test, C=US')
+            $ok = Test-ProductionSigningPreflight
+            Assert-True ($ok.Approved -and $ok.Configured -and [string]::IsNullOrWhiteSpace($ok.BlockedReason)) "preflight must pass with the publisher policy configured: $($ok.BlockedReason)"
+        }
+        finally {
+            foreach ($name in $envNames) {
+                if ($null -eq $saved[$name]) { Remove-Item "Env:\$name" -ErrorAction SilentlyContinue }
+                else { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+            }
+            if ($null -eq $previousProvider) { Remove-Item Env:\SIGNING_PROVIDER -ErrorAction SilentlyContinue }
+            else { [Environment]::SetEnvironmentVariable('SIGNING_PROVIDER', $previousProvider) }
+        }
+    }
+
+    New-TestCase 'production-stage-a-receives-no-pfx-secrets' {
+        # Least privilege: the production Stage A job must not receive the
+        # legacy exportable-PFX secrets at all (they have no legitimate role
+        # in the HSM path; RC/local paths keep them elsewhere).
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\prepare-release-candidate.yml'))
+        foreach ($secret in @('SIGNCERT_BASE64', 'SIGNCERT_PASSWORD', 'SIGNCERT_TIMESTAMP')) {
+            Assert-True ($yml -notmatch [regex]::Escape($secret)) "prepare-release-candidate.yml must not expose '$secret'"
+        }
+    }
+
+    New-TestCase 'digicert-action-pinned-to-full-immutable-sha' {
+        # The signing control plane receives highly sensitive service
+        # authentication material; a mutable major tag is never trusted.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\prepare-release-candidate.yml'))
+        Assert-True ($yml -match 'digicert/code-signing-software-trust-action@fae23a455ba4bde62b64fd7cb2f81ade788f5a95') 'the DigiCert action must be pinned to the full 40-character immutable SHA'
+        Assert-True ($yml -notmatch 'digicert/code-signing-software-trust-action@v\d') 'a mutable major tag must never be used for the DigiCert action'
+        Assert-True ($yml -match 'v1\.2\.1') 'the pinned SHA must be documented with its human-readable release version'
+    }
+
+    New-TestCase 'stage-b-trusted-policy-path-points-to-policy-not-candidate-source' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        $expected = 'policy/scripts/release-tooling.ps1'
+        $count = ([regex]::Matches($yml, [regex]::Escape($expected))).Count
+        Assert-True ($count -ge 2) "Stage B must dot-source the trusted module from policy/ in every job (found $count)"
+        Assert-True ($yml -notmatch [regex]::Escape('candidate-source/scripts')) 'Stage B must never load scripts from candidate-source/'
+        Assert-True ($yml -notmatch [regex]::Escape("(Join-Path `$env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1')")) 'the old candidate-controlled dot-source pattern must be gone'
+    }
+
+    New-TestCase 'hosted-build-workflow-invokes-release-tooling-tests' {
+        # The 96+ release-control cases must be an exact-SHA hosted-CI gate.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\build.yml'))
+        Assert-True ($yml -match 'release-tooling-tests\.ps1') 'build.yml must invoke the release-tooling regression suite'
+    }
+
+    New-TestCase 'stage-b-verify-job-has-no-contents-write' {
+        # Least privilege: the verify job's permissions block must be
+        # contents: read only (plus the documented actions: write deviation
+        # for the same-run handoff upload); the release-mutation permission
+        # exists only in the publish job.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        $verifyIdx = $yml.IndexOf('  verify:')
+        $publishIdx = $yml.IndexOf('  publish:')
+        Assert-True ($verifyIdx -ge 0 -and $publishIdx -gt $verifyIdx) 'Stage B must contain verify and publish jobs in that order'
+        $verifySection = $yml.Substring($verifyIdx, $publishIdx - $verifyIdx)
+        $permStart = $verifySection.IndexOf('permissions:')
+        $permEnd = $verifySection.IndexOf('outputs:')
+        Assert-True ($permStart -ge 0 -and $permEnd -gt $permStart) 'the verify job must declare permissions followed by outputs'
+        $verifyPerms = $verifySection.Substring($permStart, $permEnd - $permStart)
+        Assert-True ($verifyPerms -match 'contents: read') 'the verify job must declare contents: read'
+        Assert-True ($verifyPerms -notmatch 'contents: write') 'the verify job permissions must NOT include contents: write'
+        Assert-True ($verifyPerms -match 'actions: write') 'the verify job must hold actions: write for the same-run handoff upload (documented deviation; no release/tag capability)'
+        $publishSection = $yml.Substring($publishIdx)
+        Assert-True ($publishSection -match 'contents: write') 'the publish job must declare contents: write'
+        Assert-True ($publishSection -match 'needs: verify') 'the publish job must depend on the verify job'
+    }
+
+    New-TestCase 'stage-b-publish-job-performs-no-build-sign-or-candidate-execution' {
+        # The contents:write-capable job performs only the final hash identity
+        # check, the release mutation, and asset verification.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        $publishIdx = $yml.IndexOf('  publish:')
+        Assert-True ($publishIdx -ge 0) 'Stage B must contain the publish job'
+        $publishSection = $yml.Substring($publishIdx)
+        foreach ($forbidden in @('dotnet build', 'dotnet publish', 'sign-release', 'release-qualify', 'smctl',
+                '--selftest', '--version', '& $exe', 'SIGNING_PROVIDER', 'SIGNCERT_', 'SM_API_KEY',
+                'SM_CLIENT_CERT', 'SM_KEYPAIR_ALIAS', 'digicert', 'candidate-source')) {
+            Assert-True ($publishSection -notmatch [regex]::Escape($forbidden)) "the Stage B publish job must not contain '$forbidden'"
+        }
+        Assert-True ($publishSection -match 'gh release create') 'the publish job must create the release'
+        Assert-True ($publishSection -match 'final hash identity') 'the publish job must perform the final hash identity check'
+    }
+
+    New-TestCase 'stage-b-policy-checkout-is-the-running-workflow-revision' {
+        # The trusted policy checkout ref must be github.sha (== the revision
+        # of publish-release.yml being executed) and the workflow must fail
+        # closed when the dispatched ref is not main or when
+        # github.workflow_sha disagrees with github.sha.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        Assert-True ($yml -match [regex]::Escape("ref: `${{ github.sha }}")) 'the trusted policy checkout must use github.sha'
+        Assert-True ($yml -match 'path: policy') 'the trusted policy checkout must land in policy/'
+        Assert-True ($yml -match 'github.workflow_sha') 'Stage B must bind the policy revision to the workflow file being executed'
+        Assert-True ($yml -match [regex]::Escape("`$env:WORKFLOW_SHA -ne `$env:DISPATCH_SHA")) 'Stage B must fail when the workflow-file revision differs from the dispatch commit'
+        Assert-True ($yml -match 'refs/heads/main') 'Stage B must require dispatch from main'
+    }
+
+    New-TestCase 'timestamp-missing-fails-production' {
+        # RFC3161 timestamp policy: an unverified/absent timestamp state and a
+        # manifest without timestamper identity both fail closed.
+        $art = New-SyntheticArtifactDir $testRoot 'tb-ts-missing' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ timestampStatus = 'NOT_PERFORMED' }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate.Eligible) 'a manifest with timestampStatus != VERIFIED must fail production'
+        Assert-True (($gate.Failures -join ';') -match 'timestampStatus') 'failure must cite the timestamp status'
+
+        $art2 = New-SyntheticArtifactDir $testRoot 'tb-ts-identity' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art2.ManifestPath $art2.ArtifactSha256
+        Update-TestManifest $art2.ManifestPath @{ timestampCertificateSubject = $null; timestampCertificateThumbprint = $null }
+        $evidencePath2 = Join-Path $art2.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath2 (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art2.ArtifactSha256)
+        $gate2 = Test-PublicationEligibility -ArtifactDir $art2.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath2 -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate2.Eligible) 'a manifest without timestamper identity must fail production'
+        Assert-True (($gate2.Failures -join ';') -match 'timestampCertificate') 'failure must cite the missing timestamper identity'
+    }
+
+    New-TestCase 'timestamp-warning-non-valid-state-fails' {
+        # A warning/non-valid timestamp state is never acceptable: signtool
+        # /tw turns an untimestamped file into a non-zero (warning) result,
+        # and the manifest-level policy rejects anything but VERIFIED.
+        $art = New-SyntheticArtifactDir $testRoot 'tb-ts-warned' -SourceSha $goodSha -Version $goodVersion
+        Set-SyntheticSignedManifest $art.ManifestPath $art.ArtifactSha256
+        Update-TestManifest $art.ManifestPath @{ timestampStatus = 'WARNED' }
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256)
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -RequireSigning -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate.Eligible) 'timestampStatus=WARNED must fail production (only VERIFIED is acceptable)'
+        # The verification helper itself must fail closed on an untimestamped
+        # file (unsigned test artifact -> no timestamp possible).
+        $exe = Join-Path $testRoot 'tb-ts-unsigned.exe'
+        New-DummyArtifact $exe
+        Assert-True (-not (Test-AuthenticodeTimestamp $exe)) 'an untimestamped artifact must fail timestamp verification (fail closed)'
+    }
+
+    Write-Host ''
     Write-Host '==> Two-stage workflow structural guarantees (static workflow review)' -ForegroundColor Cyan
 
     New-TestCase 'publish-workflow-cannot-build-sign-or-qualify' {
         $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
-        foreach ($forbidden in @('dotnet publish', 'sign-release.ps1', 'release-qualify.ps1', 'upload-artifact',
+        foreach ($forbidden in @('dotnet publish', 'sign-release.ps1', 'release-qualify.ps1',
                 'RELEASE_SIGNING_REQUIRED', 'RELEASE_PRODUCTION_GATE', 'create-release',
                 'SIGNING_PROVIDER', 'SIGNCERT_BASE64', 'SIGNCERT_PASSWORD', 'SM_HOST', 'SM_API_KEY',
                 'SM_CLIENT_CERT', 'SM_KEYPAIR_ALIAS', 'digicert', 'smctl')) {
@@ -1401,6 +1778,17 @@ try {
         Assert-True ($yml -match 'actions: read') 'Stage B needs actions: read for the cross-run artifact download'
         Assert-True ($yml -match 'gh release create') 'Stage B must be the only workflow that creates the release'
         Assert-True ($yml -match 'Get-ReleaseTagFromVersion') 'Stage B must derive the tag from the semantic version'
+        # The ONLY upload in Stage B is the verified same-run handoff (the
+        # publish job re-downloads the Stage A bytes itself); the candidate
+        # artifact is downloaded, never uploaded.
+        Assert-True ($yml -match 'upload-artifact') 'Stage B verify job must upload the verified same-run handoff'
+        Assert-True ($yml -match 'tabdock-verified-\${{ github.run_id }}') 'the Stage B handoff artifact uses the verified-handoff naming scheme'
+        $uploadIdx = $yml.IndexOf('actions/upload-artifact')
+        Assert-True ($uploadIdx -ge 0) 'Stage B must contain an upload-artifact step (verified handoff)'
+        $nextStep = $yml.IndexOf('      - name:', $uploadIdx + 10)
+        $uploadStep = if ($nextStep -ge 0) { $yml.Substring($uploadIdx, $nextStep - $uploadIdx) } else { $yml.Substring($uploadIdx) }
+        Assert-True ($uploadStep -match 'path: verified-handoff') 'the Stage B upload must be the verified handoff directory'
+        Assert-True ($uploadStep -notmatch 'candidate-artifact') 'Stage B must never upload the candidate artifact'
     }
 
     New-TestCase 'prepare-candidate-workflow-forces-approved-provider-and-never-publishes' {
@@ -1411,7 +1799,8 @@ try {
         Assert-True ($yml -match 'SIGNING_PROVIDER') 'Stage A must select the signing provider explicitly'
         Assert-True ($yml -match 'Test-ApprovedProductionSigningProvider') 'Stage A must require an APPROVED production provider (reject local-pfx/mock/not-configured)'
         Assert-True ($yml -match 'Get-SigningProviderCredentialRequirements') 'Stage A must validate the selected provider credentials'
-        Assert-True ($yml -match 'digicert/code-signing-software-trust-action@v1') 'Stage A must use the official DigiCert tooling setup for digicert-stm'
+        Assert-True ($yml -match 'digicert/code-signing-software-trust-action@fae23a455ba4bde62b64fd7cb2f81ade788f5a95') 'Stage A must pin the official DigiCert tooling action to its full immutable commit SHA (v1.2.1)'
+        Assert-True ($yml -notmatch 'digicert/code-signing-software-trust-action@v\d') 'Stage A must never float a mutable major tag for the DigiCert signing control plane'
         Assert-True ($yml -notmatch 'smctl sign') 'Stage A must never invoke smctl directly in the workflow; signing happens exactly once inside sign-release.ps1'
         Assert-True ($yml -notmatch 'gh release create') 'Stage A must never create a GitHub Release'
         Assert-True ($yml -notmatch 'create-release') 'Stage A has no release-creation input'

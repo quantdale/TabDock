@@ -14,6 +14,25 @@ name: prepare-release-candidate
 # publish-release workflow (STAGE B) later downloads this same artifact and
 # publishes it WITHOUT rebuilding, re-signing, or touching the executable.
 #
+# POLICY TRUST BOUNDARY (release-policy hardening): for PRODUCTION candidate
+# preparation the requested source SHA must equal the trusted dispatch SHA
+# of THIS workflow and the workflow must be dispatched from main:
+#
+#   github.ref          == refs/heads/main
+#   inputs.sha          == github.sha   (workflow_dispatch: last commit on
+#                                        the dispatched branch = main HEAD)
+#   github.workflow_sha == github.sha   (the workflow-file revision being
+#                                        executed is the dispatch commit)
+#
+# Under that contract the checkout at inputs.sha IS the trusted workflow
+# revision: the release policy code (scripts/release-tooling.ps1,
+# release-qualify.ps1) and the candidate source start from the SAME trusted
+# release-policy generation, so the candidate can never supply its own
+# production signing/publication policy. Any disagreement fails BEFORE any
+# credentials are materialized and BEFORE any build. RC qualification
+# (release.yml) continues to support arbitrary SHAs; this production path
+# intentionally does not.
+#
 # SIGNING IS MANDATORY AND PROVIDER-AWARE ON THIS PATH. The signing backend
 # is selected by the repository variable SIGNING_PROVIDER and must be an
 # APPROVED production provider (currently digicert-stm: DigiCert Software
@@ -22,15 +41,18 @@ name: prepare-release-candidate
 # only ever holds authentication material for the signing service (API key +
 # client-authentication certificate), never the production private key.
 # Local-PFX signing (exportable private key) is NEVER accepted for
-# production candidates. Without an approved, fully configured provider the
-# run fails with BLOCKED_EXTERNAL and no candidate is produced.
-# Qualification-only RC runs remain possible through release.yml (unsigned
-# or local-PFX signed, never published).
+# production candidates and the legacy local-PFX secrets (the exportable
+# PFX, its password, and the local timestamp URL override) are NOT exposed
+# to this production job at all - they exist only in the RC/local workflows. The current publisher identity policy (SIGNING_EXPECTED_SUBJECT)
+# is MANDATORY here: the signed certificate subject must equal it. Without an
+# approved, fully configured provider the run fails with BLOCKED_EXTERNAL and
+# no candidate is produced. Qualification-only RC runs remain possible
+# through release.yml (unsigned or local-PFX signed, never published).
 on:
   workflow_dispatch:
     inputs:
       sha:
-        description: 'Exact source commit SHA to prepare (required)'
+        description: 'Exact source commit SHA to prepare (required; for PRODUCTION it must equal the current main HEAD this workflow is dispatched from)'
         required: true
         type: string
       version:
@@ -50,8 +72,43 @@ jobs:
       # for production candidates it must be 'digicert-stm'.
       SIGNING_PROVIDER: ${{ vars.SIGNING_PROVIDER }}
     steps:
+      # TRUSTED DISPATCH CONTRACT - FIRST STEP, before any checkout, before
+      # any credentials are materialized, before any build: a production
+      # candidate may only be prepared from the exact trusted workflow
+      # revision (main HEAD = the dispatch SHA). GitHub Actions semantics
+      # (official documentation): for workflow_dispatch, github.ref is the
+      # branch the workflow was dispatched from and github.sha is the last
+      # commit on that branch (the revision of this workflow file being
+      # executed); github.workflow_sha is the commit SHA of the workflow
+      # file. Any disagreement fails closed HERE, so policy code and
+      # candidate source always start from the same trusted generation and
+      # an old candidate can never be prepared under old policy code.
+      - name: Verify trusted production dispatch contract (requested SHA == trusted workflow SHA == main)
+        shell: pwsh
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+          REQUESTED_SHA: ${{ inputs.sha }}
+        run: |
+          if ($env:WORKFLOW_REF -ne 'refs/heads/main') {
+            throw "BLOCKED: production candidate preparation must be dispatched from main (got '$env:WORKFLOW_REF'). The trusted release policy is the main revision being executed; no candidate is prepared."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WORKFLOW_SHA)) {
+            throw 'BLOCKED: github.workflow_sha is empty; the trusted policy revision cannot be bound to the workflow file being executed.'
+          }
+          if ($env:WORKFLOW_SHA -ne $env:DISPATCH_SHA) {
+            throw "BLOCKED: github.workflow_sha '$env:WORKFLOW_SHA' != github.sha '$env:DISPATCH_SHA'; the workflow-file revision being executed is not the dispatch commit - refusing to guess a trusted policy revision."
+          }
+          if ($env:REQUESTED_SHA -ne $env:DISPATCH_SHA) {
+            throw "BLOCKED: requested production SHA '$env:REQUESTED_SHA' != the trusted dispatch SHA '$env:DISPATCH_SHA' (main HEAD). Production candidates are prepared ONLY from the exact trusted main revision so policy code and candidate source start from the same release-policy generation. No credentials are touched and nothing is built."
+          }
+          Write-Host "Trusted production dispatch contract verified: ref=$env:WORKFLOW_REF dispatch_sha=$env:DISPATCH_SHA requested_sha=$env:REQUESTED_SHA (candidate source == trusted policy revision)" -ForegroundColor Green
+
       # Current checkout action: Node 24 action runtime (runner-supported).
-      - name: Checkout exact candidate SHA
+      # Under the contract verified above, this checkout at inputs.sha ==
+      # github.sha IS the trusted workflow revision.
+      - name: Checkout exact candidate SHA (== trusted dispatch SHA)
         uses: actions/checkout@v7
         with:
           ref: ${{ inputs.sha }}
@@ -83,10 +140,14 @@ jobs:
 
       # Provider-aware signing preflight. Production candidates are only
       # prepared with an APPROVED production signer (non-exportable HSM/cloud
-      # private key) whose authentication material is complete. Anything else
-      # (not-configured, local-pfx, mock, unknown) stops the run here with an
-      # explicit BLOCKED_EXTERNAL reason; nothing is built, signed, or
-      # retained. Only variable NAMES are reported, never values.
+      # private key) whose authentication material is complete AND whose
+      # publisher identity is governed by the CURRENT policy
+      # (SIGNING_EXPECTED_SUBJECT, a repository variable, mandatory here).
+      # Anything else (not-configured, local-pfx, mock, unknown provider,
+      # incomplete credentials, missing publisher policy) stops the run here
+      # with an explicit BLOCKED_EXTERNAL reason; nothing is built, signed,
+      # or retained. Only variable NAMES are reported, never values. The
+      # legacy local-PFX secrets are NOT exposed to this production job.
       - name: Signing provider preflight (BLOCKED_EXTERNAL unless approved production signer)
         shell: pwsh
         env:
@@ -95,8 +156,7 @@ jobs:
           SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
           SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
           SM_KEYPAIR_ALIAS: ${{ vars.SM_KEYPAIR_ALIAS }}
-          SIGNCERT_BASE64: ${{ secrets.SIGNCERT_BASE64 }}
-          SIGNCERT_PASSWORD: ${{ secrets.SIGNCERT_PASSWORD }}
+          SIGNING_EXPECTED_SUBJECT: ${{ vars.SIGNING_EXPECTED_SUBJECT }}
         run: |
           . (Join-Path $env:GITHUB_WORKSPACE 'scripts/release-tooling.ps1')
           $provider = Get-SigningProvider
@@ -121,38 +181,61 @@ jobs:
             Write-Host "::error::BLOCKED_EXTERNAL: production signing provider '$provider' is missing required configuration: $($missing -join ', '). These authenticate to the signing service (the production private key never leaves it). Configure the GitHub Secrets/variables and re-dispatch. No candidate is produced."
             exit 1
           }
-          Write-Host "Signing provider approved: $provider (key protection $(Get-SigningProviderKeyProtection $provider)); configuration complete."
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_EXPECTED_SUBJECT)) {
+            Write-Host '::error::BLOCKED_EXTERNAL: the current production publisher identity policy (SIGNING_EXPECTED_SUBJECT) is not configured. Production candidates require the expected publisher subject so the signed certificate is bound to the CURRENT publisher policy (stable across certificate rotation; never a hard-coded thumbprint). No candidate is produced.'
+            exit 1
+          }
+          Write-Host "Signing provider approved: $provider (key protection $(Get-SigningProviderKeyProtection $provider)); configuration complete; publisher identity policy configured."
+          Write-Host '::notice::SIGNING_EXPECTED_SUBJECT is configured; the signed certificate subject must match the current publisher identity policy.'
 
       # The DigiCert client-authentication certificate is AUTHENTICATION
       # material for the signing service, not the production code-signing
-      # private key. It is materialized on the runner from its base64 secret
-      # and passed to the official DigiCert tooling.
-      - name: Materialize DigiCert client-authentication certificate
+      # private key. Hygiene (P2): it is materialized with PowerShell/.NET
+      # (never bash base64 behavior on Windows) into a RANDOM private path
+      # under runner.temp, never printed (the path only), never uploaded as
+      # an artifact, never included in logs, and deleted by an always-run
+      # cleanup step at the end of the job.
+      - name: Materialize DigiCert client-authentication certificate (private temp path)
         if: env.SIGNING_PROVIDER == 'digicert-stm'
-        shell: bash
+        shell: pwsh
         env:
           SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
         run: |
-          if [ -z "$SM_CLIENT_CERT_FILE_B64" ]; then
-            echo "::error::SM_CLIENT_CERT_FILE_B64 secret is empty; cannot authenticate to the DigiCert signing service."
+          if ([string]::IsNullOrWhiteSpace($env:SM_CLIENT_CERT_FILE_B64)) {
+            Write-Host '::error::SM_CLIENT_CERT_FILE_B64 secret is empty; cannot authenticate to the DigiCert signing service.'
             exit 1
-          fi
-          echo "$SM_CLIENT_CERT_FILE_B64" | base64 --decode > "$RUNNER_TEMP/digicert-client-auth.p12"
-          test -s "$RUNNER_TEMP/digicert-client-auth.p12"
-          echo "Client-authentication certificate materialized: $RUNNER_TEMP/digicert-client-auth.p12"
+          }
+          try {
+            $bytes = [Convert]::FromBase64String($env:SM_CLIENT_CERT_FILE_B64)
+          }
+          catch {
+            Write-Host '::error::SM_CLIENT_CERT_FILE_B64 is not valid base64; cannot authenticate to the DigiCert signing service.'
+            exit 1
+          }
+          if ($bytes.Length -eq 0) {
+            Write-Host '::error::SM_CLIENT_CERT_FILE_B64 decoded to an empty file; cannot authenticate to the DigiCert signing service.'
+            exit 1
+          }
+          $path = Join-Path $env:RUNNER_TEMP ("digicert-client-auth-" + [Guid]::NewGuid().ToString('N') + '.p12')
+          [IO.File]::WriteAllBytes($path, $bytes)
+          [IO.File]::WriteAllText($env:GITHUB_ENV, "SM_CLIENT_CERT_FILE=$path`r`n", [Text.UTF8Encoding]::new($false))
+          Write-Host "Client-authentication certificate materialized at a private random path under runner.temp (content never printed, never uploaded, removed by the always-run cleanup step)."
 
-      # Official DigiCert tooling setup (current action version):
-      # digicert/code-signing-software-trust-action@v1 installs smctl and
-      # adds it to PATH (simple-signing-mode; no input/keypair-alias, so the
-      # action only sets up tooling - the actual signing happens exactly once
-      # inside release-qualify -> sign-release.ps1).
-      - name: Setup DigiCert Software Trust Manager (official tooling)
+      # Official DigiCert tooling setup, PINNED TO THE FULL IMMUTABLE COMMIT
+      # SHA (P1): this action receives highly sensitive signing-service
+      # authentication material, so a mutable major tag is never trusted for
+      # the production signing control plane. Verified 2026-08-15:
+      # digicert/code-signing-software-trust-action v1.2.1 and v1 both
+      # resolve to fae23a455ba4bde62b64fd7cb2f81ade788f5a95. Updates must be
+      # intentional: review the new release, pin the new full SHA, and run
+      # scripts/release-tooling-tests.ps1 (hosted in build.yml).
+      - name: Setup DigiCert Software Trust Manager (official tooling, pinned SHA)
         if: env.SIGNING_PROVIDER == 'digicert-stm'
-        uses: digicert/code-signing-software-trust-action@v1
+        uses: digicert/code-signing-software-trust-action@fae23a455ba4bde62b64fd7cb2f81ade788f5a95 # v1.2.1
         env:
           SM_HOST: ${{ vars.SM_HOST }}
           SM_API_KEY: ${{ secrets.SM_API_KEY }}
-          SM_CLIENT_CERT_FILE: ${{ runner.temp }}/digicert-client-auth.p12
+          SM_CLIENT_CERT_FILE: ${{ env.SM_CLIENT_CERT_FILE }}
           SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
         with:
           simple-signing-mode: true
@@ -170,13 +253,16 @@ jobs:
       # The production-candidate chain, exactly once: publish -> execute +
       # qualify the exact binary -> Authenticode sign once through the
       # approved provider -> independent signature + timestamp verification
-      # -> certificate identity -> FINAL SHA-256 -> release-manifest.json +
-      # SHA256SUMS.txt (both describing the FINAL distributed bytes) ->
-      # immutable artifact retention. RELEASE_SIGNING_REQUIRED=true and
-      # RELEASE_PRODUCTION_GATE=true make signing mandatory, require the
-      # approved provider, and refuse test-only mock signing;
+      # -> certificate identity (must equal the current publisher identity
+      # policy) -> FINAL SHA-256 -> release-manifest.json + SHA256SUMS.txt
+      # (both describing the FINAL distributed bytes, recording the current
+      # releasePolicySchemaVersion) -> immutable artifact retention.
+      # RELEASE_SIGNING_REQUIRED=true and RELEASE_PRODUCTION_GATE=true make
+      # signing mandatory, require the approved provider, refuse test-only
+      # mock signing, and require SIGNING_EXPECTED_SUBJECT;
       # releaseMode=PRODUCTION is recorded so the Stage B publication gate
-      # can reject qualification-only artifacts.
+      # can reject qualification-only artifacts. NO local-PFX secrets are
+      # exposed to this production job.
       - name: Prepare signed production candidate (build once, sign once)
         shell: pwsh
         env:
@@ -185,13 +271,10 @@ jobs:
           SIGNING_PROVIDER: ${{ vars.SIGNING_PROVIDER }}
           SM_HOST: ${{ vars.SM_HOST }}
           SM_API_KEY: ${{ secrets.SM_API_KEY }}
-          SM_CLIENT_CERT_FILE: ${{ runner.temp }}/digicert-client-auth.p12
+          SM_CLIENT_CERT_FILE: ${{ env.SM_CLIENT_CERT_FILE }}
           SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
           SM_KEYPAIR_ALIAS: ${{ vars.SM_KEYPAIR_ALIAS }}
           SIGNING_EXPECTED_SUBJECT: ${{ vars.SIGNING_EXPECTED_SUBJECT }}
-          SIGNCERT_BASE64: ${{ secrets.SIGNCERT_BASE64 }}
-          SIGNCERT_PASSWORD: ${{ secrets.SIGNCERT_PASSWORD }}
-          SIGNCERT_TIMESTAMP: ${{ secrets.SIGNCERT_TIMESTAMP }}
           RELEASE_SIGNING_REQUIRED: 'true'
           RELEASE_PRODUCTION_GATE: 'true'
         run: .\scripts\release-qualify.ps1 -Ci -Sha '${{ inputs.sha }}' -Version '${{ inputs.version }}' -Sign -OutDir (Join-Path $env:RUNNER_TEMP 'production-candidate')
@@ -208,6 +291,20 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+      # Always-run hygiene: remove the materialized client-authentication
+      # certificate from the runner regardless of how the job ended. It is
+      # authentication material, never the production code-signing key, and
+      # it must not linger on the runner.
+      - name: Remove DigiCert client-authentication material (always)
+        if: always()
+        shell: pwsh
+        run: |
+          $path = [string]$env:SM_CLIENT_CERT_FILE
+          if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path -LiteralPath $path -PathType Leaf)) {
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            Write-Host 'Removed the materialized DigiCert client-authentication certificate.'
+          }
+
       # The human-qualification handoff: the operator records these exact
       # values (run id, artifact name, source SHA, semantic version, final
       # artifact SHA-256) in release-external-evidence.json before dispatching
@@ -223,12 +320,13 @@ jobs:
 
           - Stage A workflow run: `${{ github.run_id }}
           - Candidate artifact name: tabdock-candidate-`${{ inputs.sha }}`-`${{ github.run_id }}
-          - Source commit: `${{ inputs.sha }}
+          - Source commit: `${{ inputs.sha }} (== trusted dispatch SHA of this run)
           - Semantic version: `$($manifest.semanticVersion)` (project <Version>, authoritative)
           - Final distributed SHA-256: `$sha
           - Signing: `$($manifest.signingStatus)` / `$($manifest.signatureVerification)` / timestamp `$($manifest.timestampStatus)
           - Signing provider: `$($manifest.signingProvider)` (key protection `$($manifest.signingKeyProtection)`)
           - Signing certificate: `$($manifest.signingCertificateSubject)` (thumbprint `$($manifest.signingCertificateThumbprint)`)
+          - Release-policy schema: `$($manifest.releasePolicySchemaVersion)` (Stage B requires the CURRENT policy schema)
 
           Download the artifact from this run, verify TabDock.exe SHA-256 equals the
           final distributed SHA-256, execute the human gates against those exact bytes
