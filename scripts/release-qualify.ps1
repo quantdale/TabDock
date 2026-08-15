@@ -248,10 +248,14 @@ try {
     $signingRequired = [string]::Equals($env:RELEASE_SIGNING_REQUIRED, 'true', [StringComparison]::OrdinalIgnoreCase)
     $signScript = Join-Path $PSScriptRoot 'sign-release.ps1'
     if ($Sign -or $signingRequired -or $env:SIGNCERT_BASE64) {
-        $signResult = & $signScript -ExePath $ArtifactExe
-        if ($null -eq $signResult) {
+        $signOutput = & $signScript -ExePath $ArtifactExe
+        if ($LASTEXITCODE -ne 0) {
+            throw "sign-release.ps1 exited with $LASTEXITCODE; signing infrastructure failure."
+        }
+        if ([string]::IsNullOrWhiteSpace($signOutput)) {
             throw 'sign-release.ps1 produced no structured result; signing infrastructure failure.'
         }
+        $signResult = $signOutput | ConvertFrom-Json
         $manifest.signingStatus = $signResult.Status
         $manifest.signatureVerification = $signResult.Verification
         $manifest.externalGates.signingCredentials = $signResult.Status
