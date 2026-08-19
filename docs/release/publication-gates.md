@@ -318,16 +318,44 @@ verified same-run handoff (final hash identity check in the publish job).
 
 ## Checkout credential hardening
 
-Every `actions/checkout@v7` step in the release workflows
+Every `actions/checkout` step in the release workflows
 (`publish-release.yml` — both trusted-policy checkouts and the
 candidate-source checkout; `prepare-release-candidate.yml`; `release.yml`;
 `build.yml`) sets `persist-credentials: false`: none of these workflows
 performs an authenticated git push from a checkout, so no credentials are
 persisted in `.git/config` on the runner. This is a static, tested property
 of every release-sensitive checkout. The explicitly passed `github-token`
-inputs used by the cross-run `actions/download-artifact@v7` steps remain —
+inputs used by the cross-run `actions/download-artifact` steps remain —
 that mechanism genuinely requires them — and `gh`/artifact operations use
 the per-job `github.token` as before.
+
+## Action pinning (P2)
+
+Every `uses: actions/...` step in the four release-adjacent workflows
+(`build.yml`, `prepare-release-candidate.yml`, `publish-release.yml`,
+`release.yml`) is pinned to an immutable full commit SHA with a trailing
+`# vX.Y.Z` comment for human readability (the `digicert/...` signing action
+in Stage A was already pinned). No mutable `@v7` / `@v6` tags remain in
+the production signing/publication trust boundary, and `build.yml`
+(non-production but hosted-CI sensitive) is pinned identically.
+
+Current pins:
+
+- `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`
+- `actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.1.0`
+- `actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.1.0`
+- `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0`
+- `actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0`
+- `digicert/code-signing-software-trust-action@fae23a455ba4bde62b64fd7cb2f81ade788f5a95 # v1.2.1` (already pinned)
+
+Update procedure: resolve the new lightweight tag via `gh api` (e.g.
+`gh api repos/actions/checkout/git/refs/tags/v7 --jq '.object.sha'`),
+verify the SHA matches the intended release, replace the SHA in each
+workflow, keep the `# vX.Y.Z` comment, and run
+`pwsh -File scripts/release-tooling-tests.ps1` (the `all-actions-pinned-to-immutable-shas`
+case fails if any mutable `actions/*@v` remains; `Get-CheckoutSteps` tolerates
+pinned forms). Each workflow file also carries a short header comment with
+the same update recipe.
 
 ## Evidence schema (`release-external-evidence.json`, v2)
 

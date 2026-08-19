@@ -423,13 +423,15 @@ function Get-CheckoutSteps {
     .SYNOPSIS
         Extracts every actions/checkout step (the uses line plus its with:
         block) from a workflow YAML, preserving order.
+        Accepts pinned SHAs (uses: actions/checkout@<sha> # v7 ...) as well
+        as legacy @v7 forms so the helper is not coupled to the pin format.
     #>
     param([Parameter(Mandatory = $true)][string]$YamlText)
     $steps = [System.Collections.Generic.List[string]]::new()
     $lines = $YamlText -split "`r?`n"
     $i = 0
     while ($i -lt $lines.Count) {
-        if ($lines[$i] -match '^\s*(?:-\s+)?uses: actions/checkout@v7\s*$') {
+        if ($lines[$i] -match '^\s*(?:-\s+)?uses: actions/checkout@(?:v\d+|[0-9a-f]{40})') {
             $step = [System.Text.StringBuilder]::new()
             [void]$step.AppendLine($lines[$i])
             $j = $i + 1
@@ -1634,10 +1636,11 @@ try {
         # (inputs.sha == github.sha) is the FIRST step, before checkout,
         # before any signing credentials, before restore/build.
         $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\prepare-release-candidate.yml'))
+        $stepsIdx = $yml.IndexOf('steps:')
         $contract = $yml.IndexOf('Verify trusted production dispatch contract')
-        $checkout = $yml.IndexOf('actions/checkout')
-        $apiKey = $yml.IndexOf('SM_API_KEY')
-        $dotnet = $yml.IndexOf('actions/setup-dotnet')
+        $checkout = $yml.IndexOf('actions/checkout', $stepsIdx)
+        $apiKey = $yml.IndexOf('SM_API_KEY', $stepsIdx)
+        $dotnet = $yml.IndexOf('actions/setup-dotnet', $stepsIdx)
         Assert-True ($contract -ge 0) 'Stage A must contain the trusted dispatch contract step'
         Assert-True ($contract -lt $checkout) 'the dispatch contract must run before any checkout'
         Assert-True ($contract -lt $apiKey) 'the dispatch contract must run before signing credentials are referenced'
@@ -1880,7 +1883,8 @@ try {
                 'SM_CLIENT_CERT', 'SM_KEYPAIR_ALIAS', 'digicert', 'smctl')) {
             Assert-True ($yml -notmatch [regex]::Escape($forbidden)) "publish-release.yml must not contain '$forbidden' (Stage B never builds, signs, qualifies, or contacts a signing provider)"
         }
-        Assert-True ($yml -match 'actions/download-artifact@v7') 'Stage B must download the Stage A artifact'
+        Assert-True ($yml -match 'actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131') 'Stage B must download the Stage A artifact via the pinned download-artifact SHA'
+        Assert-True ($yml -notmatch 'actions/download-artifact@v\d') 'Stage B must not use a mutable download-artifact tag'
         Assert-True ($yml -match 'run-id') 'Stage B must bind to the Stage A run id'
         Assert-True ($yml -match 'actions: read') 'Stage B needs actions: read for the cross-run artifact download'
         Assert-True ($yml -match 'gh release create') 'Stage B must be the only workflow that creates the release'
@@ -1911,7 +1915,8 @@ try {
         Assert-True ($yml -notmatch 'smctl sign') 'Stage A must never invoke smctl directly in the workflow; signing happens exactly once inside sign-release.ps1'
         Assert-True ($yml -notmatch 'gh release create') 'Stage A must never create a GitHub Release'
         Assert-True ($yml -notmatch 'create-release') 'Stage A has no release-creation input'
-        Assert-True ($yml -match 'actions/upload-artifact@v7') 'Stage A must retain the candidate artifact'
+        Assert-True ($yml -match 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a') 'Stage A must retain the candidate artifact via the pinned upload-artifact SHA'
+        Assert-True ($yml -notmatch 'actions/upload-artifact@v\d') 'Stage A must not use a mutable upload-artifact tag'
         Assert-True ($yml -match 'tabdock-candidate-') 'Stage A artifact names follow the candidate scheme'
     }
 
@@ -2124,6 +2129,44 @@ try {
         Assert-True ($publishSection -match 'final hash identity') 'the final hash identity check must remain'
         Assert-True ($publishSection -match 'Get-FileSha256Lower') 'the publish job must hash the exact Stage A bytes'
         Assert-True ($publishSection -match 'Read-Sha256Sums') 'the publish job must cross-check SHA256SUMS.txt'
+    }
+
+    New-TestCase 'all-actions-pinned-to-immutable-shas' {
+        # P2: no mutable `actions/*@v` tag may remain in the production signing/
+        # publication trust boundary; every actions/* use must be a full 40-char
+        # SHA with a trailing human-readable `# vX` comment. build.yml is also
+        # pinned (non-production but hosted-CI sensitive) and is covered here.
+        $workflows = @(
+            '.github/workflows/build.yml',
+            '.github/workflows/prepare-release-candidate.yml',
+            '.github/workflows/publish-release.yml',
+            '.github/workflows/release.yml'
+        )
+        $expected = @{
+            'actions/checkout'          = '3d3c42e5aac5ba805825da76410c181273ba90b1'
+            'actions/setup-dotnet'      = 'a98b56852c35b8e3190ac28c8c2271da59106c68'
+            'actions/setup-node'        = '820762786026740c76f36085b0efc47a31fe5020'
+            'actions/upload-artifact'   = '043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
+            'actions/download-artifact' = '37930b1c2abaa49bbe596cd826c3c89aef350131'
+        }
+        foreach ($wf in $workflows) {
+            $yml = [IO.File]::ReadAllText((Join-Path $repoRoot $wf))
+            Assert-True ($yml -notmatch 'uses: actions/[^@\s]+@v\d') "mutable actions/* tag remains in $wf"
+            foreach ($line in ($yml -split "`r?`n" | Where-Object { $_ -match '^\s*uses: actions/' })) {
+                Assert-True ($line -match 'uses: actions/[^@]+@[0-9a-f]{40}\s+#\s*v\d') "pinned actions/* line must carry a human-readable version comment: $wf : $line"
+                if ($line -match 'uses: (actions/[^@]+)@([0-9a-f]{40})') {
+                    $action = $Matches[1]
+                    $sha = $Matches[2]
+                    if ($expected.ContainsKey($action)) {
+                        Assert-True ($sha -eq $expected[$action]) "$wf : $action SHA $sha != expected $($expected[$action])"
+                    }
+                }
+            }
+        }
+        # The signing control plane's DigiCert action keeps its own pin.
+        $stageA = [IO.File]::ReadAllText((Join-Path $repoRoot '.github/workflows/prepare-release-candidate.yml'))
+        Assert-True ($stageA -match 'digicert/code-signing-software-trust-action@fae23a455ba4bde62b64fd7cb2f81ade788f5a95') 'Stage A DigiCert action pin must remain'
+        Assert-True ($stageA -notmatch 'digicert/code-signing-software-trust-action@v\d') 'Stage A must not float a mutable DigiCert tag'
     }
 
     Write-Host ''

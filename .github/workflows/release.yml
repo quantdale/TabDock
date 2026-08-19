@@ -1,3 +1,10 @@
+# Action pinning (P2): every `uses: actions/...` step is pinned to an immutable
+# full commit SHA with a trailing `# vX` comment for human readability.
+# To update: resolve the new tag via `gh api` (lightweight tags):
+#   gh api repos/actions/checkout/git/refs/tags/v7 --jq ".object.sha"
+# Verify the SHA matches the intended release, replace the SHA in this file,
+# keep the `# vX.Y.Z` comment, then run `pwsh -File scripts/release-tooling-tests.ps1`.
+
 name: release
 
 # RC QUALIFICATION-ONLY workflow (never publishes). Intentionally NOT
@@ -51,7 +58,7 @@ jobs:
     steps:
       # Current checkout action: Node 24 action runtime (runner-supported).
       - name: Checkout exact candidate SHA
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Least privilege: this checkout performs no authenticated git
           # operation (push/merge); no credentials are persisted in .git.
@@ -69,11 +76,11 @@ jobs:
           }
           Write-Host "Candidate SHA verified: $actual"
 
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.1.0
         with:
           dotnet-version: 8.0.x
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.1.0
         with:
           node-version: 24.x
           cache: npm
@@ -118,7 +125,7 @@ jobs:
 
       # Immutable retention of the exact qualified RC artifact.
       - name: Upload qualified release artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
           name: tabdock-rc-${{ inputs.sha }}-${{ github.run_id }}
           path: ${{ runner.temp }}/release-artifacts

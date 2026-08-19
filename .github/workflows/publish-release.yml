@@ -1,3 +1,10 @@
+# Action pinning (P2): every `uses: actions/...` step is pinned to an immutable
+# full commit SHA with a trailing `# vX` comment for human readability.
+# To update: resolve the new tag via `gh api` (lightweight tags):
+#   gh api repos/actions/checkout/git/refs/tags/v7 --jq '.object.sha'
+# Verify the SHA matches the intended release, replace the SHA in this file,
+# keep the `# vX.Y.Z` comment, then run `pwsh -File scripts/release-tooling-tests.ps1`.
+
 name: publish-release
 
 # STAGE B of the two-stage production release architecture: publish the
@@ -127,7 +134,7 @@ jobs:
       # policy/. This tree supplies ALL release-policy code; the candidate
       # can never replace it.
       - name: Checkout trusted release policy (current workflow revision)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Least privilege: this checkout performs no authenticated git
           # operation (push/merge); no credentials are persisted in .git.
@@ -223,7 +230,7 @@ jobs:
       # scripts are NEVER executed, dot-sourced, or imported: all release
       # policy comes from the trusted policy/ checkout above.
       - name: Checkout candidate source (data only)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Least privilege: no authenticated git operation is performed on
           # the candidate tree; no credentials are persisted in .git.
@@ -245,7 +252,7 @@ jobs:
       # is extracted as-is; nothing in this workflow builds or signs, and the
       # candidate executable is never modified.
       - name: Download the EXACT Stage A candidate artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: ${{ steps.locate-candidate.outputs.artifact_name }}
           run-id: ${{ inputs.run-id }}
@@ -437,7 +444,7 @@ jobs:
       # consumes from this job. It is small (verdict record + release notes);
       # the publish job re-downloads the EXACT Stage A bytes itself.
       - name: Upload verified same-run handoff
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
           name: tabdock-verified-${{ github.run_id }}
           path: verified-handoff
@@ -478,7 +485,7 @@ jobs:
 
       # Trusted policy module for tag derivation - never candidate code.
       - name: Checkout trusted release policy (current workflow revision)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Least privilege: this checkout performs no authenticated git
           # operation (push/merge); no credentials are persisted in .git.
@@ -487,7 +494,7 @@ jobs:
           path: policy
 
       - name: Download the verified same-run handoff
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: tabdock-verified-${{ github.run_id }}
           path: verified-handoff
@@ -495,7 +502,7 @@ jobs:
       # Re-download the EXACT Stage A bytes (not the handoff's copy - the
       # published bytes always come from the immutable Stage A artifact).
       - name: Download the EXACT Stage A candidate artifact (cross-run)
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: ${{ needs.verify.outputs.candidate_artifact_name }}
           run-id: ${{ inputs.run-id }}
