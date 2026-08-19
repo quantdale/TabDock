@@ -320,8 +320,13 @@ internal static partial class Scenarios
         ctx.Check(TabCount(container) == 1, "tab remains captured after native title movement");
         ctx.Check(TabDockLog.WaitForLogLine(off, "SHEPHERD[re-glue]", 3000),
             "TabDock logged the native move/size re-glue");
-        ctx.Check(TabDockLog.CountNewLines(off, "SHEPHERD[dragout]") == 0,
-            "native title movement does not log a pop-out dragout");
+        // The native drag was re-glued (above), so the guest is still docked
+        // (IsDocked) and the tab count is unchanged (TabCount == 1): no pop-out
+        // occurred. A legacy assertion checked SHEPHERD[dragout] here, but the
+        // current Shepherd model never emits that keyword (a native drag is
+        // re-glued, not released), so the check passed vacuously and violated
+        // TESTING.md §D. The re-glue + docked + tab-count assertions already
+        // prove the non-pop-out contract without referencing absent logging.
         ctx.Check(pig.Proc != null && !pig.Proc.HasExited, "pig process still alive after native movement");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
     }

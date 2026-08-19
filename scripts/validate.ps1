@@ -38,6 +38,7 @@ $AppExe         = Join-Path $RepoRoot "bin\$Configuration\net8.0-windows\win-x64
 $DriverProject  = Join-Path $RepoRoot 'tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj'
 $PigProject     = Join-Path $RepoRoot 'tests\ValidationDriver\TabDock.GuineaPig\TabDock.GuineaPig.csproj'
 $PerfProject    = Join-Path $RepoRoot 'tests\Performance\TabDock.Performance.csproj'
+$UnitTestProject = Join-Path $RepoRoot 'tests\UnitTests\TabDock.UnitTests.csproj'
 $OpenSpecRoot   = Join-Path $RepoRoot 'tools\openspec'
 $OpenSpecLocal  = Join-Path $OpenSpecRoot 'node_modules\.bin\openspec.cmd'
 $TempRoot       = Join-Path ([IO.Path]::GetTempPath()) "TabDock-validation-$PID-$([Guid]::NewGuid().ToString('N'))"
@@ -199,7 +200,7 @@ function Assert-SupportBundlePrivacy {
 New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null
 Push-Location $RepoRoot
 try {
-    $restoreProjects = @($Solution, $DriverProject, $PigProject, $PerfProject)
+    $restoreProjects = @($Solution, $DriverProject, $PigProject, $PerfProject, $UnitTestProject)
     if ($Ci) {
         foreach ($project in $restoreProjects) {
             Invoke-Step "Restore with NuGet audit: $(Split-Path -Leaf $project)" {
@@ -230,9 +231,13 @@ try {
     Invoke-Step "Build Performance runner ($Configuration, compile-only)" {
         dotnet build $PerfProject -c $Configuration --nologo @noRestore
     }
+    Invoke-Step "Build + run headless unit tests ($Configuration)" {
+        dotnet test $UnitTestProject -c $Configuration --nologo @noRestore
+    }
 
     Invoke-Executable "Geometry self-test ($Configuration)" $AppExe @('--selftest-geometry')
     Invoke-Executable "Diagnostics/persistence/privacy self-tests ($Configuration)" $AppExe @('--selftest-diagnostics')
+    Invoke-Executable "Native ABI contract self-test ($Configuration)" $AppExe @('--selftest-native-abi')
     Invoke-Executable "Version smoke ($Configuration)" $AppExe @('--version')
 
     $doctorPath = Join-Path $TempRoot 'doctor.txt'
