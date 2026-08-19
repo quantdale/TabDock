@@ -33,6 +33,21 @@ public partial class ContainerWindow
             return;
 
         _viewModel.DisplayTabs.CollectionChanged += SplitDisplayTabs_CollectionChanged;
+
+        // The ordinary ListBox preview handler deliberately marks a non-member
+        // click handled while a pair is presented. That is correct as a guard
+        // against WPF selecting C before the journal-safe pair hide completes,
+        // but it also means a window-level hit-test miss used to make the click
+        // disappear completely. Listen on the ListBox itself with
+        // handledEventsToo=true so this transition runs after that guard and can
+        // reuse the ListBoxItem it already resolved in _draggedItem. This makes
+        // pair -> C/D navigation independent of OriginalSource shape/template
+        // details and closes the four-tab "stuck in split" failure mode.
+        TabsListBox.AddHandler(
+            UIElement.PreviewMouseLeftButtonDownEvent,
+            new MouseButtonEventHandler(TabsListBox_PreviewMouseLeftButtonDown_SplitInteraction),
+            true);
+
         _splitInteractionHooksAttached = true;
     }
 
@@ -41,6 +56,9 @@ public partial class ContainerWindow
         if (_splitInteractionHooksAttached)
         {
             _viewModel.DisplayTabs.CollectionChanged -= SplitDisplayTabs_CollectionChanged;
+            TabsListBox.RemoveHandler(
+                UIElement.PreviewMouseLeftButtonDownEvent,
+                new MouseButtonEventHandler(TabsListBox_PreviewMouseLeftButtonDown_SplitInteraction));
             _splitInteractionHooksAttached = false;
         }
         DisarmSplitPresentationSettle();
@@ -48,59 +66,121 @@ public partial class ContainerWindow
     }
 
     /// <summary>
-    /// Intercept a third-tab LEFT click before the child ListBox split guard can
-    /// swallow it. Buttons are deliberately excluded so per-tab close/pop-out
-    /// retains its existing structural behavior. Hover and right-click are not
-    /// handled here and therefore continue to leave the split pair untouched.
+    /// Runs after the strip's existing split guard even when that guard marked
+    /// the routed event handled. A third/fourth ordinary tab click is therefore
+    /// never dependent on the earlier window-level hit-test path.
     /// </summary>
-    protected override void OnPreviewMouseLeftButtonDown(MouseButtonEventArgs e)
+    private void TabsListBox_PreviewMouseLeftButtonDown_SplitInteraction(object sender, MouseButtonEventArgs e)
     {
-        if (TryActivateOrdinaryTabFromSplit(e))
+        if (!IsSplitPresented)
             return;
 
-        base.OnPreviewMouseLeftButtonDown(e);
-    }
+        // The normal strip preview handler executes first and records the exact
+        // ListBoxItem in _draggedItem. Fall back to a pointer hit-test so this
+        // remains correct if handler ordering changes in a future template.
+        ListBoxItem? item = _draggedItem;
+        DependencyObject? hit = TabsListBox.InputHitTest(e.GetPosition(TabsListBox)) as DependencyObject;
+        item ??= hit != null ? FindListBoxItem(hit) : FindListBoxItem(e.OriginalSource);
 
-    private bool TryActivateOrdinaryTabFromSplit(MouseButtonEventArgs e)
-    {
-        if (!IsSplitPresented || e.OriginalSource is not DependencyObject source)
-            return false;
-
-        ListBoxItem? item = ItemsControl.ContainerFromElement(TabsListBox, source) as ListBoxItem;
         if (item?.DataContext is not TabViewModel target || IsSplitMember(target.Model))
-            return false;
+            return;
 
-        // Do not turn a close-button click into a tab activation. Walk only up
-        // to the owning item so an unrelated ancestor cannot affect the result.
-        for (DependencyObject? current = source; current != null && current != item;
-             current = VisualTreeHelper.GetParent(current))
+        // Buttons inside a tab retain their structural action (pop out/close).
+        // Use the pointer hit rather than OriginalSource where possible because
+        // text/content elements do not always participate in the visual tree in
+        // the same way as the owning control.
+        DependencyObject? source = hit ?? e.OriginalSource as DependencyObject;
+        for (DependencyObject? current = source; current != null && current != item;)
         {
             if (current is Button)
-                return false;
+                return;
+
+            current = current is Visual || current is System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(current)
+                : LogicalTreeHelper.GetParent(current);
         }
 
-        // Stop WPF's ListBox selection path before doing native work. The
-        // suspend transition changes ActiveTab only after both split members
-        // have been hidden journal-safely, so an uncertain hide cannot leave a
-        // third tab selected while the old pair remains authoritative.
+        // The existing split guard has already prevented WPF's ListBox from
+        // selecting the target. Keep it handled while we perform the native
+        // transaction so a RecoveryPending hide cannot expose a logical C/D
+        // selection over an authoritative pair.
         e.Handled = true;
+        EndDrag();
         _log.Log($"SPLIT[third-tab] activate guest=0x{target.Model.Hwnd.ToInt64():X}");
 
-        SuspendSplitPairForGuest(target.Model);
-        if (!IsSplitRelationshipDefined || !IsSplitPresented)
+        if (SuspendPresentedPairForUserSelection(target))
         {
             DiagnosticRuntime.Record("split.third-tab", _containerHwnd, target.Model.Hwnd,
-                group: Group.Id.ToString("N"), action: "activate-non-member", result: "pair-suspended");
-            return true;
+                group: Group.Id.ToString("N"), action: "activate-non-member", result: "pair-suspended-single-pass");
+            return;
         }
 
-        // ExitSplit fails closed when a member hide is RecoveryPending. A prior
-        // member may already have completed its hide before the later member
-        // became uncertain, so re-present the still-authoritative pair before
-        // returning to the input loop instead of leaving a half-blank split.
-        LayoutSplitPanes();
+        // SuspendPresentedPairForUserSelection repairs a partially-hidden pair
+        // before returning false. Do not issue a second LayoutSplitPanes here:
+        // duplicate native positioning in the same input turn was unnecessary
+        // presentation churn and could be visible as a render/jitter pulse.
         DiagnosticRuntime.Record("split.third-tab", _containerHwnd, target.Model.Hwnd,
-            group: Group.Id.ToString("N"), action: "activate-non-member", result: "recovery-pending-pair-retained");
+            group: Group.Id.ToString("N"), action: "activate-non-member", result: "pair-retained");
+    }
+
+    /// <summary>
+    /// User-selection variant of pair suspension. It preserves the same
+    /// journal-safe/fail-closed ordering as SuspendSplitPairForGuest, but makes
+    /// the pair -> single-guest presentation exactly one native transition:
+    /// each pair member is hidden once, C/D is positioned/shown once, and then
+    /// foreground is requested once.
+    ///
+    /// The shepherd active reference is set before ActiveTab. That is deliberate:
+    /// ActiveTab notification normally enters SyncShepherdActiveWindow, whose
+    /// ordinary single-tab path would otherwise hide the already-hidden focused
+    /// split member a second time and re-run presentation work. With the target
+    /// already authoritative, that notification becomes a no-op and this method
+    /// performs the single explicit layout below.
+    /// </summary>
+    private bool SuspendPresentedPairForUserSelection(TabViewModel targetTab)
+    {
+        CapturedWindow guest = targetTab.Model;
+        if (!IsSplitPresented || IsSplitMember(guest) || !NativeMethods.IsWindow(guest.Hwnd))
+            return false;
+
+        CapturedWindow? previousActive = _shepherdActiveWindow;
+        foreach (CapturedWindow member in new[] { _splitLeft!, _splitRight! })
+        {
+            WindowHideOutcome outcome = _shepherd.Hide(member);
+            LogHidePending(member, outcome);
+            if (outcome == WindowHideOutcome.RecoveryPending)
+            {
+                // A member may already have hidden before its partner became
+                // uncertain. Restore the presentation-side active reference and
+                // re-present the still-authoritative pair exactly once.
+                _shepherdActiveWindow = previousActive;
+                LayoutSplitPanes();
+                DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
+                    group: Group.Id.ToString("N"), action: "pair-to-single", result: "recovery-pending-pair-retained");
+                return false;
+            }
+        }
+
+        _splitPairPresented = false;
+        _splitPresentationGeneration++;
+        DisarmSplitPresentationSettle();
+        _constraintDirty = true;
+        _refusedPaneByHwnd.Clear();
+
+        // Pre-seed presentation authority before SetActiveTab. This prevents the
+        // ActiveTab notification from entering the ordinary hide-old/show-new
+        // path and repeating work that this transaction has already completed.
+        _shepherdActiveWindow = guest;
+        if (!ReferenceEquals(_viewModel.ActiveTab, targetTab))
+            _viewModel.SetActiveTab(targetTab);
+
+        LayoutShepherdActiveWindow();
+        _shepherd.SetForeground(guest);
+
+        _log.Log($"SPLIT[suspend] guest=0x{guest.Hwnd.ToInt64():X}");
+        _log.Log($"SPLIT[single] guest=0x{guest.Hwnd.ToInt64():X} pair=dormant");
+        DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
+            group: Group.Id.ToString("N"), action: "pair-to-single", result: "pair-retained-single-pass");
         return true;
     }
 
