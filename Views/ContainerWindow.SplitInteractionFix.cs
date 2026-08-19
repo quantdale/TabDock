@@ -39,10 +39,10 @@ public partial class ContainerWindow
         // against WPF selecting C before the journal-safe pair hide completes,
         // but it also means a window-level hit-test miss used to make the click
         // disappear completely. Listen on the ListBox itself with
-        // handledEventsToo=true so this transition runs after that guard and can
-        // reuse the ListBoxItem it already resolved in _draggedItem. This makes
-        // pair -> C/D navigation independent of OriginalSource shape/template
-        // details and closes the four-tab "stuck in split" failure mode.
+        // handledEventsToo=true so this transition runs after that guard. The
+        // guard clears its drag candidate before returning, so this handler
+        // resolves the item from the pointer position rather than depending on
+        // transient drag state or OriginalSource template shape.
         TabsListBox.AddHandler(
             UIElement.PreviewMouseLeftButtonDownEvent,
             new MouseButtonEventHandler(TabsListBox_PreviewMouseLeftButtonDown_SplitInteraction),
@@ -75,12 +75,12 @@ public partial class ContainerWindow
         if (!IsSplitPresented)
             return;
 
-        // The normal strip preview handler executes first and records the exact
-        // ListBoxItem in _draggedItem. Fall back to a pointer hit-test so this
-        // remains correct if handler ordering changes in a future template.
-        ListBoxItem? item = _draggedItem;
+        // Resolve from the actual pointer hit. The ordinary split guard has
+        // already cleared _draggedItem before this handled-events-too callback.
+        // InputHitTest yields a visual element even when OriginalSource is a
+        // content element nested inside the tab template.
         DependencyObject? hit = TabsListBox.InputHitTest(e.GetPosition(TabsListBox)) as DependencyObject;
-        item ??= hit != null ? FindListBoxItem(hit) : FindListBoxItem(e.OriginalSource);
+        ListBoxItem? item = hit != null ? FindListBoxItem(hit) : FindListBoxItem(e.OriginalSource);
 
         if (item?.DataContext is not TabViewModel target || IsSplitMember(target.Model))
             return;
@@ -140,8 +140,19 @@ public partial class ContainerWindow
     private bool SuspendPresentedPairForUserSelection(TabViewModel targetTab)
     {
         CapturedWindow guest = targetTab.Model;
-        if (!IsSplitPresented || IsSplitMember(guest) || !NativeMethods.IsWindow(guest.Hwnd))
+        if (!IsSplitPresented || IsSplitMember(guest))
             return false;
+
+        // A user click is a cold/destructive presentation boundary, so use the
+        // full Shepherd identity gate rather than IsWindow alone. A recycled
+        // HWND must never cause us to hide the valid pair and then attempt to
+        // present an unrelated replacement window.
+        if (!_shepherd.IsCurrentCapturedWindow(guest))
+        {
+            DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
+                group: Group.Id.ToString("N"), action: "pair-to-single", result: "target-identity-rejected");
+            return false;
+        }
 
         CapturedWindow? previousActive = _shepherdActiveWindow;
         foreach (CapturedWindow member in new[] { _splitLeft!, _splitRight! })
@@ -159,6 +170,19 @@ public partial class ContainerWindow
                     group: Group.Id.ToString("N"), action: "pair-to-single", result: "recovery-pending-pair-retained");
                 return false;
             }
+        }
+
+        // Hiding two top-level guests is not atomic with respect to process/HWND
+        // lifetime. Re-prove C/D after those native calls and before committing
+        // dormant state. If the target changed while the pair was being hidden,
+        // re-present the still-defined pair and leave logical selection alone.
+        if (!_shepherd.IsCurrentCapturedWindow(guest))
+        {
+            _shepherdActiveWindow = previousActive;
+            LayoutSplitPanes();
+            DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
+                group: Group.Id.ToString("N"), action: "pair-to-single", result: "target-changed-pair-retained");
+            return false;
         }
 
         _splitPairPresented = false;
