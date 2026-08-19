@@ -370,8 +370,12 @@ retained bytes (no build, no sign)
   allowed); RC artifacts can never be production-published (their manifest
   records `releaseMode = QUALIFICATION_ONLY`, which Stage B rejects).
 - Qualification vocabulary: `PASS`, `FAIL`, `BLOCKED_EXTERNAL`,
-  `BLOCKED_ENVIRONMENT`, `SKIP_NOT_APPLICABLE`. A 0/N scenario run, an
-  unavailable browser, or missing mixed-DPI hardware is never `PASS`.
+  `BLOCKED_ENVIRONMENT`, `SKIP_NOT_APPLICABLE` (see external gate lifecycle
+  and the gate table in `docs/release/publication-gates.md` — the only allowed
+  `BLOCKED_ENVIRONMENT` refinement is `BLOCKED_NO_MIXED_DPI_HARDWARE`). A 0/N
+  scenario run, an unavailable browser, or missing mixed-DPI hardware is never
+  `PASS`; stale bindings, wrong `schemaVersion`, or future `completedAt` fail
+  closed and cannot be marked `PASS` by availability.
 - Human gates stay explicitly unperformed until real evidence exists:
   final manual Windows smoke (`docs/release/final-smoke.md`), physical
   mixed-DPI qualification (`docs/release/mixed-dpi-qualification.md`), and

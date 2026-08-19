@@ -364,16 +364,64 @@ decision, never a silent gate-simplification.
 - **THEN** publication is refused
 
 ### Requirement: External evidence is traceable and timestamp-quality
-External evidence (schemaVersion 2) SHALL record `candidateWorkflowRunId`
-(the numeric Stage A run id) and `candidateArtifactName` (the downloaded
-Stage A artifact name) in addition to the source SHA and final artifact hash.
-Every `completedAt` field SHALL parse as an ISO-8601 timestamp and SHALL not
-be materially in the future.
+External evidence SHALL be exactly `schemaVersion: 2` (no other value accepted)
+and SHALL record `candidateWorkflowRunId` (the numeric Stage A run id) and
+`candidateArtifactName` (the downloaded Stage A artifact name) in addition to
+the source SHA and final artifact hash. Every `completedAt` field SHALL parse
+as an ISO-8601 timestamp and SHALL not be materially in the future (5-minute
+clock-skew tolerance). Any wrong schema version, stale SHA/hash/run/artifact
+binding, or future `completedAt` SHALL fail publication closed; missing evidence
+SHALL remain `BLOCKED_EXTERNAL` and no workflow SHALL mark an unavailable gate
+`PASS`.
 
 #### Scenario: Future or malformed timestamps are refused
 - **WHEN** an evidence gate carries a non-ISO-8601 `completedAt` or one in
   the future beyond the clock-skew tolerance
 - **THEN** the evidence is invalid and publication is refused
+
+#### Scenario: Stale or wrong-schema evidence is refused
+- **WHEN** the evidence carries `schemaVersion != 2` or a `sourceCommitSha` /
+  `artifactSha256` / `candidateWorkflowRunId` / `candidateArtifactName` that
+  does not equal the Stage A run/artifact/hash being published
+- **THEN** publication is refused and the evidence cannot be reused for another candidate
+
+#### Scenario: Unavailable gates cannot be marked PASS
+- **WHEN** external evidence is absent or a mandatory gate is unavailable
+- **THEN** the gate remains `BLOCKED_EXTERNAL` / `BLOCKED_ENVIRONMENT` and the
+  publication gate refuses; no workflow path marks it `PASS` by availability
+
+### Requirement: External gates have an exact vocabulary and lifecycle
+Every externally visible gate status SHALL be exactly one of `PASS`, `FAIL`,
+`BLOCKED_EXTERNAL`, or `BLOCKED_ENVIRONMENT` (the only allowed
+`BLOCKED_ENVIRONMENT` refinement is `BLOCKED_NO_MIXED_DPI_HARDWARE` for the
+mixed-DPI gate). `PASS` SHALL require all mandatory gates present with
+`status == "PASS"`, a non-empty `operator` and `evidence`, and an ISO-8601
+`completedAt` not in the future; `BLOCKED_EXTERNAL` SHALL mean the prerequisite
+(credentials/hardware/real Windows environment) does not exist. Every gate SHALL
+have an exact prerequisite, exact command/procedure, expected evidence format,
+and exact artifact SHA + workflow run + artifact name binding (see
+`docs/release/publication-gates.md` external gate table). Publication tooling
+SHALL fail closed when evidence says `PASS` but prerequisites are unmet, and
+missing evidence SHALL fail closed (`BLOCKED_EXTERNAL`).
+
+#### Scenario: Ambiguous manual steps are rejected
+- **WHEN** external gate documentation lacks any of: exact prerequisite, exact
+  command/procedure, expected evidence format, or exact SHA/run/artifact binding
+- **THEN** the gate is not considered precise and must be repaired before production publication
+
+### Requirement: External evidence is authored once and bound to provenance
+The operator SHALL author `release-external-evidence.json` exactly once per
+candidate with `schemaVersion: 2` and exact bindings `sourceCommitSha` /
+`artifactSha256` (`finalSignedSha256`) / `candidateWorkflowRunId` /
+`candidateArtifactName` equal to the Stage A bytes just verified by hash, and
+every `completedAt` at actual completion time (ISO-8601, not in the future).
+Any reuse with a different SHA/hash/run/artifact, any future `completedAt`, or
+any wrong schema version SHALL fail the publication gate.
+
+#### Scenario: Reused evidence for another candidate is refused
+- **WHEN** evidence authored for one candidate is presented for a different
+  source commit, artifact hash, or Stage A run
+- **THEN** the publication gate rejects it as stale provenance
 
 ### Requirement: Publication policy is trusted-policy isolated from the candidate
 Stage B publication SHALL evaluate the candidate exclusively with release-policy

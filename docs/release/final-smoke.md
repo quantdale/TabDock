@@ -1,12 +1,14 @@
 # Final Manual Windows Release Smoke
 
 **Status: NOT PERFORMED — BLOCKED_EXTERNAL until executed by a human on real
-Windows.**
+Windows against the exact Stage A candidate bytes.**
 
 This is the final human gate for the **exact release candidate artifact**
-(verify `TabDock.exe --version` reports the release commit and a SHA-256 equal
-to `release-manifest.json`'s). It is a smoke test, not an exhaustive suite:
-every item is a quick manual check on a real desktop.
+(the FINAL distributed `TabDock.exe` from Stage A). It is a smoke test, not an
+exhaustive suite: every item is a quick manual check on a real desktop. It may
+only be marked `PASS` after the operator performs every applicable item against
+those exact bytes; there is no tooling flag or boolean shortcut — only the
+auditable evidence record described below satisfies the publication gate.
 
 **Which artifact:** the FINAL distributed executable — the signed `TabDock.exe`
 when production signing is in effect. Signing changes the bytes, so smoke
@@ -20,19 +22,50 @@ HSM/cloud signer in Stage A; the manifest records `signingProvider`,
 
 Result vocabulary per item: `PASS`, `FAIL`, `SKIP_NOT_APPLICABLE`,
 `BLOCKED_ENVIRONMENT`. The overall smoke is PASS only when all applicable
-items PASS with evidence (a checklist signed by the operator).
+items PASS with evidence (a checklist signed by the operator). The externally
+visible gate statuses are exactly `PASS`, `FAIL`, `BLOCKED_EXTERNAL`, and
+`BLOCKED_ENVIRONMENT`; see "External gate lifecycle" in
+`docs/release/publication-gates.md` — nothing else may be recorded.
+
+## Operator procedure (exact, unfakeable)
+
+Every check must run against the **exact bytes that will be published**,
+cryptographically bound to the Stage A run that produced them:
+
+1. **Download the exact candidate** from the Stage A
+   `prepare-release-candidate` run that produced it: artifact
+   `tabdock-candidate-<sha>-<run-id>` from run `candidateWorkflowRunId`.
+   Do NOT substitute a local build, a debug build, or an unsigned copy.
+2. **Verify byte identity** before touching any checklist item:
+   ```powershell
+   # Must equal manifest finalSignedSha256 (the FINAL distributed hash).
+   (Get-FileHash -Algorithm SHA256 .\TabDock.exe).Hash.ToLowerInvariant() -eq
+     ((Get-Content release-manifest.json | ConvertFrom-Json).finalSignedSha256.ToLowerInvariant())
+   Get-Content SHA256SUMS.txt   # same hash
+   .\TabDock.exe --version      # reports the release commit + matching sha256
+   .\TabDock.exe --selftest-native-abi  # capture the environment report for the compatibility gate
+   ```
+   Proceed only when the three hashes agree and `--version` reports the
+   candidate commit. A local smoke that does not re-prove this hash is not
+   bound to the published artifact and will be rejected.
+3. Execute items 1–38 below on that verified binary.
+
+Expected evidence format (see "Recording"): exactly one
+`release-external-evidence.json` authored once with `schemaVersion: 2`, the
+exact `sourceCommitSha` / `artifactSha256` / `candidateWorkflowRunId` /
+`candidateArtifactName` above, and every gate carrying an ISO-8601
+`completedAt` (not in the future beyond 5 minutes), `operator`, and `evidence`.
 
 ## Setup
 
 - Fresh Windows 10/11 x64 session; at least 2-3 real applications available
   (e.g. Notepad, Windows Terminal, a browser).
-- Run the release `TabDock.exe` (never a debug build).
+- Use ONLY the verified `TabDock.exe` from the step above (never a debug build).
 - Record the candidate SHA-256 and the machine OS build before starting.
-- Confirm the artifact identity first: `TabDock.exe --version` must report
-  the release commit and a SHA-256 equal to `release-manifest.json`
-  `artifactSha256` AND `SHA256SUMS.txt`. Also record the
-  `--selftest-native-abi` environment report for the compatibility matrix
-  (`docs/release/compatibility-matrix.md`).
+- Confirm again that `TabDock.exe --version` reports the release commit and a
+  SHA-256 equal to `release-manifest.json` `artifactSha256` AND `SHA256SUMS.txt`.
+  Also retain the `--selftest-native-abi` environment report for the
+  compatibility matrix (`docs/release/compatibility-matrix.md`).
 
 ## Application
 
@@ -132,16 +165,23 @@ items PASS with evidence (a checklist signed by the operator).
 If Chrome/Edge/Brave/Firefox is unavailable, report the exact unavailable
 browser. Never substitute unavailable-browser coverage with PASS.
 
-## Recording
+## Recording (exact, once)
 
-The operator signs the checklist with: candidate SHA-256, machine OS build,
-date, and every item's result. The smoke is PASS only with every applicable
-item PASS; anything unexecuted is `BLOCKED_EXTERNAL` and is recorded as such
-in `release-manifest.json` (`externalGates.finalWindowsHumanSmoke`).
+The operator signs the 38-item checklist with: the exact `candidateWorkflowRunId`
++ `candidateArtifactName`, the verified `artifactSha256` (`finalSignedSha256`),
+the machine OS build, an ISO-8601 `completedAt` at signing time (not in the
+future beyond the 5-minute clock-skew tolerance), and every item's result. The
+smoke is `PASS` only with every applicable item `PASS`; anything unexecuted is
+`BLOCKED_EXTERNAL` and is recorded as such in `release-manifest.json`
+(`externalGates.finalWindowsHumanSmoke`). The gate's externally visible status
+is exactly `PASS` / `FAIL` / `BLOCKED_EXTERNAL` / `BLOCKED_ENVIRONMENT` — see
+"External gate lifecycle" in `docs/release/publication-gates.md`.
 
-A PASS smoke must additionally be recorded in the production evidence file
-`release-external-evidence.json` (schemaVersion 2, see
-`docs/release/publication-gates.md`):
+The evidence file `release-external-evidence.json` must be authored **exactly
+once** with `schemaVersion: 2` and the bindings proven above (any reuse with a
+different SHA, hash, run id, or artifact name fails; any `completedAt` in the
+future fails; any wrong schema version fails — the publication gate fails
+closed). A PASS smoke is recorded there as:
 
 ```json
 {

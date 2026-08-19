@@ -2136,11 +2136,13 @@ try {
         # publication trust boundary; every actions/* use must be a full 40-char
         # SHA with a trailing human-readable `# vX` comment. build.yml is also
         # pinned (non-production but hosted-CI sensitive) and is covered here.
+        # promote-staging.yml is the main-admission gate and is pinned too.
         $workflows = @(
             '.github/workflows/build.yml',
             '.github/workflows/prepare-release-candidate.yml',
             '.github/workflows/publish-release.yml',
-            '.github/workflows/release.yml'
+            '.github/workflows/release.yml',
+            '.github/workflows/promote-staging.yml'
         )
         $expected = @{
             'actions/checkout'          = '3d3c42e5aac5ba805825da76410c181273ba90b1'
@@ -2167,6 +2169,47 @@ try {
         $stageA = [IO.File]::ReadAllText((Join-Path $repoRoot '.github/workflows/prepare-release-candidate.yml'))
         Assert-True ($stageA -match 'digicert/code-signing-software-trust-action@fae23a455ba4bde62b64fd7cb2f81ade788f5a95') 'Stage A DigiCert action pin must remain'
         Assert-True ($stageA -notmatch 'digicert/code-signing-software-trust-action@v\d') 'Stage A must not float a mutable DigiCert tag'
+    }
+
+    New-TestCase 'promote-staging-exact-sha-gate-and-serialization' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\promote-staging.yml'))
+        Assert-True ($yml -match 'name: promote-staging') 'promote-staging workflow must be named promote-staging'
+        Assert-True ($yml -match 'agent/staging') 'promotion must target agent/staging'
+        Assert-True ($yml -match 'workflow_dispatch') 'promotion must support exact-SHA dispatch'
+        Assert-True ($yml -match 'inputs\.sha') 'dispatch must accept an exact SHA input'
+        Assert-True ($yml -match 'permissions:\s*\r?\n\s*contents: write') 'only the promotion workflow may hold contents: write'
+        Assert-True ($yml -match 'concurrency:\s*\r?\n\s*group: promote-main') 'promotion must serialize via concurrency group promote-main'
+        Assert-True ($yml -match 'cancel-in-progress: false') 'serialization must not cancel in-progress promotions (TOCTOU)'
+        Assert-True ($yml -match 'fetch-depth: 0') 'promotion checkout must fetch full history for ancestor checks'
+        Assert-True ($yml -match 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1') 'promotion checkout must be pinned to the immutable SHA'
+        Assert-True ($yml -notmatch 'uses: actions/checkout@v\d') 'promotion must not use a mutable checkout tag'
+        Assert-True ($yml -match 'persist-credentials: false') 'promotion checkout must not persist credentials'
+        Assert-True ($yml -match 'git rev-parse HEAD') 'promotion must verify HEAD == expected SHA'
+        Assert-True ($yml -match 'origin/agent/staging') 'promotion must verify agent/staging points to expected SHA'
+        Assert-True ($yml -match 'git rev-parse origin/agent/staging') 'promotion must compare origin/agent/staging to expected SHA'
+        Assert-True ($yml -match 'gh run list --workflow build\.yml --commit') 'promotion must verify build.yml qualification for the exact SHA'
+        Assert-True ($yml -match 'conclusion.*success|success.*conclusion') 'promotion must require a successful build conclusion'
+        Assert-True ($yml -match 'merge-base --is-ancestor') 'promotion must verify main is ancestor of the expected SHA (fast-forward safety)'
+        Assert-True ($yml -match 'origin/main') 'promotion must reference origin/main for fast-forward check'
+        Assert-True ($yml -match 'gh api.*PATCH.*repos/.*\/git\/refs\/heads\/main') 'promotion must update main via PATCH refs/heads/main'
+        Assert-True ($yml -match 'force.*false') 'promotion PATCH must use force=false (fails closed on concurrent main advance)'
+        Assert-True ($yml -match 'Reference update failed') 'promotion must handle 422 Reference update failed (concurrent advance)'
+        Assert-True ($yml -match 'rebase.*origin/main') 'promotion recovery must document rebase onto origin/main'
+        Assert-True ($yml -match 'force-with-lease') 'rebase recovery must use --force-with-lease'
+        # No other workflow (except the release publisher, which needs write
+        # to create releases/tags) may hold contents: write for branch
+        # promotion. The promotion workflow is the only branch writer.
+        foreach ($wf in @('.github\workflows\build.yml', '.github\workflows\prepare-release-candidate.yml', '.github\workflows\release.yml')) {
+            $other = [IO.File]::ReadAllText((Join-Path $repoRoot $wf))
+            Assert-True ($other -notmatch 'contents:\s*write') "$wf must remain contents: read (only promote-staging and publish-release may hold write)"
+        }
+    }
+
+    New-TestCase 'promote-staging-has-no-build-sign-or-publish' {
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\promote-staging.yml'))
+        foreach ($forbidden in @('dotnet publish', 'sign-release.ps1', 'release-qualify.ps1', 'RELEASE_SIGNING_REQUIRED', 'gh release create', 'SIGNCERT_BASE64', 'digicert', 'smctl', 'download-artifact', 'upload-artifact')) {
+            Assert-True ($yml -notmatch [regex]::Escape($forbidden)) "promote-staging must not contain '$forbidden'"
+        }
     }
 
     Write-Host ''

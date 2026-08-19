@@ -1,17 +1,19 @@
 # Physical Mixed-DPI Production Qualification Procedure
 
 **Status: NOT PERFORMED — BLOCKED_EXTERNAL until executed on real mixed-DPI
-hardware.**
+hardware against the exact Stage A candidate bytes.**
 
 Deterministic repository tests (`--selftest-geometry`, `MonitorDpiSelfTest`)
 are **not** equivalent to physical mixed-DPI hardware qualification. This
 procedure is the required human/hardware gate. It must be executed against the
-**exact release candidate artifact** (same SHA-256 as the artifact in
-`release-manifest.json` — the FINAL signed executable when production signing
-is in effect; signing changes the bytes, so qualify the artifact that will
-actually be distributed) on a machine with at least two monitors at different
-scaling (e.g. 100% + 150%). See `docs/release/publication-gates.md` for the
-trust model and the evidence schema.
+**exact release candidate artifact** (byte-identical to the FINAL distributed
+`TabDock.exe` from Stage A — same SHA-256 as `release-manifest.json`
+`finalSignedSha256` / `SHA256SUMS.txt`; signing changes the bytes, so
+qualifying any other build is NOT acceptable) on a machine with at least two
+monitors at different scaling (e.g. 100% + 150%). There is no tooling boolean
+shortcut — only the auditable evidence record described below satisfies the
+publication gate. See `docs/release/publication-gates.md` for the trust model
+and the evidence schema.
 
 ## Rules
 
@@ -22,17 +24,45 @@ trust model and the evidence schema.
 - `BLOCKED_NO_MIXED_DPI_HARDWARE` is the only honest result on single-DPI
   machines. Never mark a scenario PASS without executing it.
 - A `0/N` scenario run is not a PASS. An unexecuted scenario is not a PASS.
+- Externally visible gate statuses are exactly `PASS` / `FAIL` /
+  `BLOCKED_EXTERNAL` / `BLOCKED_ENVIRONMENT` (see "External gate lifecycle"
+  in `docs/release/publication-gates.md`); `BLOCKED_NO_MIXED_DPI_HARDWARE`
+  is the hardware-specific reporting of `BLOCKED_ENVIRONMENT` for this gate.
+
+## Operator procedure (exact, unfakeable)
+
+Every scenario must run against the **exact bytes that will be published**,
+cryptographically bound to the Stage A run that produced them:
+
+1. **Download the exact candidate** from Stage A: artifact
+   `tabdock-candidate-<sha>-<run-id>` from run `candidateWorkflowRunId`
+   (the same artifact described in `release-manifest.json`).
+2. **Verify byte identity** before any scenario (fail closed if the hash
+   differs from `finalSignedSha256` / `SHA256SUMS.txt`):
+   ```powershell
+   (Get-FileHash -Algorithm SHA256 .\TabDock.exe).Hash.ToLowerInvariant() -eq
+     ((Get-Content release-manifest.json | ConvertFrom-Json).finalSignedSha256.ToLowerInvariant())
+   Get-Content SHA256SUMS.txt  # same hash
+   .\TabDock.exe --version     # reports the candidate commit + matching sha256
+   ```
+   A smoke/qualification that does not re-prove this hash is not bound to the
+   published artifact and will be rejected by the publication gate.
+3. Then execute scenarios 1–16 on that verified binary, recording the required
+   evidence per scenario. Missing evidence, a wrong hash, a stale run id, or a
+   future `completedAt` fails the publication gate closed — see
+   `docs/release/publication-gates.md`.
 
 ## Setup
 
-1. Windows 10 (recent build) or Windows 11, 64-bit; release candidate
-   `TabDock.exe` whose SHA-256 matches the manifest.
+1. Windows 10 (recent build) or Windows 11, 64-bit; the verified
+   `TabDock.exe` from the procedure above (whose SHA-256 equals
+   `finalSignedSha256` / `SHA256SUMS.txt`). Do NOT substitute another build.
 2. Monitor A at 100% scaling, monitor B at 150% scaling (both directions of
    the transition are exercised in scenario 1/2).
 3. Guests: two normal Windows applications (e.g. Notepad + Windows Terminal)
    plus one DPI-unaware guest when available (see scenario 13).
-4. Verify the candidate identity first: `TabDock.exe --version` must report
-   the release commit and its self-reported SHA-256 must equal the manifest.
+4. Verify again that `TabDock.exe --version` reports the release commit and
+   its self-reported SHA-256 equals the manifest before starting scenarios.
 
 ## Scenarios and evidence
 
@@ -75,16 +105,20 @@ or a release-evidence directory) as JSON, one object per scenario:
 }
 ```
 
-## Completion
+## Completion (exact, once)
 
-The physical mixed-DPI gate is PASS only when **every applicable scenario**
-records PASS with evidence, the machine configuration is described, and the
-candidate artifact SHA-256 is recorded. Until then the gate remains
-`BLOCKED_NO_MIXED_DPI_HARDWARE` / `BLOCKED_EXTERNAL` and must be reported as
-such in `release-manifest.json` (`externalGates.physicalMixedDpi`).
+The physical mixed-DPI gate is `PASS` only when **every applicable scenario**
+records `PASS` with evidence, the machine configuration is described, and the
+verified `artifactSha256` (`finalSignedSha256`) is recorded. Until then the
+gate remains `BLOCKED_NO_MIXED_DPI_HARDWARE` / `BLOCKED_EXTERNAL` and must be
+reported as such in `release-manifest.json`
+(`externalGates.physicalMixedDpi`). Externally visible gate statuses are
+exactly `PASS` / `FAIL` / `BLOCKED_EXTERNAL` / `BLOCKED_ENVIRONMENT`.
 
-A PASS qualification must additionally be recorded in the production evidence
-file `release-external-evidence.json` (schemaVersion 2, see
+A PASS qualification must additionally be recorded **exactly once** in
+`release-external-evidence.json` with `schemaVersion: 2` and the bindings
+proven above (any reuse with a different SHA/hash/run/artifact fails; any
+`completedAt` in the future fails; any wrong schema version fails — see
 `docs/release/publication-gates.md`):
 
 ```json

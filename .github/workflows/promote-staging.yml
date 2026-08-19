@@ -1,0 +1,227 @@
+# Action pinning (P2): every `uses: actions/...` step is pinned to an immutable
+# full commit SHA with a trailing `# vX` comment for human readability.
+# To update: resolve the new tag via `gh api` (lightweight tags):
+#   gh api repos/actions/checkout/git/refs/tags/v7 --jq '.object.sha'
+# Verify the SHA matches the intended release, replace the SHA in this file,
+# keep the `# vX.Y.Z` comment, then run `pwsh -File scripts/release-tooling-tests.ps1`.
+#
+# PROMOTION ARCHITECTURE (P2 exact-SHA staging promotion)
+#
+#   agent/staging  --(exact-SHA verify)-->  main
+#
+# This is the ONLY workflow that may fast-forward main (permissions:
+# contents: write). All other workflows are contents: read. The workflow
+# serializes promotion via `concurrency: group: promote-main,
+# cancel-in-progress: false`, which prevents TOCTOU races where two
+# concurrent promotions both read an old main and then one clobbers the
+# other.
+#
+# Exact-SHA contract:
+#   - For a `push` to agent/staging, the promoted SHA is github.sha (the
+#     push HEAD). For a `workflow_dispatch`, the promoted SHA is inputs.sha,
+#     which MUST be the exact commit that origin/agent/staging points to.
+#   - The workflow fails closed unless:
+#     (a) HEAD == expected SHA after checkout,
+#     (b) origin/agent/staging == expected SHA (the branch still points to the
+#         qualified commit; no unqualified tip can be promoted),
+#     (c) build.yml has a completed successful run for that exact SHA
+#         (exact-SHA qualification), and
+#     (d) origin/main is an ancestor of the expected SHA (fast-forward safe).
+#   - Promotion itself is `gh api PATCH repos/{owner}/{repo}/git/refs/heads/main`
+#     with `force: false` so GitHub rejects the update if main moved since the
+#     fetch (TOCTOU closed). A 422 "Reference update failed" means main
+#     advanced concurrently.
+#
+# RECOVERY (also documented in docs/release/repository-protection.md):
+#   - "No build run found"      -> re-run (or wait for) the build.yml workflow
+#     on that exact SHA (push the SHA to agent/staging or re-trigger build.yml
+#     via the GitHub UI/API for that commit) and then re-dispatch/re-push.
+#   - "agent/staging does not point to expected SHA" -> fetch, verify the
+#     branch tip is the intended qualified SHA, and retry with the correct SHA.
+#   - "main is not ancestor / diverged" -> `git fetch origin; git rebase
+#     origin/main` on agent/staging, re-qualify the new tip (build must pass
+#     again), then retry with the rebased SHA.
+#   - "Reference update failed (422)" -> main advanced concurrently. Fetch,
+#     rebase agent/staging onto the new origin/main, re-qualify, retry.
+#   - "main already at expected SHA" -> no-op success; nothing to promote.
+#
+# Direct pushes to main remain technically possible (no branch protection
+# may be enforced in this environment) but are the non-recommended fallback.
+# The recommended path is always via agent/staging + this workflow, which is
+# auditable and exact-SHA qualified. See docs/release/repository-protection.md
+# for the ruleset to enable when repository settings can be modified.
+
+name: promote-staging
+
+on:
+  push:
+    branches: [agent/staging]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Exact commit on agent/staging to promote (40-char SHA; must equal origin/agent/staging HEAD)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promote-main
+  cancel-in-progress: false
+
+jobs:
+  verify-and-promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve expected SHA
+        id: resolve-sha
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            SHA="${{ inputs.sha }}"
+          else
+            SHA="${{ github.sha }}"
+          fi
+          SHA="$(echo "$SHA" | tr -d '[:space:]')"
+          if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Expected SHA must be a 40-char lowercase hex commit (got '$SHA'). For workflow_dispatch, provide the exact agent/staging HEAD; for push events it defaults to github.sha."
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Expected SHA: $SHA (event: ${{ github.event_name }})"
+
+      # Checkout with full history so origin/main and origin/agent/staging are
+      # available for rev-parse / merge-base checks. Pinned to immutable SHA.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ steps.resolve-sha.outputs.sha }}
+
+      - name: Verify HEAD == expected SHA
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.resolve-sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          HEAD="$(git rev-parse HEAD)"
+          if [[ "$HEAD" != "$EXPECTED_SHA" ]]; then
+            echo "::error::HEAD $HEAD != expected SHA $EXPECTED_SHA after checkout. Refusing to promote."
+            exit 1
+          fi
+          echo "HEAD verified: $HEAD"
+
+      - name: Verify agent/staging points to expected SHA
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.resolve-sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin agent/staging --prune --no-tags 2>&1 | head -n 50 || true
+          if ! git show-ref --verify --quiet refs/remotes/origin/agent/staging; then
+            echo "::error::origin/agent/staging does not exist. Push the expected SHA to agent/staging first."
+            echo "Recovery: git push origin <sha>:refs/heads/agent/staging"
+            exit 1
+          fi
+          REMOTE_SHA="$(git rev-parse origin/agent/staging)"
+          if [[ "$REMOTE_SHA" != "$EXPECTED_SHA" ]]; then
+            echo "::error::origin/agent/staging $REMOTE_SHA != expected SHA $EXPECTED_SHA."
+            echo "Recovery: ensure inputs.sha equals the current tip of agent/staging."
+            echo "  git fetch origin agent/staging && git rev-parse origin/agent/staging"
+            echo "Then retry with sha=$REMOTE_SHA, or push the intended SHA to agent/staging."
+            exit 1
+          fi
+          echo "agent/staging verified: $REMOTE_SHA"
+
+      - name: Verify build.yml qualification passed for exact SHA
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ steps.resolve-sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          echo "Checking build.yml runs for commit $EXPECTED_SHA ..."
+          # gh run list --workflow build.yml --commit <sha> is the supported
+          # filter; require a completed successful run for that exact SHA.
+          JSON="$(gh run list --workflow build.yml --commit "$EXPECTED_SHA" --json conclusion,status --jq '.' 2>&1 || true)"
+          echo "gh run list output: $JSON"
+          # Count successful completed runs
+          COUNT="$(echo "$JSON" | jq '[.[] | select(.status == "completed" and .conclusion == "success")] | length' 2>/dev/null || echo 0)"
+          if [[ "$JSON" == "[]" ]] || [[ "$COUNT" == "0" ]] || [[ -z "$COUNT" ]]; then
+            echo "::error::No successful completed build.yml run found for SHA $EXPECTED_SHA."
+            echo "Recovery: re-run (or wait for) the build.yml workflow on that exact SHA before promoting."
+            echo "  Options:"
+            echo "    - Push the SHA to agent/staging (triggers build on PR/push if configured), or"
+            echo "    - Use: gh workflow run build.yml --ref <branch-containing-sha>  (or re-run via UI)"
+            echo "    - Or dispatch build via API for that commit, then retry promote-staging with sha=$EXPECTED_SHA"
+            exit 1
+          fi
+          echo "build.yml qualification verified: $COUNT successful completed run(s) for $EXPECTED_SHA"
+
+      - name: Verify main fast-forward safety
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.resolve-sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --prune --no-tags 2>&1 | head -n 50 || true
+          if ! git show-ref --verify --quiet refs/remotes/origin/main; then
+            echo "::error::origin/main does not exist. Cannot verify fast-forward safety."
+            exit 1
+          fi
+          MAIN_SHA="$(git rev-parse origin/main)"
+          echo "origin/main: $MAIN_SHA"
+          echo "expected SHA: $EXPECTED_SHA"
+          if [[ "$MAIN_SHA" == "$EXPECTED_SHA" ]]; then
+            echo "main already at expected SHA $EXPECTED_SHA — nothing to promote (no-op success)."
+            echo "noop=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if git merge-base --is-ancestor "$MAIN_SHA" "$EXPECTED_SHA"; then
+            echo "Fast-forward safe: origin/main is ancestor of $EXPECTED_SHA"
+          else
+            echo "::error::Fast-forward check FAILED: origin/main $MAIN_SHA is NOT an ancestor of $EXPECTED_SHA (branch diverged)."
+            echo "Recovery: rebase agent/staging onto the new main and re-qualify:"
+            echo "  git fetch origin"
+            echo "  git checkout agent/staging"
+            echo "  git rebase origin/main"
+            echo "  # resolve conflicts if any, then:"
+            echo "  git push --force-with-lease origin agent/staging"
+            echo "  # wait for build.yml to pass on the new tip, then retry promotion with the new SHA"
+            exit 1
+          fi
+
+      - name: Promote to main (fast-forward only)
+        if: env.noop != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ steps.resolve-sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          echo "Promoting main to $EXPECTED_SHA (force=false) ..."
+          set +e
+          OUT="$(gh api --method PATCH "repos/${{ github.repository }}/git/refs/heads/main" -f sha="$EXPECTED_SHA" -F force=false 2>&1)"
+          CODE=$?
+          set -e
+          echo "$OUT"
+          if [[ $CODE -eq 0 ]]; then
+            echo "Promoted main to $EXPECTED_SHA"
+            exit 0
+          fi
+          if echo "$OUT" | grep -qi "Reference update failed"; then
+            echo "::error::Promotion failed with 422 Reference update failed — main advanced concurrently since fetch (TOCTOU)."
+            echo "Recovery: fetch the new main, rebase agent/staging, re-qualify, and re-dispatch:"
+            echo "  git fetch origin"
+            echo "  git checkout agent/staging && git rebase origin/main"
+            echo "  git push --force-with-lease origin agent/staging"
+            echo "  # wait for build.yml success on the rebased tip, then retry with its SHA"
+            exit 1
+          fi
+          echo "::error::Promotion failed (gh api exit $CODE). See output above."
+          echo "If main moved concurrently, recovery is the same rebase + re-qualify + retry flow."
+          exit 1

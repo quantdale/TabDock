@@ -400,9 +400,67 @@ the same update recipe.
 }
 ```
 
+## External gate vocabulary and lifecycle
+
+Externally visible statuses are exactly `PASS`, `FAIL`, `BLOCKED_EXTERNAL`, and
+`BLOCKED_ENVIRONMENT` — no other value is accepted by the publication gate.
+The only allowed `BLOCKED_ENVIRONMENT` refinement is
+`BLOCKED_NO_MIXED_DPI_HARDWARE` for the mixed-DPI gate on single-DPI hardware
+(its external reporting maps to `BLOCKED_ENVIRONMENT`).
+
+State machine (each mandatory gate):
+
+```
+            ┌─────────────────────────────────────────────────────────┐
+            │  Stage A: manifest externalGates.* = BLOCKED_EXTERNAL    │
+            │  (honest until real evidence exists; never PASS)          │
+            └──────────────────────────┬────────────────────────────────┘
+                                     │ human gates on the exact bytes
+                                     ▼
+                 ┌─────────────────────────────────────┐
+                 │  evidence record absent/malformed    │────> FAIL (Stage B, fail-closed)
+                 │  or gate missing / FAIL / BLOCKED    │     publication refused
+                 └──────────────┬────────────────────────┘
+                                │ schemaVersion 2 + bindings + PASS
+                                ▼
+                 candidate bytes proven (SHA+run+artifact+timestamps) ──> PASS
+                                      else ──> FAIL / BLOCKED*
+```
+
+`PASS` requires: every mandatory gate carries `status == "PASS"` with a
+non-empty `operator`, non-empty `evidence`, and an ISO-8601 `completedAt` that
+is not materially in the future (5-minute clock-skew tolerance; future fails).
+`BLOCKED_EXTERNAL` means the prerequisite (credentials/hardware/real Windows
+environment) does not exist — the gate is honestly unperformed, not faked.
+`BLOCKED_ENVIRONMENT` means the local environment cannot execute the check
+(e.g. `BLOCKED_NO_MIXED_DPI_HARDWARE`). Any `FAIL` or missing evidence fails
+the publication gate closed.
+
+No workflow can mark an unavailable gate `PASS` by availability: the validator
+(`Test-ExternalEvidenceFile`) insists on explicit `PASS` with all fields
+present and cryptographically bound — `PASS` without meeting prerequisites is
+rejected, and missing evidence is `BLOCKED_EXTERNAL` / `FAIL`, never `PASS`.
+
+## External gate table (exact prerequisite → command → evidence → binding)
+
+| Gate | Prerequisite | Exact command / procedure | Expected evidence format | Artifact + run binding | Vocabulary |
+|------|--------------|---------------------------|--------------------------|------------------------|------------|
+| `finalWindowsHumanSmoke` | Real Windows 10/11 x64 desktop with 2–3 apps; exact Stage A artifact downloaded and hash-verified | Download `tabdock-candidate-<sha>-<run-id>` from Stage A run; `Get-FileHash` == `finalSignedSha256` == `SHA256SUMS.txt`; execute the 38 checks in `docs/release/final-smoke.md` | `finalWindowsHumanSmoke: { status: PASS, completedAt: ISO-8601, operator, evidence }` (checklist + OS build + native-ABI report) | `sourceCommitSha` + `artifactSha256` + `candidateWorkflowRunId` + `candidateArtifactName` must equal the verified Stage A run/artifact/hash; `completedAt` not in the future; `schemaVersion == 2` enforced | `PASS` / `FAIL` / `BLOCKED_EXTERNAL` / `BLOCKED_ENVIRONMENT` |
+| `physicalMixedDpi` | Two monitors at 100% + 150% (or documented mixed-DPI hardware); same exact verified artifact | Same download+verify preamble; execute 16 scenarios in `docs/release/mixed-dpi-qualification.md` (record per-scenario monitor/handle/DPI/geometry JSON) | `physicalMixedDpi: { status: PASS, completedAt: ISO-8601, operator, evidence }` (16 scenarios + evidence dir) | Same four-way binding + future/`schemaVersion` enforcement as above | `PASS` / `FAIL` / `BLOCKED_EXTERNAL` / `BLOCKED_ENVIRONMENT` (`BLOCKED_NO_MIXED_DPI_HARDWARE` when hardware absent) |
+| `windowsCompatibility.windows10` | Real Windows 10 x64 machine (recent build) | Same download+verify preamble on that machine; `TabDock.exe --selftest-native-abi` → capture the full environment report | `windowsCompatibility: { status: PASS, windows10: { status: PASS, build, operator, completedAt: ISO-8601, nativeAbiEvidence, evidence } }` | Same four-way binding + `build` + `nativeAbiEvidence` required; stale reuse (different SHA/hash/run) rejected | `PASS` only; `FAIL`/`BLOCKED_EXTERNAL`/missing fails closed |
+| `windowsCompatibility.windows11` | Real Windows 11 x64 machine | Same as Windows 10 entry, on Windows 11 | `windows11: { status: PASS, build, operator, completedAt: ISO-8601, nativeAbiEvidence, evidence }` | Same four-way binding as Windows 10; both entries required | `PASS` only; `FAIL`/`BLOCKED_EXTERNAL`/missing fails closed |
+
+Stale-evidence guard: any SHA, hash, run id, or artifact name mismatch between
+the evidence and the Stage A bytes fails the gate; any `completedAt` in the
+future beyond the 5-minute tolerance fails; any `schemaVersion != 2` fails.
+Missing evidence fails closed (`BLOCKED_EXTERNAL`). These rules are enforced
+by `scripts/release-tooling.ps1` (`Test-ExternalEvidenceFile`,
+`Test-CompletedAt`, and `Test-PublicationEligibility`'s run/artifact binding)
+and are regression-covered by `scripts/release-tooling-tests.ps1`.
+
 Validation rules (enforced by `Test-ExternalEvidenceFile`):
 
-- `schemaVersion` must be `2`.
+- `schemaVersion` must be exactly `2` (no other value accepted; see state machine).
 - `sourceCommitSha` must be exactly 40 hex characters and MUST equal the
   candidate SHA (the Stage A run `head_sha`).
 - `artifactSha256` must be exactly 64 hex characters and MUST equal the FINAL
@@ -443,7 +501,7 @@ are verified. The publish-time verdict is a separate record,
 `publication-verification.json`, written by the Stage B job after every check
 passes and attached to the release alongside `release-external-evidence.json`.
 
-## Production dispatch walkthrough
+## Production dispatch walkthrough (step-by-step for the human operator)
 
 1. **Stage A — prepare:** ensure the repository variables/secrets for the
    approved production signer are configured (see
@@ -467,14 +525,28 @@ passes and attached to the release alongside `release-external-evidence.json`.
    SHA, semantic version, final SHA-256, and the signing certificate.
    Without an approved, configured production signer (or without the
    publisher policy) the run fails `BLOCKED_EXTERNAL` before any build.
-2. **Human gates on the exact artifact:** download the retained artifact,
-   verify `TabDock.exe` SHA-256 == manifest `artifactSha256` ==
-   `SHA256SUMS.txt`, run the final manual Windows smoke
-   (`docs/release/final-smoke.md`), the physical mixed-DPI qualification
-   (`docs/release/mixed-dpi-qualification.md`), and the Windows 10/11
-   compatibility qualification (`docs/release/compatibility-matrix.md`)
-   against THAT executable, and fill in `release-external-evidence.json`
-   (schemaVersion 2) with the exact SHA, hash, run id, and artifact name.
+2. **Human gates on the exact artifact (one-shot evidence):**
+   1. Download the retained artifact `tabdock-candidate-<sha>-<run-id>` from
+      the Stage A run whose id is `candidateWorkflowRunId` (from the Stage A
+      summary: manifest `sourceCommitSha`, `artifactSha256`
+      (`finalSignedSha256`), `candidateArtifactName`).
+   2. Verify before any human check: `Get-FileHash TabDock.exe` (SHA-256,
+      lowercase) equals manifest `finalSignedSha256` / `artifactSha256` equals
+      `SHA256SUMS.txt` equals `TabDock.exe --version`'s reported sha256. Do not
+      substitute any other build.
+   3. Run the final manual Windows smoke
+      (`docs/release/final-smoke.md` — 38 items), the physical mixed-DPI
+      qualification (`docs/release/mixed-dpi-qualification.md` — 16 scenarios
+      with per-scenario JSON), and the Windows 10/11 compatibility gates
+      (`docs/release/compatibility-matrix.md` — `TabDock.exe
+      --selftest-native-abi` on each OS, capture the environment report).
+   4. Author `release-external-evidence.json` **exactly once** with
+      `schemaVersion: 2`, `sourceCommitSha` = the Stage A `head_sha`,
+      `artifactSha256` = the verified final hash, `candidateWorkflowRunId` = the
+      Stage A run id, `candidateArtifactName` = the downloaded artifact name,
+      and every gate `completedAt` at actual completion time (ISO-8601, not in
+      the future) with `operator` and `evidence`. Stale or future-dated evidence
+      will be rejected; there is no second authoring that can reuse old bindings.
 3. **Stage B — publish:** dispatch `publish-release.yml` from `main` with
    `run-id=<Stage A run id>` and `external-evidence=<the record>`. Stage B
    verifies the trusted dispatch contract, checks out the trusted policy at
