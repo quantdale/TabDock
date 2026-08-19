@@ -185,9 +185,15 @@ public partial class ContainerWindow
             return false;
         }
 
-        _splitPairPresented = false;
+        // Disarm the settle and bump generation BEFORE clearing _splitPairPresented
+        // so a CompositionTarget.Rendering already queued cannot fire after the
+        // pair is dormant. The bump invalidates that stale generation even if
+        // Disarm races with the dispatcher's invocation list (Q8). Ordering:
+        // bump -> disarm -> dormant prevents a window where a stale settle
+        // re-arms or re-presents a dormant pair.
         _splitPresentationGeneration++;
         DisarmSplitPresentationSettle();
+        _splitPairPresented = false;
         _constraintDirty = true;
         _refusedPaneByHwnd.Clear();
 
@@ -214,6 +220,14 @@ public partial class ContainerWindow
     /// call intentionally no-ops while TabDock chrome is raised. Watch the
     /// display projection for the new composite and perform one post-popup
     /// settle on the first render frame after chrome is no longer active.
+    ///
+    /// Why CompositionTarget.Rendering (not LayoutUpdated): LayoutUpdated fires
+    /// once per layout pass, but a popup close may finish its z-restore at
+    /// DispatcherPriority.Input AFTER layout — a LayoutUpdated settle would
+    /// still race that pending Input restore and steal foreground from chrome.
+    /// Rendering runs after Input, so waiting for it guarantees the popup
+    /// teardown's restore is done. IsContainerChromeInteractionActive()
+    /// keeps the one-shot armed if chrome is still active.
     ///
     /// The settle is deliberately ordinary positioning plus SetForeground: no
     /// WM_SIZE synthesis, style mutation, reparenting, or frame-change flags.
@@ -243,6 +257,13 @@ public partial class ContainerWindow
             CompositionTarget.Rendering -= SplitPresentationSettle_Rendering;
             return;
         }
+        // Validate the stale-callback guards BEFORE any native work (Q5/Q6/Q7):
+        // - Generation must still match the current ContainerWindow generation
+        //   (a Suspension or exit bumped it, making this callback stale).
+        // - Presentation must still be active (exit/suspend made it dormant).
+        // IsCurrentSettle + IsSplitPresented together prevent a dormant pair
+        // from being accidentally resurrected (Q7) or a stale generation
+        // from running after mode changed (Q6).
         var settleState = new TabDock.Models.SplitPresentationState(
             _splitLeft?.Hwnd.ToString("X"),
             _splitRight?.Hwnd.ToString("X"),
@@ -257,11 +278,21 @@ public partial class ContainerWindow
             DisarmSplitPresentationSettle();
             return;
         }
+        // Extra explicit guard: verify the ContainerWindow fields match the
+        // controller-level state used by IsCurrentSettle — the two generations
+        // must agree and presentation still true before LayoutSplitPanes (Q5).
+        if (_splitPresentationSettleGeneration != _splitPresentationGeneration)
+        {
+            DisarmSplitPresentationSettle();
+            return;
+        }
 
         // ContextMenu.Closed -> EndChromePopup queues the normal z-order restore
         // at Input priority. Rendering runs after that transition; if another
         // TabDock-owned chrome surface is still active, keep the one-shot armed
-        // instead of stealing foreground from it.
+        // instead of stealing foreground from it. Input-priority z-restore races
+        // are avoided because Rendering fires after Input, but an interactively
+        // held popup (right-click menu still open) must still defer.
         if (IsContainerChromeInteractionActive())
             return;
 
@@ -287,6 +318,9 @@ public partial class ContainerWindow
 
     private void DisarmSplitPresentationSettle()
     {
+        // Idempotent: callers may race (suspend, exit, mode change, Closed).
+        // Removing the handler when not pending is a no-op; each arm adds
+        // exactly one subscription, each disarm removes exactly one.
         if (!_splitPresentationSettlePending)
             return;
         _splitPresentationSettlePending = false;

@@ -515,10 +515,11 @@ public partial class ContainerWindow : Window
             // guest's rect still exactly matches the content area (the
             // redundant-glue guard in LayoutShepherdActiveWindow would then
             // skip every later repair, blanking the content area until a tab
-            // switch re-glues it). Schedule ONE coalesced post-layout
-            // reconciliation through the existing mechanism (Render priority
-            // runs after layout), which re-validates both geometry and the
-            // local z-order pairing.
+            // switch re-glues it). RequestRelayout coalesces; ensureFinalPass
+            // latches so a Render already pending from the final
+            // WM_WINDOWPOSCHANGED is not lost and produces one authoritative
+            // post-loop pass (Q9). WM_ACTIVATE reassert remains gated by
+            // _inNativeMoveLoop above (Q4).
             RequestRelayout(ensureFinalPass: true);
         }
         else if ((uint)msg == NativeMethods.WM_WINDOWPOSCHANGED)
@@ -700,6 +701,10 @@ public partial class ContainerWindow : Window
     {
         if (_containerHwnd == IntPtr.Zero)
             return;
+        // ensureFinalPass must latch even when a frame is already pending:
+        // WM_EXITSIZEMOVE's final z-order normalization can land AFTER the
+        // last WM_WINDOWPOSCHANGED queued this Render callback. Without the
+        // latch the final pass would be lost (Q9).
         if (ensureFinalPass)
             _relayoutAfterPending = true;
         if (_relayoutPending)
@@ -707,6 +712,9 @@ public partial class ContainerWindow : Window
         _relayoutPending = true;
         Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
         {
+            // Clear BEFORE RelayoutGuests so a re-entrant RequestRelayout
+            // issued mid-callback (Q1/Q2) correctly re-queues for the next
+            // frame rather than being dropped by the early-return guard.
             _relayoutPending = false;
             // Recompute the container's minimum size from the currently visible
             // guest(s) before laying them out, so the min-track clamp (WM_GETMINMAXINFO)
@@ -964,6 +972,13 @@ public partial class ContainerWindow : Window
 
     private void ContainerWindow_Closed(object? sender, EventArgs e)
     {
+        // Tear down coalesced callbacks before dropping state. Disarm the split
+        // settle so a queued Rendering handler does not fire against nulled
+        // split members after close, and stop the activate reassert timer
+        // before clearing the active guest it would reassert (Q5/Q8).
+        DisarmSplitPresentationSettle();
+        _activateReassertTimer?.Stop();
+        _activateReassertTimer = null;
         CloseCapturePanel();
         _constraintRefreshTimer?.Stop();
         _constraintRefreshTimer = null;
@@ -975,7 +990,8 @@ public partial class ContainerWindow : Window
 
         // Drop the active guest reference so any pending WM_ACTIVATE or restore
         // timer that fires after the window has closed cannot act on a released
-        // guest (finding #3).
+        // guest (finding #3). Disarm + timer stop already done at top of
+        // handler; do not re-add them here.
         _shepherdActiveWindow = null;
         _splitLeft = null;
         _splitRight = null;
@@ -984,7 +1000,6 @@ public partial class ContainerWindow : Window
         _splitPresentationGeneration++;
         _guestMoveSizeActive = false;
         _guestMoveSizeGeneration++;
-        _activateReassertTimer?.Stop();
         _stateSettledTimer?.Stop();
         _restoreMinimizedTimer?.Stop();
         _openTabContextMenu = null;
@@ -2013,6 +2028,13 @@ public partial class ContainerWindow : Window
     /// journal-safe transaction before showing the incoming one. If identity
     /// or journal durability is uncertain, the logical active tab is rolled
     /// back so an old visible guest cannot coexist with a new logical guest.
+    ///
+    /// Q3: When SuspendPresentedPairForUserSelection pre-seeds
+    /// _shepherdActiveWindow to the target BEFORE calling SetActiveTab, this
+    /// notification would otherwise repeat the entire hide-old/show-new
+    /// transaction transactionally already done. The ReferenceEquals guard
+    /// above makes that notification a no-op in that path — no duplicate
+    /// native work (the single-pass invariant).
     /// </summary>
     private void SyncShepherdActiveWindow()
     {
@@ -2310,6 +2332,11 @@ public partial class ContainerWindow : Window
     {
         if (_shepherdActiveWindow == null)
             return;
+        // Q10: If this is called while split is presented (stale callback,
+        // re-entrancy), do nothing — split mode owns both panes. RelayoutGuests
+        // gates this correctly, but direct callers must also be safe (Q7).
+        if (IsSplitPresented)
+            return;
         if (WindowState == WindowState.Minimized)
             return;
         // A guest's own minimize is handled by RestoreMinimizedWindow. Do not
@@ -2579,6 +2606,10 @@ public partial class ContainerWindow : Window
     {
         if (!IsSplitPresented)
             return;
+        // Q7/Q10: If split members are unexpectedly null despite IsSplitPresented
+        // (teardown race), skip gracefully rather than throwing.
+        if (_splitLeft == null || _splitRight == null)
+            return;
         if (_guestMoveSizeActive)
             return;
         if (WindowState == WindowState.Minimized)
@@ -2593,10 +2624,10 @@ public partial class ContainerWindow : Window
         if (containerHwnd == IntPtr.Zero)
             return;
 
-        if (!IsMeasureValid || !IsArrangeValid)
-            UpdateLayout();
-        NativeMethods.RECT content = GetContentAreaScreenRect();
-        if (content.Width == 0 || content.Height == 0)
+        // Content rect unavailable or zero-sized (host not yet created,
+        // minimized marker) — nothing to lay out (Q10). Early return avoids
+        // a layout fight/oscillation from positioning with a stale rect.
+        if (!TryGetContentAreaScreenRect(out NativeMethods.RECT content) || content.Width == 0 || content.Height == 0)
             return;
         var (leftRect, rightRect) = SplitRect(content);
 

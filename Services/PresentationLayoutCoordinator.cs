@@ -39,6 +39,9 @@ public sealed class PresentationLayoutCoordinator
     /// </summary>
     public void RequestRelayout(Action<Action> scheduleRender, Action execute, bool ensureFinalPass = false)
     {
+        // ensureFinalPass must latch even when already pending: WM_EXITSIZEMOVE's
+        // final z-order reconciliation must survive a Render already queued from
+        // the final WM_WINDOWPOSCHANGED (Q9).
         if (ensureFinalPass)
             _relayoutAfterPending = true;
         if (_relayoutPending)
@@ -47,6 +50,8 @@ public sealed class PresentationLayoutCoordinator
         long gen = ++_pendingLayoutGeneration;
         scheduleRender(() =>
         {
+            // Clear BEFORE execute so a re-entrant RequestRelayout inside
+            // execute (Q1/Q2) correctly re-queues for the next frame.
             _relayoutPending = false;
             // Stale frame: if generation changed between schedule and execute, the
             // callback is for an older layout world. Caller checks via IsCurrentSettle
