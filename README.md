@@ -7,8 +7,32 @@ Built with C# / .NET 8 / WPF, using only P/Invoke for native interop.
 ## Requirements
 
 - Windows 10 (recent builds) or Windows 11
-- .NET 8 SDK (for development builds)
-- Visual Studio 2022 or `dotnet` CLI
+- **.NET 8 SDK** — `global.json` pins the project to the .NET 8 SDK family
+  (`version: 8.0.400`, `rollForward: latestFeature`). A machine with only the
+  .NET 9 SDK installed will fail with *"A compatible .NET SDK was not found"*,
+  because `rollForward` stays within .NET 8 and does **not** roll forward to 9.
+  Install a current .NET 8 SDK *side-by-side* with any newer SDK; do not
+  uninstall newer SDKs and do not retarget the app to .NET 9.
+- A .NET 8 *runtime* is not required for self-contained publish builds.
+- Visual Studio 2022 or `dotnet` CLI.
+- PowerShell 7 (`pwsh`) for the canonical `scripts/validate.ps1` qualification
+  (CI uses `pwsh`; the script also runs under Windows PowerShell 5.1).
+
+### Developer preflight
+
+Run the bundled environment check before building — it detects a missing or
+incompatible .NET SDK and prints the exact remediation:
+
+```powershell
+.\scripts\dev-doctor.ps1
+```
+
+Install the .NET 8 SDK if the preflight reports it missing (keep any newer
+SDK installed):
+
+```powershell
+winget install Microsoft.DotNet.SDK.8
+```
 
 ## Build and run
 
@@ -41,6 +65,17 @@ The resulting single executable is at:
 
 ```
 .\bin\Release\net8.0-windows\win-x64\publish\TabDock.exe
+```
+
+### Full qualification
+
+`scripts/validate.ps1` is the canonical one-command qualification: audited
+restore, Release build, native/geometry/diagnostics self-tests, doctor and
+support-bundle privacy checks, OpenSpec validation, and the self-contained
+single-file publish smoke test.
+
+```powershell
+.\scripts\validate.ps1 -Configuration Release -Ci -Publish
 ```
 
 ### Support diagnostics

@@ -85,7 +85,10 @@ function Invoke-RecoveryProcessSmoke {
     Write-Host '==> Supervised recovery redirected-process smoke' -ForegroundColor Cyan
     $psi = [Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $Path
-    $psi.ArgumentList.Add('--recover-pending')
+    # Use the string Arguments property (available on both .NET Framework 4.8
+    # / Windows PowerShell 5.1 and .NET / PowerShell 7). ProcessStartInfo.
+    # ArgumentList exists only on .NET and is null under Windows PowerShell 5.1.
+    $psi.Arguments = '--recover-pending'
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
@@ -108,8 +111,11 @@ function Invoke-RecoveryProcessSmoke {
             $process.Kill()
             throw 'Recovery process did not exit within 30 seconds.'
         }
-        $stdout = $stdoutTask.GetAwaiter().GetResult()
-        $stderr = $stderrTask.GetAwaiter().GetResult()
+        # .Result is an instance property available on both Windows PowerShell
+        # 5.1 and PowerShell 7; the extension-method GetAwaiter() used earlier
+        # is not bound by Windows PowerShell 5.1 and returns null there.
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
         if ($process.ExitCode -ne 0) {
             throw "Recovery process exited with code $($process.ExitCode). stderr=$stderr"
         }
@@ -119,6 +125,12 @@ function Invoke-RecoveryProcessSmoke {
         Write-Host 'Redirected WinExe lifecycle, isolated APPDATA, EOF input, output, and exit code: PASS' -ForegroundColor Green
     }
     finally {
+        # Never leave a launched copy of the executable holding a lock on the
+        # build output (which would break a subsequent publish). Kill it if it
+        # did not already exit.
+        if ($process -and -not $process.HasExited) {
+            try { $process.Kill() } catch { }
+        }
         $process.Dispose()
     }
 }
