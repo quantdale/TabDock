@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
@@ -45,6 +45,24 @@ public sealed class PersistenceService
     // user's state is empty. Block later saves in that process.
     private bool _stateLoadFailed;
 
+    // Single-writer gate. Every state.json disk mutation (backup copy, temp
+    // write, atomic rename) happens only inside this lock, so the synchronous
+    // safety-boundary path and the off-thread debounced path can never interleave
+    // and produce a torn .tmp/.bak/.json set.
+    private readonly object _writeGate = new();
+
+    // Monotonic save generation. Every Save/SaveAsync attempt claims the next
+    // generation and is the only one permitted to touch disk when its generation
+    // is still the most-recently-attempted one. A delayed/stale async snapshot
+    // can therefore never overwrite a newer attempted save.
+    private long _lastAttemptedGeneration = -1;
+
+    // Handle to the most recently enqueued off-thread write, so a graceful
+    // shutdown (or a deterministic test) can await the single-writer drain.
+    // This is a reference only; it does not chain or serialize the tasks, so
+    // rapid-save coalescing is preserved.
+    private System.Threading.Tasks.Task? _lastWriteTask;
+
     public PersistenceService(LoggingService log, string? statePath = null)
         : this(log, statePath, path => File.GetAttributes(path), path => File.ReadAllText(path))
     {
@@ -89,28 +107,46 @@ public sealed class PersistenceService
 
     internal bool StateLoadFailed => _stateLoadFailed;
 
+    /// <summary>
+    /// Awaits the most recently enqueued off-thread write (if any). Used for a
+    /// graceful shutdown flush and for deterministic tests; it never chains or
+    /// serializes the writes, so coalescing is preserved.
+    /// </summary>
+    public System.Threading.Tasks.Task WhenWritesSettledAsync()
+        => _lastWriteTask ?? System.Threading.Tasks.Task.CompletedTask;
+
+    /// <summary>
+    /// Safety-boundary save (capture, release, group mutation, rescue). Runs the
+    /// full durable write synchronously on the calling thread but still goes
+    /// through the single serialized disk gate so it can never interleave with a
+    /// concurrent debounced write.
+    /// </summary>
     public void Save(IEnumerable<Group> groups)
     {
         string? json = BuildStateJson(groups);
         if (json == null)
             return;
-        CommitJson(json);
+        long generation = System.Threading.Interlocked.Increment(ref _lastAttemptedGeneration);
+        CommitJson(json, generation);
     }
 
     /// <summary>
     /// Debounced / high-frequency save path. Builds the immutable JSON snapshot
-    /// on the calling (UI) thread, then performs the blocking WriteThrough +
-    /// fsync + atomic rename off-thread so a rapid tab switch or container drag
-    /// never pays synchronous disk I/O on the input/render turn. Safety-critical
-    /// boundaries (capture, release, group mutation) use <see cref="Save"/>
-    /// instead and stay synchronous.
+    /// on the calling (UI) thread, claims the next monotonic generation, then
+    /// performs the blocking WriteThrough + fsync + atomic rename off-thread so a
+    /// rapid tab switch or container drag never pays synchronous disk I/O on the
+    /// input/render turn. Rapid bursts coalesce: only the most-recently-attempted
+    /// generation is permitted to write, so a newer switch always wins even if an
+    /// older async snapshot is still queued. Safety-critical boundaries (capture,
+    /// release, group mutation) use <see cref="Save"/> instead and stay synchronous.
     /// </summary>
     public void SaveAsync(IEnumerable<Group> groups)
     {
         string? json = BuildStateJson(groups);
         if (json == null)
             return;
-        System.Threading.Tasks.Task.Run(() => CommitJson(json));
+        long generation = System.Threading.Interlocked.Increment(ref _lastAttemptedGeneration);
+        _lastWriteTask = System.Threading.Tasks.Task.Run(() => CommitJson(json, generation));
     }
 
     /// <summary>
@@ -187,26 +223,37 @@ public sealed class PersistenceService
     /// <summary>
     /// Performs the durable, atomic state write. Shared by the synchronous
     /// <see cref="Save"/> (safety boundaries) and the off-thread
-    /// <see cref="SaveAsync"/> (debounced preference writes).
+    /// <see cref="SaveAsync"/> (debounced preference writes). This is the ONLY
+    /// method that touches state.json / .bak / .tmp; every call is serialized by
+    /// <see cref="_writeGate"/> and gated by <paramref name="generation"/> so a
+    /// stale (older) snapshot can never clobber a newer attempted save.
     /// </summary>
-    private void CommitJson(string json)
+    private void CommitJson(string json, long generation)
     {
-        try
+        lock (_writeGate)
         {
-            // A backup copy is part of the same save transaction. If it cannot
-            // be made, the catch below prevents the primary from being touched.
-            if (File.Exists(_statePath))
-                File.Copy(_statePath, BackupPath, overwrite: true);
+            // Latest-wins: only the most-recently-requested generation may touch
+            // disk. A delayed async snapshot from an earlier attempt is dropped.
+            if (generation != System.Threading.Interlocked.Read(ref _lastAttemptedGeneration))
+                return;
 
-            string tempPath = _statePath + ".tmp";
-            WriteDurableText(tempPath, json);
-            File.Move(tempPath, _statePath, overwrite: true);
-            _lastSavedJson = json;
-            _log.Log($"Saved state to {DiagnosticEnvironmentService.RedactPath(_statePath)} (schema={PersistedState.CurrentVersion})");
-        }
-        catch (Exception ex)
-        {
-            _log.LogException("PersistenceService.Save", ex);
+            try
+            {
+                // A backup copy is part of the same save transaction. If it cannot
+                // be made, the catch below prevents the primary from being touched.
+                if (File.Exists(_statePath))
+                    File.Copy(_statePath, BackupPath, overwrite: true);
+
+                string tempPath = _statePath + ".tmp";
+                WriteDurableText(tempPath, json);
+                File.Move(tempPath, _statePath, overwrite: true);
+                _lastSavedJson = json;
+                _log.Log($"Saved state to {DiagnosticEnvironmentService.RedactPath(_statePath)} (schema={PersistedState.CurrentVersion})");
+            }
+            catch (Exception ex)
+            {
+                _log.LogException("PersistenceService.Save", ex);
+            }
         }
     }
 

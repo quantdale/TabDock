@@ -460,3 +460,39 @@ this text.
    artifact name, then dispatch `publish-release.yml` with that run id and
    evidence; do not publish v1.0.0 without it.
 4. Do not create a state-only commit merely to record a SHA or CI run.
+
+## Persistence single-writer fix (this session, deterministic DONE; live A–G PENDING)
+
+- Applied `tabdock_persistence_single_writer_fix.py` (`--check` then `--apply`) to
+  `Services/PersistenceService.cs`. The fix establishes a true single-writer gate:
+  - one disk writer for state.json / .bak / .tmp — `CommitJson` is the only code
+    path that touches those files, serialized by `lock (_writeGate)`.
+  - monotonic latest-wins save generations — every `Save`/`SaveAsync` claims the
+    next `Interlocked` generation; only the most-recently-attempted generation may
+    write, so an older/delayed async snapshot can never clobber a newer save.
+  - rapid `SaveAsync` coalescing — a burst collapses to the single newest disk write.
+  - synchronous `Save` uses the same serialized gate (no interleave with debounced).
+  - ordinary active-tab switching keeps its off-thread path (no synchronous disk I/O).
+  - recovery journal / `PendingRecoveryService` untouched (separate, synchronous).
+  - Added `public Task WhenWritesSettledAsync()` (graceful-shutdown flush; the
+    project's reference assembly strips internals, so it must be public).
+- Deterministic validation (all green, local):
+  - `dotnet build TabDock.sln -c Debug` and `-c Release`: 0 errors.
+  - `dotnet test tests/UnitTests/TabDock.UnitTests.csproj -c Release`: 146 PASS
+    (added `PersistenceSingleWriterTests` — off-thread debounce, rapid coalesce
+    latest-wins, stale-async protection, concurrent sync+async gate consistency,
+    150-snapshot     hammer parseable/no-temp-collision; the concurrency hammer now fires 1000
+    SaveAsync snapshots plus periodic synchronous Save barriers).
+  - `pwsh -File scripts/validate.ps1 -Configuration Release -Ci -Publish`: OpenSpec
+    20/20, publish + `--version` identity (commit 6ebdd8a) PASS.
+  - `pwsh -File scripts/release-tooling-tests.ps1`: 139 PASS.
+  - `git diff --check`: clean (CRLF normalized to match repo). Both ValidationDriver
+    + GuineaPig build Release; `--list` enumerates shards/scenarios.
+- NOT DONE (requires a real interactive Windows session, no mouse/keyboard during
+  SendInput — cannot be executed by the agent): the supervised live-desktop
+  acceptance A–G (four-tab split escape, member focus, rapid switching w/ latency,
+  intervening HWND, drag/resize counts, hard-kill recovery, lifecycle torture, and
+  the >=1000 SaveAsync + synchronous-barrier persistence concurrency hammer). The
+  driver is built and ready; run in an interactive session:
+  `dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -c Release -- --yes --configuration Release all`
+  Do NOT declare the campaign complete until A–G pass on the real desktop.
