@@ -186,75 +186,75 @@ Use this checklist to verify a build before considering it ready.
 
 ### Tab switching and reordering
 
-5. Click each tab; verify the correct window is shown and the others are hidden.
+1. Click each tab; verify the correct window is shown and the others are hidden.
    Click a tab's `×` or middle-click it to pop it out without closing the external
    application.
-6. Drag a tab left/right in the strip; verify the order updates.
+2. Drag a tab left/right in the strip; verify the order updates.
 
 ### Group identity
 
-7. Double-click the group name and rename it to "Acme Corp - Invoice".
-8. Open the Group ▾ menu and choose **Rename group**; rename it again and verify
+1. Double-click the group name and rename it to "Acme Corp - Invoice".
+2. Open the Group ▾ menu and choose **Rename group**; rename it again and verify
    the title bar/group selector update immediately, that a blank name is
    rejected, and that the new name survives a restart.
-9. Click the colored chip and choose a different accent color; verify the title bar/tab highlight updates.
-10. Open the Group ▾ menu and choose **Delete group**; confirm the prompt.
+3. Click the colored chip and choose a different accent color; verify the title bar/tab highlight updates.
+4. Open the Group ▾ menu and choose **Delete group**; confirm the prompt.
     Verify the captured windows return to standalone AND keep running, the
     container closes, and the group does not come back after restarting TabDock.
 
 ### Ungroup
 
-9. Drag one tab out of the container; verify the window returns to a standalone window at its original size, position, and style (caption, borders, maximize button).
-10. Right-click a tab and choose **Pop out**; verify the same.
+1. Drag one tab out of the container; verify the window returns to a standalone window at its original size, position, and style (caption, borders, maximize button).
+2. Right-click a tab and choose **Pop out**; verify the same.
 
 ### Close from inside a tab
 
-11. Close one of the captured applications from its own UI (e.g., close Chrome).
-12. Verify its tab disappears cleanly. If it was the last tab, verify the container closes.
+ 1. Close one of the captured applications from its own UI (e.g., close Chrome).
+ 2. Verify its tab disappears cleanly. If it was the last tab, verify the container closes.
 
 ### No nested groups
 
-13. Try to capture an existing TabDock container window into another group (use the picker and select the TabDock window).
-14. Verify the operation is refused with a clear message.
+ 1. Try to capture an existing TabDock container window into another group (use the picker and select the TabDock window).
+ 2. Verify the operation is refused with a clear message.
 
 ### Elevated windows
 
-15. Open Windows Terminal as Administrator.
-16. Try to capture it with TabDock running as a standard user.
-17. Verify a clear message explains that elevated windows cannot be grouped unless TabDock is also run as administrator.
+ 1. Open Windows Terminal as Administrator.
+ 2. Try to capture it with TabDock running as a standard user.
+ 3. Verify a clear message explains that elevated windows cannot be grouped unless TabDock is also run as administrator.
 
 ### Kill TabDock via Task Manager
 
-18. Group several windows, with at least one on an inactive tab.
-19. Kill `TabDock.exe` from Task Manager (`taskkill /F /IM TabDock.exe`).
-20. Verify every captured window/process is still running — since none of them
+ 1. Group several windows, with at least one on an inactive tab.
+ 2. Kill `TabDock.exe` from Task Manager (`taskkill /F /IM TabDock.exe`).
+ 3. Verify every captured window/process is still running — since none of them
     were ever reparented, killing TabDock can no longer destroy them. Relaunch
     TabDock and verify every identity-valid guest returns to its original
     reversible presentation state. An intentionally self-hidden/tray-style
     guest must remain hidden and must not be resurrected.
-21. If `%APPDATA%` is unavailable, TabDock may launch with memory-only logs or
+ 4. If `%APPDATA%` is unavailable, TabDock may launch with memory-only logs or
     persistence disabled, but capture is disabled unless the durable
     crash-recovery journal is available. Resolve the storage issue and restart
     before capturing windows.
 
 ### DPI change
 
-22. Move the container between monitors with different scaling (e.g., 100% and 150%).
-23. Verify the content area re-lays out and the active window fills the host.
+ 1. Move the container between monitors with different scaling (e.g., 100% and 150%).
+ 2. Verify the content area re-lays out and the active window fills the host.
 
 ### Maximize / restore
 
-24. Maximize the container with a window docked; verify the docked window resizes to fill the whole content area.
-25. Restore the container; verify the docked window shrinks back to match.
-26. Repeat maximize/restore a few times with a **split screen** active; verify both panes stay exactly side-by-side (no overlap, no gap) after every transition.
+ 1. Maximize the container with a window docked; verify the docked window resizes to fill the whole content area.
+ 2. Restore the container; verify the docked window shrinks back to match.
+ 3. Repeat maximize/restore a few times with a **split screen** active; verify both panes stay exactly side-by-side (no overlap, no gap) after every transition.
 
 ### Split screen
 
-27. With two captured windows, right-click a tab and choose **Split screen**; verify both windows appear side by side as one `[ A | B ]` tab item.
-28. Click the LEFT half, then the RIGHT half, alternating several times; verify BOTH panes stay rendered and the clicked side receives input every time (switching focus must never hide the partner or leave a blank pane).
-29. Pop one half out via its `×` (or middle-click); verify the other half takes the full width immediately and stays visible.
-30. Maximize and restore the container while split; verify the panes stay cleanly partitioned.
-31. **Split persistence:** with three captured windows A/B/C and A+B split, hover C's tab, then click it, then right-click it and dismiss the menu, then click the LEFT half, then the RIGHT half, then click C again — hovering leaves A/B presented; clicking C makes C the single full-width guest while the `[ A | B ]` relationship remains dormant; either composite half restores the exact A/B pair; split ends only via **Exit split screen**, an explicit new Split Screen selection, or popping/closing a member.
+ 1. With two captured windows, right-click a tab and choose **Split screen**; verify both windows appear side by side as one `[ A | B ]` tab item.
+ 2. Click the LEFT half, then the RIGHT half, alternating several times; verify BOTH panes stay rendered and the clicked side receives input every time (switching focus must never hide the partner or leave a blank pane).
+ 3. Pop one half out via its `×` (or middle-click); verify the other half takes the full width immediately and stays visible.
+ 4. Maximize and restore the container while split; verify the panes stay cleanly partitioned.
+ 5. **Split persistence:** with three captured windows A/B/C and A+B split, hover C's tab, then click it, then right-click it and dismiss the menu, then click the LEFT half, then the RIGHT half, then click C again — hovering leaves A/B presented; clicking C makes C the single full-width guest while the `[ A | B ]` relationship remains dormant; either composite half restores the exact A/B pair; split ends only via **Exit split screen**, an explicit new Split Screen selection, or popping/closing a member.
 
 ## Known limitations
 
@@ -411,7 +411,7 @@ result regardless of the backend. See `docs/release/code-signing.md` for the
 full architecture.
 
 | Provider | Use | Production-approved |
-|---|---|---|
+| --- | --- | --- |
 | `digicert-stm` (DigiCert Software Trust Manager, official DigiCert tooling; non-exportable key inside the service/HSM) | **public-GA production** | **yes** (`CLOUD_HSM`) |
 | `local-pfx` (exportable PFX + password) | local/private/RC development only | no — **LOCAL PFX SIGNING IS NOT THE APPROVED PUBLIC-GA SIGNER** |
 | `mock-test` (`-MockSign*` test flags only) | deterministic regression tests | no |

@@ -479,7 +479,7 @@ this text.
     20/20, publish + `--version` identity (commit 6ebdd8a) PASS.
   - `pwsh -File scripts/release-tooling-tests.ps1`: 139 PASS.
   - `git diff --check`: clean (CRLF normalized to match repo). Both ValidationDriver
-    + GuineaPig build Release; `--list` enumerates shards/scenarios.
+    - GuineaPig build Release; `--list` enumerates shards/scenarios.
 - NOT DONE (requires a real interactive Windows session, no mouse/keyboard during
   SendInput — cannot be executed by the agent): the supervised live-desktop
   acceptance A–G (four-tab split escape, member focus, rapid switching w/ latency,

@@ -99,7 +99,7 @@ failures are still logged (`App.xaml.cs:49-66`). `Application_Startup` (`App.xam
 state via `_shepherd.FlushJournal()` (`WindowShepherdService.cs`). Both run on every path:
 
 | Path | What runs |
-|------|-----------|
+| ------ | ----------- |
 | `Application_Exit` (`App.xaml.cs:167`) | `EmergencyReleaseAll` → `SaveState` → `FlushJournalGuarded` → dispose events/hotkey/mutex/logger (`App.xaml.cs:170-189`) |
 | `Application_DispatcherUnhandledException` (`App.xaml.cs:192`) | `SaveStateGuarded` → `FlushJournalGuarded` → `EmergencyReleaseAll` → `Shutdown(1)` (`App.xaml.cs:194-207`) |
 | `CurrentDomain_UnhandledException` (`App.xaml.cs:210`) | Terminating: log-only (any thread; runtime is tearing down, `App.xaml.cs:215-221`). Non-terminating: marshals `SaveStateGuarded` + `FlushJournalGuarded` + `EmergencyReleaseAll` to the UI dispatcher with a 1 s deadline (`App.xaml.cs:226-252`) |
@@ -370,6 +370,7 @@ exact-SHA and immutable as described in `README.md` and
 `docs/release/publication-gates.md`.
 
 ### Release (tab) removes the member from `Group.Members`
+
 first (the index drops it via `CollectionChanged`), then `_shepherd.Release(cw, show)`
 (`WindowShepherdService.cs:328-419`):
 
@@ -525,7 +526,7 @@ changes, so the callback snapshots `GetForegroundWindow()` and the UI handler
 revalidates that snapshot before pairing a captured guest.
 
 | WinEvent | Handler (`GuestLifecycleService.Attach`, `GuestLifecycleService.cs:51-60`) | Effect |
-|---|---|---|
+| --- | --- | --- |
 | `EVENT_OBJECT_DESTROY` | `OnWindowDestroyed` (`GuestLifecycleService.cs:62-69`) | Log `destroyed; removing its tab` → `RemoveDeadMember(show: true)` |
 | `EVENT_OBJECT_HIDE` | `OnWindowHidden` (`GuestLifecycleService.cs:71-108`) | Guest-initiated-hide classification: rejected unless the hider is the **active** tab (tab-switch hides are excluded because the active tab already moved), HWND still alive, not visible again, and container not minimized (minimize-hide guard). Passes → log `hid itself` → `RemoveDeadMember(show: false)` |
 | `EVENT_SYSTEM_MINIMIZESTART` | `OnWindowMinimized` (`GuestLifecycleService.cs:110-120`) | Log → `container.RestoreMinimizedWindow` — 200 ms deferred, re-checks iconic + visible + still active before `SW_RESTORE` (`ContainerWindow.xaml.cs:875-914`) |
@@ -535,6 +536,7 @@ revalidates that snapshot before pairing a captured guest.
 | `EVENT_OBJECT_NAMECHANGE` | `DebounceNameChanged` (`GuestLifecycleService.cs:166-184`) | Per-HWND 250 ms coalescing timer → `HandleNameChanged` (`GuestLifecycleService.cs:186-215`): custom label wins, empty titles ignored, unchanged titles skipped, else update `OriginalTitle` + `RefreshTabTitle` |
 
 **Invariants** (see `docs/internal/perf-2026-07-25.md`):
+
 - **Post, never Send** — `WinEventMonitor.cs:170-177`.
 - **O(1) resolution** — handlers resolve via `GroupManager.TryGetCapturedMember` (`GroupManager.cs:168-180`),
   one probe; never scan `Groups`.
@@ -626,7 +628,7 @@ weakens the separate crash-journal gate: capture remains disabled unless the
 journal can be durably written.
 
 | Log line (substring) | Emitter | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `SHEPHERD[position] guest=0x… rect=…` | `WindowShepherdService.cs:214` | Guest (re)positioned/shown; per mouse tick during container drag |
 | `Shepherd-captured 0x…` | `WindowShepherdService.cs:161` | Capture succeeded (new member) |
 | `Shepherd-released 0x…` | `WindowShepherdService.cs:353` / `:384` / `:418` | Release: guest-initiated-hidden / bounds-fallback / normal |
@@ -654,6 +656,7 @@ journal can be durably written.
 | `Shepherd capture blocked: …dpi::probe-failed…` | `WindowShepherdService.cs` (`Capture`) | Guest awareness/target-monitor DPI probe failed closed |
 
 Rules:
+
 - **The log file is held open for the process lifetime** (`FileShare.ReadWrite`, `LoggingService.cs:226`);
   read it with `FileShare.ReadWrite` (as `tests/ValidationDriver/TabDockLog.cs` does) — bare
   `File.ReadAllText` hits a sharing violation.
