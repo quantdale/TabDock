@@ -360,23 +360,11 @@ preserve the pair's visible set).
 
 ### Release chain
 
-Production workflows are pinned to immutable SHAs. Main admission has a
-race-free exact-SHA promotion path
-
-    agent/staging push
-      -> build.yml exact-SHA qualification
-      -> successful workflow_run completion
-      -> promote-staging exact-SHA verification
-      -> fast-forward main
-
-`promote-staging.yml` triggers only on `workflow_run: workflows: ["build"],
-branches: [agent/staging], conclusion == success` (the tested
-`head_sha` is authoritative; direct `push: agent/staging` no longer
-promotes). Promotion is `PATCH .../git/refs/heads/main` with `force:
-false`, `concurrency` group `promote-main`; see
-`docs/release/repository-protection.md`), so only the exact
-build-qualified `agent/staging` tip — not a stale or PR/fork run — can
-fast-forward `main`. The two-stage
+Production workflows are pinned to immutable SHAs. The repository is
+**main-only**: `main` is the sole development/integration branch and is
+qualified directly on push by `build.yml` (exact-SHA hosted-CI gates).
+There is no `agent/staging` branch and no `promote-staging` workflow;
+future agents must develop, commit, and push against `main`. The two-stage
 release chain (`prepare-release-candidate.yml` → `publish-release.yml`) remains
 exact-SHA and immutable as described in `README.md` and
 `docs/release/publication-gates.md`.

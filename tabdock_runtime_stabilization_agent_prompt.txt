@@ -565,21 +565,21 @@ Do not weaken:
 - privacy tests
 - release provenance
 - immutable workflow action pins
-- exact-SHA staging promotion
+- exact-SHA qualification on main push
 
 ==================================================
 14. DELIVERY
 ==================================================
 
-Use the repository's hardened autonomous flow:
+Use the repository's hardened autonomous flow (the repository is main-only —
+there is no agent/staging branch and no promote-staging workflow):
 
 - synchronize from origin/main
-- work on agent/staging (or a temporary local branch that is ultimately rebased
-  onto current main and pushed to agent/staging)
+- work on main (or a temporary local branch that is ultimately rebased
+  onto current main and pushed to main)
 - commit coherent checkpoints
-- push agent/staging
-- wait for exact-SHA build success
-- allow promote-staging workflow_run to fast-forward main
+- push main
+- wait for exact-SHA build success (build.yml qualifies the pushed SHA)
 - verify main == qualified SHA
 
 If another agent has advanced main, rebase and re-qualify. Never reuse CI

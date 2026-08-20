@@ -10,7 +10,6 @@ on:
   push:
     branches:
       - main
-      - agent/staging
   pull_request:
     branches: [main]
 

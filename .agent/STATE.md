@@ -34,8 +34,11 @@ this text.
   `WM_WINDOWPOSCHANGED` (fires before final rect; would guess geometry). Residual
   drag jitter after duplicate-work removal is a Shepherd separate-surface
   architecture ceiling, not a callback deficit. No new callbacks added.
-- Promotion: commit on `agent/staging`, qualify via `build.yml`, promote exact
-  SHA to `main`. Do not reintroduce SetParent/AttachThreadInput/style
+- Branch model: the repository is **main-only**. Develop, commit, and push
+  directly on `main`; qualify each SHA via `build.yml` on push. `main` is the
+  sole authoritative development/integration branch — do NOT recreate an
+  `agent/staging` branch or a `promote-staging` workflow.
+- Do not reintroduce SetParent/AttachThreadInput/style
   stripping/animations/synthetic activation.
 
 ## Current checkpoint — production release closure (v1.0.0 campaign)
@@ -298,19 +301,14 @@ this text.
     comments and `gh api` update procedure documented; `persist-credentials:
     false` preserved; `release-tooling-tests` verifies no mutable tag
     remains.
-  - Main-branch admission hardened to exact-SHA promotion:
-    race-free `agent/staging push -> build.yml exact-SHA qualification
-    (push branches [main, agent/staging]) -> successful workflow_run
-    completion (workflows ["build"], branches [agent/staging], conclusion
-    == success, head_sha authoritative) -> promote-staging exact-SHA
-    verification -> fast-forward main`. Promotion serializes via
-    `concurrency: group: promote-main` + `force:false` PATCH; stale
-    `origin/agent/staging` cannot promote; rebased SHAs require a NEW
-    build (old evidence never reused); PR/fork runs rejected via
-    `head_branch` + workflow name gate; recovery no longer references
-    unsupported `gh workflow run build.yml`. `docs/release/
-    repository-protection.md` documents the chain and exact bypass ruleset
-    for `github-actions[bot]`.
+  - Repository collapsed to main-only: `agent/staging` and the
+    `promote-staging` workflow no longer exist. `main` is the sole
+    development/integration branch and is qualified directly on push by
+    `build.yml` (exact-SHA hosted-CI gates); PRs targeting `main` are also
+    qualified. `docs/release/repository-protection.md` documents the
+    main-only model and the exact bypass ruleset for `github-actions[bot]`.
+    Action pinning, `persist-credentials: false`, and the two-stage
+    release chain are preserved.
   - Release external gates are precise and unfakeable: `publication-
     gates.md` gate vocabulary lifecycle (PASS/FAIL/BLOCKED_EXTERNAL/
     BLOCKED_ENVIRONMENT), exact gate table (prerequisite -> command ->
@@ -340,27 +338,21 @@ this text.
     qualification PASS; real production signing/hardware/manual evidence
     remain `BLOCKED_EXTERNAL` — REPOSITORY-SIDE HARDENING COMPLETE,
     EXTERNAL RELEASE EVIDENCE BLOCKED_EXTERNAL.
-- Campaign H fix (exact-SHA admission race, this session):
-  - Race eliminated: `build.yml` now runs on `push: branches: [main,
-    agent/staging]` so pushing `agent/staging` actually triggers
-    qualification. `promote-staging.yml` no longer triggers on `push:
-    agent/staging` (which raced build) — it triggers only on
-    `workflow_run: workflows: ["build"], types: [completed], branches:
-    [agent/staging]` with a gate step requiring `conclusion == 'success'`
-    (fail-closed for failure/cancelled/skipped/timed_out/neutral) and
-    `head_branch == 'agent/staging'` + workflow name `build` (PR/fork
-    rejection). The promoted SHA is `workflow_run.head_sha` — the tested
-    SHA is authoritative, not the latest tip; it must still equal
-    `origin/agent/staging` (+ ancestor + `force:false` checks). Recovery
-    no longer references unsupported `gh workflow run build.yml`.
-  - `scripts/release-tooling-tests.ps1` extended to 139 passing: new
-    `build-qualifies-agent-staging` and
-    `promote-staging-workflow-run-trigger-chain` covering the entire
-    trigger chain (no push promotion, workflow_run build/agent/staging,
-    success-only, head_sha wiring, PR/fork rejection, no build dispatch,
-    build branch cross-check).
-  - Docs reconciled: `repository-protection.md` (race-free chain),
-    `ARCHITECTURE.md` (trigger diagram), README (139 cases).
+- Campaign H fix (exact-SHA admission race) — superseded by the main-only
+  collapse: the `agent/staging` + `promote-staging` race-free promotion
+  architecture was retired. The repository is now main-only: `build.yml`
+  qualifies every pushed SHA on `main` (and PRs targeting `main`) directly,
+  and there is no `agent/staging` branch or `promote-staging` workflow to
+  race. Action pinning, `persist-credentials: false`, PR/fork protection
+  (PRs are qualified but never auto-promote), and the two-stage release
+  chain are all preserved.
+  - `scripts/release-tooling-tests.ps1` retains the main-only invariants:
+    `main-only-build-qualifies-main`, `promote-staging-workflow-removed`,
+    and `only-publish-release-holds-contents-write` (the release publisher
+    remains the only `contents: write` workflow).
+  - Docs reconciled: `repository-protection.md` (main-only model),
+    `ARCHITECTURE.md` (main-only release chain note), README (main-only
+    qualification note).
 - Campaign B release engineering (repository side complete, with Campaign C
   corrections):
   - `scripts/release-qualify.ps1` — exact-SHA + clean-tree enforcement,

@@ -2136,13 +2136,11 @@ try {
         # publication trust boundary; every actions/* use must be a full 40-char
         # SHA with a trailing human-readable `# vX` comment. build.yml is also
         # pinned (non-production but hosted-CI sensitive) and is covered here.
-        # promote-staging.yml is the main-admission gate and is pinned too.
         $workflows = @(
             '.github/workflows/build.yml',
             '.github/workflows/prepare-release-candidate.yml',
             '.github/workflows/publish-release.yml',
-            '.github/workflows/release.yml',
-            '.github/workflows/promote-staging.yml'
+            '.github/workflows/release.yml'
         )
         $expected = @{
             'actions/checkout'          = '3d3c42e5aac5ba805825da76410c181273ba90b1'
@@ -2171,87 +2169,33 @@ try {
         Assert-True ($stageA -notmatch 'digicert/code-signing-software-trust-action@v\d') 'Stage A must not float a mutable DigiCert tag'
     }
 
-    New-TestCase 'build-qualifies-agent-staging' {
+    New-TestCase 'main-only-build-qualifies-main' {
+        # The repository is main-only: there is no agent/staging branch and no
+        # promote-staging workflow. main is the sole development/integration
+        # branch and is qualified directly on push by build.yml (exact-SHA).
         $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\build.yml'))
-        Assert-True ($yml -match '(?s)push:.*?-\s*main') 'build.yml must run on push to main'
-        Assert-True ($yml -match 'agent/staging') 'build.yml must run on push to agent/staging (exact-SHA qualification)'
-        # Ensure agent/staging is under push branches, not just mentioned elsewhere
-        Assert-True ($yml -match '(?s)push:.*?-\s*agent/staging') 'build.yml push branches must include agent/staging'
+        Assert-True ($yml -match '(?s)push:.*?-\s*main') 'build.yml must run on push to main (exact-SHA qualification)'
+        Assert-True ($yml -notmatch 'agent/staging') 'build.yml must NOT reference the removed agent/staging branch'
         Assert-True ($yml -match '(?s)pull_request:.*main') 'build.yml must still run on PR targeting main'
     }
 
-    New-TestCase 'promote-staging-exact-sha-gate-and-serialization' {
-        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\promote-staging.yml'))
-        Assert-True ($yml -match 'name: promote-staging') 'promote-staging workflow must be named promote-staging'
-        Assert-True ($yml -match 'agent/staging') 'promotion must target agent/staging'
-        Assert-True ($yml -match 'workflow_dispatch') 'promotion must support exact-SHA dispatch'
-        Assert-True ($yml -match 'inputs\.sha') 'dispatch must accept an exact SHA input'
-        Assert-True ($yml -match 'permissions:\s*\r?\n\s*contents: write') 'only the promotion workflow may hold contents: write'
-        Assert-True ($yml -match 'concurrency:\s*\r?\n\s*group: promote-main') 'promotion must serialize via concurrency group promote-main'
-        Assert-True ($yml -match 'cancel-in-progress: false') 'serialization must not cancel in-progress promotions (TOCTOU)'
-        Assert-True ($yml -match 'fetch-depth: 0') 'promotion checkout must fetch full history for ancestor checks'
-        Assert-True ($yml -match 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1') 'promotion checkout must be pinned to the immutable SHA'
-        Assert-True ($yml -notmatch 'uses: actions/checkout@v\d') 'promotion must not use a mutable checkout tag'
-        Assert-True ($yml -match 'persist-credentials: false') 'promotion checkout must not persist credentials'
-        Assert-True ($yml -match 'git rev-parse HEAD') 'promotion must verify HEAD == expected SHA'
-        Assert-True ($yml -match 'origin/agent/staging') 'promotion must verify agent/staging points to expected SHA'
-        Assert-True ($yml -match 'git rev-parse origin/agent/staging') 'promotion must compare origin/agent/staging to expected SHA'
-        Assert-True ($yml -match 'gh run list --workflow build\.yml --commit') 'promotion must verify build.yml qualification for the exact SHA'
-        Assert-True ($yml -match 'conclusion.*success|success.*conclusion') 'promotion must require a successful build conclusion'
-        Assert-True ($yml -match 'merge-base --is-ancestor') 'promotion must verify main is ancestor of the expected SHA (fast-forward safety)'
-        Assert-True ($yml -match 'origin/main') 'promotion must reference origin/main for fast-forward check'
-        Assert-True ($yml -match 'gh api.*PATCH.*repos/.*\/git\/refs\/heads\/main') 'promotion must update main via PATCH refs/heads/main'
-        Assert-True ($yml -match 'force.*false') 'promotion PATCH must use force=false (fails closed on concurrent main advance)'
-        Assert-True ($yml -match 'Reference update failed') 'promotion must handle 422 Reference update failed (concurrent advance)'
-        Assert-True ($yml -match 'rebase.*origin/main') 'promotion recovery must document rebase onto origin/main'
-        Assert-True ($yml -match 'force-with-lease') 'rebase recovery must use --force-with-lease'
-        # No other workflow (except the release publisher, which needs write
-        # to create releases/tags) may hold contents: write for branch
-        # promotion. The promotion workflow is the only branch writer.
+    New-TestCase 'promote-staging-workflow-removed' {
+        # The staging promotion architecture is gone; the promote-staging
+        # workflow must not exist in the main-only branch model.
+        $promotePath = Join-Path $repoRoot '.github\workflows\promote-staging.yml'
+        Assert-True (-not (Test-Path $promotePath)) 'promote-staging.yml must be removed in the main-only branch model'
+    }
+
+    New-TestCase 'only-publish-release-holds-contents-write' {
+        # In the main-only model there is no promotion/staging workflow. Only
+        # the release publisher holds contents: write (to create releases/tags);
+        # every other workflow must remain contents: read.
         foreach ($wf in @('.github\workflows\build.yml', '.github\workflows\prepare-release-candidate.yml', '.github\workflows\release.yml')) {
             $other = [IO.File]::ReadAllText((Join-Path $repoRoot $wf))
-            Assert-True ($other -notmatch 'contents:\s*write') "$wf must remain contents: read (only promote-staging and publish-release may hold write)"
+            Assert-True ($other -notmatch 'contents:\s*write') "$wf must remain contents: read (only publish-release holds write in the main-only model)"
         }
-    }
-
-    New-TestCase 'promote-staging-workflow-run-trigger-chain' {
-        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\promote-staging.yml'))
-        $buildYml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\build.yml'))
-        # Automatic promotion must NOT be a direct push to agent/staging (race)
-        Assert-True ($yml -notmatch 'on:\s*\r?\n\s*push:\s*\r?\n\s*branches:\s*\r?\n\s*-\s*agent/staging') 'promote-staging must NOT automatically promote directly from push to agent/staging (race)'
-        # Must be workflow_run based
-        Assert-True ($yml -match 'workflow_run:') 'automatic promotion must be workflow_run based'
-        Assert-True ($yml -match 'workflows:\s*\[\"build\"\]') 'workflow_run must reference canonical "build" workflow'
-        Assert-True ($yml -match 'types:\s*\[completed\]') 'workflow_run must trigger on completed'
-        Assert-True ($yml -match 'branches:\s*\[agent/staging\]') 'workflow_run must be scoped to agent/staging'
-        # Success conclusion is mandatory, fail closed for all others
-        # The gate step checks CONCLUSION != success and exits 1; the string
-        # 'success' must appear with a conclusion guard.
-        Assert-True ($yml -match 'workflow_run\.conclusion') 'promotion must gate on workflow_run.conclusion'
-        Assert-True ($yml -match "CONCLUSION.*!=.*success|conclusion.*!=.*success") 'promotion must fail closed when conclusion is not success'
-        # Automatic expected SHA comes from workflow_run.head_sha (tested SHA is authoritative)
-        Assert-True ($yml -match 'workflow_run\.head_sha') 'automatic expected SHA must come from workflow_run.head_sha'
-        Assert-True ($yml -match 'github\.event\.workflow_run\.head_sha') 'promotion must use github.event.workflow_run.head_sha for the qualified SHA'
-        # Must NOT independently resolve latest staging
-        Assert-True ($yml -notmatch 'git rev-parse origin/agent/staging.*expected.*workflow_run' -or $yml -match 'workflow_run\.head_sha') 'promotion must not assume latest staging tip without binding to tested SHA'
-        # Still verifies remote staging == expected SHA
-        Assert-True ($yml -match 'origin/agent/staging.*expected SHA|expected SHA.*origin/agent/staging') 'promotion must still verify remote staging == expected SHA'
-        # PR/fork cannot promote: branch check and workflow name check
-        Assert-True ($yml -match "head_branch.*agent/staging") 'promotion must reject non-agent/staging workflow_run branches (PR/fork protection)'
-        Assert-True ($yml -match 'WORKFLOW_NAME.*build|workflow_run\.name.*build') 'promotion must verify workflow_run is from build workflow, not a PR workflow'
-        # Recovery docs must not reference unsupported build dispatch
-        Assert-True ($yml -notmatch 'gh workflow run build\.yml') 'promote-staging recovery must not reference unsupported "gh workflow run build.yml" (build.yml has no workflow_dispatch)'
-        $repoProtect = [IO.File]::ReadAllText((Join-Path $repoRoot 'docs\release\repository-protection.md'))
-        Assert-True ($repoProtect -notmatch 'gh workflow run build\.yml') 'repository-protection.md recovery must not reference unsupported "gh workflow run build.yml"'
-        # Build.yml must indeed qualify agent/staging
-        Assert-True ($buildYml -match 'agent/staging') 'build.yml must contain agent/staging push qualification (cross-check)'
-    }
-
-    New-TestCase 'promote-staging-has-no-build-sign-or-publish' {
-        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\promote-staging.yml'))
-        foreach ($forbidden in @('dotnet publish', 'sign-release.ps1', 'release-qualify.ps1', 'RELEASE_SIGNING_REQUIRED', 'gh release create', 'SIGNCERT_BASE64', 'digicert', 'smctl', 'download-artifact', 'upload-artifact')) {
-            Assert-True ($yml -notmatch [regex]::Escape($forbidden)) "promote-staging must not contain '$forbidden'"
-        }
+        $publish = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        Assert-True ($publish -match 'contents:\s*write') 'publish-release.yml must hold contents: write to create releases/tags'
     }
 
     Write-Host ''
