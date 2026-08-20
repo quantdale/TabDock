@@ -19,7 +19,11 @@ namespace TabDock.Views;
 /// A shepherded guest is never reparented or restyled — it stays an unmodified
 /// top-level window; this container just positions, shows, hides, and z-orders
 /// it (see Services/WindowShepherdService.cs and
-/// docs/internal/deep-audit-2026-07-17.md section 6).
+/// docs/internal/deep-audit-2026-07-17.md section 6). Split presentation policy
+/// lives in <see cref="SplitPresentationController"/> / <see cref="Models.SplitPresentationPolicy"/> /
+/// <see cref="Services.SplitInteractionPolicy"/>; coalesced relayout and deferred
+/// batch bookkeeping lives in <see cref="PresentationLayoutCoordinator"/> — this
+/// window owns the split fields and timers but delegates the policy.
 /// </summary>
 public partial class ContainerWindow : Window
 {
@@ -59,6 +63,12 @@ public partial class ContainerWindow : Window
     // focused). Can differ from _shepherdActiveWindow after the user clicks a
     // guest directly (which foregrounds it without a tab-strip selection).
     private CapturedWindow? _splitForeground;
+    // Suspension is a deliberate hide of both split members (pair -> C/D).
+    // Those hides race the WinEvent EVENT_OBJECT_HIDE queue: GuestLifecycleService
+    // would otherwise see IsInSplit==true and mis-classify them as two
+    // guest-initiated tray-closes and tear the pair down. Suppress handling of
+    // hides for pair members only while a suspension transaction is in flight.
+    private bool _suspendingSplitPair;
 
     // Size-constraint state (post-audit containment finding). The container
     // refuses to shrink below what the currently visible guest(s) can physically
@@ -985,7 +995,11 @@ public partial class ContainerWindow : Window
         _refusedPaneByHwnd.Clear();
         _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
         _viewModel.EmptiedByPopOut -= ViewModel_EmptiedByPopOut;
-        _viewModel.Tabs.CollectionChanged -= Tabs_CollectionChanged;
+        // Detach unsubscribes Group.PropertyChanged + Tabs.CollectionChanged
+        // internally (hardening: Tabs is VM-owned and would otherwise keep the
+        // VM/Window rooted via the strip projection after Close). Do not also
+        // unsubscribe Tabs here — that would double-unsubscribe and hide future
+        // wiring mistakes; rely on the single Detach path.
         _viewModel.Detach();
 
         // Drop the active guest reference so any pending WM_ACTIVATE or restore
@@ -1001,7 +1015,27 @@ public partial class ContainerWindow : Window
         _guestMoveSizeActive = false;
         _guestMoveSizeGeneration++;
         _stateSettledTimer?.Stop();
+        _stateSettledTimer = null;
         _restoreMinimizedTimer?.Stop();
+        _restoreMinimizedTimer = null;
+        // _closePromptRaiseTimer is armed via ArmClosePromptRaise (50ms tick)
+        // and may still be pending when the container closes while its
+        // Dispatcher.BeginInvoke(Input) callback is queued. Null it so the tick
+        // keeps the window rooted one extra interval and fires post-close.
+        _closePromptRaiseTimer?.Stop();
+        _closePromptRaiseTimer = null;
+        // WndProc was added in OnSourceInitialized; remove explicitly so a
+        // hidden/reused HwndSource does not keep dispatching to a dead host.
+        try
+        {
+            HwndSource? src = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+            src?.RemoveHook(WndProc);
+        }
+        catch { }
+        // TabsListBox handler was added in code (+= PreviewMouseLeftButtonDown)
+        // and is not covered by ViewModel detach — remove so teardown clicks
+        // cannot re-enter drag/split logic with nulled state.
+        try { TabsListBox.PreviewMouseLeftButtonDown -= TabsListBox_PreviewMouseLeftButtonDown; } catch { }
         _openTabContextMenu = null;
         ColorContextMenu.Closed -= ColorContextMenu_Closed;
         foreach (ContextMenu menu in _trackedTabContextMenus)
@@ -2543,6 +2577,9 @@ public partial class ContainerWindow : Window
     private bool IsSplitMember(CapturedWindow? window)
         => window != null && (ReferenceEquals(window, _splitLeft) || ReferenceEquals(window, _splitRight));
 
+    /// <summary>True while a pair suspension's pair hides are in flight; GuestLifecycleService suppresses their WinEvent hides.</summary>
+    public bool IsSuspendingSplitPair => _suspendingSplitPair;
+
     /// <summary>
     /// True if <paramref name="window"/> is one of the two currently-visible
     /// split members. Consulted by GuestLifecycleService to decide whether a
@@ -2712,7 +2749,9 @@ public partial class ContainerWindow : Window
     {
         if (left == null || right == null || ReferenceEquals(left, right))
             return;
-        if (!NativeMethods.IsWindow(left.Hwnd) || !NativeMethods.IsWindow(right.Hwnd))
+        // Use strong identity (token+PID+class), not bare IsWindow, so a recycled
+        // HWND that happens to be live does not enter split as the wrong window.
+        if (!_shepherd.IsCurrentCapturedWindow(left) || !_shepherd.IsCurrentCapturedWindow(right))
             return;
 
         // Remember the previously visible guest so it can be hidden if it is not
@@ -2788,21 +2827,27 @@ public partial class ContainerWindow : Window
     /// </summary>
     private void SuspendSplitPairForGuest(CapturedWindow guest)
     {
-        if (!IsSplitPresented || !NativeMethods.IsWindow(guest.Hwnd))
+        // Strong identity gate — recycled HWND must not suspend the valid pair.
+        if (!IsSplitPresented || !_shepherd.IsCurrentCapturedWindow(guest))
             return;
 
-        foreach (CapturedWindow member in new[] { _splitLeft!, _splitRight! })
+        _suspendingSplitPair = true;
+        try
         {
-            WindowHideOutcome outcome = _shepherd.Hide(member);
-            LogHidePending(member, outcome);
-            if (outcome == WindowHideOutcome.RecoveryPending)
+            foreach (CapturedWindow member in new[] { _splitLeft!, _splitRight! })
             {
-                // The relationship is still presented and authoritative. A
-                // partially-hidden pair is repaired before input resumes.
-                LayoutSplitPanes();
-                return;
+                WindowHideOutcome outcome = _shepherd.Hide(member);
+                LogHidePending(member, outcome);
+                if (outcome == WindowHideOutcome.RecoveryPending)
+                {
+                    // The relationship is still presented and authoritative. A
+                    // partially-hidden pair is repaired before input resumes.
+                    LayoutSplitPanes();
+                    return;
+                }
             }
         }
+        finally { _suspendingSplitPair = false; }
 
         _splitPairPresented = false;
         _splitPresentationGeneration++;
@@ -2812,6 +2857,17 @@ public partial class ContainerWindow : Window
         _log.Log($"SPLIT[suspend] guest=0x{guest.Hwnd.ToInt64():X}");
         DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
             group: Group.Id.ToString("N"), action: "pair-to-single", result: "pair-retained");
+
+        // Pair hide is not atomic with HWND lifetime — re-prove C/D before
+        // committing dormant state or foregrounding. A recycled/dead guest must
+        // not become the new _shepherdActiveWindow.
+        if (!_shepherd.IsCurrentCapturedWindow(guest))
+        {
+            LayoutSplitPanes();
+            DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
+                group: Group.Id.ToString("N"), action: "pair-to-single", result: "guest-changed-pair-retained");
+            return;
+        }
 
         TabViewModel? guestTab = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, guest));
         if (guestTab == null)
@@ -2835,6 +2891,8 @@ public partial class ContainerWindow : Window
         // presented guest. Use the existing identity-checked Shepherd path so
         // the single guest receives the same activation/repaint opportunity as
         // a normal focused-tab transition, without synthetic guest input.
+        if (!_shepherd.IsCurrentCapturedWindow(guest))
+            return;
         _shepherd.SetForeground(guest);
         _log.Log($"SPLIT[single] guest=0x{guest.Hwnd.ToInt64():X} pair=dormant");
     }
@@ -3099,7 +3157,8 @@ public partial class ContainerWindow : Window
         {
             return;
         }
-        if (!NativeMethods.IsWindow(window.Hwnd) || !NativeMethods.IsIconic(window.Hwnd))
+        // Strong identity: recycled HWND that happens to be iconic must not restore the wrong window.
+        if (!_shepherd.IsCurrentCapturedWindow(window) || !NativeMethods.IsIconic(window.Hwnd))
             return;
         // A window that minimizes AND drops WS_VISIBLE is minimizing to the
         // tray (X-button close on tray apps) — restoring it here would fight
@@ -3140,7 +3199,9 @@ public partial class ContainerWindow : Window
             {
                 return;
             }
-            if (!NativeMethods.IsIconic(window.Hwnd)
+            // Re-validate strong identity at tick time — the 200ms defer outlives HWND recycling.
+            if (!_shepherd.IsCurrentCapturedWindow(window)
+                || !NativeMethods.IsIconic(window.Hwnd)
                 || !NativeMethods.IsWindowVisible(window.Hwnd))
                 return;
 
@@ -3187,7 +3248,8 @@ public partial class ContainerWindow : Window
         {
             return;
         }
-        if (!NativeMethods.IsWindow(window.Hwnd) || !NativeMethods.IsWindowVisible(window.Hwnd)
+        // Strong identity before any geometry read — recycled HWND must not be measured as this member.
+        if (!_shepherd.IsCurrentCapturedWindow(window) || !NativeMethods.IsWindowVisible(window.Hwnd)
             || NativeMethods.IsIconic(window.Hwnd) || NativeMethods.IsZoomed(window.Hwnd))
             return;
 
@@ -3216,10 +3278,12 @@ public partial class ContainerWindow : Window
         // receiving stale repair work.
         Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
         {
+            // Strong identity at render time — a recycled HWND that happens to
+            // be live/visible must not be re-glued as the old guest.
             if (finalGeneration != _guestMoveSizeGeneration
                 || _containerHwnd == IntPtr.Zero
                 || _guestMoveSizeActive
-                || !NativeMethods.IsWindow(window.Hwnd)
+                || !_shepherd.IsCurrentCapturedWindow(window)
                 || !NativeMethods.IsWindowVisible(window.Hwnd))
                 return;
 

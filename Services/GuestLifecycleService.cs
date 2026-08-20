@@ -102,6 +102,12 @@ public sealed class GuestLifecycleService
             container = c;
             inSplit = container.IsInSplit(match);
         }
+        // Suspension deliberately hides both split members. Those hides must not
+        // be treated as two independent guest tray-closes — that tore the pair
+        // down as data loss. While a suspension transaction is in flight, ignore
+        // hides for its members; the post-suspension state is authoritative.
+        if (inSplit && container != null && container.IsSuspendingSplitPair)
+            return;
         if (!inSplit)
         {
             if (group.ActiveIndex < 0 || group.ActiveIndex >= group.Members.Count
@@ -169,6 +175,12 @@ public sealed class GuestLifecycleService
     private void ArmMinimizeHideProbe(IntPtr hwnd, CapturedWindow member, ContainerWindow container)
     {
         StopMinimizeHideProbe(hwnd);
+        // Capture the group id at arm time — the tick re-looks up the container
+        // from _containers so a Closed container does not stay rooted or have
+        // WindowState probed after _containers.Remove + Close().
+        if (!_groups.TryGetCapturedMember(hwnd, out Group? armGroup, out _))
+            return;
+        Guid groupId = armGroup.Id;
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         timer.Tick += (_, _) =>
         {
@@ -190,8 +202,12 @@ public sealed class GuestLifecycleService
             // guest that is now hidden as the same guest-initiated hide path.
             // Normal self-minimize leaves WS_VISIBLE set and therefore does not
             // enter this branch.
+            // Re-lookup container at tick time — the closed-over instance may be
+            // closing/closed and must not keep the window rooted.
+            if (!_containers.TryGetValue(groupId, out var liveContainer))
+                return;
             if (!ReferenceEquals(_resolveCurrentMember(member), member)
-                || container.WindowState == WindowState.Minimized
+                || liveContainer.WindowState == WindowState.Minimized
                 || !NativeMethods.IsWindow(hwnd)
                 || NativeMethods.IsWindowVisible(hwnd))
             {
@@ -354,6 +370,14 @@ public sealed class GuestLifecycleService
     /// </summary>
     private void RemoveDeadMember(Group group, CapturedWindow match, bool show)
     {
+        // Tear down any pending debounce timers for this member — ReleaseMember
+        // leaves Group.Members without going through WindowDestroyed/Hidden, so
+        // the arm-time closures would otherwise keep the HWND/timer rooted and
+        // fire against a recycled HWND (ReferenceEquals gate prevents corruption,
+        // but still wastes a tick and retains the object).
+        StopMinimizeHideProbe(match.Hwnd);
+        if (_nameChangeDebounce.Remove(match.Hwnd, out var namePending))
+            namePending.Timer.Stop();
         if (_containers.TryGetValue(group.Id, out var container))
         {
             container.ReleaseCapturedWindow(match, show);

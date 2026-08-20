@@ -155,35 +155,40 @@ public partial class ContainerWindow
         }
 
         CapturedWindow? previousActive = _shepherdActiveWindow;
-        foreach (CapturedWindow member in new[] { _splitLeft!, _splitRight! })
+        _suspendingSplitPair = true;
+        try
         {
-            WindowHideOutcome outcome = _shepherd.Hide(member);
-            LogHidePending(member, outcome);
-            if (outcome == WindowHideOutcome.RecoveryPending)
+            foreach (CapturedWindow member in new[] { _splitLeft!, _splitRight! })
             {
-                // A member may already have hidden before its partner became
-                // uncertain. Restore the presentation-side active reference and
-                // re-present the still-authoritative pair exactly once.
+                WindowHideOutcome outcome = _shepherd.Hide(member);
+                LogHidePending(member, outcome);
+                if (outcome == WindowHideOutcome.RecoveryPending)
+                {
+                    // A member may already have hidden before its partner became
+                    // uncertain. Restore the presentation-side active reference and
+                    // re-present the still-authoritative pair exactly once.
+                    _shepherdActiveWindow = previousActive;
+                    LayoutSplitPanes();
+                    DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
+                        group: Group.Id.ToString("N"), action: "pair-to-single", result: "recovery-pending-pair-retained");
+                    return false;
+                }
+            }
+
+            // Hiding two top-level guests is not atomic with respect to process/HWND
+            // lifetime. Re-prove C/D after those native calls and before committing
+            // dormant state. If the target changed while the pair was being hidden,
+            // re-present the still-defined pair and leave logical selection alone.
+            if (!_shepherd.IsCurrentCapturedWindow(guest))
+            {
                 _shepherdActiveWindow = previousActive;
                 LayoutSplitPanes();
                 DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
-                    group: Group.Id.ToString("N"), action: "pair-to-single", result: "recovery-pending-pair-retained");
+                    group: Group.Id.ToString("N"), action: "pair-to-single", result: "target-changed-pair-retained");
                 return false;
             }
         }
-
-        // Hiding two top-level guests is not atomic with respect to process/HWND
-        // lifetime. Re-prove C/D after those native calls and before committing
-        // dormant state. If the target changed while the pair was being hidden,
-        // re-present the still-defined pair and leave logical selection alone.
-        if (!_shepherd.IsCurrentCapturedWindow(guest))
-        {
-            _shepherdActiveWindow = previousActive;
-            LayoutSplitPanes();
-            DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
-                group: Group.Id.ToString("N"), action: "pair-to-single", result: "target-changed-pair-retained");
-            return false;
-        }
+        finally { _suspendingSplitPair = false; }
 
         // Disarm the settle and bump generation BEFORE clearing _splitPairPresented
         // so a CompositionTarget.Rendering already queued cannot fire after the

@@ -47,15 +47,31 @@ public sealed class PresentationLayoutCoordinator
         if (_relayoutPending)
             return;
         _relayoutPending = true;
+        // Coalescing token: each queued frame gets a monotonic id so a stale
+        // Render callback that was queued before InvalidateLayout/exit can be
+        // discarded. Previously gen was allocated but discarded (_ = gen), so
+        // stale frames still executed against a changed layout world. Now capture
+        // the layout generation at schedule time and gate at callback time.
         long gen = ++_pendingLayoutGeneration;
+        long scheduledLayoutGen = _layoutGeneration;
         scheduleRender(() =>
         {
             // Clear BEFORE execute so a re-entrant RequestRelayout inside
             // execute (Q1/Q2) correctly re-queues for the next frame.
             _relayoutPending = false;
-            // Stale frame: if generation changed between schedule and execute, the
-            // callback is for an older layout world. Caller checks via IsCurrentSettle
-            // or revalidates; here we just execute the latest coalesced pass once.
+            if (scheduledLayoutGen != _layoutGeneration)
+            {
+                // Stale frame: layout was invalidated between schedule and
+                // callback (member removed, mode changed, container closed).
+                // Skip this execute but still honor ensureFinalPass so a
+                // WM_EXITSIZEMOVE final z-order reconciliation is not lost.
+                if (_relayoutAfterPending)
+                {
+                    _relayoutAfterPending = false;
+                    RequestRelayout(scheduleRender, execute);
+                }
+                return;
+            }
             execute();
             if (_relayoutAfterPending)
             {

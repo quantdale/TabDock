@@ -489,5 +489,11 @@ public sealed class GroupViewModel : ViewModelBase
     public void Detach()
     {
         _group.PropertyChanged -= OnGroupPropertyChanged;
+        // Tabs is a VM-owned ObservableCollection — its CollectionChanged keeps
+        // this VM (and its ContainerWindow) rooted if a view keeps a reference
+        // to Tabs/DisplayTabs after the container closes (capture-picker
+        // re-target, PersistedTabs-only Group). Unsubscribe explicitly so
+        // Closed containers do not leak through the strip projection.
+        Tabs.CollectionChanged -= Tabs_CollectionChanged;
     }
 }
