@@ -90,7 +90,12 @@ public sealed class PersistenceService
     internal bool StateLoadFailed => _stateLoadFailed;
 
     public void Save(IEnumerable<Group> groups)
-        => CommitJson(BuildStateJson(groups));
+    {
+        string? json = BuildStateJson(groups);
+        if (json == null)
+            return;
+        CommitJson(json);
+    }
 
     /// <summary>
     /// Debounced / high-frequency save path. Builds the immutable JSON snapshot
