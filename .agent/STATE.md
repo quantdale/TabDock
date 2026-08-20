@@ -488,3 +488,18 @@ this text.
   driver is built and ready; run in an interactive session:
   `dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -c Release -- --yes --configuration Release all`
   Do NOT declare the campaign complete until A–G pass on the real desktop.
+
+## Whole-Codebase Deep Technical Audit (2026-08, complete)
+
+- Objective: Comprehensive read-only technical audit across all modules, native Win32 lifecycle, shepherd model, split presentation, and failure recovery.
+- Completed deliverables:
+  - `CODEBASE_AUDIT.md` (and `CODEBASE_AUDIT_v3.md`) authored with full 23 required sections.
+  - Zero code files modified (read-only audit constraint respected).
+  - Discovered 7 actionable findings (0 Critical, 1 High, 3 Medium, 3 Low):
+    - High (AUDIT-001): Title mutation during capture handshake causes false-positive capture veto.
+    - Medium (AUDIT-002): Multi-capture sequential failure blocks container with modal dialog while guest is visible.
+    - Medium (AUDIT-003): Desktop reorder WinEvent queue race with high-frequency Alt-Tab transitions.
+    - Medium (AUDIT-004): Win32 `SetWindowPlacement` fallback path ignores pre-capture minimized/maximized placement.
+    - Low (AUDIT-005 to AUDIT-007): Placeholder commands, journal lazy load check, and internal documentation alignment.
+- Validation: `dotnet build TabDock.sln -c Release` (0 warnings, 0 errors); `dotnet test tests/UnitTests/TabDock.UnitTests.csproj` (146 passed, 0 failed); `pwsh -File scripts/release-tooling-tests.ps1` (138 passed, 0 failed).
+

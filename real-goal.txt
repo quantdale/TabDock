@@ -1,0 +1,1952 @@
+# Deep Read-Only Whole-Codebase Audit
+
+You are performing a **deep, exhaustive, repository-wide technical audit** of this codebase.
+
+Your role is **NOT to implement, refactor, fix, format, clean up, migrate, or otherwise modify the software**.
+
+Your job is to **read, inspect, reason about, cross-reference, test where safely possible, and document findings**.
+
+The final deliverable is a **single Markdown audit report** containing all findings.
+
+---
+
+# 1. NON-NEGOTIABLE OPERATING CONSTRAINTS
+
+## READ-ONLY CODEBASE
+
+Treat the entire repository as **strictly read-only**.
+
+You MAY:
+
+* Read files.
+* Search files.
+* Search symbols/references.
+* Inspect Git history.
+* Inspect branches/tags if useful.
+* Inspect configuration.
+* Inspect dependency manifests and lockfiles.
+* Inspect CI/CD definitions.
+* Inspect tests.
+* Inspect generated metadata.
+* Run non-destructive diagnostic commands.
+* Run existing tests, linters, type-checkers, builds, static analyzers, or other validation commands **only if they do not modify tracked project files**.
+* Use temporary files outside the repository if a diagnostic tool absolutely requires them.
+* Inspect runtime/test output.
+* Inspect logs generated outside tracked source files.
+
+You MUST NOT:
+
+* Modify source code.
+* Modify tests.
+* Modify documentation other than the designated audit report.
+* Modify configuration.
+* Upgrade dependencies.
+* Install fixes.
+* Reformat files.
+* Run auto-fix modes.
+* Apply migrations.
+* regenerate checked-in artifacts.
+* Commit changes.
+* Push changes.
+* Create branches.
+* delete files.
+* rename files.
+* move files.
+* modify Git state.
+* run destructive Git commands.
+* automatically repair anything you discover.
+
+## THE ONLY PERMITTED WRITE
+
+The **only repository file you are allowed to create or modify is:**
+
+`CODEBASE_AUDIT.md`
+
+Everything you discover must be documented there.
+
+Before finishing, run:
+
+```bash
+git status --short
+```
+
+Verify that the **only intentional repository modification is `CODEBASE_AUDIT.md`**.
+
+If another tracked or untracked repository file was accidentally modified/generated during auditing, restore/remove that accidental artifact before completion **only to return the repository to its original state**.
+
+Do not modify pre-existing user changes.
+
+---
+
+# 2. PRIMARY OBJECTIVE
+
+Perform the deepest practical audit possible of the **entire codebase and its engineering premises**.
+
+Do not restrict yourself to obvious bugs.
+
+Search for:
+
+* confirmed bugs
+* likely bugs
+* latent bugs
+* correctness issues
+* edge cases
+* race conditions
+* concurrency hazards
+* state-management defects
+* data-integrity risks
+* security vulnerabilities
+* privacy issues
+* performance problems
+* memory problems
+* resource leaks
+* inefficient algorithms
+* unnecessary I/O
+* excessive network usage
+* excessive database operations
+* scalability limits
+* reliability weaknesses
+* error-handling gaps
+* resilience problems
+* architectural weaknesses
+* poor abstractions
+* inappropriate coupling
+* excessive complexity
+* technical debt
+* duplicated logic
+* dead code
+* unreachable code
+* stale code
+* misleading code
+* brittle assumptions
+* undocumented invariants
+* incorrect invariants
+* configuration mistakes
+* build-system problems
+* dependency problems
+* dependency risks
+* test weaknesses
+* testing blind spots
+* missing validation
+* incomplete functionality
+* partially implemented features
+* TODO/FIXME debt
+* unsafe defaults
+* questionable API contracts
+* schema/model inconsistencies
+* serialization problems
+* compatibility risks
+* migration risks
+* platform-specific issues
+* deployment risks
+* CI/CD weaknesses
+* observability gaps
+* maintainability issues
+* developer-experience problems
+* documentation/code divergence
+* unnecessary complexity
+* opportunities for simplification
+* opportunities for optimization
+* opportunities for architectural improvement
+* opportunities for stronger correctness guarantees
+* opportunities for more effective automation
+* anything else that could materially improve this software
+
+Do not assume that because something currently passes tests it is correct.
+
+Do not assume that existing architecture, comments, documentation, tests, schemas, APIs, or design decisions are correct.
+
+**Audit the premises themselves.**
+
+---
+
+# 3. AUDIT THE WHOLE SYSTEM, NOT ISOLATED FILES
+
+Do not perform a superficial file-by-file lint review.
+
+Develop a mental model of the system first.
+
+Determine:
+
+* What is the software supposed to do?
+* What are its principal components?
+* Where are its boundaries?
+* How does data enter?
+* How does data leave?
+* Where is state stored?
+* What owns that state?
+* Which operations mutate it?
+* Which invariants are supposed to hold?
+* Which operations are asynchronous?
+* Which operations are concurrent?
+* Which processes can fail?
+* Which failures are recoverable?
+* What happens after restart?
+* What happens after partial failure?
+* What happens after retries?
+* What happens with duplicate requests/events?
+* What happens with malformed input?
+* What happens with stale state?
+* What happens with out-of-order events?
+* What happens at resource limits?
+* What happens when dependencies are unavailable?
+* What assumptions are made about environment/platform/version/order/timing?
+* Are those assumptions actually enforced?
+
+Trace important workflows **end-to-end across files and modules**.
+
+A defect may only become visible when several individually reasonable components interact incorrectly.
+
+Look specifically for **cross-component failures**.
+
+---
+
+# 4. REPOSITORY INVENTORY
+
+Begin by mapping the repository.
+
+Inspect the complete directory structure.
+
+Identify:
+
+* applications
+* packages
+* libraries
+* services
+* modules
+* workspaces
+* monorepo packages
+* source directories
+* tests
+* test fixtures
+* scripts
+* CLIs
+* database code
+* schemas
+* migrations
+* API definitions
+* frontend code
+* backend code
+* native/platform code
+* infrastructure code
+* deployment configuration
+* CI workflows
+* Docker/container definitions
+* development tooling
+* build configuration
+* compiler configuration
+* linting configuration
+* formatting configuration
+* environment configuration
+* dependency manifests
+* lockfiles
+* generated-code boundaries
+* vendored dependencies
+* documentation
+* agent instructions
+* ADRs/design documents
+* specifications
+* examples
+* sample configuration
+* legacy components
+* experimental components
+
+Do not silently ignore a major directory.
+
+If some files cannot reasonably be manually inspected because they are:
+
+* binary
+* machine-generated
+* vendored third-party code
+* minified
+* dependency caches
+* build output
+* media assets
+* lockfile internals
+
+record the exclusion and explain why inspection was not useful.
+
+Otherwise, assume first-party source/configuration/documentation is in scope.
+
+---
+
+# 5. UNDERSTAND INTENT BEFORE JUDGING IMPLEMENTATION
+
+Read the project's relevant:
+
+* README files
+* architecture documents
+* design specifications
+* requirements
+* plans
+* roadmaps
+* ADRs
+* comments
+* TODOs
+* agent instructions
+* schemas
+* API contracts
+* test descriptions
+* CI assumptions
+* deployment documentation
+
+Then compare those claims against actual implementation.
+
+Explicitly search for:
+
+### Documentation says X, code does Y
+
+### Tests assume X, implementation permits Y
+
+### API claims X, validation permits Y
+
+### Schema permits X, application assumes Y
+
+### Two modules implement the same rule differently
+
+### A historical migration invalidates a current assumption
+
+### A configuration default conflicts with production expectations
+
+### A feature appears documented but is only partially implemented
+
+### A feature appears implemented but lacks required failure handling
+
+These inconsistencies are particularly valuable findings.
+
+---
+
+# 6. CORRECTNESS AUDIT
+
+Examine business logic and core algorithms deeply.
+
+Search for:
+
+* incorrect conditions
+* wrong boolean logic
+* inverted conditions
+* precedence mistakes
+* missing cases
+* improper default branches
+* off-by-one errors
+* incorrect indexes
+* boundary-condition errors
+* null/undefined/nil handling
+* zero-value behavior
+* overflow/underflow
+* integer truncation
+* floating-point mistakes
+* precision loss
+* unit mismatches
+* timezone errors
+* locale errors
+* date-boundary errors
+* DST problems
+* ordering assumptions
+* unstable ordering
+* sorting defects
+* pagination errors
+* duplicate processing
+* skipped processing
+* incorrect caching
+* stale caches
+* stale closures
+* stale state
+* incorrect memoization
+* incorrect equality checks
+* object identity mistakes
+* improper lifecycle behavior
+* state synchronization defects
+* invalid state transitions
+* impossible states that remain representable
+* inconsistent invariants
+* missing invariant enforcement
+* hidden side effects
+* partial updates
+* transactional correctness problems
+* idempotency failures
+* retry-induced duplication
+* eventual-consistency assumptions
+* synchronization assumptions
+* rollback weaknesses
+* serialization/deserialization mismatches
+* encoding issues
+* data transformation errors
+
+For important logic, mentally challenge the implementation with adversarial input and unexpected state.
+
+---
+
+# 7. CONTROL-FLOW AND DATA-FLOW AUDIT
+
+Trace important values from:
+
+**input → validation → transformation → storage → retrieval → output**
+
+Look for places where:
+
+* validation occurs too late
+* validation is missing
+* sanitization is inconsistent
+* trusted/untrusted boundaries are unclear
+* values change type unexpectedly
+* nullable values become assumed non-null
+* validation is performed once but invalidated later
+* caller and callee disagree about contracts
+* exceptions bypass required cleanup
+* early returns skip required work
+* error paths differ dangerously from happy paths
+* mutable shared state escapes ownership
+* state is copied incorrectly
+* stale snapshots are acted upon
+* state transitions are not atomic
+
+Follow values across module boundaries rather than reviewing functions in isolation.
+
+---
+
+# 8. ASYNC / CONCURRENCY / RACE-CONDITION AUDIT
+
+If concurrency, callbacks, async operations, queues, workers, event listeners, timers, background jobs, database transactions, UI state, networking, or multi-process behavior exist, audit them aggressively.
+
+Search for:
+
+* race conditions
+* TOCTOU bugs
+* lost updates
+* double execution
+* duplicate callbacks
+* reentrancy
+* stale callback state
+* unsafe cancellation
+* orphaned promises/tasks
+* unhandled rejection paths
+* forgotten awaits
+* excessive serialization
+* accidental parallelism
+* incorrectly shared state
+* lock ordering problems
+* deadlocks
+* livelocks
+* starvation
+* polling problems
+* timer leaks
+* event listener leaks
+* cleanup races
+* shutdown races
+* startup races
+* reconnect races
+* retry storms
+* thundering-herd behavior
+* duplicate consumers
+* out-of-order event processing
+* missing sequence/correlation checks
+* stale events mutating current state
+* partial completion followed by retry
+* non-idempotent retried operations
+
+Consider unusual interleavings rather than only the intended execution order.
+
+---
+
+# 9. FAILURE-MODE AUDIT
+
+For every major workflow ask:
+
+**What happens when each dependency fails at each point in the operation?**
+
+Inspect behavior when:
+
+* filesystem operations fail
+* disk fills
+* network fails
+* requests timeout
+* dependency becomes slow
+* dependency responds incorrectly
+* process is killed
+* application restarts
+* database becomes unavailable
+* transaction fails
+* write partially succeeds
+* response is malformed
+* authentication expires
+* authorization changes
+* rate limit occurs
+* service returns 4xx
+* service returns 5xx
+* DNS fails
+* API schema changes
+* queue redelivers
+* duplicate event arrives
+* event arrives late
+* event arrives out of order
+* expected resource disappears
+* user input is malformed
+* required configuration is missing
+* environment variable is invalid
+
+Determine whether failure behavior is:
+
+* safe
+* observable
+* recoverable
+* idempotent
+* bounded
+* deterministic where required
+
+---
+
+# 10. SECURITY AUDIT
+
+Inspect the repository for realistic security issues.
+
+Consider:
+
+* authentication
+* authorization
+* broken access control
+* privilege escalation
+* IDOR
+* insecure direct object references
+* injection
+* command injection
+* SQL injection
+* shell injection
+* XSS
+* CSRF
+* SSRF
+* path traversal
+* insecure deserialization
+* arbitrary file access
+* unsafe redirects
+* insecure temporary files
+* unsafe subprocess use
+* unsafe dynamic evaluation
+* credential leakage
+* secret exposure
+* sensitive logging
+* insecure defaults
+* permissive CORS
+* token storage
+* session management
+* cryptographic misuse
+* weak random generation
+* predictable identifiers
+* unsafe dependency behavior
+* missing rate limiting
+* denial-of-service vectors
+* resource exhaustion
+* unbounded input
+* unbounded recursion
+* unbounded queues
+* unbounded retries
+* unsafe file uploads
+* MIME/type confusion
+* webhook verification
+* replay attacks
+* insecure IPC
+* production debug endpoints
+* test/admin backdoors accidentally reachable in production
+
+Do not fabricate security findings.
+
+Distinguish concrete exploitability from theoretical hardening opportunities.
+
+---
+
+# 11. PRIVACY AND DATA-HANDLING AUDIT
+
+Identify:
+
+* personally identifiable data
+* credentials
+* tokens
+* sensitive metadata
+* logs containing sensitive content
+* unnecessary retention
+* accidental persistence
+* insecure caches
+* telemetry
+* analytics
+* third-party transmission
+* exports/backups
+* deletion behavior
+* synchronization behavior
+
+Look for divergence between intended privacy behavior and implementation.
+
+---
+
+# 12. PERFORMANCE AUDIT
+
+Analyze performance from both algorithmic and systems perspectives.
+
+Search for:
+
+* O(n²), O(n³), or worse behavior where unnecessary
+* repeated full scans
+* repeated parsing
+* repeated serialization
+* duplicated calculations
+* excessive copying
+* unnecessary allocations
+* excessive object creation
+* memory retention
+* memory leaks
+* expensive hot-path abstractions
+* blocking I/O
+* synchronous operations in latency-sensitive paths
+* unnecessary database round trips
+* N+1 queries
+* missing indexes
+* inefficient joins
+* table scans
+* repeated network requests
+* cache misses caused by architecture
+* redundant API calls
+* excessive rendering
+* render loops
+* unnecessary component rerenders
+* unnecessary polling
+* excessive timers
+* startup bottlenecks
+* cold-start overhead
+* unnecessarily large bundles
+* unnecessary dependency weight
+* excessive logging
+* expensive retry behavior
+* unbounded data structures
+
+Distinguish real probable bottlenecks from speculative micro-optimizations.
+
+Prioritize optimizations that materially improve:
+
+* latency
+* throughput
+* CPU
+* RAM
+* storage
+* network usage
+* battery
+* startup time
+* scalability
+* cost
+
+---
+
+# 13. RESOURCE-LIFECYCLE AUDIT
+
+Inspect acquisition and cleanup of:
+
+* files
+* streams
+* sockets
+* database connections
+* transactions
+* subscriptions
+* event listeners
+* timers
+* workers
+* threads
+* subprocesses
+* browser contexts
+* native handles
+* UI lifecycle objects
+* temporary files
+* caches
+
+Find missing cleanup, double cleanup, ownership ambiguity, lifecycle inversion, and leaks.
+
+---
+
+# 14. DATABASE / PERSISTENCE AUDIT
+
+Where applicable inspect:
+
+* schemas
+* migrations
+* constraints
+* indexes
+* relationships
+* foreign keys
+* uniqueness
+* nullability
+* defaults
+* transactions
+* isolation assumptions
+* migration ordering
+* rollback behavior
+* backward compatibility
+* serialization
+* data versioning
+* stale records
+* orphan records
+* duplicate records
+* integrity enforcement
+* race conditions
+* concurrent writers
+* optimistic updates
+* eventual consistency
+* caching
+* backup assumptions
+* restore assumptions
+* retention/deletion
+
+Ask whether important business invariants live only in application code when the persistence layer could enforce them more reliably.
+
+---
+
+# 15. API / NETWORK AUDIT
+
+Inspect:
+
+* request validation
+* response validation
+* API contracts
+* status-code handling
+* pagination
+* retries
+* backoff
+* jitter
+* timeout configuration
+* cancellation
+* idempotency
+* authentication
+* authorization
+* version compatibility
+* schema evolution
+* partial responses
+* malformed responses
+* rate limiting
+* connection reuse
+* caching
+* circuit breaking
+* correlation IDs
+* retry-after handling
+* duplicate submissions
+* offline behavior
+
+Look at both caller and callee wherever both are present.
+
+---
+
+# 16. UI / FRONTEND AUDIT
+
+If applicable inspect:
+
+* state consistency
+* async state
+* stale state
+* race conditions
+* loading states
+* empty states
+* error states
+* optimistic updates
+* form validation
+* repeated submission
+* navigation
+* deep links
+* lifecycle behavior
+* accessibility
+* keyboard navigation
+* focus management
+* responsive behavior
+* platform differences
+* screen rotation
+* background/foreground behavior
+* component ownership
+* unnecessary rerenders
+* excessive global state
+* duplicated state
+* derived state stored unnecessarily
+* state persistence
+* hydration
+* offline operation
+* localization
+* date/time formatting
+
+Trace important user flows end-to-end.
+
+---
+
+# 17. NATIVE / PLATFORM-SPECIFIC AUDIT
+
+If the project targets operating systems, browsers, devices, runtimes, or CPU architectures, examine platform-specific assumptions.
+
+Look for:
+
+* OS-specific paths
+* path separators
+* case sensitivity
+* permissions
+* process semantics
+* filesystem differences
+* browser compatibility
+* device lifecycle differences
+* Android/iOS differences
+* Windows/Linux/macOS differences
+* architecture assumptions
+* DPI/scaling
+* encoding
+* environment-variable behavior
+* signal handling
+* process cleanup
+* platform API deprecations
+
+---
+
+# 18. DEPENDENCY AUDIT
+
+Inspect manifests and lockfiles.
+
+Identify:
+
+* unused dependencies
+* duplicated functionality
+* unnecessary heavy dependencies
+* stale dependencies where materially relevant
+* abandoned dependencies
+* dangerous dependency assumptions
+* dependency version conflicts
+* overly broad version ranges
+* runtime dependency incorrectly listed as development-only
+* development dependency incorrectly shipped
+* peer dependency problems
+* dependency-related bundle bloat
+* transitive risk
+* duplicated dependency trees
+* custom code duplicating existing platform functionality
+* unnecessary wrappers
+
+Do **not** upgrade anything.
+
+Document recommendations only.
+
+---
+
+# 19. BUILD / PACKAGING / CONFIGURATION AUDIT
+
+Inspect all important build and runtime configuration.
+
+Look for:
+
+* dev/prod divergence
+* accidental debug configuration
+* inconsistent environment handling
+* undocumented environment variables
+* unsafe defaults
+* unused configuration
+* duplicate configuration
+* configuration drift
+* missing validation
+* invalid fallback behavior
+* platform inconsistencies
+* non-reproducible builds
+* hidden build assumptions
+* fragile scripts
+* shell portability problems
+* incorrect artifact inclusion/exclusion
+* missing source maps where needed
+* accidentally shipped test/debug code
+
+---
+
+# 20. CI/CD AUDIT
+
+Inspect workflows and pipelines for:
+
+* missing required gates
+* tests that never execute
+* incorrectly scoped triggers
+* ignored failures
+* `continue-on-error` abuse
+* incorrect caching
+* stale caches
+* dependency installation inconsistencies
+* environment differences
+* non-reproducibility
+* race conditions
+* concurrency issues
+* secret exposure
+* unsafe permissions
+* excessive permissions
+* supply-chain weaknesses
+* flaky steps
+* unreachable deployment stages
+* deployments not gated by validation
+* duplicated work
+* excessively expensive work
+* missing artifact validation
+
+Compare local scripts with CI scripts.
+
+---
+
+# 21. TEST SUITE AUDIT
+
+Do not merely ask whether tests pass.
+
+Audit whether the tests actually prove meaningful properties.
+
+Inspect:
+
+* unit tests
+* integration tests
+* E2E tests
+* smoke tests
+* contract tests
+* migration tests
+* property tests
+* fuzz tests
+* regression tests
+* fixtures
+* mocks
+* test utilities
+* CI test selection
+
+Search for:
+
+* important untested code
+* tests that test mocks instead of behavior
+* weak assertions
+* tautological tests
+* snapshot overuse
+* excessive mocking
+* unrealistic fixtures
+* missing negative cases
+* missing boundary cases
+* missing concurrency cases
+* missing restart/recovery cases
+* missing failure injection
+* flaky timing assumptions
+* skipped tests
+* disabled tests
+* `.only`
+* TODO tests
+* stale tests
+* tests inconsistent with implementation
+* code paths impossible to exercise under current tests
+
+Identify areas where high test count creates false confidence.
+
+---
+
+# 22. ARCHITECTURE AUDIT
+
+Evaluate whether the architecture remains suitable for the current system.
+
+Examine:
+
+* module boundaries
+* dependency direction
+* ownership
+* cohesion
+* coupling
+* layering
+* service boundaries
+* package boundaries
+* abstraction quality
+* abstraction leakage
+* circular dependencies
+* dependency inversion
+* shared mutable state
+* singleton/global-state usage
+* domain-model quality
+* separation of concerns
+* duplicated domain logic
+* overly broad interfaces
+* god objects/modules
+* fragmented responsibilities
+* unnecessary indirection
+* unnecessary wrappers
+* premature generalization
+* missing abstraction
+* excessive abstraction
+
+Do not automatically recommend more abstraction.
+
+Sometimes the correct finding is that the code is **over-engineered** and should eventually be simpler.
+
+---
+
+# 23. MAINTAINABILITY / CODE-QUALITY AUDIT
+
+Look for:
+
+* excessive complexity
+* deeply nested control flow
+* very large functions
+* very large classes/modules
+* unclear ownership
+* confusing naming
+* misleading naming
+* inconsistent terminology
+* magic numbers
+* magic strings
+* duplicated logic
+* near-duplicated logic
+* hidden coupling
+* hidden side effects
+* boolean parameter proliferation
+* parameter explosion
+* fragile inheritance
+* enormous conditional trees
+* comments explaining obsolete behavior
+* comments contradicting implementation
+* unnecessary cleverness
+* lack of invariants
+* weak type modeling
+* broad `any`/dynamic types
+* unsafe casts
+* ignored compiler warnings
+* suppressed lint/type errors
+* catch-all exception handling
+
+Focus on maintainability issues that create real engineering risk.
+
+---
+
+# 24. TYPE-SAFETY / STATIC-CORRECTNESS AUDIT
+
+Where relevant inspect:
+
+* unsafe casts
+* type assertions
+* `any`
+* `unknown` handled unsafely
+* nullable states
+* impossible states
+* discriminated unions
+* generic misuse
+* variance problems
+* unchecked external data
+* suppression comments
+* disabled compiler options
+* inconsistent types across boundaries
+* generated types drifting from schemas
+* manually duplicated schema/type definitions
+
+Look for opportunities where stronger modeling would prevent entire bug classes.
+
+---
+
+# 25. ERROR HANDLING / OBSERVABILITY AUDIT
+
+Inspect:
+
+* exceptions
+* errors
+* logs
+* metrics
+* traces
+* diagnostics
+* user-visible errors
+* retry logging
+* correlation
+* incident diagnosability
+
+Look for:
+
+* swallowed exceptions
+* catch-and-ignore behavior
+* generic errors
+* lost stack traces
+* misleading logs
+* noisy logs
+* missing contextual information
+* secrets in logs
+* impossible-to-debug async failures
+* errors converted into success
+* fallback behavior hiding corruption
+* no distinction between transient/permanent failure
+* no operational signal for serious failures
+
+Ask:
+
+**If this fails in production, could someone determine what happened?**
+
+---
+
+# 26. DEAD / STALE / DUPLICATED CODE AUDIT
+
+Search for:
+
+* unused exports
+* unreachable branches
+* obsolete feature flags
+* stale migrations
+* abandoned implementations
+* duplicate modules
+* superseded utilities
+* commented-out code
+* TODO/FIXME/HACK/XXX comments
+* deprecated APIs
+* temporary compatibility layers that became permanent
+* experimental code accidentally entering production paths
+
+Do not recommend deleting something unless evidence supports that it is unused or obsolete.
+
+---
+
+# 27. PREMISE AND DESIGN-DECISION AUDIT
+
+This section is particularly important.
+
+Do not assume the current implementation strategy is optimal merely because it is internally consistent.
+
+Challenge foundational decisions.
+
+Ask:
+
+* Is this component necessary?
+* Is this state necessary?
+* Should this state be derived instead?
+* Does this data need persistence?
+* Does this operation need networking?
+* Does this abstraction actually reduce complexity?
+* Does this layer provide meaningful isolation?
+* Is this cache helping or merely creating invalidation complexity?
+* Is polling necessary?
+* Is the chosen persistence model appropriate?
+* Is this workflow unnecessarily serialized?
+* Is this workflow dangerously parallelized?
+* Can an invariant be enforced structurally instead of procedurally?
+* Is the system solving complexity it created itself?
+* Is there a simpler architecture with the same capabilities?
+* Is legacy compatibility constraining the design unnecessarily?
+* Are requirements encoded in the correct layer?
+* Is the system optimized for assumptions that are no longer true?
+
+Report architectural opportunities even when no immediate bug exists.
+
+---
+
+# 28. CROSS-FILE CONSISTENCY AUDIT
+
+Search globally for important concepts and determine whether they are implemented consistently.
+
+Examples:
+
+* same enum recreated in multiple locations
+* different timeout values for the same operation
+* different validation rules for the same entity
+* different retry policies
+* duplicate state machines
+* different defaults
+* inconsistent units
+* different status naming
+* schema and TypeScript/Python/etc. type disagreement
+* client/server contract mismatch
+* backend/frontend assumptions diverge
+* test behavior diverges from production
+* platform implementations behave differently
+* configuration duplicated across files
+
+Cross-file inconsistencies frequently expose deeper bugs.
+
+---
+
+# 29. GIT-HISTORY-ASSISTED AUDIT
+
+Where Git history is available, use it selectively to improve understanding.
+
+Inspect history for:
+
+* repeatedly modified hot spots
+* reverted fixes
+* recurring defects
+* compatibility patches
+* migrations
+* abandoned implementations
+* unusual TODOs
+* behavior whose rationale is unclear from current code
+
+Do not turn the audit into a history summary.
+
+Use history only when it helps determine whether current code is defective, fragile, obsolete, or intentionally designed.
+
+---
+
+# 30. RUN SAFE VALIDATION
+
+Where practical, run existing **non-destructive** validation such as:
+
+```text
+tests
+type checking
+linting without autofix
+build verification
+static analysis
+dependency diagnostics
+existing verification scripts
+```
+
+Do not assume the default test command covers everything.
+
+Inspect package scripts/workspaces/configuration to determine available checks.
+
+Never use:
+
+```text
+--fix
+--write
+format commands
+automatic dependency upgrades
+migration apply
+code generators that overwrite tracked files
+```
+
+Record:
+
+* command
+* outcome
+* meaningful failures
+* relevant warnings
+
+A failing command is evidence to investigate, not merely something to paste into the report.
+
+---
+
+# 31. FINDING QUALITY STANDARD
+
+Do not fill the report with low-value speculation.
+
+Every substantial finding should answer:
+
+1. **What is wrong?**
+2. **Where is it?**
+3. **Why is it wrong?**
+4. **Under what conditions does it matter?**
+5. **What is the consequence?**
+6. **What evidence supports the finding?**
+7. **How should it eventually be addressed?**
+8. **How confident are you?**
+
+Where useful, cite:
+
+* file path
+* symbol/function/class
+* line or approximate line range
+* related files
+* tests
+* configuration
+* command output
+
+Prefer evidence such as:
+
+> `src/foo.ts:120-161` writes state before `bar()` succeeds, while the retry path at `src/retry.ts:88-104` re-enters the same operation without an idempotency guard.
+
+over:
+
+> Error handling could be improved.
+
+---
+
+# 32. SEVERITY MODEL
+
+Assign every actionable finding one of:
+
+## CRITICAL
+
+Likely to cause or permit:
+
+* catastrophic data loss
+* severe security compromise
+* unrecoverable corruption
+* widespread production failure
+* violation of a core system guarantee
+
+## HIGH
+
+Material defect likely to cause:
+
+* incorrect behavior
+* major reliability failure
+* security exposure
+* significant data-integrity problems
+* major functional breakage
+* serious performance/scalability limitation
+
+## MEDIUM
+
+Meaningful issue affecting:
+
+* robustness
+* maintainability
+* less-common correctness paths
+* efficiency
+* reliability
+* test confidence
+* architecture
+
+but not normally catastrophic.
+
+## LOW
+
+Real but lower-impact weakness:
+
+* localized maintainability issue
+* minor inefficiency
+* minor robustness issue
+* cleanup opportunity with engineering value
+
+## INFO / OPPORTUNITY
+
+No present defect is demonstrated, but there is a credible opportunity to:
+
+* simplify
+* optimize
+* improve architecture
+* reduce future risk
+* improve observability
+* improve developer experience
+
+Do not inflate severity.
+
+---
+
+# 33. CONFIDENCE MODEL
+
+Assign:
+
+* **High confidence** — directly demonstrated by code/tests/runtime evidence.
+* **Medium confidence** — strongly supported but depends on runtime/environment assumptions.
+* **Low confidence** — plausible concern requiring targeted verification.
+
+Low-confidence findings must be clearly labeled as such.
+
+Do not present speculation as fact.
+
+---
+
+# 34. DEDUPLICATION
+
+Do not report the same root cause repeatedly.
+
+If one architectural defect creates 12 manifestations:
+
+* create one primary finding
+* list affected locations/examples underneath
+* describe the blast radius
+
+Use separate findings only when remediation or consequences materially differ.
+
+---
+
+# 35. PRIORITIZE ROOT CAUSES
+
+Prefer:
+
+> Shared operation state has no durable idempotency boundary, producing several retry/restart bugs.
+
+over 15 separate observations describing symptoms of that same flaw.
+
+Look for **systemic causes**.
+
+---
+
+# 36. REQUIRED `CODEBASE_AUDIT.md` STRUCTURE
+
+Create/update exactly:
+
+`CODEBASE_AUDIT.md`
+
+Use the following structure.
+
+---
+
+# Codebase Deep Audit
+
+## 1. Executive Summary
+
+Include:
+
+* overall assessment
+* major strengths
+* major weaknesses
+* highest-risk areas
+* number of findings by severity
+* most important architectural observations
+* whether the repository appears production-ready, conditionally ready, or not ready
+* overall confidence in the audit
+
+---
+
+## 2. Audit Scope
+
+Document:
+
+* repository areas inspected
+* relevant languages/frameworks
+* applications/packages/services discovered
+* validation commands executed
+* areas excluded and why
+* important audit limitations
+
+---
+
+## 3. System Architecture Model
+
+Explain your understanding of:
+
+* major components
+* component responsibilities
+* important dependencies
+* data flow
+* state ownership
+* persistence
+* external systems
+* important workflows
+* concurrency model
+* major invariants
+
+This demonstrates that findings are based on system understanding rather than random scanning.
+
+---
+
+## 4. Validation Results
+
+For every meaningful command executed, record:
+
+```text
+Command:
+Result:
+Relevant observations:
+```
+
+Do not dump enormous logs.
+
+Summarize and quote only important evidence.
+
+---
+
+## 5. Critical Findings
+
+For every finding use:
+
+### [AUDIT-XXX] Finding title
+
+**Severity:** Critical
+**Confidence:** High / Medium / Low
+**Category:** Correctness / Security / Architecture / Performance / etc.
+**Affected areas:** paths/symbols
+
+**Summary**
+
+Precise description.
+
+**Evidence**
+
+Specific code relationships, tests, behavior, configuration, or validation evidence.
+
+**Failure scenario**
+
+Describe a realistic sequence that exposes the problem.
+
+**Impact**
+
+Explain consequences.
+
+**Root cause**
+
+Explain the deeper reason if known.
+
+**Recommended direction**
+
+Describe how it should eventually be addressed.
+
+Do **not** implement it.
+
+**Verification recommendation**
+
+Explain what test or validation should prove the eventual fix.
+
+---
+
+## 6. High-Severity Findings
+
+Use the same format.
+
+---
+
+## 7. Medium-Severity Findings
+
+Use the same format.
+
+---
+
+## 8. Low-Severity Findings
+
+Use the same format.
+
+---
+
+## 9. Optimization Opportunities
+
+Cover credible opportunities involving:
+
+* CPU
+* memory
+* I/O
+* database
+* network
+* rendering
+* startup
+* bundle size
+* concurrency
+* caching
+* algorithmic complexity
+* infrastructure cost
+
+Estimate likely impact where possible.
+
+Avoid meaningless micro-optimization suggestions.
+
+---
+
+## 10. Architectural Improvement Opportunities
+
+Document:
+
+* unnecessary complexity
+* missing boundaries
+* incorrect boundaries
+* ownership problems
+* over-abstraction
+* under-abstraction
+* duplicated domain rules
+* architectural simplifications
+* stronger invariant enforcement
+* opportunities to eliminate entire bug classes
+
+---
+
+## 11. Test and Quality-Gate Gaps
+
+Identify:
+
+* important untested behaviors
+* insufficient assertions
+* missing negative tests
+* missing failure tests
+* missing concurrency tests
+* missing persistence/restart tests
+* weak CI gates
+* false-confidence areas
+
+Prioritize tests that would catch the most dangerous defects.
+
+---
+
+## 12. Security and Privacy Assessment
+
+Summarize:
+
+* concrete vulnerabilities
+* meaningful hardening opportunities
+* secret handling
+* authorization boundaries
+* input boundaries
+* sensitive data handling
+
+Clearly distinguish vulnerabilities from best-practice suggestions.
+
+---
+
+## 13. Reliability and Failure-Recovery Assessment
+
+Discuss:
+
+* crashes
+* retries
+* idempotency
+* partial failure
+* restart recovery
+* state reconciliation
+* network failures
+* dependency failures
+* corruption handling
+* shutdown/startup behavior
+
+---
+
+## 14. Performance and Scalability Assessment
+
+Discuss current likely bottlenecks and scaling boundaries.
+
+---
+
+## 15. Maintainability / Technical Debt Assessment
+
+Identify areas that are disproportionately expensive or risky to change.
+
+---
+
+## 16. Documentation / Implementation Divergence
+
+List cases where documentation, tests, configuration, schemas, or source disagree.
+
+---
+
+## 17. Dead / Stale / Suspicious Code
+
+Document credible candidates with evidence.
+
+---
+
+## 18. Cross-Cutting/Systemic Issues
+
+This section should contain issues affecting multiple components.
+
+Examples:
+
+* inconsistent state ownership
+* duplicated domain rules
+* weak transaction boundaries
+* fragmented error handling
+* inconsistent validation
+* inconsistent lifecycle management
+
+---
+
+## 19. Improvement Backlog
+
+Create a consolidated prioritized table:
+
+| Priority | ID | Severity | Finding | Impact | Effort | Confidence |
+| -------- | -- | -------- | ------- | ------ | ------ | ---------- |
+
+Use approximate effort:
+
+* XS
+* S
+* M
+* L
+* XL
+
+Do not turn effort estimates into precise time estimates.
+
+---
+
+## 20. Recommended Remediation Order
+
+Provide an ordered sequence of future remediation campaigns.
+
+For example:
+
+1. Critical correctness/security
+2. Data-integrity and recovery
+3. High-risk race conditions
+4. Architectural root causes
+5. Test gaps around those changes
+6. Performance bottlenecks
+7. Medium technical debt
+8. Low-risk cleanup
+
+Account for dependencies between fixes.
+
+Again: **recommend only. Do not perform any remediation.**
+
+---
+
+## 21. Positive Findings
+
+Record aspects that are genuinely well-designed.
+
+This prevents the report from becoming artificially negative and helps preserve architecture that should not be casually rewritten.
+
+Only include strengths supported by actual inspection.
+
+---
+
+## 22. Audit Coverage / Confidence
+
+Explain:
+
+* what was inspected deeply
+* what was inspected moderately
+* what could not be fully validated
+* runtime/environment limitations
+* areas deserving a second specialized audit
+
+---
+
+## 23. Final Assessment
+
+Conclude with:
+
+* overall health
+* largest systemic risk
+* strongest subsystem
+* weakest subsystem
+* highest-value improvement
+* most urgent remediation
+* remaining uncertainty
+
+---
+
+# 37. AUDIT DEPTH REQUIREMENT
+
+Do not stop after finding the first few significant issues.
+
+Continue inspecting the **rest of the repository**.
+
+Finding Critical or High issues early does not terminate the audit.
+
+Likewise, passing tests does not terminate the audit.
+
+Continue until you have examined all meaningful first-party areas of the repository.
+
+---
+
+# 38. DO NOT EQUATE SEARCH WITH REVIEW
+
+Searching for:
+
+```text
+TODO
+FIXME
+any
+catch
+unsafe
+deprecated
+```
+
+is useful but insufficient.
+
+You must actually reason about code.
+
+Read surrounding implementations.
+
+Follow callers and callees.
+
+Trace important workflows.
+
+Compare duplicated rules.
+
+Inspect error paths.
+
+Inspect lifecycle behavior.
+
+Inspect tests.
+
+Inspect configuration.
+
+Inspect persistence.
+
+Inspect architecture.
+
+The objective is **semantic review**, not keyword collection.
+
+---
+
+# 39. USE MULTIPLE AUDIT PASSES
+
+Perform the audit in multiple conceptual passes rather than one linear scan.
+
+At minimum:
+
+### Pass 1 — Repository mapping
+
+Understand structure, languages, packages, applications, and architecture.
+
+### Pass 2 — Intended behavior
+
+Read specifications, docs, schemas, contracts, and tests.
+
+### Pass 3 — Core correctness
+
+Trace important workflows and invariants.
+
+### Pass 4 — Failure behavior
+
+Study retries, restart, errors, partial failure, malformed inputs, and edge cases.
+
+### Pass 5 — Concurrency and state
+
+Study async execution, ownership, lifecycle, event ordering, and races.
+
+### Pass 6 — Security/privacy
+
+Study trust boundaries and sensitive data.
+
+### Pass 7 — Performance/scalability
+
+Study hot paths, algorithms, I/O, queries, network behavior, and memory.
+
+### Pass 8 — Architecture/maintainability
+
+Challenge abstractions, boundaries, duplication, and complexity.
+
+### Pass 9 — Test/CI/build
+
+Determine whether existing quality gates actually protect the system.
+
+### Pass 10 — Cross-cutting consistency
+
+Search globally for divergent implementations of the same concepts.
+
+### Pass 11 — Findings challenge
+
+Try to disprove your own findings.
+
+Remove or downgrade findings whose evidence is weak.
+
+### Pass 12 — Coverage pass
+
+Review the repository map again and identify anything you have not meaningfully inspected.
+
+Do not finalize until this last coverage pass is complete.
+
+---
+
+# 40. ADVERSARIAL REVIEW
+
+Approach important code as if you were deliberately trying to make it fail.
+
+Ask:
+
+* What input did the author probably not consider?
+* What sequence did the author probably not test?
+* What if this happens twice?
+* What if it happens simultaneously?
+* What if it succeeds halfway?
+* What if the application crashes immediately afterward?
+* What if the callback arrives much later?
+* What if state changed while awaiting?
+* What if this data comes from an older version?
+* What if a field is missing?
+* What if a field is unexpectedly present?
+* What if there are zero records?
+* One record?
+* Millions?
+* What if the clock changes?
+* What if ordering changes?
+* What if the dependency responds slowly?
+* What if the same event is replayed?
+* What if two users/processes/devices modify the same state?
+* What if cleanup runs twice?
+* What if cleanup never runs?
+
+Use these questions to discover issues; do not merely copy them into the report.
+
+---
+
+# 41. CHALLENGE EACH FINDING
+
+Before recording a serious finding:
+
+1. Re-read the relevant code.
+2. Search for guards elsewhere.
+3. Search callers.
+4. Search tests.
+5. Search configuration that could invalidate your assumption.
+6. Check whether behavior is intentional/documented.
+7. Determine realistic reachability.
+8. Determine realistic impact.
+9. Adjust severity and confidence accordingly.
+
+Avoid false positives.
+
+A smaller number of **well-proven** findings is more valuable than hundreds of generic recommendations.
+
+At the same time, do not suppress valid findings merely because they require complex reasoning.
+
+---
+
+# 42. DO NOT MODIFY THE SOFTWARE EVEN WHEN THE FIX IS OBVIOUS
+
+You will probably encounter issues that take only one line to fix.
+
+Do not fix them.
+
+You may document:
+
+* suggested strategy
+* example conceptual approach
+* expected invariant
+* recommended regression test
+
+but you must leave implementation untouched.
+
+The objective of this session is to produce a **diagnostic artifact**, not a patch.
+
+---
+
+# 43. REPORT DURABLE INFORMATION
+
+Write the report so that another engineer or autonomous coding agent can later use it as the basis of a remediation campaign **without having to rediscover why each issue exists**.
+
+Include enough technical context that a future agent can:
+
+* locate the issue
+* understand the failure
+* understand dependencies
+* reproduce it where possible
+* determine intended behavior
+* implement a fix
+* create a regression test
+* verify completion
+
+---
+
+# 44. FINAL COMPLETION CHECK
+
+You are finished only when all of the following are true:
+
+* [ ] Repository structure was mapped.
+* [ ] All meaningful first-party areas were inspected.
+* [ ] Architecture was understood and documented.
+* [ ] Important end-to-end workflows were traced.
+* [ ] Core invariants were identified and challenged.
+* [ ] Correctness was audited.
+* [ ] Failure paths were audited.
+* [ ] Concurrency/state behavior was audited where applicable.
+* [ ] Security/privacy were audited.
+* [ ] Performance/scalability were audited.
+* [ ] Persistence/database behavior was audited where applicable.
+* [ ] Dependencies were audited.
+* [ ] Build/configuration were audited.
+* [ ] CI/CD was audited.
+* [ ] Tests were audited for quality, not merely pass/fail.
+* [ ] Architecture and foundational assumptions were challenged.
+* [ ] Cross-file inconsistencies were searched for.
+* [ ] Dead/stale/suspicious code was considered.
+* [ ] Safe validation commands were run where practical.
+* [ ] Findings were challenged for false positives.
+* [ ] Severity/confidence were assigned.
+* [ ] Duplicate symptoms were consolidated under root causes.
+* [ ] Recommendations were prioritized.
+* [ ] Positive architectural findings were recorded.
+* [ ] Audit limitations were disclosed.
+* [ ] A final coverage pass was completed.
+* [ ] No code/config/test files were intentionally modified.
+* [ ] `git status --short` was checked.
+* [ ] The only intentional repository write is `CODEBASE_AUDIT.md`.
+
+---
+
+# 45. FINAL INSTRUCTION
+
+Be exhaustive, skeptical, technical, evidence-driven, and adversarial.
+
+Do not optimize for finishing quickly.
+
+Do not optimize for producing a large number of findings.
+
+Optimize for **discovering the most important truths about this codebase**.
+
+Investigate the repository as a system.
+
+Trace behavior across boundaries.
+
+Question assumptions.
+
+Look for bugs that ordinary linting, testing, and superficial review would miss.
+
+Then record everything worth preserving in:
+
+`CODEBASE_AUDIT_v4.md`
+
+**Do not make any code changes. Do not remediate anything. The audit report is the sole deliverable.**
+
