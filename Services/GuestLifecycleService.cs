@@ -30,6 +30,22 @@ public sealed class GuestLifecycleService
     private readonly Dictionary<IntPtr, (DispatcherTimer Timer, CapturedWindow Member)> _nameChangeDebounce = new();
     private readonly Dictionary<IntPtr, (DispatcherTimer Timer, CapturedWindow Member)> _minimizeHideDebounce = new();
 
+    // Coalesces foreground/reorder/move-size-END "presentation repair" events
+    // per HWND per dispatcher turn. A rapid burst (alt-tab storm, dragging
+    // another window, container drag) collapses to at most ONE
+    // PairZOrderBehindGuest / NoteGuestMoveSize per HWND instead of one per
+    // native event. DESTROY/HIDE/minimize lifecycle events are handled
+    // immediately and are never coalesced (correctness must not be dropped).
+    [Flags]
+    private enum RepairKind
+    {
+        Pair = 1,
+        MoveSizeEnd = 2,
+    }
+
+    private readonly Dictionary<IntPtr, RepairKind> _pendingRepair = new();
+    private bool _repairScheduled;
+
     public GuestLifecycleService(GroupManager groups, Dictionary<Guid, ContainerWindow> containers, LoggingService log)
     {
         _groups = groups;
@@ -242,10 +258,7 @@ public sealed class GuestLifecycleService
     // window either way).
     private void OnForegroundChanged(object? sender, WindowEventArgs args)
     {
-        if (!_groups.TryGetCapturedMember(args.Hwnd, out Group? group, out _))
-            return;
-        if (_containers.TryGetValue(group.Id, out var container))
-            container.PairZOrderBehindGuest(args.Hwnd);
+        QueueRepair(args.Hwnd, RepairKind.Pair);
     }
 
     // A top-level guest activation also reorders the desktop's window list.
@@ -260,10 +273,7 @@ public sealed class GuestLifecycleService
         IntPtr foregroundHwnd = args.RelatedHwnd;
         if (foregroundHwnd == IntPtr.Zero || NativeMethods.GetForegroundWindow() != foregroundHwnd)
             return;
-        if (!_groups.TryGetCapturedMember(foregroundHwnd, out Group? group, out _))
-            return;
-        if (_containers.TryGetValue(group.Id, out var container))
-            container.PairZOrderBehindGuest(foregroundHwnd);
+        QueueRepair(foregroundHwnd, RepairKind.Pair);
     }
 
     // A guest entered/left its interactive move/size modal loop (e.g. the
@@ -272,17 +282,65 @@ public sealed class GuestLifecycleService
     // the only release gesture.
     private void OnGuestMoveSize(IntPtr hwnd, bool started)
     {
-        // Resolve the member directly through GroupManager's HWND index. The
-        // move/size callback only re-glues an existing member; it never mutates
-        // the group collection, so there is no release-induced enumeration or
-        // re-entrancy here.
-        if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match))
+        // A move/size START must be handled immediately (it begins drag tracking);
+        // only the END (a re-glue presentation repair) is coalesced with the
+        // other per-HWND repair events below.
+        if (started)
+        {
+            if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match))
+                return;
+            if (_containers.TryGetValue(group.Id, out var container))
+                container.NoteGuestMoveSize(match, started: true);
+            return;
+        }
+
+        QueueRepair(hwnd, RepairKind.MoveSizeEnd);
+    }
+
+    /// <summary>
+    /// Collapses a burst of foreground/reorder/move-size-end native events for the
+    /// same HWND into a single dispatcher-turn reconciliation. Only one
+    /// <c>BeginInvoke</c> is ever outstanding per turn; subsequent events within
+    /// that turn merely accumulate their HWND into <see cref="_pendingRepair"/>, so
+    /// each HWND is repaired at most once per turn.
+    /// </summary>
+    private void QueueRepair(IntPtr hwnd, RepairKind kind)
+    {
+        if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out _))
+            return;
+        if (!_containers.TryGetValue(group.Id, out _))
             return;
 
-        if (_containers.TryGetValue(group.Id, out var container))
+        _pendingRepair.TryGetValue(hwnd, out RepairKind existing);
+        _pendingRepair[hwnd] = existing | kind;
+        if (!_repairScheduled)
         {
-            container.NoteGuestMoveSize(match, started);
+            _repairScheduled = true;
+            Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Input, (Action)ProcessPendingRepair);
         }
+    }
+
+    private void ProcessPendingRepair()
+    {
+        _repairScheduled = false;
+        if (_pendingRepair.Count == 0)
+            return;
+
+        foreach (var kvp in _pendingRepair)
+        {
+            IntPtr hwnd = kvp.Key;
+            RepairKind kind = kvp.Value;
+            if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match))
+                continue;
+            if (!_containers.TryGetValue(group.Id, out var container))
+                continue;
+            if ((kind & RepairKind.Pair) != 0)
+                container.PairZOrderBehindGuest(hwnd);
+            if ((kind & RepairKind.MoveSizeEnd) != 0 && match != null)
+                container.NoteGuestMoveSize(match, started: false);
+        }
+
+        _pendingRepair.Clear();
     }
 
     // Some guests (e.g. Windows 11 Notepad) mirror document content into the

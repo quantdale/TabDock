@@ -222,6 +222,14 @@ public sealed class WindowShepherdService
     // of the correctness boundary.
     private HiddenWindowJournalFile? _journalCache;
 
+    // A normal capture durably commits its complete recovery entry before the
+    // first presentation mutation. Rewriting and fsync'ing that identical entry
+    // before every tab-hide made tab switching perform forced disk I/O on the UI
+    // thread. Track capture generations whose rescue entry is already durable so
+    // ordinary hides can reuse it. An intentional-hide marker removes the token
+    // from this set because a later retained capture must re-commit rescue intent.
+    private readonly HashSet<long> _durablyJournaledCaptureTokens = new();
+
     public WindowShepherdService(LoggingService log, string? journalPath = null)
         : this(log, journalPath, identityApi: null, monitorDpiProbe: null, releaseApi: null, captureApi: null, testSequencingHook: null)
     {
@@ -911,6 +919,7 @@ public sealed class WindowShepherdService
         NativeMethods.RECT screenRect,
         bool verifyProcessInstance)
     {
+        RuntimeTelemetry.Instance.RecordSetWindowPos();
         if (!NativeMethods.IsWindow(containerHwnd)
             || !IsCurrentCapturedWindow(window, "position", verifyExecutable: false, verifyProcessInstance: verifyProcessInstance))
             return;
@@ -1127,6 +1136,7 @@ public sealed class WindowShepherdService
     /// </summary>
     public void PositionGuestsDeferred(CapturedWindow top, NativeMethods.RECT topRect, CapturedWindow bottom, NativeMethods.RECT bottomRect, IntPtr containerHwnd)
     {
+        RuntimeTelemetry.Instance.RecordSetWindowPos();
         if (!IsCurrentCapturedWindow(top, "position-split", verifyExecutable: false, verifyProcessInstance: false)
             || !IsCurrentCapturedWindow(bottom, "position-split", verifyExecutable: false, verifyProcessInstance: false)
             || !NativeMethods.IsWindow(containerHwnd))
@@ -1262,6 +1272,7 @@ public sealed class WindowShepherdService
     /// </summary>
     public void PairZOrderBehind(IntPtr containerHwnd, CapturedWindow guest)
     {
+        RuntimeTelemetry.Instance.RecordSetWindowPos();
         if (!IsCurrentCapturedWindow(guest, "z-order", verifyExecutable: false, verifyProcessInstance: false))
             return;
 
@@ -1408,6 +1419,7 @@ public sealed class WindowShepherdService
         }
 
         bool previouslyVisible = _releaseApi.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
+        RuntimeTelemetry.Instance.RecordShowWindow();
         WindowIdentityResult postHideIdentity = EvaluateCurrentCapturedWindow(
             window,
             "hide-post-native",
@@ -1499,6 +1511,7 @@ public sealed class WindowShepherdService
     /// </summary>
     public void SetForeground(CapturedWindow window)
     {
+        RuntimeTelemetry.Instance.RecordSetForeground();
         if (!IsCurrentCapturedWindow(window, "foreground", verifyExecutable: true, verifyProcessInstance: true))
             return;
         if (NativeMethods.GetForegroundWindow() == window.Hwnd)
@@ -1810,19 +1823,44 @@ public sealed class WindowShepherdService
     /// boundary: a terminating process cannot run an exit handler later.
     /// </summary>
     private bool JournalCapture(CapturedWindow window)
-        => UpsertJournalEntry(window, doNotRescue: false, "JournalCapture");
+    {
+        bool committed = UpsertJournalEntry(window, doNotRescue: false, "JournalCapture");
+        if (committed)
+            _durablyJournaledCaptureTokens.Add(window.WindowIdentityToken);
+        return committed;
+    }
 
     /// <summary>
-    /// Refreshes the durable capture entry immediately before a TabDock-driven
-    /// hide. The entry already exists for a normal capture. If an older journal
-    /// was loaded, the schema-compatibility gate refuses this write rather
-    /// than silently rewriting tokenless recovery evidence as v3.
+    /// Ensures rescue intent is durable before a TabDock-driven hide.
+    ///
+    /// Capture already commits the complete capture-session recovery entry
+    /// synchronously before any presentation mutation. For that overwhelmingly
+    /// common case, rewriting the identical JSON with WriteThrough + Flush(true)
+    /// on every tab switch is redundant and blocks the WPF input turn. Only
+    /// captures that do not currently have a known-durable rescue entry pay the
+    /// synchronous journal write here.
     /// </summary>
     private bool JournalHide(CapturedWindow window)
-        => UpsertJournalEntry(window, doNotRescue: false, "JournalHide");
+    {
+        if (_durablyJournaledCaptureTokens.Contains(window.WindowIdentityToken))
+        {
+            TestSequence("JournalHide.already-durable");
+            return true;
+        }
+
+        bool committed = UpsertJournalEntry(window, doNotRescue: false, "JournalHide");
+        if (committed)
+            _durablyJournaledCaptureTokens.Add(window.WindowIdentityToken);
+        return committed;
+    }
 
     private bool JournalMarkIntentionalHide(CapturedWindow window)
-        => UpsertJournalEntry(window, doNotRescue: true, "JournalIntentionalHide");
+    {
+        bool committed = UpsertJournalEntry(window, doNotRescue: true, "JournalIntentionalHide");
+        if (committed)
+            _durablyJournaledCaptureTokens.Remove(window.WindowIdentityToken);
+        return committed;
+    }
 
     private bool UpsertJournalEntry(CapturedWindow window, bool doNotRescue, string operation)
     {
@@ -1838,6 +1876,7 @@ public sealed class WindowShepherdService
             file.Entries.Add(entry);
             file.Version = HiddenWindowJournalFile.CurrentVersion;
             SaveJournal(file);
+            RuntimeTelemetry.Instance.RecordJournalCommit();
             TestSequence(operation + ".committed");
             return true;
         }
@@ -1914,6 +1953,7 @@ public sealed class WindowShepherdService
                 return true;
 
             SaveJournal(file);
+            _durablyJournaledCaptureTokens.Remove(window.WindowIdentityToken);
             return true;
         }
         catch (Exception ex)

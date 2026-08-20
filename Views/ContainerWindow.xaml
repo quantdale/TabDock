@@ -148,6 +148,7 @@
                      ItemsSource="{Binding DisplayTabs}"
                      SelectedItem="{Binding ActiveTab, Mode=OneWay}"
                      SelectionChanged="TabsListBox_SelectionChanged"
+                     PreviewMouseLeftButtonDown="TabsListBox_PreviewMouseLeftButtonDown_SplitInteraction"
                      PreviewMouseRightButtonDown="TabsListBox_PreviewMouseRightButtonDown"
                      Background="Transparent"
                      BorderThickness="0"

@@ -42,10 +42,16 @@ public sealed class PresentationLayoutCoordinator
         // ensureFinalPass must latch even when already pending: WM_EXITSIZEMOVE's
         // final z-order reconciliation must survive a Render already queued from
         // the final WM_WINDOWPOSCHANGED (Q9).
-        if (ensureFinalPass)
-            _relayoutAfterPending = true;
+        // A requested "final pass" only needs a SECOND pass when another
+        // render callback is already pending. When idle, the pass we are about
+        // to schedule is itself the final pass; latching here would always
+        // execute two frames for one request.
         if (_relayoutPending)
+        {
+            if (ensureFinalPass)
+                _relayoutAfterPending = true;
             return;
+        }
         _relayoutPending = true;
         // Coalescing token: each queued frame gets a monotonic id so a stale
         // Render callback that was queued before InvalidateLayout/exit can be
@@ -63,12 +69,15 @@ public sealed class PresentationLayoutCoordinator
             {
                 // Stale frame: layout was invalidated between schedule and
                 // callback (member removed, mode changed, container closed).
-                // Skip this execute but still honor ensureFinalPass so a
-                // WM_EXITSIZEMOVE final z-order reconciliation is not lost.
-                if (_relayoutAfterPending)
+                // Discard this execute, but still honor a requested final pass:
+                // a pending frame's follow-up (_relayoutAfterPending) OR an idle
+                // ensureFinalPass whose frame went stale before executing must
+                // re-schedule a fresh pass so a WM_EXITSIZEMOVE final z-order
+                // reconciliation is not lost.
+                if (_relayoutAfterPending || ensureFinalPass)
                 {
                     _relayoutAfterPending = false;
-                    RequestRelayout(scheduleRender, execute);
+                    RequestRelayout(scheduleRender, execute, ensureFinalPass);
                 }
                 return;
             }

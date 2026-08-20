@@ -125,7 +125,7 @@ public class NativeHwndHost : HwndHost
                     0,
                     width,
                     height,
-                    NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_FRAMECHANGED);
+                    NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
             }
         }
         return result;

@@ -126,6 +126,7 @@ public sealed class GroupManager
             {
                 _saveDebounce!.Stop();
                 _persistence.Save(Groups);
+                RuntimeTelemetry.Instance.RecordStateJsonCommit();
             };
         }
         _saveDebounce.Stop();
@@ -143,6 +144,7 @@ public sealed class GroupManager
     {
         _saveDebounce?.Stop();
         _persistence.Save(Groups);
+        RuntimeTelemetry.Instance.RecordStateJsonCommit();
         _log.Log($"Persisted semantic state change: {reason}");
     }
 
@@ -351,11 +353,20 @@ public sealed class GroupManager
     {
         if (index < 0 || index >= group.Members.Count)
             return;
+
+        // Active selection is a hot-path presentation preference, not a
+        // crash-safety boundary. Avoid a synchronous durable state-file commit
+        // on every click/focus transition; the capture recovery journal is the
+        // safety-critical store. Also make repeated activation of the already
+        // active index a true no-op.
+        if (group.ActiveIndex == index)
+            return;
+
         group.ActiveIndex = index;
         _log.Log($"Switched group {group.Id} to tab {index}");
         DiagnosticRuntime.Record("group.active-tab", group: group.Id.ToString("N"), action: "switch", result: "success",
             data: new Dictionary<string, string> { ["index"] = index.ToString(System.Globalization.CultureInfo.InvariantCulture) });
-        RequestDurableSave("active-tab-selected");
+        RequestSave();
     }
 
     public void MoveTab(Group group, int oldIndex, int newIndex)

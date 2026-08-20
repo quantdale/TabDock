@@ -143,7 +143,10 @@ internal static class DeferredWindowPositionBatch
             hdwp = updated;
         }
 
-        return api.End(hdwp)
+        bool applied = api.End(hdwp);
+        if (applied)
+            RuntimeTelemetry.Instance.RecordDeferBatch();
+        return applied
             ? DeferredWindowPositionResult.Applied
             : DeferredWindowPositionResult.EndFailed;
     }

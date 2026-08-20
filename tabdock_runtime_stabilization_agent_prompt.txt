@@ -1,0 +1,632 @@
+/goal
+
+TabDock runtime stabilization campaign — fix the ACTUAL desktop runtime, not a parallel test model.
+
+Repository:
+https://github.com/quantdale/TabDock
+
+Authoritative starting baseline when this prompt was written:
+a422785960c903b7ef00d6329675ddc5ec3cec11
+
+The user reports the current application is still visibly laggy/glitchy and not consumer-grade. The most important still-reproducible correctness defect is:
+
+    Four tabs: A, B, C, D
+    A + B are a persistent split pair
+    user clicks C or D
+    => C/D sometimes cannot actually become the visible ordinary tab
+       and the user remains effectively trapped in split
+
+This is a LIVE-RUNTIME remediation campaign. Do not respond with another audit-only report. Inspect, reproduce, instrument, fix, validate on a real Windows desktop, and keep working until the concrete runtime acceptance tests pass.
+
+==================================================
+0. CRITICAL CONTEXT FROM THE REPOSITORY AUDIT
+==================================================
+
+Do NOT assume the existing green deterministic tests prove the WPF/native runtime.
+
+A repository-wide review found an architectural testing gap:
+
+- SplitPresentationController
+- SplitInteractionPolicy
+- PresentationLayoutCoordinator
+- PresentationOperationBudget
+
+exist and have substantial deterministic coverage, BUT ContainerWindow still owns duplicated production split state, duplicated relayout state, WPF routed-event ordering, and most native presentation transactions.
+
+This means the tests can validate a parallel model while the real application remains wrong.
+
+Treat that as a P0 architectural correctness issue.
+
+Also independently verify and preserve the high-confidence hotfixes below. If they are already present in the tree, do not revert them.
+
+==================================================
+1. P0 — MAKE NON-SPLIT TAB ACTIVATION ONE REAL WPF TRANSACTION
+==================================================
+
+Current problematic shape at baseline:
+
+- ContainerWindow.xaml.cs registers TabsListBox_PreviewMouseLeftButtonDown.
+- While split is presented, that handler intentionally handles/swallow a normal TabViewModel click to prevent WPF selection ping-pong.
+- ContainerWindow.SplitInteractionFix.cs separately registers another PreviewMouseLeftButtonDown handler with handledEventsToo=true in OnContentRendered.
+- That second callback does another InputHitTest and tries to recover the click by calling SuspendPresentedPairForUserSelection.
+
+This is fragile and is a likely reason the four-tab defect still survives despite deterministic policy tests.
+
+Required architecture:
+
+ONE authoritative routed-event path must own:
+
+    pointer hit on ordinary non-member C/D
+      -> classify target
+      -> prevent premature ListBox selection
+      -> journal-safe split suspension
+      -> commit dormant split state
+      -> switch model active tab
+      -> position/show C/D once
+      -> foreground C/D once
+
+No "first handler swallows, second handledEventsToo handler recovers" design.
+
+Preferred implementation:
+- wire the split interaction preview handler during InitializeComponent/XAML or otherwise guarantee it runs before ordinary drag/selection logic;
+- once it identifies a valid non-member click, set Handled=true and execute the canonical transition;
+- ordinary drag handler must never see that already-owned interaction;
+- remove the handledEventsToo recovery hook and duplicate second hit-test path.
+
+Buttons, middle-click, right-click, split member halves, context menus, and drag affordances must retain their own behavior.
+
+Mandatory real test:
+
+    A+B split
+    click C
+    assert C visible/full content rect
+    assert A hidden
+    assert B hidden
+    assert pair relationship still A/B dormant
+    click A half/composite
+    assert exact A/B pair resumes
+    click D
+    assert D visible
+    repeat 50 cycles alternating C/D
+
+Do this with actual WPF routed events / ValidationDriver real input, not only a pure policy object.
+
+==================================================
+2. P0 — REMOVE DURABLE DISK I/O FROM TAB-CLICK HOT PATH
+==================================================
+
+Audit finding:
+
+GroupManager.SwitchActiveTab currently makes active selection a synchronous durable state save.
+
+PersistenceService.Save serializes state and performs backup/temp/atomic file writes synchronously.
+
+WindowShepherdService.Hide also refreshes the recovery journal synchronously even though a successful capture already committed the complete capture-session recovery entry BEFORE the first presentation mutation.
+
+The recovery journal uses deliberate durable disk semantics.
+
+Therefore normal A->B switching can enter durable storage multiple times during the WPF input turn; split A/B->C can hide two guests and then persist state, multiplying the stall.
+
+Fix this structurally.
+
+A. Active tab persistence
+
+Active selection is NOT a crash-recovery safety boundary.
+
+- same index => true no-op
+- active-index state save => debounced/coalesced
+- ultimately move ordinary state.json writing off the dispatcher/UI thread
+
+Preferred persistence design:
+
+    UI thread:
+      mutate authoritative model
+      build immutable persisted DTO/snapshot
+      enqueue generation N
+
+    one background state writer:
+      discard superseded generations
+      write newest snapshot atomically
+      update last-saved fingerprint
+      never block tab/input/layout threads
+
+On shutdown:
+- bounded final flush of latest state if possible
+- do not make normal focus/tab switching synchronous again
+
+Keep capture/release recovery journal safety separate.
+
+B. Recovery journal
+
+Preserve the non-negotiable invariant:
+
+    successful Capture
+       -> durable complete rescue entry
+       -> ONLY THEN first DWM/visibility/placement mutation
+
+Once that capture-generation rescue entry is known durable, ordinary TabDock
+SW_HIDE used for tab switching must NOT rewrite+fsync identical recovery JSON.
+
+Track current capture generations whose rescue entry is durably committed.
+
+Rules:
+- JournalCapture success => rescue generation known durable
+- ordinary JournalHide with same live generation => reuse known durable entry; zero disk write
+- JournalMarkIntentionalHide success => invalidate "rescue known durable" for that generation
+- if ownership is retained after an intentional-hide/release failure, a future ordinary hide must re-establish rescue intent before hiding
+- JournalClear/release cleans bookkeeping
+- legacy/loaded/recovery entries remain fail-closed
+- never weaken identity/recovery semantics to gain speed
+
+Add deterministic tests proving:
+- 100 ordinary hides after one successful capture cause zero additional durable journal commits
+- intentional-hide marker then retained ownership requires the rescue commit before a subsequent ordinary hide
+- failed initial capture journal still blocks capture
+- force-kill recovery after repeated background tab switches still rescues the guest correctly
+
+==================================================
+3. P1 — FIX RELAYOUT EVENT AMPLIFICATION
+==================================================
+
+Audit the REAL ContainerWindow path.
+
+Known issue #1:
+RequestRelayout(ensureFinalPass:true) sets the "after pending" latch before
+checking whether a render is already pending.
+
+Correct invariant:
+
+- idle + ensureFinalPass => ONE scheduled pass
+- already pending + ensureFinalPass => pending pass + exactly ONE follow-up final pass
+
+Apply this both to:
+- live ContainerWindow logic
+- PresentationLayoutCoordinator
+
+Then make PresentationLayoutCoordinator the actual production scheduler rather
+than leaving a duplicated test-only scheduler in ContainerWindow.
+
+Known issue #2:
+LayoutUpdated currently requests relayout on every WPF layout pass.
+
+Replace with geometry-dirty behavior:
+- compare actual physical ContentHost screen rect
+- if unchanged within rounding epsilon => no RequestRelayout
+- if changed => one coalesced render request
+- reset/invalidate cached rect on DPI/topology changes as needed
+
+Audit every current trigger:
+- WM_WINDOWPOSCHANGING
+- WM_WINDOWPOSCHANGED
+- WM_EXITSIZEMOVE
+- LocationChanged
+- SizeChanged
+- LayoutUpdated
+- StateChanged
+- CompositionTarget.Rendering
+- foreground/reorder WinEvents
+- guest move/size loop
+
+For each logical frame, identify which trigger is authoritative and which are
+fallbacks.
+
+There must not be 3-5 different callbacks all independently re-gluing the same
+geometry.
+
+==================================================
+4. P1 — FIX SPLIT Z-ORDER CHURN
+==================================================
+
+At baseline, split layout treats the z-order as healthy only when:
+
+    GetWindow(top, GW_HWNDNEXT) == bottom
+
+That requires strict adjacency.
+
+This is not a valid real-world invariant. IME windows, accessibility helpers,
+shell overlays, GPU/driver helper HWNDs, and unrelated top-level windows can
+legally exist between the two guests.
+
+If geometry is already correct but a helper sits between the panes in z-order,
+the current code can repeatedly issue a full PositionGuestsDeferred batch.
+
+Replace strict adjacency with RELATIVE ORDER:
+
+    focused/top split member occurs somewhere above partner
+    partner occurs above/paired correctly relative to TabDock container
+
+Then:
+- if relative order is already healthy, only repair container pairing if needed
+- do not reissue guest geometry
+- do not fight unrelated HWNDs
+
+Add a deterministic z-order seam/test where:
+
+    top
+    helper-1
+    helper-2
+    bottom
+    unrelated
+    container
+
+is accepted as healthy pair order.
+
+Also test:
+- container accidentally between top/bottom => one z-order repair
+- partner above focused member => one pair-order repair
+- helper insertion/removal does not cause repeated PositionGuestsDeferred
+
+==================================================
+5. P1 — REMOVE UNNECESSARY NATIVE FRAME CHURN
+==================================================
+
+NativeHwndHost is only a plain WS_CHILD marker for content geometry.
+
+Its ArrangeOverride does not need SWP_FRAMECHANGED for a size-only update.
+
+Remove it unless measurement proves a real necessity.
+
+Then audit all SetWindowPos/DeferWindowPos flags in:
+- NativeHwndHost
+- WindowShepherdService
+- DeferredWindowPositionBatch
+- ContainerWindow
+
+Look for:
+- unnecessary SWP_FRAMECHANGED
+- unnecessary activation
+- repeated z-order writes with unchanged order
+- geometry calls where current rect already equals target
+- repeated show calls on already-visible windows
+- repeated foreground calls when already foreground
+
+Do not add animations. Instant switching is the intended UX.
+
+==================================================
+6. P1 — MAKE THE HARDENING CONTROLLERS THE REAL RUNTIME AUTHORITY
+==================================================
+
+This is a major correctness requirement.
+
+Do not keep:
+- one SplitPresentationController state machine for tests
+and
+- another set of _splitLeft/_splitRight/_splitPairPresented/... fields that
+  independently decide production behavior.
+
+Likewise do not keep:
+- PresentationLayoutCoordinator tests
+and
+- a separate production relayout state machine.
+
+Incrementally converge, with tests at each step.
+
+Target:
+
+ContainerWindow:
+- WPF HWND/message wiring
+- visual-tree hit testing
+- invoking controllers
+- translating controller outcomes to native service calls
+
+SplitPresentationController:
+- pair identity
+- presented/dormant
+- focused member
+- generation
+- enter/suspend/resume/exit/member removal transition authority
+
+SplitInteractionPolicy:
+- actual classification used by runtime handler
+
+PresentationLayoutCoordinator:
+- actual production coalescing/generation/final-pass authority
+
+WindowShepherdService:
+- native mutation + identity/recovery safety
+
+Delete duplicated/dead code once production is using the seams.
+
+Do NOT do a giant rewrite. Migrate one transition at a time and keep the app
+buildable.
+
+==================================================
+7. P1 — INSTRUMENT ACTUAL LATENCY, NOT JUST OPERATION COUNTS
+==================================================
+
+Add a low-overhead development diagnostic that measures real transitions.
+
+For every tab transition assign a transition id and record timestamps for:
+
+- PreviewMouseDown received
+- target classified
+- journal gate complete
+- old guest(s) hide initiated/completed
+- new guest geometry committed
+- new guest visible
+- foreground request issued
+- foreground observed
+- transition stable
+
+Also record counts:
+- ShowWindow
+- SetWindowPos
+- DeferWindowPos batches
+- SetForegroundWindow
+- durable journal commits
+- state.json commits
+- RequestRelayout calls
+- actual RelayoutGuests executions
+
+Do not synchronously log to disk; existing LoggingService is already
+background/bounded.
+
+Acceptance targets on a healthy local SSD:
+- zero state.json disk commit inside the click transition
+- zero recovery-journal disk commit on ordinary switches after capture
+- no duplicate hide/show/layout for a single transition
+- input-to-target-visible should normally be well below one frame-to-a-few-frames,
+  not hundreds of milliseconds
+- report p50/p95/p99 from >= 200 transitions
+
+Do not fake timing evidence if the environment cannot collect it.
+
+==================================================
+8. P1 — WIN EVENT STORM COALESCING
+==================================================
+
+Audit WinEventMonitor + GuestLifecycleService.
+
+The desktop-wide EVENT_OBJECT_REORDER hook can be noisy.
+
+Current filtering is useful but may still enqueue duplicate work for the same
+foreground captured HWND.
+
+Implement per-HWND/event coalescing so a burst within the same dispatcher turn
+produces at most one pairing/layout reconciliation.
+
+Rules:
+- DESTROY/HIDE lifecycle correctness events must not be dropped
+- foreground/reorder/movesize presentation repair may be coalesced
+- stale generation events must be discarded
+- do not allocate large dictionaries/strings in the raw WinEvent callback
+
+Measure event counts before/after during:
+- browser typing
+- IME popup
+- alt-tab storm
+- dragging another unrelated window
+- TabDock container drag
+- split member focus A<->B
+
+==================================================
+9. P2 — DIAGNOSTIC HOT PATH
+==================================================
+
+DiagnosticRuntime.Trace always constructs timestamped records and locks the ring
+buffer.
+
+Keep high-value diagnostics, but classify event kinds:
+
+- correctness/audit events: always keep
+- high-frequency movement/reorder telemetry: sample or coalesce unless explicit
+  diagnostic mode is enabled
+
+Do not remove privacy protections.
+
+Prove this actually matters before doing broad churn; prioritize the synchronous
+disk and duplicate native work first.
+
+==================================================
+10. FUNDAMENTAL SHEPHERD ARCHITECTURE CHECK
+==================================================
+
+Do not assume infinite callback tuning can make two independent top-level DWM
+surfaces behave exactly like one native window.
+
+After fixing the concrete duplicate work above, measure container drag/resize.
+
+The current Shepherd architecture intentionally keeps guests as independent
+top-level HWNDs. This is excellent for input/focus reversibility and avoids
+SetParent/AttachThreadInput, but there is a compositor synchronization ceiling:
+the WPF container and guest HWNDs are separate DWM surfaces.
+
+Investigate an earlier movement signal such as WM_WINDOWPOSCHANGING, using the
+proposed container rect to pre-position guest(s) before the container's move is
+committed.
+
+Do NOT blindly add another callback.
+
+If WM_WINDOWPOSCHANGING materially improves jitter, use it as authoritative
+during the native move loop and suppress later duplicate glue.
+
+If consumer-grade drag still cannot be achieved, produce an architecture
+decision with measured evidence comparing:
+
+A. Shepherd top-level HWNDs (current)
+B. reversible reparenting (likely reject because historical input/DPI risk)
+C. DWM thumbnail / Windows Graphics Capture visual embedding + separate input
+   forwarding (major complexity)
+D. different shell/container strategy
+
+Do not switch architectures without evidence and a migration plan.
+
+==================================================
+11. LIVE WINDOWS VALIDATION — MANDATORY
+==================================================
+
+Do not declare this fixed from unit tests alone.
+
+Use a dedicated Windows desktop/session where SendInput does not interfere with
+the user's mouse/keyboard.
+
+At minimum:
+
+Scenario A — exact user bug
+- capture A/B/C/D
+- split A+B
+- click C
+- assert C full-width and foreground
+- resume A+B
+- click D
+- assert D full-width and foreground
+- repeat 50 alternating cycles
+
+Scenario B — pair member focus
+- A+B split
+- alternate A/B focus 100 times
+- neither member hides
+- no geometry re-batch after stable state
+- only required foreground/z-order work
+
+Scenario C — rapid switching
+- A/B/C/D ordinary
+- 200 rapid tab switches
+- no stale visible guest
+- no stacked windows
+- no click swallowed
+- p95 latency recorded
+
+Scenario D — split + helper HWNDs
+- enable IME / tooltip / overlay where possible
+- A+B split
+- verify no deferred-layout storm
+
+Scenario E — movement
+- drag/resize TabDock for >= 20 seconds
+- capture native operation counts per frame
+- no repeated identical pair layout
+- no one-frame backward jump if avoidable
+
+Scenario F — recovery
+- background several guests through many tab switches
+- hard-kill TabDock
+- relaunch/recovery tooling
+- prove captured guests recover correctly
+
+Scenario G — lifecycle
+- guest self-closes while active
+- guest self-closes while background
+- split left/right self-close
+- dormant pair member self-close
+- minimize/restore
+- alt-tab away/back
+- context-menu pop-out
+- group close cancellation
+
+Use real Chrome and Edge if available plus simpler native apps.
+
+==================================================
+12. TESTING CHANGES
+==================================================
+
+Add tests that exercise production seams, not duplicate fake models.
+
+Required deterministic tests:
+- final-pass idle => one execute
+- final-pass while pending => exactly one follow-up
+- repeated ordinary hide after durable capture => no new journal writes
+- intentional-hide invalidates rescue-durable cache
+- relative split z-order accepts helper HWNDs
+- runtime split input classifier is the same implementation used by
+  ContainerWindow
+- same active tab => no persistence request
+- coalesced foreground/reorder storm => one reconciliation
+
+Required WPF/dispatcher integration test if feasible:
+- construct real ListBox/DisplayTabs
+- mark an earlier routed preview stage handled where appropriate
+- prove the production handler path activates C while A/B remains dormant
+- no physical SendInput required for CI
+
+Keep supervised ValidationDriver real-input test as stronger evidence.
+
+==================================================
+13. VALIDATION
+==================================================
+
+Run at minimum:
+
+dotnet build TabDock.sln -c Debug
+dotnet build TabDock.sln -c Release
+dotnet test tests/UnitTests/TabDock.UnitTests.csproj -c Release
+pwsh -File scripts/validate.ps1 -Configuration Release -Ci -Publish
+pwsh -File scripts/release-tooling-tests.ps1
+git diff --check
+
+Run all newly-added runtime/performance tests.
+
+Then run the supervised real desktop scenarios above.
+
+Do not weaken:
+- Shepherd identity generation gates
+- durable capture-before-mutation recovery boundary
+- pending-recovery fail-closed behavior
+- privacy tests
+- release provenance
+- immutable workflow action pins
+- exact-SHA staging promotion
+
+==================================================
+14. DELIVERY
+==================================================
+
+Use the repository's hardened autonomous flow:
+
+- synchronize from origin/main
+- work on agent/staging (or a temporary local branch that is ultimately rebased
+  onto current main and pushed to agent/staging)
+- commit coherent checkpoints
+- push agent/staging
+- wait for exact-SHA build success
+- allow promote-staging workflow_run to fast-forward main
+- verify main == qualified SHA
+
+If another agent has advanced main, rebase and re-qualify. Never reuse CI
+evidence for a different SHA.
+
+Update .agent/STATE.md with:
+- actual root causes
+- measured latency before/after
+- native operation count before/after
+- exact live scenarios run
+- remaining known architectural ceiling, if any
+
+==================================================
+15. DEFINITION OF DONE
+==================================================
+
+Do NOT use "tests pass" alone as the definition.
+
+Done means:
+
+[ ] A+B split -> C/D switching works 50/50 real clicks
+[ ] user cannot become trapped in split
+[ ] dormant pair resumes exact A/B orientation
+[ ] ordinary tab click performs zero state.json disk writes in input turn
+[ ] ordinary captured-window hide performs zero redundant recovery-journal fsync
+[ ] initial capture safety journal remains durable/fail-closed
+[ ] no strict split HWND-adjacency fight
+[ ] final-pass scheduler does not automatically double-render
+[ ] unchanged LayoutUpdated does not schedule relayout
+[ ] no redundant NativeHwndHost FRAMECHANGED
+[ ] production WPF path uses the same split policy/controller being tested
+[ ] production relayout uses the coordinator being tested
+[ ] WinEvent presentation storms are bounded/coalesced
+[ ] no animations/transitions were added
+[ ] p50/p95/p99 switching latency is measured and materially improved
+[ ] container drag/resize native operation count is measured
+[ ] all deterministic tests pass
+[ ] real desktop validation passes
+[ ] hard-kill recovery still passes
+[ ] working tree clean
+[ ] exact qualified SHA promoted to main
+
+If, after all concrete duplicate-work fixes, drag/resize is still visibly
+non-consumer-grade, DO NOT pile on more callbacks. Record the measured Shepherd
+architecture ceiling and produce a concrete architecture migration proposal as
+the next work item.
+
+Keep working through all reproducible Critical/High/Medium runtime defects found
+during this campaign. Fix them and add regression coverage before final
+delivery.

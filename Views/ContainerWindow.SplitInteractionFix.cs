@@ -32,22 +32,13 @@ public partial class ContainerWindow
         if (_splitInteractionHooksAttached)
             return;
 
+        // The non-member click handler is wired in XAML, so it is registered
+        // during InitializeComponent BEFORE the ordinary drag/selection guard
+        // that ContainerWindow.xaml.cs adds later. One routed-event pass now
+        // owns pair -> C/D activation; there is no handledEventsToo recovery
+        // handler and no second hit-test after another handler has swallowed
+        // the event.
         _viewModel.DisplayTabs.CollectionChanged += SplitDisplayTabs_CollectionChanged;
-
-        // The ordinary ListBox preview handler deliberately marks a non-member
-        // click handled while a pair is presented. That is correct as a guard
-        // against WPF selecting C before the journal-safe pair hide completes,
-        // but it also means a window-level hit-test miss used to make the click
-        // disappear completely. Listen on the ListBox itself with
-        // handledEventsToo=true so this transition runs after that guard. The
-        // guard clears its drag candidate before returning, so this handler
-        // resolves the item from the pointer position rather than depending on
-        // transient drag state or OriginalSource template shape.
-        TabsListBox.AddHandler(
-            UIElement.PreviewMouseLeftButtonDownEvent,
-            new MouseButtonEventHandler(TabsListBox_PreviewMouseLeftButtonDown_SplitInteraction),
-            true);
-
         _splitInteractionHooksAttached = true;
     }
 
@@ -56,9 +47,6 @@ public partial class ContainerWindow
         if (_splitInteractionHooksAttached)
         {
             _viewModel.DisplayTabs.CollectionChanged -= SplitDisplayTabs_CollectionChanged;
-            TabsListBox.RemoveHandler(
-                UIElement.PreviewMouseLeftButtonDownEvent,
-                new MouseButtonEventHandler(TabsListBox_PreviewMouseLeftButtonDown_SplitInteraction));
             _splitInteractionHooksAttached = false;
         }
         DisarmSplitPresentationSettle();
@@ -86,35 +74,56 @@ public partial class ContainerWindow
             return;
 
         // Buttons inside a tab retain their structural action (pop out/close).
-        // Use the pointer hit rather than OriginalSource where possible because
-        // text/content elements do not always participate in the visual tree in
-        // the same way as the owning control.
+        // Resolve the hit through the SAME SplitInteractionPolicy the
+        // deterministic tests exercise, so production and tests share one
+        // classifier for the split interaction (no parallel decision model).
         DependencyObject? source = hit ?? e.OriginalSource as DependencyObject;
+        bool isButtonHit = false;
         for (DependencyObject? current = source; current != null && current != item;)
         {
-            if (current is Button)
-                return;
-
+            if (current is Button) { isButtonHit = true; break; }
             current = current is Visual || current is System.Windows.Media.Media3D.Visual3D
                 ? VisualTreeHelper.GetParent(current)
                 : LogicalTreeHelper.GetParent(current);
         }
+        if (isButtonHit)
+            return;
 
-        // The existing split guard has already prevented WPF's ListBox from
-        // selecting the target. Keep it handled while we perform the native
-        // transaction so a RecoveryPending hide cannot expose a logical C/D
-        // selection over an authoritative pair.
+        SplitPresentationState state = _splitController.ToState();
+        bool isStaleIdentity = !_shepherd.IsCurrentCapturedWindow(target.Model);
+        SplitInteractionAction action = SplitInteractionPolicy.Classify(
+            state,
+            isSplitPresented: true,
+            isTargetSplitMember: false,
+            isButtonHit: false,
+            isStaleIdentity: isStaleIdentity,
+            nativeOutcome: SplitNativeTransitionOutcome.Succeeded,
+            isRightClickOrHover: false);
+
+        if (action != SplitInteractionAction.SuspendPairForGuest)
+            return;
+
+        // One authoritative WPF routed-event transaction: classify, mark handled,
+        // suspend the pair (via the controller), activate C/D, layout/show once,
+        // foreground once.
         e.Handled = true;
         EndDrag();
+        int tid = RuntimeTelemetry.Instance.BeginTransition();
+        RuntimeTelemetry.Instance.Mark(tid, RuntimeTelemetry.TransitionStage.Classified);
         _log.Log($"SPLIT[third-tab] activate guest=0x{target.Model.Hwnd.ToInt64():X}");
 
         if (SuspendPresentedPairForUserSelection(target))
         {
+            RuntimeTelemetry.Instance.Mark(tid, RuntimeTelemetry.TransitionStage.TargetVisible);
+            RuntimeTelemetry.Instance.Mark(tid, RuntimeTelemetry.TransitionStage.ForegroundRequested);
+            RuntimeTelemetry.Instance.Mark(tid, RuntimeTelemetry.TransitionStage.Stable);
+            RuntimeTelemetry.Instance.CompleteTransition(tid);
             DiagnosticRuntime.Record("split.third-tab", _containerHwnd, target.Model.Hwnd,
                 group: Group.Id.ToString("N"), action: "activate-non-member", result: "pair-suspended-single-pass");
             return;
         }
 
+        RuntimeTelemetry.Instance.CompleteTransition(tid);
         // SuspendPresentedPairForUserSelection repairs a partially-hidden pair
         // before returning false. Do not issue a second LayoutSplitPanes here:
         // duplicate native positioning in the same input turn was unnecessary
@@ -158,47 +167,24 @@ public partial class ContainerWindow
         _suspendingSplitPair = true;
         try
         {
-            foreach (CapturedWindow member in new[] { _splitLeft!, _splitRight! })
-            {
-                WindowHideOutcome outcome = _shepherd.Hide(member);
-                LogHidePending(member, outcome);
-                if (outcome == WindowHideOutcome.RecoveryPending)
-                {
-                    // A member may already have hidden before its partner became
-                    // uncertain. Restore the presentation-side active reference and
-                    // re-present the still-authoritative pair exactly once.
-                    _shepherdActiveWindow = previousActive;
-                    LayoutSplitPanes();
-                    DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
-                        group: Group.Id.ToString("N"), action: "pair-to-single", result: "recovery-pending-pair-retained");
-                    return false;
-                }
-            }
-
-            // Hiding two top-level guests is not atomic with respect to process/HWND
-            // lifetime. Re-prove C/D after those native calls and before committing
-            // dormant state. If the target changed while the pair was being hidden,
-            // re-present the still-defined pair and leave logical selection alone.
-            if (!_shepherd.IsCurrentCapturedWindow(guest))
+            // SuspendForGuest hides both members via the production shim and
+            // re-validates current identity; on failure it leaves the pair
+            // presented and authoritative, so re-present it exactly once.
+            if (!_splitController.SuspendForGuest(guest))
             {
                 _shepherdActiveWindow = previousActive;
                 LayoutSplitPanes();
                 DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
-                    group: Group.Id.ToString("N"), action: "pair-to-single", result: "target-changed-pair-retained");
+                    group: Group.Id.ToString("N"), action: "pair-to-single", result: "recovery-pending-pair-retained");
                 return false;
             }
         }
         finally { _suspendingSplitPair = false; }
 
-        // Disarm the settle and bump generation BEFORE clearing _splitPairPresented
-        // so a CompositionTarget.Rendering already queued cannot fire after the
-        // pair is dormant. The bump invalidates that stale generation even if
-        // Disarm races with the dispatcher's invocation list (Q8). Ordering:
-        // bump -> disarm -> dormant prevents a window where a stale settle
-        // re-arms or re-presents a dormant pair.
-        _splitPresentationGeneration++;
+        // Controller owns _splitPairPresented/_splitPresentationGeneration (it
+        // bumped the generation and disarmed its own settle while suspending);
+        // the container keeps its settle arming and constraint/refusal concerns.
         DisarmSplitPresentationSettle();
-        _splitPairPresented = false;
         _constraintDirty = true;
         _refusedPaneByHwnd.Clear();
 
@@ -251,7 +237,7 @@ public partial class ContainerWindow
             return;
 
         _splitPresentationSettlePending = true;
-        _splitPresentationSettleGeneration = _splitPresentationGeneration;
+        _splitPresentationSettleGeneration = _splitController.Generation;
         CompositionTarget.Rendering += SplitPresentationSettle_Rendering;
     }
 
@@ -270,11 +256,11 @@ public partial class ContainerWindow
         // from being accidentally resurrected (Q7) or a stale generation
         // from running after mode changed (Q6).
         var settleState = new TabDock.Models.SplitPresentationState(
-            _splitLeft?.Hwnd.ToString("X"),
-            _splitRight?.Hwnd.ToString("X"),
+            _splitController.Left?.Hwnd.ToString("X"),
+            _splitController.Right?.Hwnd.ToString("X"),
             IsSplitPresented,
-            _splitForeground?.Hwnd.ToString("X") ?? _splitLeft?.Hwnd.ToString("X"),
-            _splitPresentationGeneration);
+            _splitController.Foreground?.Hwnd.ToString("X") ?? _splitController.Left?.Hwnd.ToString("X"),
+            _splitController.Generation);
         if (!TabDock.Models.SplitPresentationPolicy.IsCurrentSettle(
                 settleState,
                 _splitPresentationSettleGeneration)
@@ -286,7 +272,7 @@ public partial class ContainerWindow
         // Extra explicit guard: verify the ContainerWindow fields match the
         // controller-level state used by IsCurrentSettle — the two generations
         // must agree and presentation still true before LayoutSplitPanes (Q5).
-        if (_splitPresentationSettleGeneration != _splitPresentationGeneration)
+        if (_splitPresentationSettleGeneration != _splitController.Generation)
         {
             DisarmSplitPresentationSettle();
             return;
@@ -301,7 +287,7 @@ public partial class ContainerWindow
         if (IsContainerChromeInteractionActive())
             return;
 
-        CapturedWindow? focused = _splitForeground ?? _splitLeft;
+        CapturedWindow? focused = _splitController.Foreground ?? _splitController.Left;
         if (focused == null || !IsSplitMember(focused))
         {
             DisarmSplitPresentationSettle();
@@ -311,7 +297,7 @@ public partial class ContainerWindow
         DisarmSplitPresentationSettle();
         LayoutSplitPanes();
         if (IsSplitPresented
-            && _splitPresentationSettleGeneration == _splitPresentationGeneration
+            && _splitPresentationSettleGeneration == _splitController.Generation
             && IsSplitMember(focused))
         {
             _shepherd.SetForeground(focused);
