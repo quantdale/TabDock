@@ -226,6 +226,85 @@ this text.
   - Real production signing remains `BLOCKED_EXTERNAL`; v1.0.0 is PREPARED
     BUT INTENTIONALLY NOT PUBLISHED; verdict stays GO FOR RELEASE CANDIDATE
     / BETA ONLY.
+- Campaign H (production hardening campaign, this session):
+  - Split navigation is now deterministically gated in hosted CI, not
+    only by supervised SendInput: `SplitInteractionPolicy` (pure hit ->
+    action classifier) proves a handled preview event still suspends the
+    pair for a non-member, while member/button/right-click/hover/stale
+    hits are correctly filtered; `SplitPresentationPolicy` has exhaustive
+    coverage (3/4 tabs, repeated C/D switching 20 cycles, alternating,
+    member focus A<->B without suspension, dormant resume, explicit exit,
+    member removal while dormant/presented with survivor promotion,
+    stale/recycled identity rejection, RecoveryPending fail-closed,
+    generation monotonicity, IsCurrentSettle staleness, dormant
+    relationship survival). `TabDock.UnitTests` 136 deterministic cases.
+  - Native presentation operation budgets are now regression-tested:
+    `PresentationOperationBudget`/`IPresentationBudgetSink` counting seam
+    (Hide/PositionAndShow/DeferBatch/SetForeground/LayoutSplit/Single/
+    PairZOrder) plus `SplitPresentationController` (pair identity,
+    presented/dormant, foreground, generation, settle; wraps policy +
+    interaction policy) and `PresentationLayoutCoordinator` (coalesced
+    relayout, generations, redundant suppression, ensureFinalPass latch).
+    14 budget tests assert A->B, pair->C, C->pair, member focus, and
+    coalesced move/resize each as bounded/exact operation counts via a
+    fake shepherd/budget sink — no real windows required.
+  - ContainerWindow responsibilities materially reduced through safe
+    incremental extraction: split state/policy and layout coordination
+    are independently testable controllers; `ContainerWindow` retains only
+    WPF wiring (WndProc, chrome, timers, hit-testing). Build remains
+    `TabDock.sln` with normal `dotnet build`.
+  - Deep render/jitter hardening: `RequestRelayout` latches
+    `ensureFinalPass` even when pending (WM_EXITSIZEMOVE final z-order pass
+    survives queued frame), Render callbacks clear pending BEFORE execute,
+    stale settle/layout callbacks generation-gated, dormant pair never
+    receives split relayout, `_refusedPaneByHwnd` only cleared on
+    constraint change not per frame, `CompositionTarget.Rendering`
+    idempotent arm/disarm, zero animation (instant teleportation).
+  - Production workflows pinned to immutable full SHAs (actions/checkout
+    3d3c42e... v7.0.1, setup-dotnet a98b56... v6.1.0, setup-node 820762...
+    v7.1.0, upload-artifact 043fb4... v7.0.0, download-artifact 37930b...
+    v7.0.0, digicert fae23a... v1.2.1 preserved); human-readable `# vX`
+    comments and `gh api` update procedure documented; `persist-credentials:
+    false` preserved; `release-tooling-tests` verifies no mutable tag
+    remains.
+  - Main-branch admission hardened to exact-SHA promotion:
+    `promote-staging.yml` (`agent/staging` -> exact-SHA verify -> build
+    qualification check -> fast-forward safety -> `PATCH
+    .../git/refs/heads/main` with `force:false`, `concurrency: group:
+    promote-main` serialized, TOCTOU-safe; recovery loop documented;
+    `docs/release/repository-protection.md` documents promotion
+    architecture and exact ruleset/bypass for `github-actions[bot]` to
+    enable without deadlocking autonomous agents; direct pushes remain
+    technically possible as fallback but are non-recommended/auditable.
+  - Release external gates are precise and unfakeable: `publication-
+    gates.md` gate vocabulary lifecycle (PASS/FAIL/BLOCKED_EXTERNAL/
+    BLOCKED_ENVIRONMENT), exact gate table (prerequisite -> command ->
+    evidence -> four-way binding), unfakeable operator procedure (download
+    exact artifact, `Get-FileHash` == `finalSignedSha256` == `SHA256SUMS`
+    == `--version`), stale/future/schema guards; `final-smoke.md`/
+    `mixed-dpi-qualification.md`/`compatibility-matrix.md` tightened;
+    OpenSpec release-engineering deltas updated; tooling already enforced.
+  - Adversarial audit after refactor: fixed recycled-HWND strong gates
+    (LayoutSplitPanes/Suspend/RestoreMinimized/NoteGuestMoveSize via
+    `IsCurrentCapturedWindow`), timer/WndProc/drag handler leaks
+    (`RemoveHook`, null timers, stop close-prompt timer), `GroupViewModel.
+    Detach` unsubscribe, `PresentationLayoutCoordinator` stale-Render
+    generation gate, `GuestLifecycleService` debounced re-lookup + debounce
+    teardown + `IsSuspendingSplitPair` suppression preventing suspension
+    misclassified as tray-close; stale `CapturedWindow`/collection mutation/
+    MessageBox reentrancy/CompositionTarget leaks dismissed with evidence
+    or already mitigated. `HardeningRegressionTests` 6 deterministic cases.
+  - Docs reconciled: `docs/ARCHITECTURE.md` (vertical split /
+    movement-sync / release chain delegated to controllers, jitter
+    hardening notes, promotion note), README qualification counts (137
+    release-tooling + hosted-CI split/budget gate note), `publication-
+    gates.md` action pinning + gate table.
+  - Validation: `dotnet build TabDock.sln -c Release` PASS,
+    `TabDock.UnitTests` 136 PASS, `release-tooling-tests.ps1` 137 PASS
+    (exact-SHA hosted-CI gate in `build.yml`), `validate.ps1` hermetic
+    qualification unchanged; real production signing/hardware/manual
+    evidence remain `BLOCKED_EXTERNAL` — repository-side hardening is
+    complete, external release evidence is still blocked.
 - Campaign B release engineering (repository side complete, with Campaign C
   corrections):
   - `scripts/release-qualify.ps1` — exact-SHA + clean-tree enforcement,
@@ -277,9 +356,13 @@ this text.
   identity. Hosted Actions evidence is always resolved dynamically for the
   exact SHA; it is not persisted here.
 - Release-tooling regression suite:
-  `scripts/release-tooling-tests.ps1` (134 cases; no real certificates, no
+  `scripts/release-tooling-tests.ps1` (137 cases; no real certificates, no
   publishing, no provider contact) — run before every release-pipeline
   change AND gated by hosted CI in `build.yml` (exact-SHA gate).
+- Headless unit suite (`TabDock.UnitTests`): 136 deterministic cases
+  (SplitPresentationPolicy exhaustive, SplitInteractionPolicy,
+  PresentationOperationBudget, HardeningRegression, Geometry, Group,
+  Persistence, Converters) — gated in `build.yml` and `validate.ps1`.
 - The release chain is `scripts/release-qualify.ps1 -Ci -Sha <sha> -Version
   1.0.0 -Sign` (locally: without `-Ci`); it fails on SHA mismatch, dirty
   trees, published-exe identity mismatch, expected-version disagreement with

@@ -655,7 +655,7 @@ silently merely to pass the gate.
   `local-pfx`); no publication path.
 - `.github/workflows/build.yml`: hosted CI gates the release-control
   regression suite (`scripts/release-tooling-tests.ps1`).
-- `scripts/release-tooling-tests.ps1`: 134 deterministic regression cases
+- `scripts/release-tooling-tests.ps1`: 137 deterministic regression cases
   including every adversarial condition (missing/malformed evidence, wrong
   SHA, wrong artifact hash, wrong run, wrong artifact name, `FAIL`,
   `BLOCKED_EXTERNAL`, unsigned artifact under mandatory signing,

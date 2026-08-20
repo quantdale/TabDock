@@ -174,17 +174,38 @@ trigger — the native `WM_WINDOWPOSCHANGED` (hooked in `WndProc` so the guest i
 re-glued in the same native message flow as the container's own movement),
 `LocationChanged`, `SizeChanged`, and the post-layout `LayoutUpdated` — funnels
 into one coalesced `RequestRelayout()` (a pending flag + a single
-Render-priority dispatcher callback), so at most one batch of native
-reposition calls is issued per WPF frame instead of 3-5, and the batch always
-runs after WPF has arranged the content marker to its final rect. This removed
-the per-frame double-move/backward-jump that made dragging look glitchy.
+Render-priority dispatcher callback owned by `PresentationLayoutCoordinator`),
+so at most one batch of native reposition calls is issued per WPF frame instead
+of 3-5, and the batch always runs after WPF has arranged the content marker to
+its final rect. This removed the per-frame double-move/backward-jump that made
+dragging look glitchy. Jitter hardening: `RequestRelayout` latches
+`ensureFinalPass` even when a Render is already pending (so the
+`WM_EXITSIZEMOVE` final z-order pass survives a queued frame), the Render
+callback clears `pending` BEFORE `execute` so a mid-callback re-queue lands on
+the next frame, stale settle/layout callbacks are generation-gated, a dormant
+pair never receives a split relayout, and `_refusedPaneByHwnd` is only cleared
+on a constraint change — not per frame — so a refused pane is not retried until
+the constraint actually changed.
 
 ### Vertical split screen (two guests)
 
 From a captured tab's context menu, TabDock can display exactly two guests
 simultaneously in a LEFT/RIGHT vertical split (the Shepherd model is unchanged —
-both stay independent top-level HWNDs, never reparented/restyled). The split is
-owned by `ContainerWindow`:
+both stay independent top-level HWNDs, never reparented/restyled). Presentation
+state is coordinated through `SplitPresentationController` (pair identity,
+presented/dormant, foreground, generation, settle — wraps
+`SplitPresentationPolicy` + `SplitInteractionPolicy`) and
+`PresentationLayoutCoordinator` (coalesced relayout, generations, redundant
+suppression); `ContainerWindow` still owns WPF wiring (WndProc, chrome,
+timers, hit-testing) but delegates policy/layout decisions to these controllers
+for testability, clear ownership, and jitter hardening.
+`SplitInteractionPolicy` is a pure hit-test → `SplitInteractionAction`
+classifier that makes non-member activation deterministic in hosted CI (a
+handled preview event still suspends the pair; button, right-click/hover, and
+stale-identity hits are correctly filtered). Render budgets are CI-gated without
+real windows via `PresentationOperationBudget` / `IPresentationBudgetSink`
+(counting hide/show/Defer/Foreground/Layout) so per-frame budgets are asserted
+in unit tests:
 
 The container caption's Group menu switches to an already-open group or creates
 one in the existing shell. The launcher is hidden while a container is open and
@@ -337,9 +358,18 @@ Log vocabulary: `SPLIT[enter]`, `SPLIT[exit]`, `SPLIT[replace]`,
 `SPLIT[member-gone]`, `SPLIT[persist]` (a newly-visible non-member hidden to
 preserve the pair's visible set).
 
-### Release
+### Release chain
 
-`GroupManager.ReleaseTab` (`GroupManager.cs:330-353`) removes the member from `Group.Members`
+Production workflows are pinned to immutable SHAs. Main admission has an
+exact-SHA promotion path `agent/staging` → `promote-staging.yml`
+(`PATCH .../git/refs/heads/main` with `force: false`, `concurrency` group
+`promote-main`; see `docs/release/repository-protection.md`), so only a
+build-qualified `agent/staging` tip can fast-forward `main`. The two-stage
+release chain (`prepare-release-candidate.yml` → `publish-release.yml`) remains
+exact-SHA and immutable as described in `README.md` and
+`docs/release/publication-gates.md`.
+
+### Release (tab) removes the member from `Group.Members`
 first (the index drops it via `CollectionChanged`), then `_shepherd.Release(cw, show)`
 (`WindowShepherdService.cs:328-419`):
 
