@@ -308,6 +308,9 @@ internal static class DiagnosticSelfTest
         (int pendingChecks, int pendingFailures) = PendingRecoverySelfTest.Run();
         checks += pendingChecks;
         failures += pendingFailures;
+        (int stabilizationChecks, int stabilizationFailures) = RuntimeStabilizationSelfTest.Run();
+        checks += stabilizationChecks;
+        failures += stabilizationFailures;
         var concurrent = new DiagnosticTrace(128);
         Parallel.For(0, 512, i => concurrent.Record("concurrent"));
         Check(concurrent.Snapshot().Count == 128);

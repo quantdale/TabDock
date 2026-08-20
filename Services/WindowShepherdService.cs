@@ -712,6 +712,30 @@ public sealed class WindowShepherdService
         _capturedByHwnd.Bind(window);
     }
 
+    /// <summary>
+    /// Test seam for the capture-generation rescue-known bookkeeping. A real
+    /// capture durably commits the complete recovery entry before the first
+    /// presentation mutation and records the token here so ordinary hides can
+    /// skip the redundant journal rewrite. This lets deterministic tests mark a
+    /// capture as already durable without replaying the full native capture
+    /// transaction.
+    /// </summary>
+    internal void MarkJournalCaptureCompleteForTesting(CapturedWindow window)
+    {
+        _durablyJournaledCaptureTokens.Add(window.WindowIdentityToken);
+    }
+
+    /// <summary>
+    /// Test seam mirroring the intentional-hide bookkeeping: an explicit
+    /// release / close must invalidate the rescue-known flag so a later retained
+    /// capture re-establishes rescue intent before hiding instead of trusting a
+    /// stale durable token.
+    /// </summary>
+    internal void MarkIntentionalHideForTesting(CapturedWindow window)
+    {
+        JournalMarkIntentionalHide(window);
+    }
+
     private bool RemoveCaptureIdentityToken(CapturedWindow window)
     {
         if (window.WindowIdentityToken == 0)

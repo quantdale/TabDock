@@ -90,80 +90,114 @@ public sealed class PersistenceService
     internal bool StateLoadFailed => _stateLoadFailed;
 
     public void Save(IEnumerable<Group> groups)
+        => CommitJson(BuildStateJson(groups));
+
+    /// <summary>
+    /// Debounced / high-frequency save path. Builds the immutable JSON snapshot
+    /// on the calling (UI) thread, then performs the blocking WriteThrough +
+    /// fsync + atomic rename off-thread so a rapid tab switch or container drag
+    /// never pays synchronous disk I/O on the input/render turn. Safety-critical
+    /// boundaries (capture, release, group mutation) use <see cref="Save"/>
+    /// instead and stay synchronous.
+    /// </summary>
+    public void SaveAsync(IEnumerable<Group> groups)
+    {
+        string? json = BuildStateJson(groups);
+        if (json == null)
+            return;
+        System.Threading.Tasks.Task.Run(() => CommitJson(json));
+    }
+
+    /// <summary>
+    /// Builds the serialized state JSON (and validates the target path) on the
+    /// caller's thread. Returns null when the write should be skipped (storage
+    /// unavailable, unsafe load, or unchanged content).
+    /// </summary>
+    private string? BuildStateJson(IEnumerable<Group> groups)
+    {
+        if (!_storageAvailable)
+        {
+            _log.Log("PersistenceService.Save skipped because durable state storage is unavailable.");
+            return null;
+        }
+
+        if (_stateLoadFailed)
+        {
+            _log.Log("PersistenceService.Save skipped because the existing state could not be read safely this session.");
+            return null;
+        }
+
+        var state = new PersistedState { Version = PersistedState.CurrentVersion };
+        foreach (Group g in groups)
+        {
+            if (!g.HasMaterializedTabs)
+            {
+                // Empty shells are useful during the current session but
+                // have no durable layout intent. Persisting them makes a
+                // fresh shell reappear at every startup and allowed
+                // failed picker attempts to accumulate zero-tab groups.
+                _log.Log($"PersistenceService.Save skipped unmaterialized empty group {g.Id}.");
+                continue;
+            }
+
+            var pg = new PersistedGroup
+            {
+                Id = g.Id,
+                Name = g.Name,
+                AccentColor = g.AccentColor,
+                // A group with no live members has only loaded metadata;
+                // preserve its persisted active intent rather than the
+                // clamped -1 live index.
+                ActiveIndex = g.Members.Count > 0 ? g.ActiveIndex : g.PersistedActiveIndex,
+            };
+
+            if (g.Members.Count > 0)
+            {
+                foreach (CapturedWindow m in g.Members)
+                    pg.Tabs.Add(ToPersistedTab(m));
+            }
+            else
+            {
+                foreach (PersistedTabMetadata pm in g.PersistedTabs)
+                    pg.Tabs.Add(ToPersistedTab(pm));
+            }
+            state.Groups.Add(pg);
+        }
+
+        string json = JsonSerializer.Serialize(state, TabDockJsonContext.Default.PersistedState);
+        if (string.Equals(json, _lastSavedJson, StringComparison.Ordinal) && File.Exists(_statePath))
+            return null;
+
+        PathKind currentPath = ClassifyPath(_statePath, out string currentReason);
+        if (currentPath == PathKind.Directory || currentPath == PathKind.Unreadable)
+        {
+            _stateLoadFailed = true;
+            _log.Log($"PersistenceService.Save skipped because the primary state path is not safely writable ({currentReason}).");
+            return null;
+        }
+
+        return json;
+    }
+
+    /// <summary>
+    /// Performs the durable, atomic state write. Shared by the synchronous
+    /// <see cref="Save"/> (safety boundaries) and the off-thread
+    /// <see cref="SaveAsync"/> (debounced preference writes).
+    /// </summary>
+    private void CommitJson(string json)
     {
         try
         {
-            if (!_storageAvailable)
-            {
-                _log.Log("PersistenceService.Save skipped because durable state storage is unavailable.");
-                return;
-            }
-
-            if (_stateLoadFailed)
-            {
-                _log.Log("PersistenceService.Save skipped because the existing state could not be read safely this session.");
-                return;
-            }
-
-            var state = new PersistedState { Version = PersistedState.CurrentVersion };
-            foreach (Group g in groups)
-            {
-                if (!g.HasMaterializedTabs)
-                {
-                    // Empty shells are useful during the current session but
-                    // have no durable layout intent. Persisting them makes a
-                    // fresh shell reappear at every startup and allowed
-                    // failed picker attempts to accumulate zero-tab groups.
-                    _log.Log($"PersistenceService.Save skipped unmaterialized empty group {g.Id}.");
-                    continue;
-                }
-
-                var pg = new PersistedGroup
-                {
-                    Id = g.Id,
-                    Name = g.Name,
-                    AccentColor = g.AccentColor,
-                    // A group with no live members has only loaded metadata;
-                    // preserve its persisted active intent rather than the
-                    // clamped -1 live index.
-                    ActiveIndex = g.Members.Count > 0 ? g.ActiveIndex : g.PersistedActiveIndex,
-                };
-
-                if (g.Members.Count > 0)
-                {
-                    foreach (CapturedWindow m in g.Members)
-                        pg.Tabs.Add(ToPersistedTab(m));
-                }
-                else
-                {
-                    foreach (PersistedTabMetadata pm in g.PersistedTabs)
-                        pg.Tabs.Add(ToPersistedTab(pm));
-                }
-                state.Groups.Add(pg);
-            }
-
-            string json = JsonSerializer.Serialize(state, TabDockJsonContext.Default.PersistedState);
-            if (string.Equals(json, _lastSavedJson, StringComparison.Ordinal) && File.Exists(_statePath))
-                return;
-
-            PathKind currentPath = ClassifyPath(_statePath, out string currentReason);
-            if (currentPath == PathKind.Directory || currentPath == PathKind.Unreadable)
-            {
-                _stateLoadFailed = true;
-                _log.Log($"PersistenceService.Save skipped because the primary state path is not safely writable ({currentReason}).");
-                return;
-            }
-
             // A backup copy is part of the same save transaction. If it cannot
             // be made, the catch below prevents the primary from being touched.
-            if (currentPath == PathKind.File)
+            if (File.Exists(_statePath))
                 File.Copy(_statePath, BackupPath, overwrite: true);
 
             string tempPath = _statePath + ".tmp";
             WriteDurableText(tempPath, json);
             File.Move(tempPath, _statePath, overwrite: true);
             _lastSavedJson = json;
-            _log.Log($"Saved {state.Groups.Count} group(s) to {DiagnosticEnvironmentService.RedactPath(_statePath)} (schema={state.Version})");
+            _log.Log($"Saved state to {DiagnosticEnvironmentService.RedactPath(_statePath)} (schema={PersistedState.CurrentVersion})");
         }
         catch (Exception ex)
         {

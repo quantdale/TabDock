@@ -446,7 +446,7 @@ internal static class WindowReleaseSelfTest
             && fixture.Native.MutationCount > 0;
     }
 
-    private sealed class TestFixture : IDisposable
+    internal sealed class TestFixture : IDisposable
     {
         private TestFixture(string root, string journalPath, string statePath, LoggingService log,
             FakeIdentityApi identity, FakeReleaseApi native, CapturedWindow captured,
@@ -555,7 +555,7 @@ internal static class WindowReleaseSelfTest
             catch { }
         }
 
-        private static CapturedWindow CapturedWindowFor(long hwnd, uint pid, long token, long start)
+        internal static CapturedWindow CapturedWindowFor(long hwnd, uint pid, long token, long start)
             => new()
             {
                 Hwnd = new IntPtr(hwnd),
@@ -576,7 +576,7 @@ internal static class WindowReleaseSelfTest
                 OriginalBounds = new NativeMethods.RECT { right = 400, bottom = 300 },
             };
 
-        private static HiddenWindowEntry JournalEntryFor(CapturedWindow captured)
+        internal static HiddenWindowEntry JournalEntryFor(CapturedWindow captured)
             => new()
             {
                 Hwnd = captured.Hwnd.ToInt64(),
@@ -594,7 +594,7 @@ internal static class WindowReleaseSelfTest
             };
     }
 
-    private sealed class FakeIdentityApi : IWindowIdentityNativeApi
+    internal sealed class FakeIdentityApi : IWindowIdentityNativeApi
     {
         private readonly Dictionary<IntPtr, FakeIdentityApi> _identities = new();
         private readonly IntPtr _hwnd;
@@ -679,7 +679,7 @@ internal static class WindowReleaseSelfTest
         }
     }
 
-    private sealed class FakeReleaseApi : IWindowReleaseNativeApi
+    internal sealed class FakeReleaseApi : IWindowReleaseNativeApi
     {
         private readonly Dictionary<IntPtr, bool> _visible = new();
         public int MutationCount { get; private set; }
@@ -730,7 +730,7 @@ internal static class WindowReleaseSelfTest
         public string DescribeWindow(IntPtr hwnd) => "fake";
     }
 
-    private sealed class FakeMonitorDpiProbe : IMonitorDpiProbe
+    internal sealed class FakeMonitorDpiProbe : IMonitorDpiProbe
     {
         public uint GetEffectiveDpi(IntPtr monitor) => 96;
     }

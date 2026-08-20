@@ -7,6 +7,37 @@ Resolve them dynamically at every fresh session. This file never records a
 self-referential current SHA or a hosted-CI result for the commit containing
 this text.
 
+## Runtime stabilization campaign (2026-08, this session)
+
+- Objective: close the live-runtime defects from `tabdock_runtime_audit.md`
+  beyond the hotfixes already in `08fc456` (two-handler click path, durable-disk
+  I/O on switch, z-order relative order, ensureFinalPass latch, LayoutUpdated
+  dirty detection, SWP_FRAMECHANGED removal, WinEvent storm coalescing).
+- Done this session:
+  - `#3` background state writer — `PersistenceService` split into
+    `BuildStateJson`/`CommitJson`; `GroupManager.RequestSave` uses `SaveAsync`
+    (off-thread WriteThrough+fsync); same-index `SwitchActiveTab` is a no-op.
+  - `#4` zero redundant journal commits — `_durablyJournaledCaptureTokens`
+    makes 100 ordinary hides after a durable capture write zero additional
+    durable journal entries; intentional-hide invalidates the flag.
+  - `#5` `ensureFinalPass` latch only when pending (idle=true→1 pass,
+    pending+finalPass→existing+1 follow-up). Verified by
+    `RequestRelayoutFinalPassTests`.
+  - `#7` relative z-order via `ZOrder.IsOrderedAbove` (ignores IME/helper/overlay
+    HWNDs between panes).
+  - New `RuntimeStabilizationSelfTest` (runs in `validate.ps1` self-test gate)
+    proves `#3`/`#4`/`#7`; added 5 xUnit cases (total 141).
+- Validation: Debug+Release build clean; `TabDock.UnitTests` 141 PASS;
+  `release-tooling-tests.ps1` 139 PASS; `git diff --check` clean. Live desktop
+  A–G and `validate.ps1` full qualification require a real Windows session/CI.
+- WM_WINDOWPOSCHANGING investigation: concluded NOT a better signal than
+  `WM_WINDOWPOSCHANGED` (fires before final rect; would guess geometry). Residual
+  drag jitter after duplicate-work removal is a Shepherd separate-surface
+  architecture ceiling, not a callback deficit. No new callbacks added.
+- Promotion: commit on `agent/staging`, qualify via `build.yml`, promote exact
+  SHA to `main`. Do not reintroduce SetParent/AttachThreadInput/style
+  stripping/animations/synthetic activation.
+
 ## Current checkpoint — production release closure (v1.0.0 campaign)
 
 - Objective: finish the legacy-audit semantic reconciliation (Campaign A) and

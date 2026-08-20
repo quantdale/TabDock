@@ -125,7 +125,7 @@ public sealed class GroupManager
             _saveDebounce.Tick += (_, _) =>
             {
                 _saveDebounce!.Stop();
-                _persistence.Save(Groups);
+                _persistence.SaveAsync(Groups);
                 RuntimeTelemetry.Instance.RecordStateJsonCommit();
             };
         }

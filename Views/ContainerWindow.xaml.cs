@@ -2594,17 +2594,7 @@ public partial class ContainerWindow : Window
     /// overlay and shell helper HWNDs can legally sit between two TabDock guests.
     /// </summary>
     private static bool IsWindowAbove(IntPtr upper, IntPtr lower)
-    {
-        if (upper == IntPtr.Zero || lower == IntPtr.Zero || upper == lower)
-            return false;
-
-        for (IntPtr hwnd = upper; hwnd != IntPtr.Zero; hwnd = NativeMethods.GetWindow(hwnd, NativeMethods.GW_HWNDNEXT))
-        {
-            if (hwnd == lower)
-                return true;
-        }
-        return false;
-    }
+        => ZOrder.IsOrderedAbove(upper, lower, h => NativeMethods.GetWindow(h, NativeMethods.GW_HWNDNEXT));
 
     #region Split screen
 
