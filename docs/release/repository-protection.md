@@ -30,32 +30,46 @@ Authenticode signature before creating a `v*` tag (see
 
 - **Staging branch:** agents and humans push validated changes to
   `agent/staging` (not directly to `main`). A push to `agent/staging`
-  triggers `build.yml` qualification on that SHA and, on success, is eligible
-  for promotion.
-- **Promotion workflow:** `promote-staging` is triggered either by a push to
-  `agent/staging` (promotes `github.sha`) or by `workflow_dispatch` with an
-  explicit `inputs.sha` (the exact commit on `agent/staging` to promote).
-  It serializes via `concurrency: group: promote-main, cancel-in-progress:
-  false` to avoid TOCTOU races between concurrent promotions.
+  triggers `build.yml` qualification on that SHA (build.yml runs on `push:
+  branches: [main, agent/staging]`). Promotion only happens after build
+  succeeds — see next item.
+- **Promotion workflow:** `promote-staging` is triggered **only** by a
+  successful `build` workflow_run on `agent/staging`
+  (`workflow_run.workflows: ["build"], branches: [agent/staging],
+  conclusion == 'success'`) — the promoted SHA is
+  `workflow_run.head_sha` (the SHA build actually tested). A manual
+  `workflow_dispatch` with `inputs.sha` remains as a controlled
+  recovery path. Direct `push: branches: [agent/staging]` does NOT
+  promote — it only starts qualification; promotion waits for build
+  success, eliminating the race where promotion would start concurrently
+  with qualification. Serialization remains `concurrency: group:
+  promote-main, cancel-in-progress: false`.
 - **Exact-SHA verification (fail-closed):**
-  1. Resolve `expected SHA` = `inputs.sha` (dispatch) else `github.sha` (push).
-     Reject unless `^[0-9a-f]{40}$`.
+  1. For `workflow_run`: verify `conclusion == 'success'`, `head_branch ==
+     'agent/staging'`, and `workflow name == 'build'`; `expected SHA` =
+     `workflow_run.head_sha` (the tested SHA is authoritative). For
+     dispatch: `expected SHA` = `inputs.sha`. Reject unless
+     `^[0-9a-f]{40}$`.
   2. Checkout `expected SHA` with `fetch-depth: 0` (pinned
      `actions/checkout@3d3c42e...`) and verify `HEAD == expected SHA`.
   3. Verify `origin/agent/staging == expected SHA` (`git rev-parse
      origin/agent/staging`). The branch must still point to the qualified
-     commit — an unqualified tip cannot be promoted.
+     commit — a stale tip cannot promote, and a rebased SHA requires a NEW
+     build before it can promote (old qualification evidence is never reused).
   4. Verify `build.yml` qualification passed for that exact SHA:
      `gh run list --workflow build.yml --commit $sha --json conclusion,status`
-     must contain at least one `completed`/`success` run. No run = fail with
-     recovery instructions (re-run `build.yml` on that SHA first).
+     must contain at least one `completed`/`success` run for that exact SHA.
+     No run = fail with recovery instructions (push again or re-run build).
+     For `workflow_run` triggers this re-queries the same run as
+     defense-in-depth.
   5. Verify fast-forward safety: `origin/main` is an ancestor of `expected
      SHA` (`git merge-base --is-ancestor origin/main $sha`) or `main == sha`
-     (no-op success). Divergence = fail with rebase instructions.
+     (no-op success). Divergence = fail with rebase + re-qualify instructions
+     (a rebased commit is a new SHA and needs a new build).
   6. Promote via `gh api PATCH repos/{owner}/{repo}/git/refs/heads/main`
      with `force: false`. This fails closed (422) if `main` moved since fetch.
      On 422 `Reference update failed`, the workflow reports concurrent advance
-     and recovery steps.
+     and requires a rebase + NEW build (never reuses old evidence).
 
 Only this workflow may fast-forward `main`; all other workflows remain
 `contents: read`.
@@ -172,7 +186,7 @@ All recovery instructions are also embedded as comments and error messages in
 
 | Failure | Cause | Recovery |
 |---------|-------|----------|
-| `No successful completed build.yml run found for SHA ...` | The exact SHA has no `success` build. | Re-run or wait for `build.yml` on that SHA, then retry: `gh workflow run build.yml --ref agent/staging` or push the SHA again to `agent/staging`. For dispatch, retry with the same `sha` after the build succeeds. |
+| `No successful completed build.yml run found for SHA ...` | The exact SHA has no `success` build. | Push the SHA again to `agent/staging` (re-triggers build) or re-run the build via the GitHub UI (Actions → build → Re-run) for that commit, then allow promotion to auto-trigger. For dispatch, retry with the same `sha` after the build succeeds. |
 | `origin/agent/staging ... != expected SHA` | `inputs.sha` does not match the current tip of `agent/staging`. | `git fetch origin agent/staging && git rev-parse origin/agent/staging` — retry with that SHA, or push the intended SHA to `agent/staging` first. |
 | `origin/main ... is NOT an ancestor of ... (branch diverged)` | `main` advanced or `agent/staging` diverged. | `git fetch origin; git checkout agent/staging; git rebase origin/main; git push --force-with-lease origin agent/staging` — wait for `build.yml` on the new tip, then retry with the new SHA. |
 | `422 Reference update failed` | `main` moved between fetch and `PATCH` (concurrent promotion). | Same rebase flow as above — fetch, rebase `agent/staging` onto new `origin/main`, re-qualify, retry. |

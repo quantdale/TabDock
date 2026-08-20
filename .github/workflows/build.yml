@@ -8,7 +8,9 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - agent/staging
   pull_request:
     branches: [main]
 

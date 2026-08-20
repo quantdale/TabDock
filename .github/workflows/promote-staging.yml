@@ -5,9 +5,13 @@
 # Verify the SHA matches the intended release, replace the SHA in this file,
 # keep the `# vX.Y.Z` comment, then run `pwsh -File scripts/release-tooling-tests.ps1`.
 #
-# PROMOTION ARCHITECTURE (P2 exact-SHA staging promotion)
+# PROMOTION ARCHITECTURE (P2 exact-SHA staging promotion, race-free)
 #
-#   agent/staging  --(exact-SHA verify)-->  main
+#   agent/staging push
+#     -> build.yml exact-SHA qualification (push to agent/staging)
+#     -> successful workflow_run completion
+#     -> promote-staging exact-SHA verification
+#     -> fast-forward main
 #
 # This is the ONLY workflow that may fast-forward main (permissions:
 # contents: write). All other workflows are contents: read. The workflow
@@ -16,10 +20,20 @@
 # concurrent promotions both read an old main and then one clobbers the
 # other.
 #
+# Automatic promotion is triggered ONLY by a successful build workflow_run
+# on agent/staging (workflow_run.head_sha is authoritative). Direct push to
+# agent/staging does NOT promote — it only starts build qualification. The
+# promotion waits for build success, eliminating the race where promotion
+# would start concurrently with qualification.
+#
 # Exact-SHA contract:
-#   - For a `push` to agent/staging, the promoted SHA is github.sha (the
-#     push HEAD). For a `workflow_dispatch`, the promoted SHA is inputs.sha,
-#     which MUST be the exact commit that origin/agent/staging points to.
+#   - For a successful workflow_run on agent/staging, the promoted SHA is
+#     github.event.workflow_run.head_sha (the SHA build actually tested).
+#     That SHA must still be the tip of origin/agent/staging at promotion
+#     time — a stale tip cannot promote.
+#   - For a workflow_dispatch, the promoted SHA is inputs.sha, which MUST be
+#     the exact commit that origin/agent/staging points to and must have a
+#     successful build for that exact SHA.
 #   - The workflow fails closed unless:
 #     (a) HEAD == expected SHA after checkout,
 #     (b) origin/agent/staging == expected SHA (the branch still points to the
@@ -32,29 +46,36 @@
 #     fetch (TOCTOU closed). A 422 "Reference update failed" means main
 #     advanced concurrently.
 #
+# Security: automatic promotion accepts ONLY a successful build run from
+# agent/staging in this repository. PR/fork runs cannot reach promotion:
+# the workflow_run branch check, repository check, and pinned checkout
+# (persist-credentials: false) ensure only agent/staging success promotes.
+# Promotion performs verification/git/API operations only; candidate code
+# ran only inside the read-only build workflow.
+#
 # RECOVERY (also documented in docs/release/repository-protection.md):
-#   - "No build run found"      -> re-run (or wait for) the build.yml workflow
-#     on that exact SHA (push the SHA to agent/staging or re-trigger build.yml
-#     via the GitHub UI/API for that commit) and then re-dispatch/re-push.
+#   - "No build run found"      -> the exact SHA has no success build. Push
+#     the SHA again to agent/staging (re-triggers build) or re-run the build
+#     via GitHub UI/API for that commit, then retry.
 #   - "agent/staging does not point to expected SHA" -> fetch, verify the
 #     branch tip is the intended qualified SHA, and retry with the correct SHA.
 #   - "main is not ancestor / diverged" -> `git fetch origin; git rebase
-#     origin/main` on agent/staging, re-qualify the new tip (build must pass
-#     again), then retry with the rebased SHA.
+#     origin/main` on agent/staging, push with --force-with-lease (new SHA),
+#     wait for build.yml success on the new tip, promotion will auto-trigger
+#     via workflow_run.
 #   - "Reference update failed (422)" -> main advanced concurrently. Fetch,
-#     rebase agent/staging onto the new origin/main, re-qualify, retry.
+#     rebase agent/staging onto the new origin/main, push with
+#     --force-with-lease, wait for build success, auto-trigger.
+#   - "workflow_run conclusion is not success" -> build failed/cancelled.
+#     Fix, push again to agent/staging, wait for success.
 #   - "main already at expected SHA" -> no-op success; nothing to promote.
-#
-# Direct pushes to main remain technically possible (no branch protection
-# may be enforced in this environment) but are the non-recommended fallback.
-# The recommended path is always via agent/staging + this workflow, which is
-# auditable and exact-SHA qualified. See docs/release/repository-protection.md
-# for the ruleset to enable when repository settings can be modified.
 
 name: promote-staging
 
 on:
-  push:
+  workflow_run:
+    workflows: ["build"]
+    types: [completed]
     branches: [agent/staging]
   workflow_dispatch:
     inputs:
@@ -76,19 +97,51 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Gate workflow_run conclusion and branch
+        if: github.event_name == 'workflow_run'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONCLUSION="${{ github.event.workflow_run.conclusion }}"
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          WORKFLOW_NAME="${{ github.event.workflow_run.name }}"
+          HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+          HTML_URL="${{ github.event.workflow_run.html_url }}"
+          echo "workflow_run conclusion=$CONCLUSION branch=$HEAD_BRANCH workflow=$WORKFLOW_NAME head_sha=$HEAD_SHA url=$HTML_URL"
+          if [[ "$CONCLUSION" != "success" ]]; then
+            echo "::error::Refusing to promote: workflow_run conclusion is '$CONCLUSION' (expected 'success'). Only successful build runs can promote."
+            exit 1
+          fi
+          if [[ "$HEAD_BRANCH" != "agent/staging" ]]; then
+            echo "::error::Refusing to promote: workflow_run head_branch is '$HEAD_BRANCH' (expected 'agent/staging'). PR/fork runs cannot promote."
+            exit 1
+          fi
+          if [[ "$WORKFLOW_NAME" != "build" ]]; then
+            echo "::error::Refusing to promote: workflow_run name is '$WORKFLOW_NAME' (expected 'build')."
+            exit 1
+          fi
+          if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::workflow_run head_sha '$HEAD_SHA' is not a 40-char lowercase hex commit."
+            exit 1
+          fi
+          echo "workflow_run gate passed: success on agent/staging for $HEAD_SHA"
+
       - name: Resolve expected SHA
         id: resolve-sha
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            SHA="${{ github.event.workflow_run.head_sha }}"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             SHA="${{ inputs.sha }}"
           else
-            SHA="${{ github.sha }}"
+            echo "::error::Unexpected event '${{ github.event_name }}'; promotion supports only workflow_run (build success) and workflow_dispatch (manual recovery)."
+            exit 1
           fi
-          SHA="$(echo "$SHA" | tr -d '[:space:]')"
+          SHA="$(echo "$SHA" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
           if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Expected SHA must be a 40-char lowercase hex commit (got '$SHA'). For workflow_dispatch, provide the exact agent/staging HEAD; for push events it defaults to github.sha."
+            echo "::error::Expected SHA must be a 40-char lowercase hex commit (got '$SHA'). For workflow_run it is workflow_run.head_sha; for workflow_dispatch provide the exact agent/staging HEAD."
             exit 1
           fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
@@ -130,9 +183,10 @@ jobs:
           REMOTE_SHA="$(git rev-parse origin/agent/staging)"
           if [[ "$REMOTE_SHA" != "$EXPECTED_SHA" ]]; then
             echo "::error::origin/agent/staging $REMOTE_SHA != expected SHA $EXPECTED_SHA."
-            echo "Recovery: ensure inputs.sha equals the current tip of agent/staging."
+            echo "Recovery: ensure the SHA being promoted equals the current tip of agent/staging."
             echo "  git fetch origin agent/staging && git rev-parse origin/agent/staging"
             echo "Then retry with sha=$REMOTE_SHA, or push the intended SHA to agent/staging."
+            echo "For workflow_run promotion this means the branch moved after build success — push again to re-qualify the new tip."
             exit 1
           fi
           echo "agent/staging verified: $REMOTE_SHA"
@@ -147,17 +201,17 @@ jobs:
           echo "Checking build.yml runs for commit $EXPECTED_SHA ..."
           # gh run list --workflow build.yml --commit <sha> is the supported
           # filter; require a completed successful run for that exact SHA.
+          # For workflow_run triggers this is the run that just succeeded
+          # (defense-in-depth: re-query rather than trusting the event alone).
           JSON="$(gh run list --workflow build.yml --commit "$EXPECTED_SHA" --json conclusion,status --jq '.' 2>&1 || true)"
           echo "gh run list output: $JSON"
           # Count successful completed runs
           COUNT="$(echo "$JSON" | jq '[.[] | select(.status == "completed" and .conclusion == "success")] | length' 2>/dev/null || echo 0)"
           if [[ "$JSON" == "[]" ]] || [[ "$COUNT" == "0" ]] || [[ -z "$COUNT" ]]; then
             echo "::error::No successful completed build.yml run found for SHA $EXPECTED_SHA."
-            echo "Recovery: re-run (or wait for) the build.yml workflow on that exact SHA before promoting."
-            echo "  Options:"
-            echo "    - Push the SHA to agent/staging (triggers build on PR/push if configured), or"
-            echo "    - Use: gh workflow run build.yml --ref <branch-containing-sha>  (or re-run via UI)"
-            echo "    - Or dispatch build via API for that commit, then retry promote-staging with sha=$EXPECTED_SHA"
+            echo "Recovery: the exact SHA must have a successful build.yml run before it can be promoted."
+            echo "  - For workflow_run promotion this should not happen (build just succeeded). If it does, check that the workflow is 'build' and branch is 'agent/staging'."
+            echo "  - For manual recovery: push the SHA to agent/staging (triggers build), or re-run build via GitHub UI/API for that commit, then retry promote-staging."
             exit 1
           fi
           echo "build.yml qualification verified: $COUNT successful completed run(s) for $EXPECTED_SHA"
@@ -185,13 +239,13 @@ jobs:
             echo "Fast-forward safe: origin/main is ancestor of $EXPECTED_SHA"
           else
             echo "::error::Fast-forward check FAILED: origin/main $MAIN_SHA is NOT an ancestor of $EXPECTED_SHA (branch diverged)."
-            echo "Recovery: rebase agent/staging onto the new main and re-qualify:"
+            echo "Recovery: rebase agent/staging onto the new main and re-qualify (new SHA required):"
             echo "  git fetch origin"
             echo "  git checkout agent/staging"
             echo "  git rebase origin/main"
             echo "  # resolve conflicts if any, then:"
             echo "  git push --force-with-lease origin agent/staging"
-            echo "  # wait for build.yml to pass on the new tip, then retry promotion with the new SHA"
+            echo "  # wait for build.yml to pass on the NEW tip (it will auto-trigger promotion via workflow_run)"
             exit 1
           fi
 
@@ -215,13 +269,13 @@ jobs:
           fi
           if echo "$OUT" | grep -qi "Reference update failed"; then
             echo "::error::Promotion failed with 422 Reference update failed — main advanced concurrently since fetch (TOCTOU)."
-            echo "Recovery: fetch the new main, rebase agent/staging, re-qualify, and re-dispatch:"
+            echo "Recovery: fetch the new main, rebase agent/staging, re-qualify, and allow auto-promotion:"
             echo "  git fetch origin"
             echo "  git checkout agent/staging && git rebase origin/main"
             echo "  git push --force-with-lease origin agent/staging"
-            echo "  # wait for build.yml success on the rebased tip, then retry with its SHA"
+            echo "  # wait for build.yml success on the rebased tip — promotion auto-triggers via workflow_run"
             exit 1
           fi
           echo "::error::Promotion failed (gh api exit $CODE). See output above."
-          echo "If main moved concurrently, recovery is the same rebase + re-qualify + retry flow."
+          echo "If main moved concurrently, recovery is the same rebase + re-qualify flow (new SHA, new build required)."
           exit 1

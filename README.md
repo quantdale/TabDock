@@ -387,17 +387,20 @@ retained bytes (no build, no sign)
   need evidence and their manifests honestly report
   `productionReleaseEligibility = BLOCKED_EXTERNAL`.
 - Release-tooling regression tests: `scripts/release-tooling-tests.ps1`
-  (137 deterministic adversarial cases, including signing-provider policy,
+  (139 deterministic adversarial cases, including signing-provider policy,
   the release-policy trust boundary (old candidates rejected under CURRENT
   policy, policy-schema contract, candidate-policy isolation, publisher
   identity policy, Stage A/B dispatch contracts), Stage B zero candidate
   execution (identity validated from trusted records; no candidate path in
   any execution position), checkout credential hardening
   (`persist-credentials: false` everywhere), pinned production actions
-  (immutable SHAs including `agent/staging` -> `promote-staging.yml`
-  `concurrency: group: promote-main` / `force: false` exact-SHA promotion),
-  and static workflow guarantees; no real certificates, no publishing, no
-  provider contact). The suite is an exact-SHA hosted-CI gate in `build.yml`.
+  (immutable SHAs; race-free `agent/staging push -> build exact-SHA
+  qualification -> workflow_run success -> promote-staging
+  `head_sha`-authoritative promotion` with `concurrency: group:
+  promote-main` / `force: false` and PR/fork rejection, plus
+  `build-qualifies-agent-staging` coverage), and static workflow
+  guarantees; no real certificates, no publishing, no provider contact).
+  The suite is an exact-SHA hosted-CI gate in `build.yml`.
   Split presentation and render budgets are now deterministically gated in
   hosted CI via `SplitInteractionPolicy` / `PresentationOperationBudget` unit
   tests (in addition to supervised `ValidationDriver` real-input coverage).
