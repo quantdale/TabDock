@@ -10,15 +10,47 @@ this text.
 
 ## CURRENT STATUS
 
-The August 21 audit remediation campaign (R21) is COMPLETE on the repository
-side: all confirmed P0/P1 findings are fixed at root cause, regression
-coverage is in place, the full automated validation matrix passes, and the
-work is committed and pushed to `origin/main` (main-only; no force-push).
-Remaining work is exclusively external: supervised live-desktop validation
-(BLOCKED_SUPERVISED below) and the pre-existing BLOCKED_EXTERNAL release
-evidence (signing credentials, human smoke, mixed-DPI hardware, Windows 10
-x64 compatibility). Verdict stays GO FOR RELEASE CANDIDATE / BETA ONLY;
-v1.0.0 remains PREPARED BUT INTENTIONALLY NOT PUBLISHED.
+The R22 interactive Windows qualification & torture campaign (2026-08-21)
+is COMPLETE for everything executable in its environment; verdict
+**QUALIFIED_WITH_EXTERNAL_BLOCKERS** (see
+`.agent/R22_WINDOWS_QUALIFICATION.md` for the full matrix and evidence).
+One real product regression was reproduced supervised and fixed: capture of
+a first tab into a new group did not durably persist (`52cd3ca`; regression
+coverage = persist-kill family scenarios, re-run green). The remainder of
+the campaign's fixes are harness/interaction-layer hardening (raw-DLL shard
+spawn, relaunched-process registration, exact picker-row matching,
+popup-under-cursor verify+retry on all menu paths, transient null-foreground
+tolerance, Group-these enabled poll) — commits `e9ac3dc b2bae03 52cd3ca
+8427588 99747ac d3314f8 3847148 ef27e4c`, all pushed to `origin/main`.
+
+Supervised coverage achieved before the desktop became shared with operator
+activity: core-lifecycle ×4 green, capture-group green (incl. same-process
+close-group identity torture, 24 assertions), split-core member-destruction
+phases a/b green (survivor promotion, dormant-clear, no ghost pane),
+group-create-inline 10/10 post-hardening. Remaining supervised shards
+(keyboard-input incl. tab-switch torture soaks, split-render, split-focus
+minrestore soak, drag-z-order, crash-recovery soak, dpi-multi-monitor,
+startup) are **BLOCKED_ENVIRONMENT**: user applications appeared mid-run
+(foreign Notepad single-instance handoff + foreground churn) and the
+driver's fail-closed identity guard correctly refused input. Exact rerun
+commands are in `.agent/R22_WINDOWS_QUALIFICATION.md`. Do not treat those
+contaminated failures as product defects.
+
+External gates unchanged: mixed-DPI hardware, Windows 10 x64, signing
+credentials, human final smoke. Verdict remains GO FOR RELEASE CANDIDATE /
+BETA ONLY; v1.0.0 intentionally not published.
+
+## R22 AUTOMATED RESULTS (2026-08-21, final SHA = tip of origin/main)
+
+- `dotnet build TabDock.sln -c Debug`: 0 errors, 0 warnings.
+- `dotnet build TabDock.sln -c Release`: 0 errors, 0 warnings.
+- `dotnet test tests/UnitTests/TabDock.UnitTests.csproj -c Debug`: 184 passed / 0 failed.
+- `dotnet test tests/UnitTests/TabDock.UnitTests.csproj -c Release`: 184 passed / 0 failed.
+- `pwsh -NoProfile -File scripts/release-tooling-tests.ps1`: 150 passed / 0 failed.
+- `pwsh -NoProfile -File scripts/validate.ps1 -Configuration Release -Ci`: PASS.
+- `pwsh -NoProfile -File scripts/validate.ps1 -Configuration Release -Ci -Publish`: PASS.
+- `tools/openspec/node_modules/.bin/openspec validate --all --no-interactive`: 20 passed / 0 failed.
+- `git diff --check`: clean.
 
 ## WHAT WAS IMPLEMENTED (R21 campaign, 2026-08-21/22)
 
