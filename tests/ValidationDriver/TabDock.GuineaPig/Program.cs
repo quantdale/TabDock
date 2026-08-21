@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace TabDock.GuineaPig;
@@ -42,7 +44,25 @@ internal static class Program
         IntPtr previousDpi = PigDpi.ApplyThreadDpi(opts.DpiMode);
         try
         {
+            // Extra windows run on their own STA UI threads so each keeps
+            // pumping messages (and WndProc logging) independently while
+            // sharing this process and window class. Closing ANY pig form
+            // closes the others, unwinding every Application.Run for a
+            // graceful process exit.
+            var extraThreads = new List<Thread>();
+            for (int i = 0; i < opts.ExtraWindows; i++)
+            {
+                PigOptions extraOpts = CloneForExtraWindow(opts, i + 2);
+                var thread = new Thread(() => RunExtraForm(extraOpts));
+                thread.SetApartmentState(ApartmentState.STA);
+                extraThreads.Add(thread);
+                thread.Start();
+            }
+
             Application.Run(new PigForm(opts));
+
+            foreach (Thread extraThread in extraThreads)
+                extraThread.Join();
         }
         finally
         {
@@ -106,11 +126,56 @@ internal static class Program
                 case "--dpi":
                     opts.DpiMode = ParseDpiMode(Require(args, ref i));
                     break;
+                case "--extra-windows":
+                    opts.ExtraWindows = int.Parse(Require(args, ref i));
+                    break;
+                case "--churn-title-every-ms":
+                    opts.ChurnTitleEveryMilliseconds = int.Parse(Require(args, ref i));
+                    break;
                 default:
                     throw new ArgumentException($"Unknown argument '{args[i]}'.");
             }
         }
         return opts;
+    }
+
+    /// <summary>Runs one extra pig form on its own STA UI thread.</summary>
+    private static void RunExtraForm(PigOptions opts)
+    {
+        IntPtr previousDpi = PigDpi.ApplyThreadDpi(opts.DpiMode);
+        try
+        {
+            Application.Run(new PigForm(opts));
+        }
+        finally
+        {
+            PigDpi.RestoreThreadDpi(previousDpi);
+        }
+    }
+
+    /// <summary>Copies the options for an additional top-level window titled '<Title>-W&lt;n&gt;'.</summary>
+    private static PigOptions CloneForExtraWindow(PigOptions src, int windowNumber)
+    {
+        return new PigOptions
+        {
+            Title = $"{src.Title}-W{windowNumber}",
+            RunId = src.RunId,
+            Color = src.Color,
+            Pulse = src.Pulse,
+            HideOnClose = src.HideOnClose,
+            MinimizeThenHideOnClose = src.MinimizeThenHideOnClose,
+            SelfCloseAfterSeconds = src.SelfCloseAfterSeconds,
+            SelfMinimizeAfterSeconds = src.SelfMinimizeAfterSeconds,
+            CloseButton = src.CloseButton,
+            ClickCounterButton = src.ClickCounterButton,
+            TextBox = src.TextBox,
+            ResizeProbe = src.ResizeProbe,
+            MinWidth = src.MinWidth,
+            MinHeight = src.MinHeight,
+            BlockMessagesMilliseconds = src.BlockMessagesMilliseconds,
+            DpiMode = src.DpiMode,
+            ChurnTitleEveryMilliseconds = src.ChurnTitleEveryMilliseconds,
+        };
     }
 
     private static string Require(string[] args, ref int i)

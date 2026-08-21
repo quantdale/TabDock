@@ -30,7 +30,8 @@ internal static partial class Scenarios
     //     LEFT click on a non-member suspends the pair and presents that guest
     //     full-width. Clicking either composite half resumes the same pair.
     // The app logs SPLIT[enter] / SPLIT[suspend] / SPLIT[resume] / SPLIT[exit]
-    // / SPLIT[replace] / SPLIT[member-gone] (all present in committed source).
+    // / SPLIT[member-gone] (all present in committed source; there is no
+    //   SPLIT[replace] line — a replace re-enters via SPLIT[enter]).
     //
     // Pane geometry contract: the content-area marker HWND (class TabDockContentHost)
     // gives the full host client screen rect via Discover.GetClientScreenRect(host).

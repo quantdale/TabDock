@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -151,6 +152,14 @@ public sealed class PigOptions
     // Deliberate DPI-awareness mode this pig should launch under (see
     // DpiMenuMode). Default = the pig's natural WinForms/no-manifest awareness.
     public DpiMenuMode DpiMode = DpiMenuMode.Default;
+    // Additional top-level PigForm windows (same window class, same process)
+    // launched on their own STA UI threads, titled '<Title>-W2', '<Title>-W3',
+    // ... so ONE spawned process yields multiple capturable same-class windows.
+    public int ExtraWindows;
+    // Interval (ms) at which this form's Text cycles through: base title ->
+    // base + ' - report.txt' -> '' -> base + ' - report.txt *' -> base.
+    // 0 disables title churn entirely.
+    public int ChurnTitleEveryMilliseconds;
 }
 
 /// <summary>
@@ -186,10 +195,21 @@ public sealed class PigForm : Form
     private TextBox? _textBox;
     private int _resizeProbeCount;
     private int _nativeMoveCount;
+    // Tracks every live PigForm in this process so that when ANY form closes
+    // (--extra-windows runs several STA UI threads) the others are closed too
+    // and each thread's Application.Run unwinds for a graceful process exit.
+    private static readonly object s_liveFormsGate = new object();
+    private static readonly List<PigForm> s_liveForms = new List<PigForm>();
+    // Held in a field: an unreferenced WinForms Timer can be garbage-collected.
+    private Timer? _churnTimer;
 
     public PigForm(PigOptions opts)
     {
         _opts = opts;
+        lock (s_liveFormsGate)
+        {
+            s_liveForms.Add(this);
+        }
 
         string dir = Path.Combine(Path.GetTempPath(), "TabDock-Validation");
         try
@@ -218,6 +238,30 @@ public sealed class PigForm : Form
                 BackColor = _pulseOn ? _pulseColor : _baseColor;
             };
             pulseTimer.Start();
+        }
+
+        if (opts.ChurnTitleEveryMilliseconds > 0)
+        {
+            // Rotates the caption through base -> base + ' - report.txt' ->
+            // '' -> base + ' - report.txt *' -> base so scenarios can assert
+            // against title churn (including an empty caption).
+            string[] churnSteps =
+            {
+                opts.Title,
+                opts.Title + " - report.txt",
+                string.Empty,
+                opts.Title + " - report.txt *",
+                opts.Title,
+            };
+            int churnStep = 0;
+            _churnTimer = new Timer { Interval = opts.ChurnTitleEveryMilliseconds };
+            _churnTimer.Tick += (s, e) =>
+            {
+                churnStep = (churnStep + 1) % churnSteps.Length;
+                Text = churnSteps[churnStep];
+                Log($"TITLE text='{churnSteps[churnStep].Replace("'", "''")}'");
+            };
+            _churnTimer.Start();
         }
 
         if (opts.BlockMessagesMilliseconds > 0)
@@ -311,7 +355,11 @@ public sealed class PigForm : Form
 
         Shown += (s, e) => Log($"LIFECYCLE Shown {PigDpi.DescribeDpi(Handle)}");
         FormClosing += OnPigFormClosing;
-        FormClosed += (s, e) => Log("LIFECYCLE FormClosed");
+        FormClosed += (s, e) =>
+        {
+            Log("LIFECYCLE FormClosed");
+            CloseSiblingPigForms();
+        };
 
         Log($"LIFECYCLE Created title='{opts.Title}' pid={Environment.ProcessId} runId={opts.RunId} color={_baseColor} " +
             $"pulse={opts.Pulse} hideOnClose={opts.HideOnClose} minThenHide={opts.MinimizeThenHideOnClose} " +
@@ -427,6 +475,29 @@ public sealed class PigForm : Form
         {
             bool focused = _textBox?.Focus() == true;
             Log($"FOCUS_FORWARD result={focused} msg={m.Msg:X} wParam=0x{(long)m.WParam:X}");
+        }
+    }
+
+    /// <summary>Closes every other live PigForm so all UI threads unwind together.</summary>
+    private void CloseSiblingPigForms()
+    {
+        PigForm[] siblings;
+        lock (s_liveFormsGate)
+        {
+            s_liveForms.Remove(this);
+            siblings = s_liveForms.ToArray();
+        }
+        foreach (PigForm sibling in siblings)
+        {
+            try
+            {
+                // Close() must run on the sibling's own UI thread.
+                sibling.BeginInvoke(new Action(sibling.Close));
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("PigForm CloseSiblingPigForms failed: " + ex.Message);
+            }
         }
     }
 

@@ -324,6 +324,10 @@ internal static partial class Scenarios
         "crashkill-maximized-recovery", "crashkill-minimized-recovery",
         "crashkill-split-rescue",
         "startup-local-stack-above-unrelated-when-guest-present",
+        // R22 qualification torture harness (Scenarios.Torture.cs): hermetic
+        // pig-only soaks; categorized in GetScenarioShard's torture- block.
+        "torture-tabswitch-rapid", "torture-tabswitch-random", "torture-split-member-destroy",
+        "torture-closegroup-same-process", "torture-minrestore-soak", "torture-crash-restart-soak",
     };
 
     /// <summary>
@@ -445,6 +449,25 @@ internal static partial class Scenarios
             return "real-app";
         if (name == "browser-multi" || Array.IndexOf(BrowserOnlyScenarios, name) >= 0)
             return "browser";
+        // R22 qualification torture harness (Scenarios.Torture.cs). Shard
+        // mapping follows each soak's dominant cost driver: tab-switch soaks
+        // are click/input churn (keyboard-input), member-destroy drives the
+        // split relationship lifecycle (split-core), the close-group prompt
+        // exercises multi-capture grouping (capture-group), the min/restore
+        // soak is split presentation focus (split-focus), and the crash/restart
+        // soak is rescue-journal recovery (crash-recovery).
+        if (name.StartsWith("torture-", StringComparison.Ordinal))
+        {
+            return name switch
+            {
+                "torture-tabswitch-rapid" or "torture-tabswitch-random" => "keyboard-input",
+                "torture-split-member-destroy" => "split-core",
+                "torture-closegroup-same-process" => "capture-group",
+                "torture-minrestore-soak" => "split-focus",
+                "torture-crash-restart-soak" => "crash-recovery",
+                _ => null,
+            };
+        }
         if (name.StartsWith("crashkill-", StringComparison.Ordinal))
             return "crash-recovery";
         if (Array.IndexOf(SplitCoreScenarios, name) >= 0)
@@ -647,6 +670,12 @@ internal static partial class Scenarios
 "capture-dpi-unaware-guest" => CaptureDpiUnawareGuest,
 "capture-dpi-system-guest" => CaptureDpiSystemGuest,
             "three-app-torture" => ThreeAppTorture,
+            "torture-tabswitch-rapid" => TortureTabSwitchRapid,
+            "torture-tabswitch-random" => TortureTabSwitchRandom,
+            "torture-split-member-destroy" => TortureSplitMemberDestroy,
+            "torture-closegroup-same-process" => TortureCloseGroupSameProcess,
+            "torture-minrestore-soak" => TortureMinRestoreSoak,
+            "torture-crash-restart-soak" => TortureCrashRestartSoak,
             "browser-lifecycle" => BrowserLifecycle,
             "browser-tabswitch-hidesafety" => BrowserTabSwitchHideSafety,
             "browser-dragreorder" => BrowserDragReorder,
