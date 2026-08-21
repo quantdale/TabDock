@@ -40,14 +40,13 @@ on:
         default: false
         type: boolean
       signing-provider:
-        description: 'Signing backend: not-configured (default, unsigned) or local-pfx (development/private certificate; NEVER the approved public-GA signer). digicert-stm is not supported on this RC-only path (no DigiCert tooling setup) and is never needed here.'
+        description: 'Signing backend: not-configured (default, unsigned) or local-pfx (development/private certificate; NEVER the approved public-GA signer). DigiCert is not offered on this RC-only path: production DigiCert signing belongs exclusively to Stage A (prepare-release-candidate.yml).'
         required: false
         default: 'not-configured'
         type: choice
         options:
           - not-configured
           - local-pfx
-          - digicert-stm
 
 permissions:
   contents: read
@@ -55,6 +54,12 @@ permissions:
 jobs:
   qualify:
     runs-on: windows-latest
+    # Least privilege (R21-001d): this job uploads the qualified RC artifact,
+    # so it holds actions: write; contents stays read (the RC workflow never
+    # creates releases or tags).
+    permissions:
+      contents: read
+      actions: write
     steps:
       # Current checkout action: Node 24 action runtime (runner-supported).
       - name: Checkout exact candidate SHA
@@ -69,10 +74,12 @@ jobs:
       # aborts before any build work begins.
       - name: Verify exact candidate SHA
         shell: pwsh
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
         run: |
           $actual = (git rev-parse HEAD).Trim()
-          if ($actual -ne '${{ inputs.sha }}') {
-            throw "Checked out $actual but the release candidate was requested as ${{ inputs.sha }}"
+          if ($actual -ne $env:REQUESTED_SHA) {
+            throw "Checked out $actual but the release candidate was requested as $env:REQUESTED_SHA"
           }
           Write-Host "Candidate SHA verified: $actual"
 
@@ -120,8 +127,15 @@ jobs:
           SIGNCERT_BASE64: ${{ secrets.SIGNCERT_BASE64 }}
           SIGNCERT_PASSWORD: ${{ secrets.SIGNCERT_PASSWORD }}
           SIGNCERT_TIMESTAMP: ${{ secrets.SIGNCERT_TIMESTAMP }}
-          RELEASE_SIGNING_REQUIRED: ${{ inputs.signing-required == 'true' }}
-        run: .\scripts\release-qualify.ps1 -Ci -Sha '${{ inputs.sha }}' -Version '${{ inputs.version }}' -Sign -OutDir (Join-Path $env:RUNNER_TEMP 'release-artifacts')
+          # Boolean dispatch input stringifies to the literal 'true'/'false';
+          # comparing a boolean to the STRING 'true' always evaluated false.
+          RELEASE_SIGNING_REQUIRED: ${{ inputs.signing-required }}
+          REQUESTED_SHA: ${{ inputs.sha }}
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: |
+          # Dispatch inputs travel as DATA via env:, never interpolated into
+          # the script text (R21-001).
+          .\scripts\release-qualify.ps1 -Ci -Sha $env:REQUESTED_SHA -Version $env:EXPECTED_VERSION -Sign -OutDir (Join-Path $env:RUNNER_TEMP 'release-artifacts')
 
       # Immutable retention of the exact qualified RC artifact.
       - name: Upload qualified release artifact
@@ -138,6 +152,8 @@ jobs:
       # workflows above.
       - name: Record RC artifact identity
         shell: pwsh
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'release-artifacts'
           $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
@@ -145,8 +161,8 @@ jobs:
           ## RC qualification artifact (NOT a production candidate)
 
           - RC workflow run: `${{ github.run_id }}
-          - Artifact name: tabdock-rc-`${{ inputs.sha }}`-`${{ github.run_id }}
-          - Source commit: `${{ inputs.sha }}
+          - Artifact name: tabdock-rc-`$($env:REQUESTED_SHA)`-`${{ github.run_id }}
+          - Source commit: `$($env:REQUESTED_SHA)
           - Semantic version: `$($manifest.semanticVersion)`
           - Final distributed SHA-256: `$($manifest.artifactSha256)`
           - Signing: `$($manifest.signingStatus)` / `$($manifest.signatureVerification)`

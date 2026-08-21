@@ -103,6 +103,13 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+# Uninitialized VARIABLE references must throw (R21-003a): silent $null
+# argument binding once masked a fused-variable bug in the direct-evidence
+# cases below. Version 1 (not Latest) deliberately: the dot-sourced module
+# and the invoked signer/qualifier probe optional JSON properties and scalar
+# .Count by design, and must keep failing closed on absence rather than
+# throwing here.
+Set-StrictMode -Version 1
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $modulePath = Join-Path $PSScriptRoot 'release-tooling.ps1'
@@ -922,10 +929,18 @@ try {
     New-TestCase 'evidence-direct-validation-binds-sha-and-hash' {
         $evidencePath = Join-Path $testRoot 'h-evidence.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha ('b' * 64))
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
         Assert-True ($result.Valid) "valid evidence must pass: $($result.Failures -join '; ')"
-        $wrong = Test-ExternalEvidenceFile $evidencePath $goodSha ('c' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
+        $wrong = Test-ExternalEvidenceFile $evidencePath $goodSha ('c' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
         Assert-True (-not $wrong.Valid) 'the same evidence must fail against a different artifact hash'
+        # Direct-evidence binding must check the SPECIFIC Stage A run and
+        # artifact values, not merely non-empty fields (R21-003a).
+        $wrongRun = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId '999999999' -ExpectedCandidateArtifactName $goodArtifactName
+        Assert-True (-not $wrongRun.Valid) 'evidence naming another Stage A run must fail direct validation'
+        Assert-True (($wrongRun.Failures -join ';') -match 'candidateWorkflowRunId') 'failure must cite the run binding'
+        $wrongName = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName ('tabdock-candidate-' + ('c' * 40) + '-999999999')
+        Assert-True (-not $wrongName.Valid) 'evidence naming another artifact must fail direct validation'
+        Assert-True (($wrongName.Failures -join ';') -match 'candidateArtifactName') 'failure must cite the artifact-name binding'
     }
 
     Write-Host ''
@@ -1081,7 +1096,7 @@ try {
         $evidence.Remove('windowsCompatibility')
         $evidencePath = Join-Path $testRoot 'w-missing.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
         Assert-True (-not $result.Valid) 'evidence without windowsCompatibility must fail closed'
         Assert-True (($result.Failures -join ';') -match 'windowsCompatibility') 'failure must cite the missing gate'
     }
@@ -1091,7 +1106,7 @@ try {
         $evidence.windowsCompatibility.status = 'FAIL'
         $evidencePath = Join-Path $testRoot 'w-fail.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
         Assert-True (-not $result.Valid) 'windowsCompatibility status FAIL must fail closed'
     }
 
@@ -1100,7 +1115,7 @@ try {
         $evidence.windowsCompatibility.Remove('windows10')
         $evidencePath = Join-Path $testRoot 'w-no10.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
         Assert-True (-not $result.Valid) 'evidence without Windows 10 entry must fail closed'
         Assert-True (($result.Failures -join ';') -match 'windows10') 'failure must cite the Windows 10 entry'
     }
@@ -1110,7 +1125,7 @@ try {
         $evidence.windowsCompatibility.windows10.status = 'BLOCKED_EXTERNAL'
         $evidencePath = Join-Path $testRoot 'w-10blocked.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
         Assert-True (-not $result.Valid) 'Windows 10 BLOCKED_EXTERNAL must fail closed for production'
     }
 
@@ -1119,7 +1134,7 @@ try {
         $evidence.windowsCompatibility.windows10.build = ''
         $evidencePath = Join-Path $testRoot 'w-10build.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
         Assert-True (-not $result.Valid) 'Windows 10 evidence without a recorded build must fail closed'
         Assert-True (($result.Failures -join ';') -match 'build') 'failure must cite the missing OS build'
     }
@@ -1129,7 +1144,7 @@ try {
         $evidence.windowsCompatibility.windows10.nativeAbiEvidence = ''
         $evidencePath = Join-Path $testRoot 'w-10abi.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
         Assert-True (-not $result.Valid) 'Windows 10 evidence without the native ABI selftest report must fail closed'
         Assert-True (($result.Failures -join ';') -match 'nativeAbiEvidence') 'failure must cite the native ABI evidence'
     }
@@ -1139,14 +1154,14 @@ try {
         $evidence.windowsCompatibility.windows11.status = 'FAIL'
         $evidencePath = Join-Path $testRoot 'w-11fail.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
         Assert-True (-not $result.Valid) 'Windows 11 status FAIL must fail closed'
     }
 
     New-TestCase 'windows-compatibility-happy-path-passes' {
         $evidencePath = Join-Path $testRoot 'w-happy.json'
         Save-TestEvidence $evidencePath (New-TestEvidence -SourceSha $goodSha -ArtifactSha ('b' * 64))
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
         Assert-True ($result.Valid) "valid Windows 10/11 evidence must pass: $($result.Failures -join '; ')"
     }
 
@@ -1158,7 +1173,7 @@ try {
         $evidence.finalWindowsHumanSmoke.completedAt = 'tomorrow-ish'
         $evidencePath = Join-Path $testRoot 'c-not-iso.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
         Assert-True (-not $result.Valid) 'a non-ISO completedAt must fail closed'
         Assert-True (($result.Failures -join ';') -match 'ISO-8601') 'failure must cite the timestamp format'
     }
@@ -1168,7 +1183,7 @@ try {
         $evidence.physicalMixedDpi.completedAt = [DateTimeOffset]::UtcNow.AddHours(1).ToString('O')
         $evidencePath = Join-Path $testRoot 'c-future.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
         Assert-True (-not $result.Valid) 'a future completedAt must fail closed'
         Assert-True (($result.Failures -join ';') -match 'future') 'failure must cite the future timestamp'
     }
@@ -1178,7 +1193,7 @@ try {
         $evidence.windowsCompatibility.windows10.completedAt = 'not-a-date'
         $evidencePath = Join-Path $testRoot 'c-wc.json'
         Save-TestEvidence $evidencePath $evidence
-        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactNamegoodPublisherSubject
+        $result = Test-ExternalEvidenceFile $evidencePath $goodSha ('b' * 64) -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName
         Assert-True (-not $result.Valid) 'a malformed Windows 10 completedAt must fail closed'
     }
 
@@ -2213,11 +2228,14 @@ try {
     # (release-qualify.ps1 reads <Version> from the repository root csproj).
     [IO.File]::WriteAllText((Join-Path $scratch 'TabDock.csproj'), '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><Version>1.0.0</Version></PropertyGroup></Project>', [Text.UTF8Encoding]::new($false))
     Push-Location $scratch
+    # Every scratch git call passes -c core.autocrlf=false (R21-003d): with
+    # core.autocrlf=true git writes CRLF warnings to stderr, which must never
+    # be able to abort this harness under $ErrorActionPreference = 'Stop'.
     try {
-        git init -q 2>&1 | Out-Null
-        git -c user.email=test@tabdock.invalid -c user.name='Test' add -A 2>&1 | Out-Null
-        git -c user.email=test@tabdock.invalid -c user.name='Test' commit -q -m 'scratch' 2>&1 | Out-Null
-        $scratchSha = (git rev-parse HEAD).Trim()
+        git -c core.autocrlf=false init -q 2>&1 | Out-Null
+        git -c core.autocrlf=false -c user.email=test@tabdock.invalid -c user.name='Test' add -A 2>&1 | Out-Null
+        git -c core.autocrlf=false -c user.email=test@tabdock.invalid -c user.name='Test' commit -q -m 'scratch' 2>&1 | Out-Null
+        $scratchSha = (git -c core.autocrlf=false rev-parse HEAD).Trim()
 
         New-TestCase 'dirty-local-release-candidate-refused' {
             $dirtyFile = Join-Path $scratch 'dirty-marker.txt'
@@ -2249,9 +2267,9 @@ try {
 
         New-TestCase 'malformed-project-version-fails' {
             [IO.File]::WriteAllText((Join-Path $scratch 'TabDock.csproj'), '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><Version>banana</Version></PropertyGroup></Project>', [Text.UTF8Encoding]::new($false))
-            git -c user.email=test@tabdock.invalid -c user.name='Test' add -A 2>&1 | Out-Null
-            git -c user.email=test@tabdock.invalid -c user.name='Test' commit -q -m 'scratch malformed version' 2>&1 | Out-Null
-            $newSha = (git rev-parse HEAD).Trim()
+            git -c core.autocrlf=false -c user.email=test@tabdock.invalid -c user.name='Test' add -A 2>&1 | Out-Null
+            git -c core.autocrlf=false -c user.email=test@tabdock.invalid -c user.name='Test' commit -q -m 'scratch malformed version' 2>&1 | Out-Null
+            $newSha = (git -c core.autocrlf=false rev-parse HEAD).Trim()
             $output = & (Join-Path $scratch 'scripts\release-qualify.ps1') -Sha $newSha -Version 1.0.0 -SkipOpenSpec 6>&1 2>&1 | Out-String
             Assert-True ($LASTEXITCODE -ne 0) "a malformed project version must fail`n$output"
             Assert-True ($output -match 'not a valid semantic version') "failure must cite the malformed project version`n$output"
@@ -2261,9 +2279,9 @@ try {
             # The project now declares 2.0.0; the workflow still expects
             # 1.0.0. The project version is authoritative.
             [IO.File]::WriteAllText((Join-Path $scratch 'TabDock.csproj'), '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><Version>2.0.0</Version></PropertyGroup></Project>', [Text.UTF8Encoding]::new($false))
-            git -c user.email=test@tabdock.invalid -c user.name='Test' add -A 2>&1 | Out-Null
-            git -c user.email=test@tabdock.invalid -c user.name='Test' commit -q -m 'scratch version 2.0.0' 2>&1 | Out-Null
-            $newSha = (git rev-parse HEAD).Trim()
+            git -c core.autocrlf=false -c user.email=test@tabdock.invalid -c user.name='Test' add -A 2>&1 | Out-Null
+            git -c core.autocrlf=false -c user.email=test@tabdock.invalid -c user.name='Test' commit -q -m 'scratch version 2.0.0' 2>&1 | Out-Null
+            $newSha = (git -c core.autocrlf=false rev-parse HEAD).Trim()
             $output = & (Join-Path $scratch 'scripts\release-qualify.ps1') -Sha $newSha -Version 1.0.0 -SkipOpenSpec 6>&1 2>&1 | Out-String
             Assert-True ($LASTEXITCODE -ne 0) "an expected version that disagrees with the project version must fail`n$output"
             Assert-True ($output -match 'Version authority mismatch') "failure must cite the authority mismatch`n$output"
@@ -2272,7 +2290,7 @@ try {
         New-TestCase 'release-qualify-rejects-mock-provider-always' {
             # The test-only mock provider must never be usable for release
             # qualification, with or without a production gate.
-            $headSha = (git rev-parse HEAD).Trim()
+            $headSha = (git -c core.autocrlf=false rev-parse HEAD).Trim()
             $env:SIGNING_PROVIDER = 'mock-test'
             try {
                 $output = & (Join-Path $scratch 'scripts\release-qualify.ps1') -Sha $headSha -SkipOpenSpec 6>&1 2>&1 | Out-String
@@ -2285,7 +2303,7 @@ try {
         }
 
         New-TestCase 'release-qualify-production-gate-rejects-local-pfx-before-build' {
-            $headSha = (git rev-parse HEAD).Trim()
+            $headSha = (git -c core.autocrlf=false rev-parse HEAD).Trim()
             $env:SIGNING_PROVIDER = 'local-pfx'
             $env:RELEASE_PRODUCTION_GATE = 'true'
             try {
@@ -2302,7 +2320,7 @@ try {
             # digicert-stm selected but its credentials incomplete: the run
             # must fail BLOCKED_EXTERNAL before any build, naming ONLY the
             # missing variable names.
-            $headSha = (git rev-parse HEAD).Trim()
+            $headSha = (git -c core.autocrlf=false rev-parse HEAD).Trim()
             $env:SIGNING_PROVIDER = 'digicert-stm'
             $env:RELEASE_PRODUCTION_GATE = 'true'
             try {
@@ -2322,7 +2340,7 @@ try {
             # run must proceed past it (the minimal scratch project then
             # fails at publish - expected - which proves the preflight did
             # not block the RC path).
-            $headSha = (git rev-parse HEAD).Trim()
+            $headSha = (git -c core.autocrlf=false rev-parse HEAD).Trim()
             $env:SIGNING_PROVIDER = 'local-pfx'
             $env:SIGNCERT_BASE64 = 'c2hvdWxkLW5ldmVyLWJlLXVzZWQ='
             $env:SIGNCERT_PASSWORD = 'pw'
@@ -2339,6 +2357,229 @@ try {
     }
     finally {
         Pop-Location
+    }
+
+    Write-Host ''
+    Write-Host '==> Workflow dispatch-input transport (R21-001) and trust-boundary static guarantees' -ForegroundColor Cyan
+
+    function ConvertTo-RenderedWorkflow {
+        <#
+        .SYNOPSIS
+            Renders a workflow the way GitHub would for ONE dispatch-input
+            expression, substituting the given value ONLY into env: value
+            positions (the transport form). Non-executable positions
+            (uses:, with:, name:) are left untouched so the extraction below
+            observes exactly the executable script text.
+        #>
+        param(
+            [Parameter(Mandatory = $true)][string]$YamlText,
+            [Parameter(Mandatory = $true)][string]$Expression,
+            [Parameter(Mandatory = $true)][string]$Value
+        )
+        $pattern = '(?m)^(\s*[A-Za-z0-9_]+:\s*)' + [regex]::Escape($Expression) + '\s*$'
+        return [regex]::Replace($YamlText, $pattern, { param($m) $m.Groups[1].Value + $Value })
+    }
+
+    New-TestCase 'workflow-run-blocks-contain-no-workflow-dispatch-expressions' {
+        # R21-001a static invariant: NO workflow under .github/workflows may
+        # interpolate a dispatch input, a previous-step output, a variable,
+        # or a secret directly into an executable run: block. Such values
+        # must travel as DATA via env: and be read with $env: inside the
+        # script. github.* context values that are repository-constant
+        # (e.g. github.repository) remain allowed.
+        $workflows = @(Get-ChildItem -Path (Join-Path $repoRoot '.github\workflows') -Filter '*.yml' | Sort-Object Name)
+        Assert-True ($workflows.Count -ge 4) "expected the release workflows to exist (found $($workflows.Count))"
+        foreach ($wf in $workflows) {
+            $yml = [IO.File]::ReadAllText($wf.FullName)
+            foreach ($block in (Get-WorkflowRunBlocks $yml)) {
+                foreach ($forbidden in @('${{ inputs.', '${{ steps.', '${{ needs.', '${{ vars.', '${{ secrets.')) {
+                    Assert-True ($block -notmatch [regex]::Escape($forbidden)) "$($wf.Name) interpolates '$forbidden' inside an executable run: block; transport it via env: instead"
+                }
+            }
+        }
+    }
+
+    New-TestCase 'dispatch-inputs-travel-as-data-adversarial-values-cannot-change-scripts' {
+        # R21-001b adversarial proof: hostile dispatch-input values travel as
+        # env: DATA. Rendering each affected workflow with a hostile value
+        # substituted into the env value ONLY must produce byte-identical
+        # run-block script text to the benign rendering - the value can never
+        # become syntax.
+        $benign = '123456789'
+        $hostile = "1'; `"back`" ; `$(`$env:PATH); `$(calc); ```r`nWrite-Host pwned; exit 1 # -- `r`n'"
+        Assert-True ($hostile -match "'" -and $hostile -match '"' -and $hostile -match ';' -and $hostile -match '\$\(') 'test premise: the hostile value carries quote/semicolon/subcommand metacharacters'
+        $expressions = @(
+            '${{ inputs.run-id }}',
+            '${{ inputs.sha }}',
+            '${{ inputs.version }}',
+            '${{ inputs.signing-required }}',
+            '${{ inputs.signing-provider }}',
+            '${{ inputs.external-evidence }}'
+        )
+        $covered = 0
+        $workflows = @(Get-ChildItem -Path (Join-Path $repoRoot '.github\workflows') -Filter '*.yml' | Sort-Object Name)
+        foreach ($wf in $workflows) {
+            $yml = [IO.File]::ReadAllText($wf.FullName)
+            foreach ($expr in $expressions) {
+                if (-not $yml.Contains($expr)) { continue }
+                $covered++
+                $benignBlocks = @(Get-WorkflowRunBlocks (ConvertTo-RenderedWorkflow $yml $expr $benign))
+                $hostileBlocks = @(Get-WorkflowRunBlocks (ConvertTo-RenderedWorkflow $yml $expr $hostile))
+                Assert-True ($benignBlocks.Count -eq $hostileBlocks.Count) "$($wf.Name): rendering $expr changed the number of run blocks ($($benignBlocks.Count) vs $($hostileBlocks.Count))"
+                for ($i = 0; $i -lt $benignBlocks.Count; $i++) {
+                    Assert-True ([string]::Equals($benignBlocks[$i], $hostileBlocks[$i], [StringComparison]::Ordinal)) "$($wf.Name): hostile value for $expr altered run block #$i - the input reached the script text"
+                }
+            }
+        }
+        Assert-True ($covered -ge 5) "expected at least 5 workflow/input expression pairs to exercise (covered $covered)"
+    }
+
+    New-TestCase 'rc-signing-required-boolean-input-stringifies-unambiguously' {
+        # R21-001c: a boolean dispatch input stringifies to 'true'/'false'.
+        # The old `${{ inputs.signing-required == 'true' }}` compared a
+        # boolean to a STRING and always rendered false.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\release.yml'))
+        Assert-True ($yml -match [regex]::Escape('RELEASE_SIGNING_REQUIRED: ${{ inputs.signing-required }}')) 'release.yml must pass the boolean input through unmodified (stringifies to true/false)'
+        Assert-True ($yml -notmatch "inputs\.signing-required\s*==") "the boolean-to-string comparison form must be gone from release.yml"
+    }
+
+    New-TestCase 'rc-workflow-offers-no-digicert-provider' {
+        # R21-001c: the RC-only path cannot provision DigiCert; production
+        # DigiCert signing belongs exclusively to Stage A.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\release.yml'))
+        Assert-True ($yml -notmatch 'digicert-stm') 'release.yml must not offer digicert-stm anywhere (choice list included)'
+        Assert-True ($yml -match 'not-configured') 'the RC unsigned default provider must remain'
+        Assert-True ($yml -match 'local-pfx') 'the RC development provider must remain'
+    }
+
+    New-TestCase 'artifact-uploading-jobs-hold-least-privilege-actions-write' {
+        # R21-001d: jobs that call actions/upload-artifact need job-level
+        # actions: write (top-level contents: read alone is insufficient);
+        # jobs without uploads must not hold it. build.yml uploads nothing.
+        $rc = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\release.yml'))
+        $rcJob = $rc.Substring($rc.IndexOf('  qualify:'))
+        Assert-True ($rcJob -match 'permissions:') 'the release.yml upload job must declare job-level permissions'
+        Assert-True ($rcJob -match 'actions: write') 'the release.yml upload job must hold actions: write'
+        Assert-True ($rcJob -match 'contents: read') 'the release.yml upload job must keep contents: read'
+        $stageA = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\prepare-release-candidate.yml'))
+        $stageAJob = $stageA.Substring($stageA.IndexOf('  prepare-candidate:'))
+        Assert-True ($stageAJob -match 'permissions:') 'the Stage A upload job must declare job-level permissions'
+        Assert-True ($stageAJob -match 'actions: write') 'the Stage A upload job must hold actions: write'
+        Assert-True ($stageAJob -match 'contents: read') 'the Stage A upload job must keep contents: read'
+        $build = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\build.yml'))
+        Assert-True ($build -notmatch 'upload-artifact') 'build.yml uploads no artifact'
+        Assert-True ($build -notmatch 'actions:\s*write') 'build.yml must not grant actions: write (no uploads)'
+    }
+
+    New-TestCase 'stage-a-github-env-is-appended-never-overwritten' {
+        # R21-001e: materializing the DigiCert client-auth P12 must APPEND to
+        # $GITHUB_ENV; overwriting the file silently drops variables written
+        # by earlier steps.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\prepare-release-candidate.yml'))
+        Assert-True ($yml -match 'AppendAllText\(\$env:GITHUB_ENV') 'Stage A must append to $GITHUB_ENV'
+        Assert-True ($yml -notmatch [regex]::Escape('[IO.File]::WriteAllText($env:GITHUB_ENV')) 'Stage A must never overwrite the whole $GITHUB_ENV file'
+    }
+
+    New-TestCase 'required-release-assets-gate-unit-happy-path-and-missing-file-fails' {
+        # R21-002 unit coverage of the fail-closed pre-publication gate:
+        # every required asset present -> passes; ANY missing asset ->
+        # throws naming it, before any release mutation could happen.
+        $layout = Join-Path $testRoot 'assets-gate'
+        $candidate = Join-Path $layout 'candidate-artifact'
+        $handoff = Join-Path $layout 'verified-handoff'
+        New-Item -ItemType Directory -Path $candidate -Force | Out-Null
+        New-Item -ItemType Directory -Path $handoff -Force | Out-Null
+        foreach ($name in @('TabDock.exe', 'SHA256SUMS.txt', 'release-manifest.json')) {
+            [IO.File]::WriteAllText((Join-Path $candidate $name), 'x', [Text.UTF8Encoding]::new($false))
+        }
+        foreach ($name in @('release-external-evidence.json', 'publication-verification.json')) {
+            [IO.File]::WriteAllText((Join-Path $handoff $name), 'x', [Text.UTF8Encoding]::new($false))
+        }
+        Assert-True ((Get-RequiredReleaseAssets).Count -eq 5) 'the required-asset list must cover exactly the five publication assets'
+        Assert-ReleaseAssetsPresent -CandidateArtifactDir $candidate -VerifiedHandoffDir $handoff
+        foreach ($victim in @('TabDock.exe', 'SHA256SUMS.txt', 'release-manifest.json', 'release-external-evidence.json', 'publication-verification.json')) {
+            Remove-Item -LiteralPath (Join-Path $candidate $victim) -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath (Join-Path $handoff $victim) -ErrorAction SilentlyContinue
+            $threw = $false
+            try { Assert-ReleaseAssetsPresent -CandidateArtifactDir $candidate -VerifiedHandoffDir $handoff } catch { $threw = $true }
+            Assert-True $threw "the gate must fail closed when $victim is missing"
+            # Restore for the next iteration.
+            if (Test-Path (Join-Path $candidate $victim)) { continue }
+            $target = if ($victim -in @('release-external-evidence.json', 'publication-verification.json')) { $handoff } else { $candidate }
+            [IO.File]::WriteAllText((Join-Path $target $victim), 'x', [Text.UTF8Encoding]::new($false))
+        }
+    }
+
+    New-TestCase 'stage-b-evidence-travels-in-verified-handoff-and-publish-consumes-it' {
+        # R21-002 architectural fix: the validated external evidence is
+        # uploaded IN the verified same-run handoff (bound to
+        # publication-verification.json); the publish job uploads THAT copy
+        # as the release asset. The pristine Stage A candidate artifact never
+        # contains release-external-evidence.json, so consuming it from
+        # candidate-artifact/ was structurally impossible.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        $verifyIdx = $yml.IndexOf('  verify:')
+        $publishIdx = $yml.IndexOf('  publish:')
+        $verifySection = $yml.Substring($verifyIdx, $publishIdx - $verifyIdx)
+        $publishSection = $yml.Substring($publishIdx)
+        Assert-True ($verifySection -match [regex]::Escape("Copy-Item -LiteralPath (Join-Path `$dir 'release-external-evidence.json')")) 'the verify job must copy the validated evidence into the verified handoff'
+        Assert-True ($publishSection -match [regex]::Escape('verified-handoff/release-external-evidence.json')) 'the publish job must upload the handoff copy of the evidence'
+        Assert-True ($publishSection -notmatch [regex]::Escape('candidate-artifact/release-external-evidence.json')) 'the publish job must never reference the evidence inside the candidate artifact'
+    }
+
+    New-TestCase 'stage-b-required-assets-gate-wired-before-release-create' {
+        # R21-002: ALL required release assets must be proven to physically
+        # exist in the publish workspace BEFORE `gh release create` runs.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        $publishIdx = $yml.IndexOf('  publish:')
+        $publishSection = $yml.Substring($publishIdx)
+        $gateIdx = $publishSection.IndexOf('Assert-ReleaseAssetsPresent')
+        $createIdx = $publishSection.IndexOf('gh release create $tag')
+        Assert-True ($gateIdx -ge 0) 'the publish job must invoke the required-assets gate'
+        Assert-True ($createIdx -gt $gateIdx) 'the required-assets gate must run BEFORE gh release create'
+        Assert-True ($publishSection -match 'Get-RequiredReleaseAssets|Assert-ReleaseAssetsPresent') 'the gate function must come from the trusted policy module'
+    }
+
+    New-TestCase 'sign-release-verification-failure-branch-reports-signing-failed' {
+        # R21-003b: the independent Authenticode verification FAILURE branch
+        # must set a failure status; claiming SIGNED there contradicted the
+        # FAILED verification and misrecorded downstream manifests.
+        $sig = [IO.File]::ReadAllText($signScript)
+        $start = $sig.IndexOf('if (-not (Test-AuthenticodeSignature $ExePath)) {')
+        Assert-True ($start -ge 0) 'the verification failure branch must exist in sign-release.ps1'
+        $end = $sig.IndexOf('$script:verification = ''SIGNATURE_VERIFIED''', $start)
+        Assert-True ($end -gt $start) 'the verified continuation must follow the failure branch'
+        $branch = $sig.Substring($start, $end - $start)
+        Assert-True ($branch -match [regex]::Escape("`$script:status = 'SIGNING_FAILED'")) 'the verification failure branch must report SIGNING_FAILED'
+        Assert-True ($branch -notmatch [regex]::Escape("`$script:status = 'SIGNED'")) 'the verification failure branch must never claim SIGNED'
+    }
+
+    New-TestCase 'stage-a-first-step-dispatch-contract-sha-equals-github-sha-on-main' {
+        # Trust-boundary regression coverage (previously unautomated): the
+        # Stage A FIRST step must still enforce
+        # inputs.sha == github.sha == refs/heads/main before anything else.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\prepare-release-candidate.yml'))
+        Assert-True ($yml -match [regex]::Escape('REQUESTED_SHA: ${{ inputs.sha }}')) 'inputs.sha must be transported via the REQUESTED_SHA env key'
+        Assert-True ($yml -match [regex]::Escape('DISPATCH_SHA: ${{ github.sha }}')) 'github.sha must be captured as the trusted dispatch SHA'
+        Assert-True ($yml -match 'if \(\$env:REQUESTED_SHA -ne \$env:DISPATCH_SHA\)') 'Stage A must fail when inputs.sha != github.sha'
+        Assert-True ($yml -match 'if \(\$env:WORKFLOW_REF -ne ''refs/heads/main''\)') 'Stage A must fail when dispatched from anything other than main'
+        $stepsIdx = $yml.IndexOf('steps:')
+        $contract = $yml.IndexOf('Verify trusted production dispatch contract', $stepsIdx)
+        $checkout = $yml.IndexOf('actions/checkout', $stepsIdx)
+        Assert-True ($contract -ge 0 -and $contract -lt $checkout) 'the dispatch contract must remain the first step, before checkout'
+    }
+
+    New-TestCase 'stage-b-policy-gate-workflow-sha-equals-dispatch-sha-in-both-jobs' {
+        # Trust-boundary regression coverage (previously unautomated): BOTH
+        # Stage B jobs must enforce github.workflow_sha == github.sha (and
+        # dispatch from main) so the policy checkout can only be the trusted
+        # revision of publish-release.yml being executed.
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\publish-release.yml'))
+        $checks = ([regex]::Matches($yml, [regex]::Escape('if ($env:WORKFLOW_SHA -ne $env:DISPATCH_SHA)'))).Count
+        Assert-True ($checks -eq 2) "expected the workflow_sha == sha policy gate in BOTH Stage B jobs (found $checks)"
+        $refs = ([regex]::Matches($yml, [regex]::Escape("if (`$env:WORKFLOW_REF -ne 'refs/heads/main')"))).Count
+        Assert-True ($refs -eq 2) "expected the main-ref gate in BOTH Stage B jobs (found $refs)"
+        Assert-True (([regex]::Matches($yml, [regex]::Escape('WORKFLOW_SHA: ${{ github.workflow_sha }}'))).Count -eq 2) 'both jobs must capture github.workflow_sha'
     }
 
     Write-Host ''

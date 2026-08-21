@@ -48,10 +48,10 @@ name: publish-release
 #       process ever runs in this job or anywhere in Stage B, and no
 #       write-capable credential exists in this job.
 #   JOB 2 (publish): contents: write - obtains ONLY the verified same-run
-#       handoff (publication-verification.json + RELEASE_NOTES.md), performs
-#       the final hash identity check against the exact Stage A bytes, and
-#       creates the release. It never executes candidate code and never runs
-#       candidate scripts.
+#       handoff (publication-verification.json + RELEASE_NOTES.md +
+#       release-external-evidence.json), performs the final hash identity
+#       check against the exact Stage A bytes, and creates the release. It
+#       never executes candidate code and never runs candidate scripts.
 # JOB 1 additionally holds actions: write (documented deviation from the
 # strict "actions: read" ideal) solely to upload the same-run verification
 # handoff artifact; it cannot create releases or tags (no contents: write).
@@ -144,10 +144,12 @@ jobs:
 
       - name: Verify trusted policy checkout revision
         shell: pwsh
+        env:
+          POLICY_SHA: ${{ github.sha }}
         run: |
           $actual = (git -C policy rev-parse HEAD).Trim()
-          if ($actual -ne '${{ github.sha }}') {
-            throw "Trusted policy checkout is at $actual but the trusted policy revision is ${{ github.sha }}"
+          if ($actual -ne $env:POLICY_SHA) {
+            throw "Trusted policy checkout is at $actual but the trusted policy revision is $env:POLICY_SHA"
           }
           $workflow = Join-Path 'policy' '.github\workflows\publish-release.yml'
           if (-not (Test-Path -LiteralPath $workflow -PathType Leaf)) {
@@ -165,8 +167,11 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.run-id }}
         run: |
-          $runId = '${{ inputs.run-id }}'
+          # Dispatch inputs travel as DATA via env:, never interpolated into
+          # the script text (R21-001).
+          $runId = $env:CANDIDATE_RUN_ID
           if ($runId -notmatch '^\d+$') {
             throw "run-id must be a numeric GitHub Actions run ID, got '$runId'"
           }
@@ -199,9 +204,11 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.run-id }}
+          EXPECTED_HEAD_SHA: ${{ steps.resolve-run.outputs.head_sha }}
         run: |
-          $runId = '${{ inputs.run-id }}'
-          $headSha = '${{ steps.resolve-run.outputs.head_sha }}'
+          $runId = $env:CANDIDATE_RUN_ID
+          $headSha = $env:EXPECTED_HEAD_SHA
           $expectedName = "tabdock-candidate-$headSha-$runId"
           $list = gh api "repos/${{ github.repository }}/actions/runs/$runId/artifacts" --paginate --jq '[.artifacts[] | { name, id, expired }]' 2>&1
           if ($LASTEXITCODE -ne 0) {
@@ -240,10 +247,12 @@ jobs:
 
       - name: Verify exact candidate source SHA
         shell: pwsh
+        env:
+          EXPECTED_HEAD_SHA: ${{ steps.resolve-run.outputs.head_sha }}
         run: |
           $actual = (git -C candidate-source rev-parse HEAD).Trim()
-          if ($actual -ne '${{ steps.resolve-run.outputs.head_sha }}') {
-            throw "Candidate source is at $actual but the Stage A run head SHA is ${{ steps.resolve-run.outputs.head_sha }}"
+          if ($actual -ne $env:EXPECTED_HEAD_SHA) {
+            throw "Candidate source is at $actual but the Stage A run head SHA is $env:EXPECTED_HEAD_SHA"
           }
           Write-Host "Candidate source SHA verified: $actual"
 
@@ -292,13 +301,17 @@ jobs:
         shell: pwsh
         env:
           RELEASE_EXTERNAL_EVIDENCE: ${{ inputs.external-evidence }}
+          CANDIDATE_RUN_ID: ${{ inputs.run-id }}
+          EXPECTED_HEAD_SHA: ${{ steps.resolve-run.outputs.head_sha }}
+          CANDIDATE_ARTIFACT_NAME: ${{ steps.locate-candidate.outputs.artifact_name }}
+          SIGNING_EXPECTED_SUBJECT: ${{ vars.SIGNING_EXPECTED_SUBJECT }}
         run: |
           . (Join-Path $env:GITHUB_WORKSPACE 'policy/scripts/release-tooling.ps1')
           $dir = Join-Path $env:GITHUB_WORKSPACE 'candidate-artifact'
           $evidencePath = Join-Path $dir 'release-external-evidence.json'
           [IO.File]::WriteAllText($evidencePath, $env:RELEASE_EXTERNAL_EVIDENCE, [Text.UTF8Encoding]::new($false))
           $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
-          $expectedSha = '${{ steps.resolve-run.outputs.head_sha }}'
+          $expectedSha = $env:EXPECTED_HEAD_SHA
           $expectedVersion = [string]$manifest.semanticVersion
 
           # Project -> manifest version authority: read from the CANDIDATE
@@ -311,9 +324,9 @@ jobs:
 
           $gate = Test-PublicationEligibility -ArtifactDir $dir -ExpectedSourceSha $expectedSha -ExpectedVersion $expectedVersion `
             -EvidencePath $evidencePath -RequireSigning `
-            -ExpectedCandidateRunId '${{ inputs.run-id }}' `
-            -ExpectedCandidateArtifactName '${{ steps.locate-candidate.outputs.artifact_name }}' `
-            -ExpectedPublisherSubject '${{ vars.SIGNING_EXPECTED_SUBJECT }}'
+            -ExpectedCandidateRunId $env:CANDIDATE_RUN_ID `
+            -ExpectedCandidateArtifactName $env:CANDIDATE_ARTIFACT_NAME `
+            -ExpectedPublisherSubject $env:SIGNING_EXPECTED_SUBJECT
           if (-not $gate.Eligible) {
             Write-Host 'Publication gate FAILED - refusing to publish the candidate:' -ForegroundColor Red
             $gate.Failures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
@@ -346,6 +359,10 @@ jobs:
       # derived tag - it never re-evaluates or executes candidate code.
       - name: Write publication verification record and release notes (verified handoff)
         shell: pwsh
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.run-id }}
+          CANDIDATE_ARTIFACT_NAME: ${{ steps.locate-candidate.outputs.artifact_name }}
+          POLICY_SHA: ${{ github.sha }}
         run: |
           . (Join-Path $env:GITHUB_WORKSPACE 'policy/scripts/release-tooling.ps1')
           $dir = Join-Path $env:GITHUB_WORKSPACE 'candidate-artifact'
@@ -361,12 +378,12 @@ jobs:
             semanticVersion              = $manifest.semanticVersion
             sourceCommitSha              = $manifest.sourceCommitSha
             artifactSha256               = $manifest.artifactSha256
-            candidateWorkflowRunId       = '${{ inputs.run-id }}'
-            candidateArtifactName        = '${{ steps.locate-candidate.outputs.artifact_name }}'
+            candidateWorkflowRunId       = $env:CANDIDATE_RUN_ID
+            candidateArtifactName        = $env:CANDIDATE_ARTIFACT_NAME
             releaseTag                   = $tag
             productionReleaseEligibility = 'ELIGIBLE'
             verifiedAt                   = [DateTimeOffset]::UtcNow.ToString('O')
-            trustedPolicyRevision        = '${{ github.sha }}'
+            trustedPolicyRevision        = $env:POLICY_SHA
             checks                       = [ordered]@{
               automatedQualification    = 'PASS'
               releasePolicySchema       = 'PASS'
@@ -438,11 +455,19 @@ jobs:
           $lines.Add('- Read-only diagnostics: TabDock.exe --doctor, --support-bundle')
           $lines.Add('- Privacy: support bundles are sanitized; raw logs are local-only and must be redacted before sharing.')
           $lines -join "`n" | Set-Content -Path (Join-Path $handoff 'RELEASE_NOTES.md') -Encoding utf8
-          Write-Host "Verified handoff written: publication-verification.json + RELEASE_NOTES.md (derived tag $tag)" -ForegroundColor Green
+
+          # R21-002: the validated external-evidence file travels IN the
+          # verified same-run handoff (bound to publication-verification.json).
+          # The publish job consumes THIS copy for the release asset; it never
+          # relies on the pristine Stage A candidate artifact containing it
+          # (Stage A never produces release-external-evidence.json).
+          Copy-Item -LiteralPath (Join-Path $dir 'release-external-evidence.json') -Destination (Join-Path $handoff 'release-external-evidence.json')
+          Write-Host "Verified handoff written: publication-verification.json + RELEASE_NOTES.md + release-external-evidence.json (derived tag $tag)" -ForegroundColor Green
 
       # The verified same-run handoff is the ONLY thing the publish job
-      # consumes from this job. It is small (verdict record + release notes);
-      # the publish job re-downloads the EXACT Stage A bytes itself.
+      # consumes from this job. It is small (verdict record + release notes +
+      # the validated external-evidence file); the publish job re-downloads
+      # the EXACT Stage A bytes itself.
       - name: Upload verified same-run handoff
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
@@ -516,6 +541,9 @@ jobs:
       # derived tag. No candidate code runs here.
       - name: Verify handoff and final artifact hash identity
         shell: pwsh
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.run-id }}
+          CANDIDATE_ARTIFACT_NAME: ${{ needs.verify.outputs.candidate_artifact_name }}
         run: |
           . (Join-Path $env:GITHUB_WORKSPACE 'policy/scripts/release-tooling.ps1')
           $recordPath = Join-Path 'verified-handoff' 'publication-verification.json'
@@ -526,8 +554,8 @@ jobs:
           if ([string]$record.recordKind -ne 'publication-verification') { throw 'handoff record kind is not publication-verification' }
           if ([int]$record.schemaVersion -ne 1) { throw "handoff record schemaVersion=$($record.schemaVersion) (expected 1)" }
           if ([string]$record.productionReleaseEligibility -ne 'ELIGIBLE') { throw "handoff record productionReleaseEligibility=$($record.productionReleaseEligibility) (expected ELIGIBLE after the verify job gate)" }
-          if ([string]$record.candidateWorkflowRunId -ne '${{ inputs.run-id }}') { throw "handoff candidateWorkflowRunId $($record.candidateWorkflowRunId) != the requested Stage A run ${{ inputs.run-id }}" }
-          if ([string]$record.candidateArtifactName -ne '${{ needs.verify.outputs.candidate_artifact_name }}') { throw "handoff candidateArtifactName $($record.candidateArtifactName) != the located artifact ${{ needs.verify.outputs.candidate_artifact_name }}" }
+          if ([string]$record.candidateWorkflowRunId -ne $env:CANDIDATE_RUN_ID) { throw "handoff candidateWorkflowRunId $($record.candidateWorkflowRunId) != the requested Stage A run $env:CANDIDATE_RUN_ID" }
+          if ([string]$record.candidateArtifactName -ne $env:CANDIDATE_ARTIFACT_NAME) { throw "handoff candidateArtifactName $($record.candidateArtifactName) != the located artifact $env:CANDIDATE_ARTIFACT_NAME" }
           if ([string]$record.sourceCommitSha -notmatch '^[0-9a-f]{40}$') { throw 'handoff sourceCommitSha is malformed' }
           if ([string]$record.artifactSha256 -notmatch '^[0-9a-f]{64}$') { throw 'handoff artifactSha256 is malformed' }
 
@@ -567,15 +595,23 @@ jobs:
       # Intentional publication of the EXACT verified bytes. The derived tag
       # is created at the exact candidate SHA; no source modification, no
       # second compilation, no signing, and no candidate execution occur here.
-      # The evidence and the publication verification record travel with the
-      # release as assets.
+      # The evidence (validated by the verify job and carried in the verified
+      # handoff) and the publication verification record travel with the
+      # release as assets. The required-assets gate fails closed BEFORE the
+      # release mutation if any asset is missing from the publish workspace.
       - name: Publish GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          . (Join-Path $env:GITHUB_WORKSPACE 'policy/scripts/release-tooling.ps1')
           $record = Get-Content (Join-Path 'verified-handoff' 'publication-verification.json') -Raw | ConvertFrom-Json
           $tag = [string]$record.releaseTag
+
+          # R21-002 fail-closed gate: every required release asset must
+          # physically exist in this workspace before `gh release create`.
+          Assert-ReleaseAssetsPresent -CandidateArtifactDir 'candidate-artifact' -VerifiedHandoffDir 'verified-handoff'
+
           gh release create $tag --repo ${{ github.repository }} `
             --target $([string]$record.sourceCommitSha) `
             --title "TabDock $($record.semanticVersion)" `
@@ -583,7 +619,7 @@ jobs:
             candidate-artifact/TabDock.exe `
             candidate-artifact/SHA256SUMS.txt `
             candidate-artifact/release-manifest.json `
-            candidate-artifact/release-external-evidence.json `
+            verified-handoff/release-external-evidence.json `
             verified-handoff/publication-verification.json
 
       - name: Verify release assets

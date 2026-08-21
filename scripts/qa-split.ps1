@@ -283,8 +283,10 @@ function Invoke-Comparison {
         throw "candidate path is not built: $candidate"
     }
 
-    $historicalA = Invoke-HistoricalComparison -Label 'baseline-8b75c99' -Sha $requested[0]
-    $historicalB = Invoke-HistoricalComparison -Label 'baseline-13c3d6f' -Sha $requested[1]
+    # Labels derive from the ACTUAL baseline SHAs (default or -BaselineSha
+    # override), so worktree/label naming always matches what was compared.
+    $historicalA = Invoke-HistoricalComparison -Label ('baseline-' + ($requested[0] -replace '^([0-9a-f]{7}).*$', '$1')) -Sha $requested[0]
+    $historicalB = Invoke-HistoricalComparison -Label ('baseline-' + ($requested[1] -replace '^([0-9a-f]{7}).*$', '$1')) -Sha $requested[1]
     $candidateObservation = Invoke-ComparisonDriver -Label 'candidate-observation' -TabDockPath $candidateTabDock -PigPath $candidatePig -Scenario 'split-comparison-observe'
     $candidatePersistent = Invoke-ComparisonDriver -Label 'candidate-persistent' -TabDockPath $candidateTabDock -PigPath $candidatePig -Scenario 'split-click-third' -ScenarioCycles ([Math]::Max(20, $Cycles))
     $candidateFour = Invoke-ComparisonDriver -Label 'candidate-four-tab' -TabDockPath $candidateTabDock -PigPath $candidatePig -Scenario 'split-four-tab-nonmember-switching' -ScenarioCycles ([Math]::Max(20, $Cycles))

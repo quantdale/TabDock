@@ -190,7 +190,10 @@ function Complete-RealSignerValidation {
         actual bytes.
     #>
     if (-not (Test-AuthenticodeSignature $ExePath)) {
-        $script:status = 'SIGNED'
+        # The status must reflect the FAILURE, never claim SIGNED: downstream
+        # consumers (release-qualify.ps1 manifest fields, production policy)
+        # treat anything but a verified SIGNED result as a signing failure.
+        $script:status = 'SIGNING_FAILED'
         $script:verification = 'FAILED'
         Write-Host 'sign-release: provider reported success but independent Authenticode verification FAILED (signtool verify /pa).' -ForegroundColor Red
         Emit-Result

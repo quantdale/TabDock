@@ -74,6 +74,12 @@ permissions:
 jobs:
   prepare-candidate:
     runs-on: windows-latest
+    # Least privilege (R21-001d): this job uploads the immutable candidate
+    # artifact, so it holds actions: write; contents stays read (Stage A
+    # never creates releases or tags).
+    permissions:
+      contents: read
+      actions: write
     env:
       # The signing backend selector. Repository variable (not a secret);
       # for production candidates it must be 'digicert-stm'.
@@ -127,10 +133,12 @@ jobs:
       # aborts before any build work begins.
       - name: Verify exact candidate SHA
         shell: pwsh
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
         run: |
           $actual = (git rev-parse HEAD).Trim()
-          if ($actual -ne '${{ inputs.sha }}') {
-            throw "Checked out $actual but the release candidate was requested as ${{ inputs.sha }}"
+          if ($actual -ne $env:REQUESTED_SHA) {
+            throw "Checked out $actual but the release candidate was requested as $env:REQUESTED_SHA"
           }
           Write-Host "Candidate SHA verified: $actual"
 
@@ -228,7 +236,9 @@ jobs:
           }
           $path = Join-Path $env:RUNNER_TEMP ("digicert-client-auth-" + [Guid]::NewGuid().ToString('N') + '.p12')
           [IO.File]::WriteAllBytes($path, $bytes)
-          [IO.File]::WriteAllText($env:GITHUB_ENV, "SM_CLIENT_CERT_FILE=$path`r`n", [Text.UTF8Encoding]::new($false))
+          # Append (never overwrite): $GITHUB_ENV may already carry variables
+          # from earlier steps; overwriting the file would silently drop them.
+          [IO.File]::AppendAllText($env:GITHUB_ENV, "SM_CLIENT_CERT_FILE=$path`r`n", [Text.UTF8Encoding]::new($false))
           Write-Host "Client-authentication certificate materialized at a private random path under runner.temp (content never printed, never uploaded, removed by the always-run cleanup step)."
 
       # Official DigiCert tooling setup, PINNED TO THE FULL IMMUTABLE COMMIT
@@ -287,7 +297,12 @@ jobs:
           SIGNING_EXPECTED_SUBJECT: ${{ vars.SIGNING_EXPECTED_SUBJECT }}
           RELEASE_SIGNING_REQUIRED: 'true'
           RELEASE_PRODUCTION_GATE: 'true'
-        run: .\scripts\release-qualify.ps1 -Ci -Sha '${{ inputs.sha }}' -Version '${{ inputs.version }}' -Sign -OutDir (Join-Path $env:RUNNER_TEMP 'production-candidate')
+          REQUESTED_SHA: ${{ inputs.sha }}
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: |
+          # Dispatch inputs travel as DATA via env:, never interpolated into
+          # the script text (R21-001).
+          .\scripts\release-qualify.ps1 -Ci -Sha $env:REQUESTED_SHA -Version $env:EXPECTED_VERSION -Sign -OutDir (Join-Path $env:RUNNER_TEMP 'production-candidate')
 
       # Immutable retention of the exact signed candidate. The artifact name
       # embeds the source SHA and the run id so Stage B can locate the exact
@@ -321,6 +336,8 @@ jobs:
       # the publish-release workflow.
       - name: Record candidate identity for human qualification
         shell: pwsh
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'production-candidate'
           $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
@@ -329,8 +346,8 @@ jobs:
           ## Production candidate ready for human qualification
 
           - Stage A workflow run: `${{ github.run_id }}
-          - Candidate artifact name: tabdock-candidate-`${{ inputs.sha }}`-`${{ github.run_id }}
-          - Source commit: `${{ inputs.sha }} (== trusted dispatch SHA of this run)
+          - Candidate artifact name: tabdock-candidate-`$($env:REQUESTED_SHA)`-`${{ github.run_id }}
+          - Source commit: `$($env:REQUESTED_SHA) (== trusted dispatch SHA of this run)
           - Semantic version: `$($manifest.semanticVersion)` (project <Version>, authoritative)
           - Final distributed SHA-256: `$sha
           - Signing: `$($manifest.signingStatus)` / `$($manifest.signatureVerification)` / timestamp `$($manifest.timestampStatus)
@@ -343,7 +360,7 @@ jobs:
           (docs/release/final-smoke.md, mixed-dpi-qualification.md,
           compatibility-matrix.md), then author release-external-evidence.json
           (schemaVersion 2) with candidateWorkflowRunId = `${{ github.run_id }}` and
-          candidateArtifactName = tabdock-candidate-`${{ inputs.sha }}`-`${{ github.run_id }}.
+          candidateArtifactName = tabdock-candidate-`$($env:REQUESTED_SHA)`-`${{ github.run_id }}.
           Dispatch the publish-release workflow with that run id and evidence; it
           publishes THESE exact bytes without rebuilding or re-signing.
           "@

@@ -132,6 +132,56 @@ function Assert-ChecksumsMatchArtifact {
     return $actual
 }
 
+function Get-RequiredReleaseAssets {
+    <#
+    .SYNOPSIS
+        The exact set of release assets every production publication must
+        upload. The Stage B publish job gates on this list BEFORE
+        `gh release create` (fail closed), and the post-publication
+        verification re-checks it against the created release.
+    #>
+    return @(
+        'TabDock.exe'
+        'SHA256SUMS.txt'
+        'release-manifest.json'
+        'release-external-evidence.json'
+        'publication-verification.json'
+    )
+}
+
+function Assert-ReleaseAssetsPresent {
+    <#
+    .SYNOPSIS
+        Fail-closed pre-publication gate: every required release asset must
+        PHYSICALLY EXIST in the publish workspace before `gh release create`
+        runs. Throws naming the first missing asset.
+
+    .DESCRIPTION
+        R21-002: the validated external evidence travels IN the verified
+        same-run handoff (bound to publication-verification.json); the
+        candidate artifact directory supplies the exact Stage A bytes and
+        their manifest/checksums. A missing file aborts the release mutation
+        instead of producing a release with missing assets.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$CandidateArtifactDir,
+        [Parameter(Mandatory = $true)][string]$VerifiedHandoffDir
+    )
+    $locations = @{
+        'TabDock.exe'                    = (Join-Path $CandidateArtifactDir 'TabDock.exe')
+        'SHA256SUMS.txt'                 = (Join-Path $CandidateArtifactDir 'SHA256SUMS.txt')
+        'release-manifest.json'          = (Join-Path $CandidateArtifactDir 'release-manifest.json')
+        'release-external-evidence.json' = (Join-Path $VerifiedHandoffDir 'release-external-evidence.json')
+        'publication-verification.json'  = (Join-Path $VerifiedHandoffDir 'publication-verification.json')
+    }
+    foreach ($name in (Get-RequiredReleaseAssets)) {
+        $path = $locations[$name]
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "required release asset is MISSING from the publish workspace: $name (expected at $path); refusing to create the release"
+        }
+    }
+}
+
 function Complete-ReleaseRecords {
     <#
     .SYNOPSIS
