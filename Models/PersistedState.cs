@@ -88,6 +88,18 @@ public sealed class HiddenWindowJournalFile
 
     public int Version { get; set; } = CurrentVersion;
     public List<HiddenWindowEntry> Entries { get; set; } = new();
+
+    /// <summary>
+    /// Durable source-instance identity: one GUID per journal-file generation.
+    /// Assigned when a journal file is created from empty and kept stable for
+    /// every subsequent write of that same file. Pending-recovery resolution
+    /// ledgers key on this id so byte-identical pending evidence produced by a
+    /// LATER journal generation is never mistaken for already-resolved
+    /// evidence. Nullable so journals written before this field existed
+    /// deserialize unchanged; those files fall back to the legacy
+    /// content-fingerprint matching in PendingRecoveryService.
+    /// </summary>
+    public string? SourceInstanceId { get; set; }
 }
 
 [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true, WriteIndented = true)]

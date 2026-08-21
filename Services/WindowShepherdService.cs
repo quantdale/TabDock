@@ -2091,7 +2091,19 @@ public sealed class WindowShepherdService
         // and unconditionally deletes hidden-windows.json after consuming it, so
         // loading here first would just re-read entries that rescue already
         // consumed. All subsequent mutations act on this in-memory copy only.
-        return _journalCache ??= LoadJournal();
+        if (_journalCache == null)
+        {
+            _journalCache = LoadJournal();
+            // Generation identity: a journal created from empty (after rescue
+            // consumed the previous file, or after corruption quarantine) gets
+            // a new SourceInstanceId; an existing file keeps the id it was
+            // written with. PendingRecoveryService keys resolution ledgers on
+            // this id so byte-identical pending evidence from a LATER journal
+            // generation is never treated as already-resolved.
+            if (string.IsNullOrWhiteSpace(_journalCache.SourceInstanceId))
+                _journalCache.SourceInstanceId = Guid.NewGuid().ToString("D");
+        }
+        return _journalCache;
     }
 
     /// <summary>
@@ -2465,6 +2477,10 @@ public sealed class WindowShepherdService
         if (_journalLoadFailed)
             throw new IOException("Recovery journal was unreadable or an unsupported future version; refusing to overwrite it.");
         file.Version = HiddenWindowJournalFile.CurrentVersion;
+        // Every write of the journal root carries the stable per-file
+        // generation id assigned when this journal instance was created.
+        file.SourceInstanceId = _journalCache?.SourceInstanceId
+            ?? Guid.NewGuid().ToString("D");
         SaveJournal(_journalPath, file);
     }
 
@@ -2620,7 +2636,13 @@ public sealed class WindowShepherdService
             {
                 // Keep the existing file intact if this rewrite fails; the
                 // next startup can retry from the complete original journal.
-                SaveJournal(path, new HiddenWindowJournalFile { Entries = retry });
+                // The rewritten journal is a fresh generation, so it receives
+                // a new source-instance id.
+                SaveJournal(path, new HiddenWindowJournalFile
+                {
+                    Entries = retry,
+                    SourceInstanceId = Guid.NewGuid().ToString("D"),
+                });
             }
             if (rescued > 0)
                 log.Log($"SHEPHERD[rescue] {rescued} previously-hidden window(s) restored.");

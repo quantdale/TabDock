@@ -20,6 +20,21 @@ internal static class PendingRecoveryService
     private const string PendingFilePrefix = "hidden-windows.json.pending";
     internal const int RecoveryTransactionSchemaVersion = 1;
 
+    /// <summary>
+    /// Maximum number of Retired transaction records retained per sidecar
+    /// ledger. Retired records are historical bookkeeping only; compaction
+    /// keeps the most recent slice and never touches a non-retired record.
+    /// </summary>
+    private const int RetiredLedgerCompactionLimit = 64;
+
+    /// <summary>
+    /// Age after which an orphaned recovery temp file (a durable-write
+    /// fragment left by a process that died between the temp write and the
+    /// atomic move) may be swept. Bounded so a concurrently in-flight write
+    /// is never deleted.
+    /// </summary>
+    private static readonly TimeSpan OrphanTemporaryFileAge = TimeSpan.FromHours(24);
+
     internal static class RecoveryPhase
     {
         public const string Prepared = "Prepared";
@@ -65,6 +80,7 @@ internal static class PendingRecoveryService
             }
             if (!Directory.Exists(root))
                 return catalog;
+            SweepOrphanedTemporaryFiles(root);
             paths = GetPendingPaths(root).ToArray();
         }
         catch (UnauthorizedAccessException ex)
@@ -151,13 +167,19 @@ internal static class PendingRecoveryService
             output.WriteLine($"Pending evidence is {SanitizeConsoleDisplayValue(catalog.Error)}; no mutation was attempted.");
             return 2;
         }
-        PendingRecoveryFile? unreadableFile = catalog.Files.FirstOrDefault(file =>
-            file.Entries.Count == 0
-            && !string.Equals(file.Status, "empty-resolved", StringComparison.Ordinal));
-        if (unreadableFile != null)
+        // An unreadable pending file is a logged skip, not a short-circuit:
+        // disk-only cleanup of OTHER completed evidence must still proceed so
+        // one damaged file cannot strand every other retirement. New
+        // supervised selection is still refused while unreadable evidence
+        // remains (fail-closed below).
+        List<string> unreadableFileNames = catalog.Files
+            .Where(file => file.Entries.Count == 0
+                && !string.Equals(file.Status, "empty-resolved", StringComparison.Ordinal))
+            .Select(file => file.FileName)
+            .ToList();
+        foreach (string unreadableFileName in unreadableFileNames)
         {
-            output.WriteLine($"Pending evidence in {SanitizeConsoleDisplayValue(unreadableFile.FileName)} is {SanitizeConsoleDisplayValue(unreadableFile.Status)}; no mutation was attempted.");
-            return 2;
+            output.WriteLine($"Pending evidence in {SanitizeConsoleDisplayValue(unreadableFileName)} is unreadable; it was skipped and retained.");
         }
 
         // A transaction that already durably completed native recovery is a
@@ -205,6 +227,15 @@ internal static class PendingRecoveryService
         if (completedEntries.Length > 0)
             catalog = Discover(directory, api);
 
+        // Fail closed for supervised selection: while any pending file is
+        // unreadable, no new recovery transaction may start, even though the
+        // cleanup pass above already ran.
+        if (unreadableFileNames.Count > 0)
+        {
+            output.WriteLine("Unreadable pending evidence remains; no new supervised recovery will be attempted until it is reviewed. All other evidence was retained.");
+            return 2;
+        }
+
         List<PendingRecoveryEntry> entries = catalog.Files
             .SelectMany(file => file.Entries)
             .Where(entry => !entry.AlreadyResolved)
@@ -223,9 +254,11 @@ internal static class PendingRecoveryService
             output.WriteLine($"  {SanitizeConsoleDisplayValue(entry.SessionId)}: schema=v{entry.Version}, status={SanitizeConsoleDisplayValue(entry.Status)}, fields={SanitizeConsoleDisplayValue(entry.AvailableFields)}, file={SanitizeConsoleDisplayValue(entry.FileName)}");
         }
 
-        PendingRecoveryEntry? selectedEntry = SelectEntry(entries, input, output);
+        PendingRecoveryEntry? selectedEntry = SelectEntry(entries, input, output, out bool abandonRequested);
         if (selectedEntry == null)
             return 1;
+        if (abandonRequested)
+            return AbandonInterruptedTransaction(selectedEntry, native, output);
         bool interruptedTransaction = selectedEntry.Transaction != null
             && IsSupportedTransaction(selectedEntry, selectedEntry.Transaction)
             && !IsNativeRecoveryComplete(selectedEntry.Transaction.Phase);
@@ -748,6 +781,7 @@ internal static class PendingRecoveryService
         PendingRecoveryEntry entry,
         PendingRecoveryTransaction transaction)
         => string.Equals(transaction.SourceFileId, entry.FileName, StringComparison.Ordinal)
+            && SameSourceInstance(transaction.SourceInstanceId, entry.SourceInstanceId)
             && string.Equals(transaction.EntryFingerprint, entry.EntryFingerprint, StringComparison.OrdinalIgnoreCase)
             && ((string.Equals(transaction.SourceFileSha256, entry.SourceFileSha256, StringComparison.OrdinalIgnoreCase)
                     && transaction.EntryIndex == entry.EntryIndex)
@@ -762,6 +796,7 @@ internal static class PendingRecoveryService
         {
             SchemaVersion = RecoveryTransactionSchemaVersion,
             SourceFileId = entry.FileName,
+            SourceInstanceId = entry.SourceInstanceId,
             SourceFileSha256 = entry.SourceFileSha256,
             EntryFingerprint = entry.EntryFingerprint,
             EntryIndex = entry.EntryIndex,
@@ -807,6 +842,7 @@ internal static class PendingRecoveryService
         List<PendingRecoveryTransaction> exactMatches = ledger.Transactions
             .Where(item =>
                 string.Equals(item.SourceFileId, transaction.SourceFileId, StringComparison.Ordinal)
+                && SameSourceInstance(item.SourceInstanceId, transaction.SourceInstanceId)
                 && string.Equals(item.SourceFileSha256, transaction.SourceFileSha256, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(item.EntryFingerprint, transaction.EntryFingerprint, StringComparison.OrdinalIgnoreCase)
                 && item.EntryIndex == transaction.EntryIndex)
@@ -846,6 +882,7 @@ internal static class PendingRecoveryService
         {
             existing.SchemaVersion = transaction.SchemaVersion;
             existing.SourceFileId = transaction.SourceFileId;
+            existing.SourceInstanceId = transaction.SourceInstanceId;
             existing.SourceFileSha256 = transaction.SourceFileSha256;
             existing.EntryFingerprint = transaction.EntryFingerprint;
             existing.EntryIndex = transaction.EntryIndex;
@@ -863,6 +900,7 @@ internal static class PendingRecoveryService
         }
         try
         {
+            CompactRetiredTransactions(ledger);
             WriteDurableJson(path, ledger);
             return true;
         }
@@ -1110,17 +1148,64 @@ internal static class PendingRecoveryService
         return result;
     }
 
+    /// <summary>
+    /// Supervised discard path for an interrupted transaction whose target is
+    /// verifiably gone. Only reachable from the interactive flow (never from
+    /// discovery or startup), and it refuses unless the transaction is
+    /// supported, not yet natively complete, and its exact HWND positively no
+    /// longer exists — unresolved evidence is never discarded on a guess.
+    /// </summary>
+    private static int AbandonInterruptedTransaction(
+        PendingRecoveryEntry entry,
+        IPendingRecoveryNativeApi native,
+        TextWriter output)
+    {
+        if (entry.Transaction == null
+            || !IsSupportedTransaction(entry, entry.Transaction)
+            || IsNativeRecoveryComplete(entry.Transaction.Phase))
+        {
+            output.WriteLine($"Entry {SanitizeConsoleDisplayValue(entry.SessionId)} has no interruptable supported transaction; it was not discarded.");
+            return 2;
+        }
+        IntPtr hwnd = new(entry.Transaction.CandidateHwnd);
+        if (native.IsWindow(hwnd))
+        {
+            output.WriteLine($"Entry {SanitizeConsoleDisplayValue(entry.SessionId)} still has a live target HWND; abandonment was refused. Use the normal supervised recovery flow.");
+            return 2;
+        }
+        if (!MarkResolved(entry, out string markerError, resultOverride: "abandoned-target-gone"))
+        {
+            output.WriteLine($"The interrupted transaction could not be durably marked abandoned: {SanitizeConsoleDisplayValue(markerError)}. Evidence was retained.");
+            return 2;
+        }
+        if (!RetireEntry(entry, out string retireError))
+        {
+            output.WriteLine($"The entry was marked abandoned, but disk-only retirement needs a later retry: {SanitizeConsoleDisplayValue(retireError)}");
+            return 2;
+        }
+        output.WriteLine($"Abandoned interrupted transaction {SanitizeConsoleDisplayValue(entry.SessionId)}; its target HWND verifiably no longer exists.");
+        return 0;
+    }
+
     private static PendingRecoveryEntry? SelectEntry(
         IReadOnlyList<PendingRecoveryEntry> entries,
         TextReader input,
-        TextWriter output)
+        TextWriter output,
+        out bool abandonRequested)
     {
-        output.Write("Select pending entry ID (or q): ");
+        abandonRequested = false;
+        output.Write("Select pending entry ID (or q, or 'abandon <ID>' for a verifiably-dead interrupted target): ");
         output.Flush();
         string? value = input.ReadLine();
         if (string.IsNullOrWhiteSpace(value) || value.Equals("q", StringComparison.OrdinalIgnoreCase))
             return null;
-        return entries.FirstOrDefault(entry => entry.SessionId.Equals(value.Trim(), StringComparison.OrdinalIgnoreCase));
+        string trimmed = value.Trim();
+        if (trimmed.StartsWith("abandon ", StringComparison.OrdinalIgnoreCase))
+        {
+            abandonRequested = true;
+            trimmed = trimmed["abandon ".Length..].Trim();
+        }
+        return entries.FirstOrDefault(entry => entry.SessionId.Equals(trimmed, StringComparison.OrdinalIgnoreCase));
     }
 
     private static PendingRecoveryCandidate? SelectCandidate(
@@ -1201,6 +1286,14 @@ internal static class PendingRecoveryService
             }
 
             int version = TryGetInt(document.RootElement, "Version") ?? HiddenWindowJournalFile.LegacyMinimalVersion;
+            // Generation identity: journals written by newer builds carry a
+            // durable per-file GUID. Files without one are pre-upgrade
+            // evidence and use the legacy content-fingerprint matching below.
+            string? sourceInstanceId =
+                TryGetProperty(document.RootElement, "SourceInstanceId", out JsonElement instanceIdElement)
+                && instanceIdElement.ValueKind == JsonValueKind.String
+                    ? instanceIdElement.GetString()
+                    : null;
             HiddenWindowJournalFile dto = JsonSerializer.Deserialize(
                 json,
                 TabDockJsonContext.Default.HiddenWindowJournalFile)
@@ -1214,6 +1307,7 @@ internal static class PendingRecoveryService
                 Version = version,
                 Status = version > HiddenWindowJournalFile.CurrentVersion ? "future-schema" : "pending",
                 SourceFileSha256 = Sha256(rawBytes),
+                SourceInstanceId = sourceInstanceId,
             };
             string sourceSha256 = Sha256(rawBytes);
             if (!TryReadLedger(path + ".recovered", out ResolutionLedger ledger, out string ledgerError))
@@ -1246,6 +1340,7 @@ internal static class PendingRecoveryService
                 PendingResolution? resolved = FindResolution(
                     ledger,
                     fileName,
+                    sourceInstanceId,
                     sourceSha256,
                     fingerprint,
                     entryIndex,
@@ -1253,6 +1348,7 @@ internal static class PendingRecoveryService
                 PendingRecoveryTransaction? transaction = FindTransaction(
                     ledger,
                     fileName,
+                    sourceInstanceId,
                     sourceSha256,
                     fingerprint,
                     entryIndex,
@@ -1266,7 +1362,7 @@ internal static class PendingRecoveryService
                     // transaction to the execution path under the current
                     // source binding. The unique rebind is committed by the
                     // next durable phase write or completed-cleanup pass.
-                    transaction = RebindTransaction(transaction, fileName, sourceSha256, fingerprint, entryIndex);
+                    transaction = RebindTransaction(transaction, fileName, sourceInstanceId, sourceSha256, fingerprint, entryIndex);
                 }
                 bool transactionSourceMatches = transaction != null
                     && string.Equals(transaction.SourceFileId, fileName, StringComparison.Ordinal)
@@ -1282,6 +1378,7 @@ internal static class PendingRecoveryService
                     Fields = fields,
                     EntryFingerprint = fingerprint,
                     SourceFileSha256 = sourceSha256,
+                    SourceInstanceId = sourceInstanceId,
                     Transaction = transaction,
                     TransactionAmbiguous = transactionAmbiguous,
                     TransactionNeedsRebind = transactionNeedsRebind,
@@ -1328,6 +1425,56 @@ internal static class PendingRecoveryService
                     && !name.EndsWith(".backup", StringComparison.OrdinalIgnoreCase);
             })
             .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Best-effort hygiene sweep for orphaned recovery temp files. A
+    /// <c>*.tmp</c> fragment exists only when a process died between the
+    /// durable temp write and the atomic move; it is an incomplete write, not
+    /// evidence. Only files matching the pending-prefix/".tmp" shape and older
+    /// than the bounded age are removed, so a concurrently in-flight write is
+    /// never deleted. Real pending and ledger files are never touched here.
+    /// </summary>
+    private static void SweepOrphanedTemporaryFiles(string root)
+    {
+        try
+        {
+            DateTime cutoff = DateTime.UtcNow - OrphanTemporaryFileAge;
+            foreach (string path in Directory.GetFiles(root, PendingFilePrefix + "*.tmp"))
+            {
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(path) < cutoff)
+                        File.Delete(path);
+                }
+                catch (Exception)
+                {
+                    // Fail-safe: an undeletable fragment is left in place.
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Discovery must never fail because of hygiene sweeping.
+        }
+    }
+
+    /// <summary>
+    /// Bounds growth of the retired sidecar ledger: keeps only the most recent
+    /// RetiredLedgerCompactionLimit retired transaction records (by UpdatedUtc)
+    /// and never removes a non-retired record, so live or interrupted
+    /// transactions and foreign/unverifiable evidence are untouched.
+    /// </summary>
+    private static void CompactRetiredTransactions(ResolutionLedger ledger)
+    {
+        List<PendingRecoveryTransaction> retired = ledger.Transactions
+            .Where(item => string.Equals(item.Phase, RecoveryPhase.Retired, StringComparison.Ordinal))
+            .OrderByDescending(item => item.UpdatedUtc)
+            .ToList();
+        if (retired.Count <= RetiredLedgerCompactionLimit)
+            return;
+        foreach (PendingRecoveryTransaction victim in retired.Skip(RetiredLedgerCompactionLimit))
+            ledger.Transactions.Remove(victim);
+    }
 
     private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
     {
@@ -1412,9 +1559,19 @@ internal static class PendingRecoveryService
     private static string Sha256(byte[] bytes)
         => Convert.ToHexString(SHA256.HashData(bytes));
 
+    /// <summary>
+    /// Generation-identity comparison. New-format records must match the
+    /// source's SourceInstanceId exactly; null on both sides (pre-upgrade
+    /// evidence and pre-upgrade ledger records) compares equal so the legacy
+    /// migration path keeps working.
+    /// </summary>
+    private static bool SameSourceInstance(string? left, string? right)
+        => string.Equals(left ?? string.Empty, right ?? string.Empty, StringComparison.Ordinal);
+
     private static PendingResolution? FindResolution(
         ResolutionLedger ledger,
         string fileName,
+        string? sourceInstanceId,
         string sourceSha256,
         string fingerprint,
         int entryIndex,
@@ -1422,6 +1579,7 @@ internal static class PendingRecoveryService
     {
         PendingResolution? exact = ledger.Resolutions.FirstOrDefault(item =>
             string.Equals(item.SourceFileId, fileName, StringComparison.Ordinal)
+            && SameSourceInstance(item.SourceInstanceId, sourceInstanceId)
             && string.Equals(item.SourceFileSha256, sourceSha256, StringComparison.OrdinalIgnoreCase)
             && item.EntryIndex == entryIndex
             && string.Equals(item.EntryFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase));
@@ -1433,6 +1591,16 @@ internal static class PendingRecoveryService
         // SHA cannot be projected onto a changed source by fingerprint alone:
         // for duplicate records that would confuse the retired entry with its
         // surviving byte-identical sibling.
+        //
+        // LEGACY MIGRATION BOUND: this content-only fallback exists solely to
+        // consume pending evidence written by pre-upgrade builds (files with
+        // no SourceInstanceId). A new-format generation never matches by
+        // content alone — byte-identical JSON under a different
+        // SourceInstanceId is fresh evidence, not a replay of an old
+        // resolution. Once consumed, the ledger entry stores whatever
+        // identity was available.
+        if (sourceInstanceId != null)
+            return null;
         return currentFingerprintCount == 1
             ? ledger.Resolutions.FirstOrDefault(item =>
                 string.IsNullOrEmpty(item.SourceFileId)
@@ -1444,6 +1612,7 @@ internal static class PendingRecoveryService
     private static PendingRecoveryTransaction? FindTransaction(
         ResolutionLedger ledger,
         string fileName,
+        string? sourceInstanceId,
         string sourceSha256,
         string fingerprint,
         int entryIndex,
@@ -1456,6 +1625,7 @@ internal static class PendingRecoveryService
         List<PendingRecoveryTransaction> exact = ledger.Transactions
             .Where(item =>
                 string.Equals(item.SourceFileId, fileName, StringComparison.Ordinal)
+                && SameSourceInstance(item.SourceInstanceId, sourceInstanceId)
                 && string.Equals(item.SourceFileSha256, sourceSha256, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(item.EntryFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase)
                 && item.EntryIndex == entryIndex
@@ -1473,10 +1643,13 @@ internal static class PendingRecoveryService
         // siblings: the source SHA and current index can change, but a single
         // unresolved transaction may be rebound when exactly one current entry
         // has its fingerprint. Never perform this migration for duplicated
-        // current fingerprints or multiple candidate transactions.
+        // current fingerprints or multiple candidate transactions. The rebind
+        // stays within one source instance: a different (or absent) generation
+        // id means the record belongs to another journal generation.
         List<PendingRecoveryTransaction> legacy = ledger.Transactions
             .Where(item =>
                 string.Equals(item.SourceFileId, fileName, StringComparison.Ordinal)
+                && SameSourceInstance(item.SourceInstanceId, sourceInstanceId)
                 && !string.IsNullOrWhiteSpace(item.SourceFileSha256)
                 && !string.Equals(item.SourceFileSha256, sourceSha256, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(item.EntryFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase)
@@ -1497,6 +1670,7 @@ internal static class PendingRecoveryService
     private static PendingRecoveryTransaction RebindTransaction(
         PendingRecoveryTransaction source,
         string sourceFileId,
+        string? sourceInstanceId,
         string sourceFileSha256,
         string entryFingerprint,
         int entryIndex)
@@ -1504,6 +1678,7 @@ internal static class PendingRecoveryService
         {
             SchemaVersion = source.SchemaVersion,
             SourceFileId = sourceFileId,
+            SourceInstanceId = sourceInstanceId,
             SourceFileSha256 = sourceFileSha256,
             EntryFingerprint = entryFingerprint,
             EntryIndex = entryIndex,
@@ -1541,7 +1716,7 @@ internal static class PendingRecoveryService
         }
     }
 
-    private static bool MarkResolved(PendingRecoveryEntry entry, out string error)
+    private static bool MarkResolved(PendingRecoveryEntry entry, out string error, string? resultOverride = null)
     {
         error = string.Empty;
         string path = entry.FullPath + ".recovered";
@@ -1553,6 +1728,7 @@ internal static class PendingRecoveryService
             ledger.Transactions ??= new List<PendingRecoveryTransaction>();
             if (!ledger.Resolutions.Any(item =>
                     string.Equals(item.SourceFileId, entry.FileName, StringComparison.Ordinal)
+                    && SameSourceInstance(item.SourceInstanceId, entry.SourceInstanceId)
                     && string.Equals(item.SourceFileSha256, entry.SourceFileSha256, StringComparison.OrdinalIgnoreCase)
                     && item.EntryIndex == entry.EntryIndex
                     && string.Equals(item.EntryFingerprint, entry.EntryFingerprint, StringComparison.OrdinalIgnoreCase)))
@@ -1560,14 +1736,16 @@ internal static class PendingRecoveryService
                 ledger.Resolutions.Add(new PendingResolution
                 {
                     SourceFileId = entry.FileName,
+                    SourceInstanceId = entry.SourceInstanceId,
                     SourceFileSha256 = entry.SourceFileSha256,
                     EntryFingerprint = entry.EntryFingerprint,
                     EntryIndex = entry.EntryIndex,
                     SchemaVersion = entry.Version,
                     ResolvedUtc = DateTimeOffset.UtcNow,
-                    Result = entry.RecoveryMode == "v2-intentional-hide"
-                        ? "intentional-hide-cleanup"
-                        : "presentation-restored",
+                    Result = resultOverride
+                        ?? (entry.RecoveryMode == "v2-intentional-hide"
+                            ? "intentional-hide-cleanup"
+                            : "presentation-restored"),
                 });
             }
             if (entry.Transaction != null)
@@ -1576,6 +1754,7 @@ internal static class PendingRecoveryService
                 entry.Transaction.UpdatedUtc = DateTimeOffset.UtcNow;
                 PendingRecoveryTransaction? persisted = ledger.Transactions.FirstOrDefault(item =>
                     string.Equals(item.SourceFileId, entry.FileName, StringComparison.Ordinal)
+                    && SameSourceInstance(item.SourceInstanceId, entry.SourceInstanceId)
                     && item.EntryIndex == entry.EntryIndex
                     && string.Equals(item.EntryFingerprint, entry.EntryFingerprint, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(item.SourceFileSha256, entry.SourceFileSha256, StringComparison.OrdinalIgnoreCase));
@@ -1584,6 +1763,7 @@ internal static class PendingRecoveryService
                 else
                     persisted.Phase = RecoveryPhase.Retired;
             }
+            CompactRetiredTransactions(ledger);
             WriteDurableJson(path, ledger);
             return true;
         }
@@ -1649,10 +1829,14 @@ internal static class PendingRecoveryService
                 string siblingFingerprint = Fingerprint(sibling);
                 bool exactResolution = ledger.Resolutions.Any(item =>
                     string.Equals(item.SourceFileId, entry.FileName, StringComparison.Ordinal)
+                    && SameSourceInstance(item.SourceInstanceId, entry.SourceInstanceId)
                     && string.Equals(item.SourceFileSha256, entry.SourceFileSha256, StringComparison.OrdinalIgnoreCase)
                     && item.EntryIndex == index
                     && string.Equals(item.EntryFingerprint, siblingFingerprint, StringComparison.OrdinalIgnoreCase));
-                bool uniqueLegacyResolution = fingerprintCounts[siblingFingerprint] == 1
+                // LEGACY MIGRATION BOUND: the content-only sibling fallback
+                // applies only to pre-upgrade sources without a generation id.
+                bool uniqueLegacyResolution = entry.SourceInstanceId == null
+                    && fingerprintCounts[siblingFingerprint] == 1
                     && ledger.Resolutions.Any(item =>
                         string.IsNullOrEmpty(item.SourceFileId)
                         && string.IsNullOrEmpty(item.SourceFileSha256)
@@ -1672,9 +1856,11 @@ internal static class PendingRecoveryService
             if (allResolved
                 && ledger.Transactions.Any(transaction =>
                     string.Equals(transaction.SourceFileId, entry.FileName, StringComparison.Ordinal)
+                    && SameSourceInstance(transaction.SourceInstanceId, entry.SourceInstanceId)
                     && !string.Equals(transaction.Phase, RecoveryPhase.Retired, StringComparison.Ordinal)
                     && !ledger.Resolutions.Any(resolution =>
                         string.Equals(resolution.SourceFileId, transaction.SourceFileId, StringComparison.Ordinal)
+                        && SameSourceInstance(resolution.SourceInstanceId, transaction.SourceInstanceId)
                         && string.Equals(resolution.SourceFileSha256, transaction.SourceFileSha256, StringComparison.OrdinalIgnoreCase)
                         && resolution.EntryIndex == transaction.EntryIndex
                         && string.Equals(resolution.EntryFingerprint, transaction.EntryFingerprint, StringComparison.OrdinalIgnoreCase))))
@@ -1753,6 +1939,8 @@ internal static class PendingRecoveryService
     private sealed class PendingResolution
     {
         public string SourceFileId { get; set; } = string.Empty;
+        /// <summary>Generation id of the source journal, or null for pre-upgrade records.</summary>
+        public string? SourceInstanceId { get; set; }
         public string SourceFileSha256 { get; set; } = string.Empty;
         public string EntryFingerprint { get; set; } = string.Empty;
         public int EntryIndex { get; set; }
@@ -1779,6 +1967,7 @@ internal sealed class PendingRecoveryFile
     public int Version { get; init; }
     public string Status { get; set; } = string.Empty;
     public string SourceFileSha256 { get; init; } = string.Empty;
+    public string? SourceInstanceId { get; init; }
     public List<PendingRecoveryEntry> Entries { get; } = new();
     public bool HasUnresolvedEvidence
         => Entries.Any(entry => !entry.AlreadyResolved)
@@ -1806,6 +1995,7 @@ internal sealed class PendingRecoveryEntry
     public PendingRecoveryFields Fields { get; init; }
     public string EntryFingerprint { get; init; } = string.Empty;
     public string SourceFileSha256 { get; init; } = string.Empty;
+    public string? SourceInstanceId { get; init; }
     public string Status { get; set; } = string.Empty;
     public bool AlreadyResolved { get; init; }
     public PendingRecoveryTransaction? Transaction { get; set; }
@@ -1825,6 +2015,8 @@ internal sealed class PendingRecoveryTransaction
 {
     public int SchemaVersion { get; set; }
     public string SourceFileId { get; set; } = string.Empty;
+    /// <summary>Generation id of the source journal, or null for pre-upgrade records.</summary>
+    public string? SourceInstanceId { get; set; }
     public string SourceFileSha256 { get; set; } = string.Empty;
     public string EntryFingerprint { get; set; } = string.Empty;
     public int EntryIndex { get; set; }
