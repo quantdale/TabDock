@@ -24,10 +24,20 @@ public sealed class RuntimeTelemetry
     public static RuntimeTelemetry Instance { get; } = new();
 
     /// <summary>
-    /// Master switch. Defaults to false (zero overhead). Set true before the
+    /// Master switch. Defaults to false (zero overhead). Enable explicitly via
+    /// the TABDOCK_RUNTIME_TELEMETRY=1 environment variable (checked once at
+    /// type initialization) or by setting this property before the
     /// transitions/counters you want to observe.
     /// </summary>
-    public static bool Enabled { get; set; }
+    public static bool Enabled { get; set; } = string.Equals(
+        Environment.GetEnvironmentVariable("TABDOCK_RUNTIME_TELEMETRY"),
+        "1",
+        StringComparison.Ordinal);
+
+    /// <summary>Upper bound on in-flight transition records. A caller that
+    /// abandons a transition without CompleteTransition cannot grow storage
+    /// without limit; the oldest record is dropped first.</summary>
+    private const int MaxInFlightTransitions = 256;
 
     public enum TransitionStage
     {
@@ -75,6 +85,15 @@ public sealed class RuntimeTelemetry
     {
         if (!Enabled)
             return -1;
+        // Bound abandoned transitions: drop the oldest record when over the cap.
+        while (_transitions.Count >= MaxInFlightTransitions)
+        {
+            int oldest = int.MaxValue;
+            foreach (int key in _transitions.Keys)
+                if (key < oldest) oldest = key;
+            if (oldest == int.MaxValue || !_transitions.TryRemove(oldest, out _))
+                break;
+        }
         int id = System.Threading.Interlocked.Increment(ref _nextId);
         _transitions[id] = new TransitionRecord();
         return id;
