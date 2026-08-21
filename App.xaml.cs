@@ -905,6 +905,12 @@ _shepherd.HideProvenance = hideProvenance;
             }
         }
 
+        // Transaction-like UX: attempt every requested capture, keep the
+        // successes, and present ONE post-operation summary. A per-failure
+        // owner-modal dialog here would disable the container while an
+        // already-captured guest sits visible above it (Shepherd guests are
+        // independent top-level windows), once per failing target.
+        var failures = new List<string>();
         try
         {
             foreach (WindowCaptureTarget target in picker.Result.SelectedTargets)
@@ -913,11 +919,26 @@ _shepherd.HideProvenance = hideProvenance;
                 if (error != null)
                 {
                     _log.Log($"Capture failed for 0x{target.Hwnd.ToInt64():X}: {error}");
-                    // Explicit owner: an owner-less MessageBox falls back to WPF's
-                    // own default modal-parent resolution, which can disable more
-                    // than just this container if it resolves unexpectedly.
-                    MessageBox.Show(container, error, "Could not capture window", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    failures.Add($"{target.Title} (0x{target.Hwnd.ToInt64():X}): {error}");
                 }
+            }
+
+            if (failures.Count > 0)
+            {
+                string summary = failures.Count == 1
+                    ? failures[0]
+                    : string.Join(Environment.NewLine, failures);
+                // Explicit owner: an owner-less MessageBox falls back to WPF's
+                // own default modal-parent resolution, which can disable more
+                // than just this container if it resolves unexpectedly.
+                MessageBox.Show(
+                    container,
+                    failures.Count == 1
+                        ? $"Could not capture the selected window.{Environment.NewLine}{summary}"
+                        : $"Could not capture {failures.Count} of the selected windows; the others were captured.{Environment.NewLine}{summary}",
+                    "Capture results",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
             }
         }
         finally
