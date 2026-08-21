@@ -23,8 +23,6 @@ namespace TabDock.Views;
 public partial class ContainerWindow
 {
     private bool _splitInteractionHooksAttached;
-    private bool _splitPresentationSettlePending;
-    private long _splitPresentationSettleGeneration;
 
     protected override void OnContentRendered(EventArgs e)
     {
@@ -164,22 +162,20 @@ public partial class ContainerWindow
         }
 
         CapturedWindow? previousActive = _shepherdActiveWindow;
-        _suspendingSplitPair = true;
-        try
+        // SuspendForGuest hides both members via the production shim and
+        // re-validates current identity; on failure it leaves the pair
+        // presented and authoritative, so re-present it exactly once. Each
+        // native hide registers its provenance with GuestHideProvenance, so
+        // the queued EVENT_OBJECT_HIDE for either member can never be
+        // misread as a guest tray-close.
+        if (!_splitController.SuspendForGuest(guest))
         {
-            // SuspendForGuest hides both members via the production shim and
-            // re-validates current identity; on failure it leaves the pair
-            // presented and authoritative, so re-present it exactly once.
-            if (!_splitController.SuspendForGuest(guest))
-            {
-                _shepherdActiveWindow = previousActive;
-                LayoutSplitPanes();
-                DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
-                    group: Group.Id.ToString("N"), action: "pair-to-single", result: "recovery-pending-pair-retained");
-                return false;
-            }
+            _shepherdActiveWindow = previousActive;
+            LayoutSplitPanes();
+            DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
+                group: Group.Id.ToString("N"), action: "pair-to-single", result: "recovery-pending-pair-retained");
+            return false;
         }
-        finally { _suspendingSplitPair = false; }
 
         // Controller owns _splitPairPresented/_splitPresentationGeneration (it
         // bumped the generation and disarmed its own settle while suspending);
@@ -233,17 +229,16 @@ public partial class ContainerWindow
             return;
         }
 
-        if (_splitPresentationSettlePending)
+        if (_splitController.SettlePending)
             return;
 
-        _splitPresentationSettlePending = true;
-        _splitPresentationSettleGeneration = _splitController.Generation;
+        _splitController.ArmSettle();
         CompositionTarget.Rendering += SplitPresentationSettle_Rendering;
     }
 
     private void SplitPresentationSettle_Rendering(object? sender, EventArgs e)
     {
-        if (!_splitPresentationSettlePending)
+        if (!_splitController.SettlePending)
         {
             CompositionTarget.Rendering -= SplitPresentationSettle_Rendering;
             return;
@@ -263,7 +258,7 @@ public partial class ContainerWindow
             _splitController.Generation);
         if (!TabDock.Models.SplitPresentationPolicy.IsCurrentSettle(
                 settleState,
-                _splitPresentationSettleGeneration)
+                _splitController.SettleGeneration)
             || !IsSplitPresented)
         {
             DisarmSplitPresentationSettle();
@@ -272,7 +267,7 @@ public partial class ContainerWindow
         // Extra explicit guard: verify the ContainerWindow fields match the
         // controller-level state used by IsCurrentSettle — the two generations
         // must agree and presentation still true before LayoutSplitPanes (Q5).
-        if (_splitPresentationSettleGeneration != _splitController.Generation)
+        if (_splitController.SettleGeneration != _splitController.Generation)
         {
             DisarmSplitPresentationSettle();
             return;
@@ -297,7 +292,7 @@ public partial class ContainerWindow
         DisarmSplitPresentationSettle();
         LayoutSplitPanes();
         if (IsSplitPresented
-            && _splitPresentationSettleGeneration == _splitController.Generation
+            && _splitController.SettleGeneration == _splitController.Generation
             && IsSplitMember(focused))
         {
             _shepherd.SetForeground(focused);
@@ -312,9 +307,9 @@ public partial class ContainerWindow
         // Idempotent: callers may race (suspend, exit, mode change, Closed).
         // Removing the handler when not pending is a no-op; each arm adds
         // exactly one subscription, each disarm removes exactly one.
-        if (!_splitPresentationSettlePending)
+        if (!_splitController.SettlePending)
             return;
-        _splitPresentationSettlePending = false;
+        _splitController.DisarmSettle();
         CompositionTarget.Rendering -= SplitPresentationSettle_Rendering;
     }
 }

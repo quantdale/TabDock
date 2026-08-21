@@ -25,6 +25,7 @@ public sealed class GuestLifecycleService
     private readonly GroupManager _groups;
     private readonly Dictionary<Guid, ContainerWindow> _containers;
     private readonly LoggingService _log;
+    private readonly GuestHideProvenance _hideProvenance;
 
     // Debounces EVENT_OBJECT_NAMECHANGE storms (see DebounceNameChanged).
     private readonly Dictionary<IntPtr, (DispatcherTimer Timer, CapturedWindow Member)> _nameChangeDebounce = new();
@@ -46,11 +47,13 @@ public sealed class GuestLifecycleService
     private readonly Dictionary<IntPtr, RepairKind> _pendingRepair = new();
     private bool _repairScheduled;
 
-    public GuestLifecycleService(GroupManager groups, Dictionary<Guid, ContainerWindow> containers, LoggingService log)
+    public GuestLifecycleService(GroupManager groups, Dictionary<Guid, ContainerWindow> containers, LoggingService log,
+        GuestHideProvenance? hideProvenance = null)
     {
         _groups = groups;
         _containers = containers;
         _log = log;
+        _hideProvenance = hideProvenance ?? new GuestHideProvenance();
     }
 
     /// <summary>
@@ -93,24 +96,29 @@ public sealed class GuestLifecycleService
         if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match))
             return;
 
-        // Inactive tabs are hidden by TabDock's own tab switching, so
-        // only a hide of the ACTIVE tab can be guest-initiated. By the
-        // time this queued event is dispatched, any TabDock-initiated
-        // switch has already completed and moved the active tab, so
-        // the just-hidden old tab is rejected here. Release-path hides
-        // never reach this handler at all: the member leaves
-        // Group.Members before Release() runs, so the monitor's
-        // captured-window filter drops the event.
+        // Provenance first: a hide that provably belongs to one of TabDock's
+        // own operations (tab switch, split suspension/replacement, container
+        // minimize) is consumed here and can never be misread as a
+        // guest-initiated close — even when the queued event is delivered
+        // after the user has already switched back to the hidden guest and it
+        // is the active tab again. Expectations bind to the capture token, so
+        // a recycled HWND cannot consume them.
+        if (_hideProvenance.TryConsumeExpectedHide(hwnd, match, eventTime, out string operation))
+        {
+            _log.Log($"WinEvent: captured window 0x{hwnd.ToInt64():X} hide matched TabDock's {operation}; retaining its captured tab.");
+            return;
+        }
+
+        // Unmatched hides fall through to structural classification. Inactive
+        // tabs are only ever hidden by TabDock itself (whose hides are all
+        // registered above), so an unmatched hide of an inactive tab carries no
+        // lifecycle meaning. Release-path hides never reach this handler at
+        // all: the member leaves Group.Members before Release() runs, so the
+        // monitor's captured-window filter drops the event.
         //
-        // In SPLIT mode both members are visible, so a hide of EITHER split
-        // member is guest-initiated (a self-hide), not a tab-switch hide —
-        // neither is ever hidden by TabDock's ordinary tab logic. During a
-        // pair -> single-guest suspension, TabDock hides both members while
-        // IsInSplit is still true, so those queued hides are recognized as
-        // intentional presentation work. Split exit/replacement and
-        // dormant-member removal clear the relationship before any later hide
-        // event is dispatched; IsInSplit is then false and the active-tab check
-        // below rejects the stale intentional hide.
+        // In SPLIT mode both members are visible, so an unmatched hide of
+        // EITHER split member is guest-initiated (a self-hide) — TabDock's own
+        // split suspension/replacement hides are registered by Hide() above.
         bool inSplit = false;
         ContainerWindow? container = null;
         if (_containers.TryGetValue(group.Id, out var c))
@@ -118,12 +126,6 @@ public sealed class GuestLifecycleService
             container = c;
             inSplit = container.IsInSplit(match);
         }
-        // Suspension deliberately hides both split members. Those hides must not
-        // be treated as two independent guest tray-closes — that tore the pair
-        // down as data loss. While a suspension transaction is in flight, ignore
-        // hides for its members; the post-suspension state is authoritative.
-        if (inSplit && container != null && container.IsSuspendingSplitPair)
-            return;
         if (!inSplit)
         {
             if (group.ActiveIndex < 0 || group.ActiveIndex >= group.Members.Count
@@ -143,31 +145,10 @@ public sealed class GuestLifecycleService
         if (!wasHiddenAtCallback && NativeMethods.IsWindowVisible(hwnd))
             return; // Transient hide; the window is visible again.
 
-        // TabDock itself hides the ACTIVE guest when its container is
-        // minimized (ContainerWindow.StateChanged -> _shepherd.Hide),
-        // which fires the very same EVENT_OBJECT_HIDE as a guest-initiated
-        // tray-close and — unlike a tab-switch hide — leaves the active
-        // tab unchanged, so it passes every check above. Distinguish the
-        // two by container state: a genuine tray-close happens while the
-        // container is open; a minimize-hide happens because the container
-        // is minimized (the guest is re-shown on restore). Without this
-        // guard, minimizing a group would release its active tab as a
-        // hidden, orphaned window (and close a single-tab group outright).
-        // This also covers split mode: minimizing the container hides both
-        // split members, and neither may be torn down as a self-hide.
-        // A container minimize hides its guests through the same USER32 path as
-        // a guest tray-close. The hide event is posted asynchronously and can be
-        // delivered after WPF has already reported Normal/Maximized, so current
-        // WindowState alone is not a sufficient source proof. ContainerWindow
-        // records the exact expected hide and its restore boundary; consume only
-        // an event proven to belong to that transition. A hide generated after
-        // restore remains a genuine guest lifecycle event and is not suppressed.
-        if (container?.IsContainerDrivenGuestHide(match, eventTime) == true)
-        {
-            _log.Log($"WinEvent: captured window 0x{hwnd.ToInt64():X} hide matched the container minimize transition; retaining its captured tab.");
-            return;
-        }
-
+        // A hide arriving while the container itself is minimized is treated
+        // as part of the minimize transition even without a consumable
+        // expectation (for example an event delayed past the delivery
+        // tolerance): releasing a guest on that evidence would be wrong.
         if (container?.WindowState == WindowState.Minimized)
             return;
 
@@ -434,6 +415,7 @@ public sealed class GuestLifecycleService
         // fire against a recycled HWND (ReferenceEquals gate prevents corruption,
         // but still wastes a tick and retains the object).
         StopMinimizeHideProbe(match.Hwnd);
+        _hideProvenance.ForgetWindow(match.Hwnd);
         if (_nameChangeDebounce.Remove(match.Hwnd, out var namePending))
             namePending.Timer.Stop();
         if (_containers.TryGetValue(group.Id, out var container))

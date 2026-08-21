@@ -28,6 +28,14 @@ public sealed class CapturedWindow
     /// </summary>
     public long WindowIdentityToken { get; set; }
 
+    /// <summary>
+    /// Nonzero one-shot HWND-instance proof installed while capture identity
+    /// was strongly proven. Unlike <see cref="WindowIdentityToken"/> it
+    /// deliberately survives release so the destructive close-group path can
+    /// prove the exact window instance before posting WM_CLOSE.
+    /// </summary>
+    public long ReleasedCloseNonce { get; set; }
+
     /// <summary>Required process-instance identity used by mutation gates and crash rescue.</summary>
     public long ProcessStartTimeUtcTicks { get; set; }
 

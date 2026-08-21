@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Security.Cryptography;
 using TabDock.Models;
 
 namespace TabDock.Services;
@@ -46,6 +47,11 @@ internal enum ReleasedWindowCloseTargetResult
 /// <summary>
 /// Immutable native identity carried from the captured state across a release
 /// transaction so a later WM_CLOSE cannot rely on a detached CapturedWindow.
+/// <see cref="ReleasedCloseNonce"/> is the one-shot HWND-instance proof
+/// installed while capture identity was still strongly proven: PID, thread,
+/// class, executable, and process-start identity all survive a same-process
+/// destroy/recreate cycle, so only this nonce can distinguish the exact
+/// released window instance from a recycled same-class replacement.
 /// </summary>
 internal readonly struct ReleasedWindowCloseTarget
 {
@@ -55,7 +61,8 @@ internal readonly struct ReleasedWindowCloseTarget
         uint windowThreadId,
         string exePath,
         string className,
-        long processStartTimeUtcTicks)
+        long processStartTimeUtcTicks,
+        long releasedCloseNonce)
     {
         Hwnd = hwnd;
         ProcessId = processId;
@@ -63,6 +70,7 @@ internal readonly struct ReleasedWindowCloseTarget
         ExePath = exePath;
         ClassName = className;
         ProcessStartTimeUtcTicks = processStartTimeUtcTicks;
+        ReleasedCloseNonce = releasedCloseNonce;
     }
 
     public IntPtr Hwnd { get; }
@@ -71,6 +79,7 @@ internal readonly struct ReleasedWindowCloseTarget
     public string ExePath { get; }
     public string ClassName { get; }
     public long ProcessStartTimeUtcTicks { get; }
+    public long ReleasedCloseNonce { get; }
 
     public static ReleasedWindowCloseTarget FromCaptured(CapturedWindow window)
         => new(
@@ -79,7 +88,8 @@ internal readonly struct ReleasedWindowCloseTarget
             window.WindowThreadId,
             window.ExePath,
             window.OriginalClassName,
-            window.ProcessStartTimeUtcTicks);
+            window.ProcessStartTimeUtcTicks,
+            window.ReleasedCloseNonce);
 }
 
 /// <summary>
@@ -96,11 +106,22 @@ internal interface IWindowIdentityNativeApi
     string? GetClassName(IntPtr hwnd);
     long GetProcessStartTimeUtcTicks(uint pid);
     bool RemoveCaptureIdentityToken(IntPtr hwnd, IntPtr expectedToken);
+    IntPtr GetReleasedCloseNonce(IntPtr hwnd);
+    bool InstallReleasedCloseNonce(IntPtr hwnd, IntPtr nonce);
+    bool ConsumeReleasedCloseNonce(IntPtr hwnd, IntPtr expectedNonce);
 }
 
 internal sealed class NativeWindowIdentityApi : IWindowIdentityNativeApi
 {
     internal const string CaptureIdentityPropertyName = "TabDock.CapturedWindowToken";
+
+    /// <summary>
+    /// One-shot HWND-instance proof for destructive post-release closes. It is
+    /// installed while capture identity is strongly proven and deliberately
+    /// survives release (unlike the capture token), because the released-close
+    /// verifier runs after ownership signals are gone.
+    /// </summary>
+    internal const string ReleasedCloseNoncePropertyName = "TabDock.ReleasedCloseNonce";
 
     public static NativeWindowIdentityApi Instance { get; } = new();
 
@@ -129,6 +150,19 @@ internal sealed class NativeWindowIdentityApi : IWindowIdentityNativeApi
         if (expectedToken == IntPtr.Zero || GetCaptureIdentityToken(hwnd) != expectedToken)
             return false;
         return NativeMethods.RemoveProp(hwnd, CaptureIdentityPropertyName) == expectedToken;
+    }
+
+    public IntPtr GetReleasedCloseNonce(IntPtr hwnd)
+        => NativeMethods.GetProp(hwnd, ReleasedCloseNoncePropertyName);
+
+    public bool InstallReleasedCloseNonce(IntPtr hwnd, IntPtr nonce)
+        => nonce != IntPtr.Zero && NativeMethods.SetProp(hwnd, ReleasedCloseNoncePropertyName, nonce);
+
+    public bool ConsumeReleasedCloseNonce(IntPtr hwnd, IntPtr expectedNonce)
+    {
+        if (expectedNonce == IntPtr.Zero || GetReleasedCloseNonce(hwnd) != expectedNonce)
+            return false;
+        return NativeMethods.RemoveProp(hwnd, ReleasedCloseNoncePropertyName) == expectedNonce;
     }
 }
 
@@ -163,6 +197,24 @@ internal static class WindowIdentityGate
 {
     public static bool IsCaptureTokenAvailable(IntPtr hwnd, IWindowIdentityNativeApi api)
         => api.GetCaptureIdentityToken(hwnd) == IntPtr.Zero;
+
+    /// <summary>
+    /// Allocates a fresh nonzero one-shot released-close nonce. The value only
+    /// has to be unique per allocation within this process: the verifier always
+    /// compares it against the exact nonce recorded on the captured object.
+    /// </summary>
+    public static long NewReleasedCloseNonce()
+    {
+        Span<byte> bytes = stackalloc byte[8];
+        do
+        {
+            RandomNumberGenerator.Fill(bytes);
+            long value = BitConverter.ToInt64(bytes);
+            if (value != 0)
+                return value;
+        }
+        while (true);
+    }
 
     public static WindowIdentityResult Evaluate(
         CapturedWindow captured,
@@ -339,7 +391,10 @@ internal static class WindowIdentityGate
     /// Verifies a target after Shepherd has released it. This deliberately
     /// does not require the captured-object binding or the per-capture token:
     /// successful release removes both ownership signals. The process-start
-    /// probe remains mandatory because PID reuse must not authorize WM_CLOSE.
+    /// probe remains mandatory because PID reuse must not authorize WM_CLOSE,
+    /// and the one-shot released-close nonce must match because PID, thread,
+    /// class, executable, and process-start identity all survive a same-process
+    /// same-class HWND recreation.
     /// </summary>
     public static ReleasedWindowCloseTargetResult VerifyReleasedCloseTarget(
         ReleasedWindowCloseTarget target,
@@ -391,6 +446,22 @@ internal static class WindowIdentityGate
                 return Result(ReleasedWindowCloseTargetResult.Unverifiable, "released target process-start identity could not be read", out reason);
             if (currentStart != target.ProcessStartTimeUtcTicks)
                 return Result(ReleasedWindowCloseTargetResult.Replaced, "released target process-start identity changed", out reason);
+
+            // Final HWND-instance proof. Every field above survives a
+            // same-process destroy/recreate of a same-class window on the same
+            // GUI thread; only this nonce was bound to the exact window
+            // instance while capture identity was still strongly proven. A
+            // recycled HWND carries no nonce; a foreign window never carries
+            // ours. The nonce is consumed so the proof cannot be replayed.
+            if (target.ReleasedCloseNonce == 0)
+                return Result(ReleasedWindowCloseTargetResult.Unverifiable, "released-close nonce is unavailable", out reason);
+            IntPtr currentNonce = api.GetReleasedCloseNonce(target.Hwnd);
+            if (currentNonce == IntPtr.Zero)
+                return Result(ReleasedWindowCloseTargetResult.Unverifiable, "released-close nonce is absent (HWND replaced)", out reason);
+            if (currentNonce != new IntPtr(target.ReleasedCloseNonce))
+                return Result(ReleasedWindowCloseTargetResult.Replaced, "released-close nonce differs (HWND replaced)", out reason);
+            if (!api.ConsumeReleasedCloseNonce(target.Hwnd, currentNonce))
+                return Result(ReleasedWindowCloseTargetResult.Unverifiable, "released-close nonce could not be consumed", out reason);
 
             reason = "released target identity matched";
             return ReleasedWindowCloseTargetResult.Match;

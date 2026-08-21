@@ -37,7 +37,8 @@ internal static class CaptureBoundarySelfTest
         return result.Completed
             && result.SetPropertyCount == 1
             && result.DwmMutationCount == 1
-            && result.CaptureToken == new IntPtr(1001);
+            && result.CaptureToken == new IntPtr(1001)
+            && result.ReleasedCloseNonce != IntPtr.Zero;
     }
 
     private static bool TargetExitAfterJournalNeverGetsSetProp()
@@ -70,7 +71,10 @@ internal static class CaptureBoundarySelfTest
         return !result.Completed
             && result.SetPropertyCount == 1
             && result.DwmMutationCount == 0
-            && result.CaptureToken == new IntPtr(2002);
+            && result.CaptureToken == new IntPtr(2002)
+            // The installed released-close nonce is cleaned up when the
+            // capture boundary rejects after installation.
+            && result.ReleasedCloseNonce == IntPtr.Zero;
     }
 
     private static bool PendingRecoveryTokenBlocksCapture()
@@ -119,7 +123,7 @@ internal static class CaptureBoundarySelfTest
             hook);
         service.BindCapturedWindowForTesting(captured);
         bool completed = service.CompleteCaptureAfterJournalForTesting(captured, out _, out _);
-        CaptureCaseResult result = new(completed, api.SetPropertyCount, api.DwmMutationCount, api.CaptureToken);
+        CaptureCaseResult result = new(completed, api.SetPropertyCount, api.DwmMutationCount, api.CaptureToken, api.ReleasedCloseNonce);
         log.Dispose();
         try
         {
@@ -134,7 +138,8 @@ internal static class CaptureBoundarySelfTest
         bool Completed,
         int SetPropertyCount,
         int DwmMutationCount,
-        IntPtr CaptureToken);
+        IntPtr CaptureToken,
+        IntPtr ReleasedCloseNonce);
 
     private sealed class FakeCaptureApi : IWindowIdentityNativeApi, IWindowCaptureNativeApi
     {
@@ -169,6 +174,26 @@ internal static class CaptureBoundarySelfTest
             if (CaptureToken != IntPtr.Zero)
                 return false;
             CaptureToken = token;
+            return true;
+        }
+
+        public IntPtr ReleasedCloseNonce { get; private set; }
+
+        public IntPtr GetReleasedCloseNonce(IntPtr hwnd) => ReleasedCloseNonce;
+
+        public bool InstallReleasedCloseNonce(IntPtr hwnd, IntPtr nonce)
+        {
+            if (nonce == IntPtr.Zero)
+                return false;
+            ReleasedCloseNonce = nonce;
+            return true;
+        }
+
+        public bool ConsumeReleasedCloseNonce(IntPtr hwnd, IntPtr expectedNonce)
+        {
+            if (expectedNonce == IntPtr.Zero || ReleasedCloseNonce != expectedNonce)
+                return false;
+            ReleasedCloseNonce = IntPtr.Zero;
             return true;
         }
 

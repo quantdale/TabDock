@@ -564,6 +564,10 @@ internal static class RecoveryJournalSelfTest
             CaptureToken = IntPtr.Zero;
             return true;
         }
+
+        public IntPtr GetReleasedCloseNonce(IntPtr hwnd) => IntPtr.Zero;
+        public bool InstallReleasedCloseNonce(IntPtr hwnd, IntPtr nonce) => false;
+        public bool ConsumeReleasedCloseNonce(IntPtr hwnd, IntPtr expectedNonce) => false;
     }
 
     private sealed class FakeReleaseApi : IWindowReleaseNativeApi

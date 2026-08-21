@@ -135,11 +135,18 @@ public partial class App : Application
             _hotkey = new HotkeyService(_log);
             DiagnosticRuntime.LogicalSnapshotProvider = CaptureLogicalSnapshots;
 
-            // All WinEvent-driven guest lifecycle policy (destroy/hide teardown,
+            // One authority for TabDock-originated guest hides: every native
+// SW_HIDE the shepherd issues registers an expected-hide operation,
+// and the lifecycle service consumes it before classifying a queued
+// EVENT_OBJECT_HIDE as guest-initiated.
+var hideProvenance = new GuestHideProvenance();
+_shepherd.HideProvenance = hideProvenance;
+
+// All WinEvent-driven guest lifecycle policy (destroy/hide teardown,
             // minimize restore, move/size re-glue, foreground pairing, title
             // refresh) lives behind GuestLifecycleService.Attach; App only wires
             // the module in and gates the hooks.
-            _guestLifecycle = new GuestLifecycleService(_groups, _containers, _log);
+            _guestLifecycle = new GuestLifecycleService(_groups, _containers, _log, hideProvenance);
             _guestLifecycle.Attach(_events);
             // The hooks observe the whole desktop, so they only earn their cost
             // while something is actually captured (PERF25-03).

@@ -49,8 +49,40 @@ internal static class WindowReleaseSelfTest
         Check(ReleaseChangeBetweenPlacementAndVisibilityStops());
         Check(ReleaseChangeBeforeTransitionsStops());
         Check(ReleaseChangeBeforeTokenRemovalStopsCleanup());
+        Check(HideRegistersHideProvenance());
+        Check(ReleaseForgetsHideProvenance());
         Check(ReleasedCloseTargetIdentityIsRecycleSafe());
         return (checks, failures);
+    }
+
+    private static bool HideRegistersHideProvenance()
+    {
+        using TestFixture fixture = TestFixture.Create();
+        var provenance = new GuestHideProvenance();
+        fixture.Service.HideProvenance = provenance;
+        WindowHideOutcome result = fixture.Service.Hide(fixture.Captured);
+        return result == WindowHideOutcome.Hidden
+            && provenance.HasExpectedHide(fixture.Captured.Hwnd)
+            && provenance.TryConsumeExpectedHide(
+                fixture.Captured.Hwnd,
+                fixture.Captured,
+                unchecked((uint)Environment.TickCount),
+                out string operation)
+            && operation == "shepherd-hide";
+    }
+
+    private static bool ReleaseForgetsHideProvenance()
+    {
+        using TestFixture fixture = TestFixture.Create();
+        var provenance = new GuestHideProvenance();
+        fixture.Service.HideProvenance = provenance;
+        provenance.RegisterExpectedHide(
+            fixture.Captured,
+            "stale-expectation",
+            unchecked((uint)Environment.TickCount));
+        WindowReleaseOutcome result = fixture.Service.Release(fixture.Captured);
+        return result == WindowReleaseOutcome.Released
+            && !provenance.HasExpectedHide(fixture.Captured.Hwnd);
     }
 
     private static bool ReleasedCloseTargetIdentityIsRecycleSafe()
@@ -58,11 +90,48 @@ internal static class WindowReleaseSelfTest
         using TestFixture fixture = TestFixture.Create();
         ReleasedWindowCloseTarget target = ReleasedWindowCloseTarget.FromCaptured(fixture.Captured);
         fixture.Identity.CaptureToken = IntPtr.Zero;
+        fixture.Identity.ReleasedCloseNonce = new IntPtr(fixture.Captured.ReleasedCloseNonce);
 
         bool exactMatch = WindowIdentityGate.VerifyReleasedCloseTarget(
             target,
             fixture.Identity,
             out _) == ReleasedWindowCloseTargetResult.Match;
+
+        // One-shot semantics: the successful proof consumed the nonce, so a
+        // replayed verification must fail closed instead of re-authorizing.
+        bool replayedProofRejected = WindowIdentityGate.VerifyReleasedCloseTarget(
+            target,
+            fixture.Identity,
+            out _) != ReleasedWindowCloseTargetResult.Match;
+
+        // A same-process destroy/recreate of a same-class window on the same
+        // GUI thread passes every process-scoped field above but carries no
+        // nonce: it must never match.
+        bool recycledSameProcessRejected = WindowIdentityGate.VerifyReleasedCloseTarget(
+            target,
+            fixture.Identity,
+            out _) == ReleasedWindowCloseTargetResult.Unverifiable;
+
+        // A foreign window carrying a different nonce is a replacement.
+        fixture.Identity.ReleasedCloseNonce = new IntPtr(fixture.Captured.ReleasedCloseNonce + 1);
+        bool wrongNonceRejected = WindowIdentityGate.VerifyReleasedCloseTarget(
+            target,
+            fixture.Identity,
+            out _) == ReleasedWindowCloseTargetResult.Replaced;
+
+        fixture.Identity.ReleasedCloseNonce = new IntPtr(fixture.Captured.ReleasedCloseNonce);
+        var noncelessTarget = new ReleasedWindowCloseTarget(
+            target.Hwnd,
+            target.ProcessId,
+            target.WindowThreadId,
+            target.ExePath,
+            target.ClassName,
+            target.ProcessStartTimeUtcTicks,
+            0);
+        bool missingNonceFailsClosed = WindowIdentityGate.VerifyReleasedCloseTarget(
+            noncelessTarget,
+            fixture.Identity,
+            out _) == ReleasedWindowCloseTargetResult.Unverifiable;
 
         fixture.Identity.Identity = new WindowProcessIdentity(99, fixture.Captured.WindowThreadId);
         bool differentPidRejected = WindowIdentityGate.VerifyReleasedCloseTarget(
@@ -111,6 +180,10 @@ internal static class WindowReleaseSelfTest
             out _) == ReleasedWindowCloseTargetResult.Destroyed;
 
         return exactMatch
+            && replayedProofRejected
+            && recycledSameProcessRejected
+            && wrongNonceRejected
+            && missingNonceFailsClosed
             && differentPidRejected
             && differentThreadRejected
             && differentExecutableRejected
@@ -562,6 +635,7 @@ internal static class WindowReleaseSelfTest
                 ProcessId = pid,
                 WindowThreadId = pid + 1000,
                 WindowIdentityToken = token,
+                ReleasedCloseNonce = 0x4E4F4E430000 + hwnd,
                 ProcessStartTimeUtcTicks = start,
                 ExePath = $"guest-{pid}.exe",
                 OriginalClassName = "Pig",
@@ -601,14 +675,17 @@ internal static class WindowReleaseSelfTest
         private readonly uint _pid;
         public WindowProcessIdentity Identity { get; set; }
         public IntPtr CaptureToken { get; set; }
+        public IntPtr ReleasedCloseNonce { get; set; }
         public string? ExePath { get; set; }
         public string ClassName { get; set; } = "Pig";
         public long ProcessStartTicks { get; set; }
         public bool ThrowOnExecutableProbe { get; set; }
         public bool ThrowOnClassProbe { get; set; }
         public bool FailTokenRemoval { get; set; }
+        public bool FailNonceInstallation { get; set; }
         public bool IsWindowAlive { get; set; } = true;
         public int TokenRemovalCount { get; private set; }
+        public int NonceConsumptionCount { get; private set; }
 
         public void ReplaceGeneration()
             => CaptureToken = new IntPtr(2002);
@@ -662,6 +739,27 @@ internal static class WindowReleaseSelfTest
             if (item.CaptureToken != expectedToken)
                 return false;
             item.CaptureToken = IntPtr.Zero;
+            return true;
+        }
+
+        public IntPtr GetReleasedCloseNonce(IntPtr hwnd)
+            => Find(hwnd).ReleasedCloseNonce;
+
+        public bool InstallReleasedCloseNonce(IntPtr hwnd, IntPtr nonce)
+        {
+            if (FailNonceInstallation || nonce == IntPtr.Zero)
+                return false;
+            Find(hwnd).ReleasedCloseNonce = nonce;
+            return true;
+        }
+
+        public bool ConsumeReleasedCloseNonce(IntPtr hwnd, IntPtr expectedNonce)
+        {
+            NonceConsumptionCount++;
+            FakeIdentityApi item = Find(hwnd);
+            if (item.ReleasedCloseNonce != expectedNonce || expectedNonce == IntPtr.Zero)
+                return false;
+            item.ReleasedCloseNonce = IntPtr.Zero;
             return true;
         }
 

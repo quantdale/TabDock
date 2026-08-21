@@ -3,12 +3,31 @@ using TabDock.Models;
 
 namespace TabDock.Services;
 
+/// <summary>Explicit outcome of a guarded split transition.</summary>
+public readonly record struct SplitTransitionResult(
+    bool Committed,
+    SplitNativeTransitionOutcome Native)
+{
+    public static SplitTransitionResult Succeeded() => new(true, SplitNativeTransitionOutcome.Succeeded);
+    public static SplitTransitionResult Pending() => new(false, SplitNativeTransitionOutcome.RecoveryPending);
+    public static SplitTransitionResult Rejected() => new(false, SplitNativeTransitionOutcome.IdentityMismatch);
+}
+
 /// <summary>
 /// Owns split pair identity, presented vs dormant, foreground member, generation
 /// and settle generation. Wraps <see cref="SplitPresentationPolicy"/> +
 /// <see cref="SplitInteractionPolicy"/> so <see cref="Views.ContainerWindow"/>
 /// only owns WPF wiring. Keeps cross-handle identity by <see cref="CapturedWindow"/>
 /// reference (never positional index) and preserves LEFT/RIGHT orientation.
+///
+/// Every transition follows one pattern: the pure policy computes the desired
+/// logical state from the authoritative state, guarded native operations
+/// execute the required diff, and the desired state is committed only when ALL
+/// of that native work succeeded. On a pending/failed native operation the
+/// authoritative state is retained untouched (the container re-presents it),
+/// so logical state and visible state can never disagree about whether the
+/// pair is presented. The controller never restates transition semantics the
+/// policy already owns.
 /// </summary>
 public sealed class SplitPresentationController
 {
@@ -55,35 +74,45 @@ public sealed class SplitPresentationController
             _foreground?.Hwnd.ToString("X") ?? _left?.Hwnd.ToString("X"),
             _generation);
 
-    public void DefinePair(CapturedWindow left, CapturedWindow right, CapturedWindow? focusedMember = null)
+    /// <summary>
+    /// Defines (or reconfigures) the pair. Departing members are hidden through
+    /// the guarded presentation seam while the old relationship is still
+    /// authoritative; a RecoveryPending hide commits nothing so the caller can
+    /// re-present the retained state instead of stranding a half-hidden pair.
+    /// </summary>
+    public SplitTransitionResult DefinePair(CapturedWindow left, CapturedWindow right, CapturedWindow? focusedMember = null)
     {
         if (left == null || right == null || ReferenceEquals(left, right))
-            return;
+            return SplitTransitionResult.Rejected();
 
-        // Hide departing members if replacing an existing pair.
-        // Hide counting is owned by the presentation ops / shepherd budget sink,
-        // not duplicated here.
+        // Pure authority first: compute the desired logical state.
+        SplitPresentationState desired = IsRelationshipDefined
+            ? SplitPresentationPolicy.Reconfigure(ToState(), Id(left), Id(right))
+            : SplitPresentationPolicy.DefinePair(Id(left), Id(right), Id(focusedMember ?? left), _generation);
+
+        // Guarded native work: hide members departing from the current pair.
         if (IsRelationshipDefined)
         {
-            foreach (var m in new[] { _left!, _right! })
+            foreach (CapturedWindow m in new[] { _left!, _right! })
             {
-                if (m != left && m != right && _ops != null)
-                {
-                    WindowHideOutcome o = _ops.Hide(m);
-                    if (o == WindowHideOutcome.RecoveryPending)
-                        return;
-                }
+                if (ReferenceEquals(m, left) || ReferenceEquals(m, right))
+                    continue;
+                WindowHideOutcome o = _ops != null ? _ops.Hide(m) : WindowHideOutcome.Hidden;
+                if (o == WindowHideOutcome.RecoveryPending)
+                    return SplitTransitionResult.Pending();
             }
         }
 
-        _generation++;
+        // All native work succeeded: commit the policy's desired state.
         _left = left;
         _right = right;
         _presented = true;
         _foreground = focusedMember != null && IsMember(focusedMember) ? focusedMember : left;
+        _generation = desired.Generation;
         DisarmSettle();
         _settlePending = true;
         _settleGeneration = _generation;
+        return SplitTransitionResult.Succeeded();
     }
 
     public bool SuspendForGuest(CapturedWindow guest)
@@ -93,21 +122,24 @@ public sealed class SplitPresentationController
         if (_isCurrent != null && !_isCurrent(guest))
             return false;
 
+        // Pure authority: pair -> single with the non-member active.
+        SplitPresentationState desired = SplitPresentationPolicy.SelectNonMember(ToState(), Id(guest));
+
         CapturedWindow left = _left!;
         CapturedWindow right = _right!;
-
         foreach (CapturedWindow member in new[] { left, right })
         {
             WindowHideOutcome outcome = _ops != null ? _ops.Hide(member) : WindowHideOutcome.Hidden;
             if (outcome == WindowHideOutcome.RecoveryPending)
-                return false;
+                return false; // Authoritative pair retained; caller re-presents it.
         }
 
         if (_isCurrent != null && !_isCurrent(guest))
             return false;
 
         _presented = false;
-        _generation++;
+        _foreground = guest;
+        _generation = desired.Generation;
         DisarmSettle();
         return true;
     }
@@ -117,69 +149,74 @@ public sealed class SplitPresentationController
         if (!IsRelationshipDefined || !IsMember(member))
             return false;
 
+        // Pure authority: single -> pair with the member focused.
+        SplitPresentationState desired = SplitPresentationPolicy.SelectMember(ToState(), Id(member));
+
         if (currentSingleGuest != null && !IsMember(currentSingleGuest) && _ops != null)
         {
             WindowHideOutcome o = _ops.Hide(currentSingleGuest);
             if (o == WindowHideOutcome.RecoveryPending)
-                return false;
+                return false; // Single-guest presentation retained.
         }
 
         _presented = true;
-        _generation++;
-        DisarmSettle();
         _foreground = member;
+        _generation = desired.Generation;
+        DisarmSettle();
         return true;
     }
 
-    public bool ExplicitExit(CapturedWindow? keepActive = null)
-    {
-        if (!IsRelationshipDefined)
-            return false;
-
-        if (!IsPresented)
-        {
-            // Dormant: hide any visible former members without promoting.
-            if (_ops != null)
-            {
-                foreach (var m in new[] { _left, _right })
-                {
-                    if (m == null) continue;
-                    WindowHideOutcome o = _ops.Hide(m);
-                    if (o == WindowHideOutcome.RecoveryPending)
-                        return false;
-                }
-            }
-            _left = null; _right = null; _foreground = null; _presented = false;
-            _generation++; DisarmSettle();
-            return true;
-        }
-
-        CapturedWindow? survivor = keepActive != null && IsMember(keepActive) ? keepActive : _left;
-        if (_ops != null)
-        {
-            foreach (var m in new[] { _left, _right })
-            {
-                if (m != null && !ReferenceEquals(m, survivor))
-                {
-                    WindowHideOutcome o = _ops.Hide(m);
-                    if (o == WindowHideOutcome.RecoveryPending)
-                        return false;
-                }
-            }
-        }
-        _left = null; _right = null; _foreground = null; _presented = false;
-        _generation++; DisarmSettle();
-        return true;
-    }
-
+    /// <summary>
+    /// Structural invalidation (a member's window is gone or was released by
+    /// another path). Applies <see cref="SplitPresentationPolicy.RemoveMember"/>
+    /// exactly: when the removed member was the active guest the surviving
+    /// member is promoted; otherwise the current active guest (which may be a
+    /// dormant non-member) is preserved. No native work happens here — the
+    /// departing member was already released/hidden by the removal path.
+    /// </summary>
     public CapturedWindow? HandleMemberRemoved(CapturedWindow removed)
     {
         if (!IsRelationshipDefined || !IsMember(removed))
             return null;
-        CapturedWindow? survivor = ReferenceEquals(removed, _left) ? _right : _left;
-        _left = null; _right = null; _foreground = null; _presented = false;
-        _generation++; DisarmSettle();
+
+        SplitPresentationState desired = SplitPresentationPolicy.RemoveMember(ToState(), Id(removed));
+        CapturedWindow? survivor;
+        if (_foreground == null || ReferenceEquals(_foreground, removed))
+        {
+            survivor = ReferenceEquals(removed, _left) ? _right : _left;
+        }
+        else
+        {
+            survivor = _foreground;
+        }
+
+        _left = null;
+        _right = null;
+        _presented = false;
+        _foreground = desired.ActiveGuest != null ? survivor : null;
+        _generation++;
+        DisarmSettle();
         return survivor;
+    }
+
+    /// <summary>
+    /// Commits an explicit split exit after the caller has executed the
+    /// journal-safe hides for every departing member. Applies
+    /// <see cref="SplitPresentationPolicy.ExplicitExit"/>: only the
+    /// relationship is removed and <paramref name="survivor"/> becomes the
+    /// ordinary active guest.
+    /// </summary>
+    public void CommitExplicitExit(CapturedWindow? survivor)
+    {
+        if (!IsRelationshipDefined)
+            return;
+        SplitPresentationPolicy.ExplicitExit(ToState());
+        _left = null;
+        _right = null;
+        _presented = false;
+        _foreground = survivor;
+        _generation++;
+        DisarmSettle();
     }
 
     public bool IsCurrentSettle(long queuedGeneration)
@@ -197,20 +234,13 @@ public sealed class SplitPresentationController
         _settlePending = false;
     }
 
-    public SplitInteractionAction ClassifyInteraction(
-        bool isSplitPresented,
-        bool isTargetSplitMember,
-        bool isButtonHit,
-        bool isStaleIdentity,
-        SplitNativeTransitionOutcome nativeOutcome,
-        bool isRightClickOrHover)
-        => SplitInteractionPolicy.Classify(ToState(), isSplitPresented, isTargetSplitMember, isButtonHit, isStaleIdentity, nativeOutcome, isRightClickOrHover);
-
     public void FocusMember(CapturedWindow member)
     {
         if (!IsMember(member)) return;
         _foreground = member;
     }
+
+    private static string Id(CapturedWindow window) => window.Hwnd.ToString("X");
 
     // Test seam: seed state without side effects.
     public void SeedState(CapturedWindow? left, CapturedWindow? right, bool presented, CapturedWindow? foreground, long generation)

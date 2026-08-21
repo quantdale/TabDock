@@ -190,6 +190,17 @@ public sealed class WindowShepherdService
     private readonly Action<string>? _testSequencingHook;
     internal IPresentationBudgetSink? BudgetSink { get; set; }
 
+    /// <summary>
+    /// Receives an expected-hide registration for every native SW_HIDE this
+    /// service issues, so the lifecycle service can prove a queued
+    /// EVENT_OBJECT_HIDE was TabDock-originated instead of inferring it from
+    /// active-tab state. Owned by App; UI-thread confined.
+    /// </summary>
+    internal GuestHideProvenance? HideProvenance { get; set; }
+
+    private static uint CurrentNativeEventTime()
+        => unchecked((uint)Environment.TickCount);
+
     // The native HWND value is not a generation number. Keep the live
     // CapturedWindow object bound to each value so a delayed callback for an
     // old object cannot operate on a same-process re-capture of the same HWND.
@@ -271,9 +282,27 @@ public sealed class WindowShepherdService
         out string reason,
         out bool tokenInstalled)
     {
+        return TryCompleteCaptureAfterJournal(
+            window,
+            expectedToken,
+            out failure,
+            out reason,
+            out tokenInstalled,
+            out _);
+    }
+
+    private bool TryCompleteCaptureAfterJournal(
+        CapturedWindow window,
+        IntPtr expectedToken,
+        out WindowIdentityResult failure,
+        out string reason,
+        out bool tokenInstalled,
+        out bool closeNonceInstalled)
+    {
         failure = WindowIdentityResult.Unverifiable;
         reason = string.Empty;
         tokenInstalled = false;
+        closeNonceInstalled = false;
 
         if (!_capturedByHwnd.IsCurrent(window))
         {
@@ -319,6 +348,20 @@ public sealed class WindowShepherdService
             return false;
         }
 
+        // Install the one-shot released-close nonce while capture identity is
+        // still strongly proven. It deliberately survives release so the
+        // destructive close-group path can prove the exact HWND instance after
+        // the capture token is gone.
+        long closeNonce = WindowIdentityGate.NewReleasedCloseNonce();
+        if (!_identityApi.InstallReleasedCloseNonce(window.Hwnd, new IntPtr(closeNonce)))
+        {
+            failure = WindowIdentityResult.Unverifiable;
+            reason = "SetProp could not install the released-close nonce";
+            return false;
+        }
+        closeNonceInstalled = true;
+        window.ReleasedCloseNonce = closeNonce;
+
         // This is intentionally the last managed work before the first DWM
         // mutation. It is a cheap generation check, not a second heavy probe.
         TestSequence("capture-before-dwm");
@@ -331,7 +374,16 @@ public sealed class WindowShepherdService
             ? "capture generation matched before DWM mutation"
             : "capture generation changed before DWM mutation";
         if (failure != WindowIdentityResult.Match)
+        {
+            // A rejected capture must not leave the one-shot released-close
+            // nonce on the guest as foreign state: consume it while the exact
+            // value is still known. closeNonceInstalled stays true only when
+            // the cleanup itself failed, so the caller can log it.
+            closeNonceInstalled = !_identityApi.ConsumeReleasedCloseNonce(
+                window.Hwnd,
+                new IntPtr(closeNonce));
             return false;
+        }
 
         _captureApi.SetTransitionsDisabled(window.Hwnd, 1);
         return true;
@@ -678,13 +730,19 @@ public sealed class WindowShepherdService
                 identityTokenValue,
                 out WindowIdentityResult captureFailure,
                 out string captureFailureReason,
-                out bool tokenInstalled))
+                out bool tokenInstalled,
+                out bool closeNonceInstalled))
         {
             if (tokenInstalled
                 && _captureApi.GetCaptureIdentityToken(hwnd) == identityTokenValue
                 && !_identityApi.RemoveCaptureIdentityToken(hwnd, identityTokenValue))
             {
                 _log.Log($"SHEPHERD[identity-token] token cleanup failed after capture-boundary rejection for 0x{hwnd.ToInt64():X}; future capture remains fail-closed.");
+            }
+
+            if (closeNonceInstalled)
+            {
+                _log.Log($"SHEPHERD[released-close-nonce] nonce cleanup failed after capture-boundary rejection for 0x{hwnd.ToInt64():X}.");
             }
 
             bool journalCleared = captureFailure != WindowIdentityResult.Unverifiable && JournalClear(cw);
@@ -846,6 +904,9 @@ public sealed class WindowShepherdService
     /// <summary>
     /// Captures the independent native identity needed by the close-group Yes
     /// transaction before release removes the live capture binding and token.
+    /// The snapshot includes the one-shot released-close nonce installed at
+    /// capture time; without it the later WM_CLOSE proof could not distinguish
+    /// the exact window instance from a same-process recycled HWND.
     /// </summary>
     internal bool TryCreateReleasedWindowCloseTarget(
         CapturedWindow window,
@@ -864,6 +925,13 @@ public sealed class WindowShepherdService
             : "captured target identity could not be proven before release";
         if (result != WindowIdentityResult.Match)
             return false;
+
+        if (window.ReleasedCloseNonce == 0)
+        {
+            result = WindowIdentityResult.Unverifiable;
+            reason = "released-close nonce is unavailable on the captured object";
+            return false;
+        }
 
         target = ReleasedWindowCloseTarget.FromCaptured(window);
         return true;
@@ -1409,6 +1477,7 @@ public sealed class WindowShepherdService
         if (identityResult == WindowIdentityResult.Mismatch)
         {
             bool journalCleared = JournalClear(window);
+            HideProvenance?.ForgetWindow(window.Hwnd);
             _log.Log($"SHEPHERD[hide-decision] guest=0x{window.Hwnd.ToInt64():X} identity mismatch; journalCleared={journalCleared}.");
             return WindowHideOutcome.TargetGoneOrRecycled;
         }
@@ -1443,6 +1512,11 @@ public sealed class WindowShepherdService
         }
 
         bool previouslyVisible = _releaseApi.ShowWindow(window.Hwnd, NativeMethods.SW_HIDE);
+        // The native hide was issued, so an EVENT_OBJECT_HIDE will be posted
+        // for this capture generation no matter how the verification below
+        // resolves. Register the expectation immediately so the lifecycle
+        // service can prove the event's provenance.
+        HideProvenance?.RegisterExpectedHide(window, "shepherd-hide", CurrentNativeEventTime());
         RuntimeTelemetry.Instance.RecordShowWindow();
         WindowIdentityResult postHideIdentity = EvaluateCurrentCapturedWindow(
             window,
@@ -1707,6 +1781,7 @@ public sealed class WindowShepherdService
             {
                 _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide)");
                 _minTrackCache.Remove(window);
+                HideProvenance?.ForgetWindow(window.Hwnd);
                 return WindowReleaseOutcome.Released;
             }
         }
@@ -1820,6 +1895,7 @@ public sealed class WindowShepherdService
             {
                 _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) guest={_releaseApi.DescribeWindow(window.Hwnd)}");
                 _minTrackCache.Remove(window);
+                HideProvenance?.ForgetWindow(window.Hwnd);
                 return WindowReleaseOutcome.Released;
             }
         }
