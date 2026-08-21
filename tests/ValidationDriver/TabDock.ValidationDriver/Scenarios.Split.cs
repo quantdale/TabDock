@@ -91,23 +91,51 @@ internal static partial class Scenarios
         (int tx, int ty) = Uia.Center(tab);
         if (!EnsureClickable(container, tx, ty))
             throw new InvalidOperationException("Could not bring the container to the foreground and the tab is obscured — refusing to click blind.");
-        Input.RightClickAt(tx, ty);
 
-        AutomationElement? parent = Uia.FindMenuItemOnDesktop(ctx.TabDockPid, parentName, 3000);
-        if (parent == null)
-            throw new InvalidOperationException($"Context menu item '{parentName}' did not appear within 3s.");
+        // The container's activation reassert can close a just-opened context
+        // menu or its hover-expanded submenu between UIA discovery and SendInput
+        // delivery (reproduced supervised: torture-split-member-destroy phase c,
+        // 'Split screen' submenu never exposed the child). Retry the whole
+        // open-hover-click sequence, and only click the child when a TabDock-
+        // owned popup is verifiably under the cursor.
+        for (int attempt = 0; ; attempt++)
+        {
+            if (attempt > 0)
+            {
+                Input.SendKey(Input.VK_ESCAPE);
+                Thread.Sleep(250);
+            }
+            Input.RightClickAt(tx, ty);
 
-        // Hover the parent to expand the submenu (WPF submenus open on mouse-over).
-        (int px, int py) = Uia.Center(parent);
-        Input.MoveTo(px, py);
-        Thread.Sleep(600);
+            AutomationElement? parent = Uia.FindMenuItemOnDesktop(ctx.TabDockPid, parentName, 3000);
+            if (parent == null)
+            {
+                if (attempt >= 2)
+                    throw new InvalidOperationException($"Context menu item '{parentName}' did not appear within 3s after {attempt + 1} attempts.");
+                continue;
+            }
 
-        AutomationElement? child = Uia.FindMenuItemOnDesktop(ctx.TabDockPid, childName, 3000);
-        if (child == null)
-            throw new InvalidOperationException($"Submenu item '{childName}' did not appear within 3s after expanding '{parentName}'.");
-        (int cx, int cy) = Uia.Center(child);
-        Input.ClickAt(cx, cy);
-        Thread.Sleep(300);
+            // Hover the parent to expand the submenu (WPF submenus open on mouse-over).
+            (int px, int py) = Uia.Center(parent);
+            Input.MoveTo(px, py);
+            Thread.Sleep(600);
+
+            AutomationElement? child = Uia.FindMenuItemOnDesktop(ctx.TabDockPid, childName, 3000);
+            if (child == null)
+            {
+                if (attempt >= 2)
+                    throw new InvalidOperationException($"Submenu item '{childName}' did not appear within 3s after expanding '{parentName}' ({attempt + 1} attempts).");
+                continue;
+            }
+            if (!TryClickVerifiedPopupItem(ctx, container, child))
+            {
+                if (attempt >= 2)
+                    throw new InvalidOperationException($"Submenu item '{childName}' was never verifiably under the cursor ({attempt + 1} attempts).");
+                continue;
+            }
+            Thread.Sleep(300);
+            return;
+        }
     }
 
     /// <summary>
