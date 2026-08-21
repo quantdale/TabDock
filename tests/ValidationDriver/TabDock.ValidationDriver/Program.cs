@@ -308,16 +308,28 @@ internal static class Program
 
     private static ProcessStartInfo CreateShardProcessInfo(Options opt, string shard)
     {
+        // A managed DLL must never be executed directly: CreateProcess starts a
+        // host that fails CLR assembly binding ("System.Runtime, Version=8.0.0.0").
+        // Prefer the apphost beside the assembly; fall back to a real dotnet host.
+        string assemblyLocation = Assembly.GetExecutingAssembly().Location;
+        string? apphost = string.IsNullOrEmpty(assemblyLocation)
+            ? null
+            : Path.ChangeExtension(assemblyLocation, ".exe");
+        bool useApphost = apphost != null && File.Exists(apphost);
         string runner = Environment.ProcessPath ?? string.Empty;
-        bool dotnetHost = string.Equals(Path.GetFileNameWithoutExtension(runner), "dotnet", StringComparison.OrdinalIgnoreCase);
+        bool dotnetHost = !string.IsNullOrEmpty(runner)
+            && string.Equals(Path.GetFileNameWithoutExtension(runner), "dotnet", StringComparison.OrdinalIgnoreCase);
+        if (!useApphost && !dotnetHost)
+            throw new InvalidOperationException(
+                $"Cannot spawn shard children: no apphost at '{apphost ?? "<none>"}' and process host '{runner}' is not a dotnet host.");
         var psi = new ProcessStartInfo
         {
-            FileName = dotnetHost ? runner : Assembly.GetExecutingAssembly().Location,
+            FileName = useApphost ? apphost! : runner,
             WorkingDirectory = AppContext.BaseDirectory,
             UseShellExecute = false,
         };
-        if (dotnetHost)
-            psi.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
+        if (!useApphost)
+            psi.ArgumentList.Add(assemblyLocation);
         psi.ArgumentList.Add("--yes");
         psi.ArgumentList.Add("--configuration");
         psi.ArgumentList.Add(opt.Configuration);
