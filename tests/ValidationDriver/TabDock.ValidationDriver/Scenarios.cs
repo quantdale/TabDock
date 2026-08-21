@@ -1628,7 +1628,7 @@ internal static partial class Scenarios
             // itself. Clicking directly on the text reliably toggles the parent
             // CheckBox; clicking the stretched CheckBox rect can land on ListBoxItem
             // padding or other non-toggleable space.
-            AutomationElement? textEl = Uia.FindDescendantByName(picker, ControlType.Text, null, g.Title, out int textCount);
+            AutomationElement? textEl = Uia.FindDescendantByName(picker, ControlType.Text, exactRowMatch ? g.Title : null, exactRowMatch ? null : g.Title, out int textCount);
             if (textEl == null || textCount != 1)
                 throw new InvalidOperationException($"Picker text label for '{g.Title}' not found uniquely (count={textCount}) — cannot toggle safely.");
 
@@ -1638,8 +1638,8 @@ internal static partial class Scenarios
                 // A retry is a fresh UIA discovery. Do not reuse an element or
                 // rectangle obtained before the failed click; virtualization
                 // can recycle the row peer while the picker is settling.
-                row = FindPickerRow(picker, g.Title);
-                textEl = Uia.FindDescendantByName(picker, ControlType.Text, null, g.Title, out textCount);
+                row = FindPickerRow(picker, g.Title, exactRowMatch);
+                textEl = Uia.FindDescendantByName(picker, ControlType.Text, exactRowMatch ? g.Title : null, exactRowMatch ? null : g.Title, out textCount);
                 if (textEl == null || textCount != 1)
                     throw new InvalidOperationException($"Picker text label for '{g.Title}' was not uniquely rediscovered before retry (count={textCount}).");
                 // Vary the click point: start on the text label, then try the
