@@ -93,9 +93,13 @@ public static class EnvironmentFingerprint
                     {
                         cbSize = (uint)Marshal.SizeOf<NativeMethods.MONITORINFO>(),
                     };
+                    // Per-monitor status composition: each probe contributes its
+                    // own entry instead of last-write-wins overwriting the
+                    // previous probe's result.
+                    var statuses = new List<string>();
                     if (!NativeMethods.GetMonitorInfo(handle, ref info))
                     {
-                        snapshot.Status = "unavailable (GetMonitorInfo)";
+                        statuses.Add("unavailable (GetMonitorInfo)");
                     }
                     else
                     {
@@ -113,9 +117,11 @@ public static class EnvironmentFingerprint
                     }
                     else
                     {
-                        snapshot.Status = "degraded (DPI unavailable)";
+                        statuses.Add("degraded (DPI unavailable)");
                     }
                     snapshot.Orientation = "unavailable (not queried)";
+                    snapshot.Statuses = statuses;
+                    snapshot.Status = statuses.Count == 0 ? "ok" : string.Join("; ", statuses);
                     monitors.Add(snapshot);
                     return true;
                 }, IntPtr.Zero);

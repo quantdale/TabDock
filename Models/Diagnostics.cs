@@ -55,6 +55,8 @@ public sealed class MonitorSnapshot
     public string ScalePercent { get; set; } = "unavailable";
     public string Orientation { get; set; } = "unavailable";
     public string Status { get; set; } = "ok";
+    /// <summary>Additive per-probe status entries; <see cref="Status"/> is their composition.</summary>
+    public List<string> Statuses { get; set; } = new();
 }
 
 /// <summary>Display adapter information available from built-in User32 APIs.</summary>

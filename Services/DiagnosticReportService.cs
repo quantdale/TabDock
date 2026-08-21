@@ -5,6 +5,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Tasks;
 using TabDock.Models;
 
 namespace TabDock.Services;
@@ -15,6 +16,13 @@ public static class DiagnosticReportService
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
+    // Compact options for trace.jsonl: JSONL requires one record per line, so
+    // the indented report options would break the framing.
+    private static readonly JsonSerializerOptions s_jsonlOptions = new()
+    {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
@@ -182,60 +190,85 @@ public static class DiagnosticReportService
         => DiagnosticEnvironmentService.SanitizeJsonText(JsonSerializer.Serialize(report, s_jsonOptions));
 
     public static string ExportBundle(string? outputPath)
+        => ExportBundleAsync(outputPath).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Builds the support ZIP off-thread so a UI hotkey caller never blocks on
+    /// hashing/zipping. The default file name carries a timestamp plus a short
+    /// GUID so two exports in the same second cannot collide, and an existing
+    /// target file is never silently overwritten: the path is uniquified and
+    /// the final name is returned to the caller.
+    /// </summary>
+    public static async Task<string> ExportBundleAsync(string? outputPath)
     {
         string path = string.IsNullOrWhiteSpace(outputPath)
-            ? Path.Combine(Environment.CurrentDirectory, $"TabDock-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip")
+            ? Path.Combine(Environment.CurrentDirectory, $"TabDock-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..8]}.zip")
             : Path.GetFullPath(outputPath);
         string? directory = Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(directory))
             Directory.CreateDirectory(directory);
 
-        // Publish only a completed archive. Writing directly to the final
-        // desktop path lets a file watcher observe a non-empty but still-open
-        // ZIP and makes consumers race the producer. The temporary name is
-        // unique so an earlier export in the same timestamp second cannot be
-        // mistaken for this one; the final move happens after both the stream
-        // and ZipArchive have closed.
-        string temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
+        return await Task.Run(() =>
         {
-            DiagnosticReport report = CreateReport(includeHash: true);
-            string doctor = FormatDoctor(report);
-            using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
-            using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: false))
-            {
-                AddEntry(archive, "version.txt", FormatVersion(report.Build));
-                AddEntry(archive, "doctor.txt", doctor);
-                AddEntry(archive, "environment.json", ToJson(report));
-                AddEntry(archive, "environment.txt", FormatEnvironment(report));
-                AddEntry(archive, "state-summary.json", JsonSerializer.Serialize(report.Persistence, s_jsonOptions));
-                AddEntry(archive, "hwnd-snapshot.json", JsonSerializer.Serialize(report.NativeWindows, s_jsonOptions));
-                AddEntry(archive, "logical-snapshot.json", JsonSerializer.Serialize(report.LogicalPresentations, s_jsonOptions));
-                AddEntry(archive, "trace.jsonl", string.Join(Environment.NewLine, report.Trace.Select(e => JsonSerializer.Serialize(e, s_jsonOptions))) + Environment.NewLine);
-                AddEntry(archive, "recent-log.txt", report.RecentLog);
-            }
-
-            File.Move(temporaryPath, path, overwrite: true);
-            return path;
-        }
-        finally
-        {
+            // Publish only a completed archive. Writing directly to the final
+            // desktop path lets a file watcher observe a non-empty but still-open
+            // ZIP and makes consumers race the producer. The temporary name is
+            // unique so an earlier export in the same timestamp second cannot be
+            // mistaken for this one; the final move happens after both the stream
+            // and ZipArchive have closed.
+            string temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
-                if (File.Exists(temporaryPath))
-                    File.Delete(temporaryPath);
+                DiagnosticReport report = CreateReport(includeHash: true);
+                string doctor = FormatDoctor(report);
+                using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+                using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: false))
+                {
+                    AddEntry(archive, "version.txt", FormatVersion(report.Build));
+                    AddEntry(archive, "doctor.txt", doctor);
+                    AddEntry(archive, "environment.json", ToJson(report));
+                    AddEntry(archive, "environment.txt", FormatEnvironment(report));
+                    AddEntry(archive, "state-summary.json", JsonSerializer.Serialize(report.Persistence, s_jsonOptions));
+                    AddEntry(archive, "hwnd-snapshot.json", JsonSerializer.Serialize(report.NativeWindows, s_jsonOptions));
+                    AddEntry(archive, "logical-snapshot.json", JsonSerializer.Serialize(report.LogicalPresentations, s_jsonOptions));
+                    AddEntry(archive, "trace.jsonl", string.Join("\n", report.Trace.Select(e => JsonSerializer.Serialize(e, s_jsonlOptions))));
+                    AddEntry(archive, "recent-log.txt", report.RecentLog);
+                }
+
+                string finalPath = path;
+                if (File.Exists(finalPath))
+                {
+                    string baseName = Path.GetFileNameWithoutExtension(path);
+                    string extension = Path.GetExtension(path);
+                    int attempt = 1;
+                    do
+                    {
+                        finalPath = Path.Combine(directory ?? Environment.CurrentDirectory, $"{baseName}({attempt++}){extension}");
+                    }
+                    while (File.Exists(finalPath));
+                }
+                File.Move(temporaryPath, finalPath);
+                return finalPath;
             }
-            catch (IOException)
+            finally
             {
-                // The primary export exception, if any, remains authoritative;
-                // a locked temporary artifact is safer to leave than to retry
-                // destructively from a diagnostics path.
+                try
+                {
+                    if (File.Exists(temporaryPath))
+                        File.Delete(temporaryPath);
+                }
+                catch (IOException)
+                {
+                    // The primary export exception, if any, remains authoritative;
+                    // a locked temporary artifact is safer to leave than to retry
+                    // destructively from a diagnostics path.
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // Same fail-closed cleanup rule for externally held files.
+                }
             }
-            catch (UnauthorizedAccessException)
-            {
-                // Same fail-closed cleanup rule for externally held files.
-            }
-        }
+        }).ConfigureAwait(false);
     }
 
     private static void AddEntry(ZipArchive archive, string name, string content)
@@ -246,7 +279,7 @@ public static class DiagnosticReportService
             ? DiagnosticEnvironmentService.SanitizeJsonText(content)
             : name.Equals("trace.jsonl", StringComparison.OrdinalIgnoreCase)
                 ? string.Join(Environment.NewLine, content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
-                    .Select(DiagnosticEnvironmentService.SanitizeJsonText))
+                    .Select(DiagnosticEnvironmentService.SanitizeJsonLine))
                 : DiagnosticEnvironmentService.SanitizeText(content);
         writer.Write(sanitized);
     }

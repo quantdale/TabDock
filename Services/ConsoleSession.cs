@@ -50,6 +50,9 @@ internal sealed class ConsoleSession : IDisposable
         session = null;
         error = null;
         bool attached = false;
+        TextReader? input = null;
+        TextWriter? output = null;
+        TextWriter? errorWriter = null;
         try
         {
             if (!HasUsableStandardHandles())
@@ -73,13 +76,13 @@ internal sealed class ConsoleSession : IDisposable
                 return false;
             }
 
-            TextReader input = new StreamReader(
+            input = new StreamReader(
                 Console.OpenStandardInput(),
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
                 detectEncodingFromByteOrderMarks: true,
                 bufferSize: 4096,
                 leaveOpen: true);
-            TextWriter output = new StreamWriter(
+            output = new StreamWriter(
                 Console.OpenStandardOutput(),
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
                 bufferSize: 4096,
@@ -87,7 +90,7 @@ internal sealed class ConsoleSession : IDisposable
             {
                 AutoFlush = true,
             };
-            TextWriter errorWriter = new StreamWriter(
+            errorWriter = new StreamWriter(
                 Console.OpenStandardError(),
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
                 bufferSize: 4096,
@@ -104,6 +107,12 @@ internal sealed class ConsoleSession : IDisposable
         }
         catch (Exception ex)
         {
+            // Late setup (SetIn/SetOut/SetError) can still throw after the
+            // streams exist; dispose whatever was created so the underlying
+            // standard handles are not leaked.
+            try { input?.Dispose(); } catch { }
+            try { output?.Dispose(); } catch { }
+            try { errorWriter?.Dispose(); } catch { }
             if (attached)
             {
                 try { NativeMethods.FreeConsole(); } catch { }

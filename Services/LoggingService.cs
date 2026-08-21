@@ -69,6 +69,15 @@ public sealed class LoggingService : IDisposable
     // the session.
     private const int RotationRetryEveryBatches = 20;
     private int _batchesUntilRotationRetry;
+    // Bound on main-log growth when rotation persistently fails (e.g. the file
+    // held open by another tool): after this many consecutive failed rotations,
+    // writing stops once the log passes the hard cap, mirroring the .err file's
+    // size bound. A one-time notice is recorded in the memory tail.
+    private const int MaxConsecutiveRotationFailures = 3;
+    private const long HardSizeCapBytes = 4 * MaxSize;
+    private int _consecutiveRotationFailures;
+    private bool _hardCapReached;
+    private bool _hardCapNoticeLogged;
 
     public LoggingService(string? logDirectory = null)
     {
@@ -229,26 +238,42 @@ public sealed class LoggingService : IDisposable
     /// </summary>
     private void WriteBatch()
     {
+        // The bounded memory tail is fed on BOTH paths so tail-based
+        // diagnostics survive dropped or rotated file lines.
+        FeedMemoryTail(_batch.ToString());
         if (!_fileBacked)
-        {
-            string[] lines = _batch.ToString().Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
-            foreach (string line in lines)
-            {
-                _memoryLines.Enqueue(line);
-                while (_memoryLines.Count > 512 && _memoryLines.TryDequeue(out _)) { }
-            }
             return;
-        }
         EnsureWriter();
         if (_writer == null)
             throw new IOException($"Log file '{_logFile}' is not open for append.");
 
+        if (_hardCapReached && _stream != null && _stream.Position > HardSizeCapBytes)
+        {
+            if (!_hardCapNoticeLogged)
+            {
+                _hardCapNoticeLogged = true;
+                FeedMemoryTail($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] (log rotation persistently failing; writes paused at the hard size cap)");
+            }
+            _batch.Clear();
+            return;
+        }
         _writer.Write(_batch);
         // Flush per batch, not per line: a batch is normally a single line, so
         // log durability against a force-kill is unchanged in the quiet case,
         // and a burst costs one flush instead of hundreds.
         _writer.Flush();
         RotateIfNeeded();
+    }
+
+    /// <summary>Appends batch lines to the bounded in-memory tail (512 lines).</summary>
+    private void FeedMemoryTail(string batchText)
+    {
+        string[] lines = batchText.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (string line in lines)
+        {
+            _memoryLines.Enqueue(line);
+            while (_memoryLines.Count > 512 && _memoryLines.TryDequeue(out _)) { }
+        }
     }
 
     private void EnsureWriter()
@@ -321,9 +346,16 @@ public sealed class LoggingService : IDisposable
             // Rotation is best effort — schedule the next attempt on a bounded
             // cadence rather than retrying on the very next batch.
             _batchesUntilRotationRetry = RotationRetryEveryBatches;
+            _consecutiveRotationFailures++;
+            if (_consecutiveRotationFailures >= MaxConsecutiveRotationFailures)
+                _hardCapReached = true;
         }
         if (rotated)
+        {
             _batchesUntilRotationRetry = 0;
+            _consecutiveRotationFailures = 0;
+            _hardCapReached = false;
+        }
 
         // Reopen either way — a failed rotation must not silently stop logging
         // for the rest of the session.
@@ -348,6 +380,17 @@ public sealed class LoggingService : IDisposable
         // outlasting the 2s budget) faults that thread instead, and leaking a
         // BlockingCollection in a process that is exiting anyway costs nothing.
         if (_writerThread.Join(TimeSpan.FromSeconds(2)))
+        {
             _queue.Dispose();
+        }
+        else
+        {
+            // Best-effort drain: the writer is stalled past the shutdown
+            // budget, so salvage whatever is still queued into the bounded
+            // memory tail instead of abandoning it silently. The queue itself
+            // is left for the writer thread (see the comment above).
+            while (_queue.TryTake(out string? remaining))
+                _memoryLines.Enqueue(remaining);
+        }
     }
 }

@@ -19,17 +19,49 @@ namespace TabDock.Services;
 public static class DiagnosticEnvironmentService
 {
     private static readonly Regex s_absolutePath = new(
-        @"(?:[A-Za-z]:[\\/]|\\\\)[^\r\n""'<>|]+",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex s_secretValue = new(
-        @"\b(password|passwd|token|secret|api[-_]?key|authorization)\b\s*[:=]\s*(?:""[^""]*""|'[^']*'|[^,\s}\]]+)",
+        @"(?<![A-Za-z])(?:[A-Za-z]:[\\/]|\\\\)[^\r\n""'<>|]+",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex s_bearerValue = new(
         @"\bBearer\s+[^,\s}\]]+",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex s_obviousSecretToken = new(
-        @"\b(?:secret|token|api[-_]?key)[-_][A-Za-z0-9_-]+\b",
+        @"(?<![A-Za-z0-9_])(?:secret|token|api[-_]?key)[-][A-Za-z0-9_-]+(?![A-Za-z0-9_])",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    // Credential keywords use a trailing lookaround boundary instead of \b
+    // because \b treats '_' as a word character and therefore never matches
+    // before "client_secret" or after "my_api_key". No prefix boundary: an
+    // underscore-prefixed form such as my_api_key must still match, and a
+    // keyword directly followed by ':' or '=' is a credential assignment.
+    private static readonly Regex s_secretValue = new(
+        @"(?:password|passwd|pass|pwd|token|secret|client[-_]?secret|api[-_]?key|authorization|credential)(?![-_A-Za-z0-9])\s*[:=]\s*(?:""[^""]*""|'[^']*'|[^,\s}\]]+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex s_urlCredentials = new(
+        @"([A-Za-z][A-Za-z0-9+.\-]*://)[^\s/:@]+:[^\s/@]+@",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Explicit title-marker convention for log emission: window titles are
+    /// wrapped as <c>title<'...'></c> so export sanitization can redact them
+    /// structurally. Any line carrying the marker loses its title content
+    /// during SanitizeText, independent of the log-tail allow/deny lists.
+    /// </summary>
+    public const string TitleMarkerPrefix = "title<'";
+    public const string TitleMarkerSuffix = "'>";
+
+    private static readonly Regex s_titleMarker = new(
+        Regex.Escape(TitleMarkerPrefix) + "[^']*" + Regex.Escape(TitleMarkerSuffix),
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>Wraps a window title in the documented redaction marker.</summary>
+    public static string FormatTitleMarker(string? title)
+        => TitleMarkerPrefix + (title ?? string.Empty).Replace("'", string.Empty) + TitleMarkerSuffix;
+
+    // The raw username is replaced only as a whole token (path segments,
+    // quoted values, standalone words). A plain substring replace corrupted
+    // unrelated words that merely contained the username.
+    private static Regex UsernameTokenRegex(string userName)
+        => new("(?i)(?<![A-Za-z0-9_])" + Regex.Escape(userName) + "(?![A-Za-z0-9_])",
+            RegexOptions.CultureInvariant);
 
     public static WindowsEnvironmentSnapshot CaptureWindows()
     {
@@ -58,14 +90,18 @@ public static class DiagnosticEnvironmentService
             result.ProductFamily = "unavailable (registry-read-failed)";
         }
 
-        if (NativeMethods.IsCurrentProcessElevated(out bool elevated))
+        if (NativeMethods.IsProcessElevated(
+                NativeMethods.GetCurrentProcessId(), out bool elevated, out string? elevationError))
         {
             result.IsElevated = elevated;
             result.ElevationStatus = elevated ? "elevated" : "standard-user";
         }
         else
         {
-            result.ElevationStatus = "unavailable (" + NativeMethods.FormatLastError() + ")";
+            // The error detail comes straight from the probe overload; calling
+            // FormatLastError here would read whatever the last P/Invoke left
+            // behind, not the elevation probe's failure.
+            result.ElevationStatus = "unavailable (" + (elevationError ?? "probe-failed") + ")";
         }
 
         try
@@ -166,7 +202,14 @@ public static class DiagnosticEnvironmentService
                 return "unavailable (log-absent)";
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             if (stream.Length > maxCharacters)
+            {
                 stream.Seek(-maxCharacters, SeekOrigin.End);
+                // Align to the next line boundary so the tail never begins with
+                // the truncated half of a multi-byte UTF-8 sequence (U+FFFD).
+                int byteRead = stream.ReadByte();
+                while (byteRead != -1 && byteRead != '\n')
+                    byteRead = stream.ReadByte();
+            }
             using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
             string text = reader.ReadToEnd();
             return stream.Position > maxCharacters ? "[tail truncated]\r\n" + text : text;
@@ -191,7 +234,15 @@ public static class DiagnosticEnvironmentService
         string raw = ReadRecentLogText(maxCharacters);
         if (raw.StartsWith("unavailable", StringComparison.OrdinalIgnoreCase))
             return raw;
+        return SanitizeLogTail(raw);
+    }
 
+    /// <summary>
+    /// Pure line filter over raw log text so self-tests can exercise the
+    /// allow/deny and retention rules without touching the real log file.
+    /// </summary>
+    internal static string SanitizeLogTail(string raw)
+    {
         var lines = new List<string>();
         foreach (string rawLine in raw.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries))
         {
@@ -202,7 +253,13 @@ public static class DiagnosticEnvironmentService
                 || line.Contains("title changed", StringComparison.OrdinalIgnoreCase)
                 || line.Contains("Quarantined corrupt", StringComparison.OrdinalIgnoreCase))
                 continue;
-            if (!line.Contains("BUILD[", StringComparison.OrdinalIgnoreCase)
+            // Exception evidence always survives: a crash report without its
+            // exception lines is useless to support. Stack-frame lines
+            // ("   at Type.Method(...)") are retained alongside EXCEPTION tags.
+            bool exceptionShaped = line.Contains("EXCEPTION", StringComparison.OrdinalIgnoreCase)
+                || line.TrimStart().StartsWith("at ", StringComparison.Ordinal);
+            if (!exceptionShaped
+                && !line.Contains("BUILD[", StringComparison.OrdinalIgnoreCase)
                 && !line.Contains("ENV[", StringComparison.OrdinalIgnoreCase)
                 && !line.Contains("STATE[", StringComparison.OrdinalIgnoreCase)
                 && !line.Contains("LAYOUT[", StringComparison.OrdinalIgnoreCase)
@@ -221,6 +278,12 @@ public static class DiagnosticEnvironmentService
         return string.Join(Environment.NewLine, lines.TakeLast(1200));
     }
 
+    /// <summary>
+    /// Sanitizes a value that is known to be a path. Kept as an alias for
+    /// SanitizeText for call-site readability; the general sanitizer already
+    /// handles profile-root substitution, embedded absolute paths, and
+    /// credential-like content, so no separate path-only rule exists.
+    /// </summary>
     public static string RedactPath(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -242,6 +305,9 @@ public static class DiagnosticEnvironmentService
             return "unavailable";
 
         string result = text;
+        // Structural title redaction: any documented title<'...'> marker loses
+        // its content before any other pass, independent of allow/deny lists.
+        result = s_titleMarker.Replace(result, TitleMarkerPrefix + "<redacted-title>" + TitleMarkerSuffix);
         string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         if (!string.IsNullOrWhiteSpace(appData))
@@ -255,7 +321,7 @@ public static class DiagnosticEnvironmentService
 
         string userName = Environment.UserName;
         if (!string.IsNullOrWhiteSpace(userName))
-            result = result.Replace(userName, "<user>", StringComparison.OrdinalIgnoreCase);
+            result = UsernameTokenRegex(userName).Replace(result, "<user>");
 
         string domainUser = Environment.UserDomainName + "\\" + Environment.UserName;
         if (!string.IsNullOrWhiteSpace(Environment.UserDomainName)
@@ -265,12 +331,16 @@ public static class DiagnosticEnvironmentService
         }
 
         result = s_absolutePath.Replace(result, "<path>");
+        result = s_urlCredentials.Replace(result, "$1<redacted>@");
+        // Bearer values are removed before the keyword pass so an
+        // "Authorization: Bearer <token>" pair cannot leak the token as the
+        // keyword rule's captured value.
+        result = s_bearerValue.Replace(result, "Bearer <redacted>");
         result = s_secretValue.Replace(result, match =>
         {
             int separator = match.Value.IndexOfAny(new[] { ':', '=' });
             return separator >= 0 ? match.Value[..(separator + 1)] + "<redacted>" : "<redacted>";
         });
-        result = s_bearerValue.Replace(result, "Bearer <redacted>");
         result = s_obviousSecretToken.Replace(result, "<redacted>");
         return result;
     }
@@ -285,6 +355,27 @@ public static class DiagnosticEnvironmentService
                 return SanitizeText(json);
             root = SanitizeJsonNode(root)!;
             return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        }
+        catch (JsonException)
+        {
+            return SanitizeText(json);
+        }
+    }
+
+    /// <summary>
+    /// Sanitizes one JSONL record and returns it as a single compact line.
+    /// The pretty-printing overload above would break the JSONL framing by
+    /// re-indenting each record across multiple lines.
+    /// </summary>
+    internal static string SanitizeJsonLine(string json)
+    {
+        try
+        {
+            JsonNode? root = JsonNode.Parse(json);
+            if (root == null)
+                return SanitizeText(json);
+            root = SanitizeJsonNode(root)!;
+            return root.ToJsonString();
         }
         catch (JsonException)
         {
