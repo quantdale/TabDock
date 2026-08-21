@@ -481,8 +481,10 @@ internal static partial class Scenarios
         ctx.Check(TabDockLog.CountNewLines(killOff2, "EXCEPTION") == 0, "phase (b): zero EXCEPTION lines");
 
         // --- Phase (c): re-enter C|D, then kill the PRESENTED left member. ---
-        long enterOff3 = TabDockLog.RecordLogLength();
-        ClickTabSubmenuItem(ctx, container, pigC.Title, "Split screen", pigD.Title);
+        // Only C and D remain alive: the two-tab direct 'Split screen' action
+        // (auto-pairing) is the correct UI path here; the partner submenu is
+        // for groups with 3+ tabs.
+        long enterOff3 = EnterSplitTwo(ctx, container, pigC);
         ctx.Check(TabDockLog.WaitForLogLine(enterOff3, "SPLIT[enter]", 3000), "phase (c): C|D entered split");
         AssertSplitPanes(ctx, host, pigC, pigD, "phase (c) enter");
 

@@ -197,7 +197,20 @@ internal static class Input
             return false;
         }
 
+        // GetForegroundWindow() legitimately returns NULL for brief windows
+        // during focus transitions (documented Win32 behavior, observed live in
+        // split-move after entering split). Retry the read before concluding
+        // the desktop has no foreground window.
         IntPtr foreground = NativeMethods.GetForegroundWindow();
+        if (foreground == IntPtr.Zero)
+        {
+            var fgSw = System.Diagnostics.Stopwatch.StartNew();
+            while (foreground == IntPtr.Zero && fgSw.ElapsedMilliseconds < 600)
+            {
+                Thread.Sleep(50);
+                foreground = NativeMethods.GetForegroundWindow();
+            }
+        }
         bool foregroundUnavailable = foreground == IntPtr.Zero;
         IntPtr root = NativeMethods.GetAncestor(foreground, NativeMethods.GA_ROOT);
         if (root == IntPtr.Zero)

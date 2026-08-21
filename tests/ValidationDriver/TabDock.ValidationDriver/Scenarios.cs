@@ -2217,8 +2217,38 @@ internal static partial class Scenarios
             throw new InvalidOperationException($"Context menu item '{menuItemName}' disappeared after its bounding rect was read.");
 
         Thread.Sleep(150);
-        (int mx, int my) = Uia.Center(mi);
-        Input.ClickAt(mx, my);
+        // Verify the popup is verifiably under the cursor before clicking;
+        // the activation reassert can close it between discovery and
+        // SendInput (same family as group-create-inline). Reopen with a
+        // fresh right-click when verification fails.
+        bool itemClicked = false;
+        for (int clickAttempt = 0; clickAttempt < 3 && !itemClicked; clickAttempt++)
+        {
+            if (clickAttempt > 0)
+            {
+                Input.SendKey(Input.VK_ESCAPE);
+                Thread.Sleep(250);
+                Input.RightClickAt(tx, ty);
+                mi = Uia.FindMenuItemOnDesktop(ctx.TabDockPid, menuItemName, 3000);
+                if (mi == null)
+                    break;
+                System.Windows.Rect miRect = Uia.GetElementRect(mi);
+                var miSw = Stopwatch.StartNew();
+                while ((miRect.IsEmpty || miRect.Width <= 0 || miRect.Height <= 0) && miSw.ElapsedMilliseconds < 2000)
+                {
+                    Thread.Sleep(100);
+                    mi = Uia.FindMenuItemOnDesktop(ctx.TabDockPid, menuItemName, 3000);
+                    if (mi == null)
+                        break;
+                    miRect = Uia.GetElementRect(mi);
+                }
+                if (mi == null)
+                    break;
+            }
+            itemClicked = TryClickVerifiedPopupItem(ctx, container, mi);
+        }
+        if (!itemClicked)
+            throw new InvalidOperationException($"Context menu item '{menuItemName}' could not be clicked with the popup verifiably under the cursor.");
         Thread.Sleep(300);
     }
 
