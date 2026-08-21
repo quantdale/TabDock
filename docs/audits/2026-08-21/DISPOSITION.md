@@ -72,6 +72,16 @@ INTENTIONAL/BY-DESIGN, DEFERRED (with reason).
   enhancement).
 - GuineaPig ParseColor fallback breadth, driver --selftest CI wiring,
   performance-harness budget enforcement (harness scope).
+- Shepherd min-track cache entry on the Hide identity-mismatch path is not
+  evicted symmetrically with Release (single stale entry keyed by the dead
+  CapturedWindow reference; bounded and harmless).
+- Cross-process min-track probe stays on the UI thread by design: it is
+  bounded (timeout + last-good cache) and gated to dirty constraint
+  transitions through a debounced refresh; moving native probe ordering to
+  uncontrolled background concurrency was rejected.
+- Sidecar `.recovered` records of deleted sources are retained (bounded by
+  ledger compaction): deleting them would erase replay protection against
+  byte-identical regeneration — the exact defect R21-005 fixes.
 
 ## Validation snapshot (this campaign)
 
