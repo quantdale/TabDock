@@ -30,7 +30,12 @@ public sealed class GroupViewModel : ViewModelBase
             // existing name when the user clears the box.
             string? trimmed = value?.Trim();
             if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                // A silent return would leave the TextBox showing "" while the
+                // model keeps the old name; raise so the binding reverts.
+                OnPropertyChanged(nameof(Name));
                 return;
+            }
             _group.Name = trimmed;
         }
     }

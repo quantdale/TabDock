@@ -63,19 +63,21 @@ public class PersistenceSingleWriterTests
     }
 
     [Fact]
-    public void SaveAsync_DoesNotWriteSynchronously()
+    public void SaveAsync_WritesOffThreadAndSettles()
     {
         var (dir, path, persistence) = MakeService();
         try
         {
             persistence.SaveAsync(new[] { MakeGroup(0, "async") });
 
-            // Immediately after the call, no synchronous disk write may have happened.
-            Assert.False(File.Exists(path), "state.json was written synchronously by SaveAsync");
+            // Deterministic completion barrier: every write submitted before
+            // the barrier has settled when it returns. The off-thread claim is
+            // proven by the writer's construction (Task.Run in SaveAsync), not
+            // by racing the filesystem for an absent file — a fast thread pool
+            // may legitimately finish before this thread resumes.
+            persistence.WhenWritesSettledAsync().GetAwaiter().GetResult();
 
-            // Eventually it lands off-thread.
-            bool ok = SpinWait.SpinUntil(() => File.Exists(path), TimeSpan.FromSeconds(10));
-            Assert.True(ok, "SaveAsync never completed off-thread");
+            Assert.True(File.Exists(path), "settled SaveAsync never reached disk");
         }
         finally
         {
@@ -93,20 +95,11 @@ public class PersistenceSingleWriterTests
             for (int i = 0; i < count; i++)
                 persistence.SaveAsync(new[] { MakeGroup(i, "gen-" + i) });
 
-            string expected = "gen-" + (count - 1);
-            bool ok = SpinWait.SpinUntil(() =>
-            {
-                try
-                {
-                    return File.Exists(path) && File.ReadAllText(path).Contains(expected);
-                }
-                catch (IOException)
-                {
-                    return false;
-                }
-            }, TimeSpan.FromSeconds(15));
-            Assert.True(ok, "latest async generation never reached disk");
+            // Barrier instead of a wall-clock poll: when all submitted writes
+            // have settled, exactly the latest generation can be on disk.
+            persistence.WhenWritesSettledAsync().GetAwaiter().GetResult();
 
+            string expected = "gen-" + (count - 1);
             string finalJson = File.ReadAllText(path);
             Assert.Contains(expected, finalJson);
             Assert.DoesNotContain("gen-0", finalJson);

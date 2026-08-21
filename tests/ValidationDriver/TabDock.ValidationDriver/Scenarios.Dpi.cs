@@ -132,6 +132,7 @@ internal static partial class Scenarios
         if (non100 == null)
         {
             GuardedProc.Log($"SKIPPED {scenario}: no non-100% monitor available; detected DPIs: {string.Join(", ", monitors.Select(m => m.Dpi.ToString()))}. DPI-unaware vs aware are indistinguishable at scale 1.");
+            ctx.Skip($"{scenario}: no non-100% monitor available (detected DPIs: {string.Join(", ", monitors.Select(m => m.Dpi.ToString()))})");
             return null;
         }
 
@@ -154,6 +155,7 @@ internal static partial class Scenarios
         if (actualMon.Dpi == NativeMethods.USER_DEFAULT_SCREEN_DPI)
         {
             GuardedProc.Log($"SKIPPED {scenario}: attempted to place the guest on a non-100% monitor but its actual monitor reads 96 DPI (0x{actualMon.Handle.ToInt64():X}). DPI-unaware vs aware are indistinguishable at scale 1. Detected DPIs: {string.Join(", ", monitors.Select(m => m.Dpi.ToString()))}.");
+            ctx.Skip($"{scenario}: guest's actual monitor reads 96 DPI despite placement attempt");
             return null;
         }
 

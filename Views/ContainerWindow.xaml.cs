@@ -540,21 +540,40 @@ public partial class ContainerWindow : Window
                     // defect. The min track is expressed as the OUTER window
                     // size: content min + the chrome delta (outer minus content).
                     //
-                    // Always SET the min-track when a valid constraint exists:
-                    // WPF's internal WM_GETMINMAXINFO handler may have already
-                    // written a large default into lParam; a "clamp up" would
-                    // never replace it, leaving the container free to shrink
-                    // below the guest's native minimum.
+                    // The incoming ptMinTrackSize is the floor already composed
+                    // by earlier handling (the XAML MinWidth/MinHeight and the
+                    // system default). The effective minimum is the MAX of that
+                    // floor and the guest-derived constraint — never a blind
+                    // overwrite, which could drop the container below its XAML
+                    // floor when no guest minimum exists or the guest minimum
+                    // is smaller.
                     if (ComputeContainerMinTrack(out int minTrackW, out int minTrackH)
                         && minTrackW > 0 && minTrackH > 0)
                     {
-                        mmi.ptMinTrackSize.x = minTrackW;
-                        mmi.ptMinTrackSize.y = minTrackH;
+                        mmi.ptMinTrackSize.x = Math.Max(mmi.ptMinTrackSize.x, minTrackW);
+                        mmi.ptMinTrackSize.y = Math.Max(mmi.ptMinTrackSize.y, minTrackH);
                     }
                     System.Runtime.InteropServices.Marshal.StructureToPtr(mmi, lParam, true);
                     handled = true;
                 }
             }
+        }
+        else if ((uint)msg == NativeMethods.WM_DPICHANGED)
+        {
+            // The container moved to a monitor with a different DPI (or the
+            // monitor's DPI changed). Cached per-monitor DPI answers and the
+            // guest-minimum cache are keyed to the old scale; recompute.
+            MonitorDpiService.InvalidateDpiCache();
+            _constraintDirty = true;
+            _refusedPaneByHwnd.Clear();
+        }
+        else if ((uint)msg == NativeMethods.WM_DISPLAYCHANGE)
+        {
+            // Display topology changed: monitor handles can be recycled, so
+            // every cached DPI answer and geometry refusal is stale.
+            MonitorDpiService.InvalidateDpiCache();
+            _constraintDirty = true;
+            _refusedPaneByHwnd.Clear();
         }
         return IntPtr.Zero;
     }
@@ -1036,6 +1055,7 @@ public partial class ContainerWindow : Window
         try { TabsListBox.PreviewMouseLeftButtonDown -= TabsListBox_PreviewMouseLeftButtonDown; } catch { }
         try { LayoutUpdated -= ContainerWindow_LayoutUpdated; } catch { }
         _openTabContextMenu = null;
+        _viewModel.DeleteGroupRequested -= ViewModel_DeleteGroupRequested;
         ColorContextMenu.Closed -= ColorContextMenu_Closed;
         foreach (ContextMenu menu in _trackedTabContextMenus)
             menu.Closed -= TabContextMenu_Closed;
@@ -1336,6 +1356,13 @@ public partial class ContainerWindow : Window
         _log.Log("CHROME[tab-menu-closed]");
         if (ReferenceEquals(_openTabContextMenu, sender))
             _openTabContextMenu = null;
+        // Stop tracking a closed menu now rather than retaining it (and the
+        // TabViewModel its items root) until container close.
+        if (sender is ContextMenu closedMenu)
+        {
+            closedMenu.Closed -= TabContextMenu_Closed;
+            _trackedTabContextMenus.Remove(closedMenu);
+        }
         EndChromePopup();
     }
 

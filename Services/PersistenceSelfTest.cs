@@ -198,10 +198,17 @@ internal static class PersistenceSelfTest
             mixedCaseFutureService.Save(Array.Empty<Group>());
             Check(File.ReadAllText(mixedCaseFuturePath) == mixedCaseFuture);
         }
-        catch
+        catch (Exception ex)
         {
-            failures++;
+            // A thrown step must be a diagnosable failure, not a silent
+            // one: name the exception and where it happened. Later checks
+            // after the throw point still cannot run — that residual
+            // limitation is why every new assertion should go into its own
+            // xUnit fact or self-test Check, not into this linear body.
             checks++;
+            failures++;
+            Console.Error.WriteLine($"PERSISTENCE-SELFTEST-EXCEPTION: {ex.GetType().Name}: {ex.Message}");
+            Console.Error.WriteLine(ex.ToString());
         }
         finally
         {

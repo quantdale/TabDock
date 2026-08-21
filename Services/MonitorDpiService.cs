@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 
 namespace TabDock.Services;
@@ -206,6 +207,51 @@ internal static class MonitorDpiGeometry
 
 internal static class MonitorDpiService
 {
+    private static readonly CachedMonitorDpiProbe CachedProbe = new(NativeMonitorDpiProbe.Instance);
+
     public static uint GetEffectiveDpi(IntPtr monitor)
-        => NativeMonitorDpiProbe.Instance.GetEffectiveDpi(monitor);
+        => CachedProbe.GetEffectiveDpi(monitor);
+
+    /// <summary>Drops every cached monitor DPI (display topology changed).</summary>
+    public static void InvalidateDpiCache()
+        => CachedProbe.Invalidate();
+
+    /// <summary>Drops the cached DPI for one monitor (its DPI changed).</summary>
+    public static void InvalidateDpiCache(IntPtr monitor)
+        => CachedProbe.Invalidate(monitor);
+}
+
+/// <summary>
+/// Per-monitor cache over the expensive PMv2 helper-window probe. A hit
+/// avoids the SetThreadDpiAwarenessContext + CreateWindowEx/DestroyWindow
+/// round trip entirely. Entries are only stored for successful probes, so a
+/// transient failure retries on the next query; callers must invalidate on
+/// WM_DPICHANGED (one monitor) and WM_DISPLAYCHANGE / topology changes (all).
+/// UI-thread confined like every other display-state consumer.
+/// </summary>
+internal sealed class CachedMonitorDpiProbe : IMonitorDpiProbe
+{
+    private readonly IMonitorDpiProbe _inner;
+    private readonly Dictionary<IntPtr, uint> _cache = new();
+
+    public CachedMonitorDpiProbe(IMonitorDpiProbe inner)
+    {
+        _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+    }
+
+    public uint GetEffectiveDpi(IntPtr monitor)
+    {
+        if (monitor == IntPtr.Zero)
+            return 0;
+        if (_cache.TryGetValue(monitor, out uint cached))
+            return cached;
+        uint dpi = _inner.GetEffectiveDpi(monitor);
+        if (dpi != 0)
+            _cache[monitor] = dpi;
+        return dpi;
+    }
+
+    public void Invalidate() => _cache.Clear();
+
+    public void Invalidate(IntPtr monitor) => _cache.Remove(monitor);
 }

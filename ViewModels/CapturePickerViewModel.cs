@@ -135,6 +135,8 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
             NativeMethods.EnumWindows((hwnd, _) =>
             {
                 windowsSeen++;
+                try
+                {
                 if (!NativeMethods.IsWindowVisible(hwnd))
                     return true;
 
@@ -183,6 +185,15 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
                 var info = new WindowInfo(hwnd, pid, className, title, exe);
                 AddCandidate(info, uncachedIcons, ref candidates);
                 return true;
+                }
+                catch (Exception ex)
+                {
+                    // One window/process probe throwing (a process exiting
+                    // between enumeration and handle open, an injected failure)
+                    // must not crash the whole picker; skip that window.
+                    _log.LogException($"PICKER[refresh] probe failed for 0x{hwnd.ToInt64():X}", ex);
+                    return true;
+                }
             }, IntPtr.Zero);
         }
 
@@ -208,8 +219,13 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
             uncachedIcons.Add(new IconWorkItem(info, info.ExePath));
         }
 
-        info.PropertyChanged += (_, _) =>
+        // Only selection changes affect command state. Raising the global
+        // requery for every icon assignment turned each refresh into an
+        // O(rows^2) CommandManager storm.
+        info.PropertyChanged += (_, e) =>
         {
+            if (!string.Equals(e.PropertyName, nameof(WindowInfo.IsSelected), StringComparison.Ordinal))
+                return;
             OnPropertyChanged(nameof(HasSelection));
             ((RelayCommand)GroupSelectedCommand).RaiseCanExecuteChanged();
         };

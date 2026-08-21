@@ -111,8 +111,10 @@ internal sealed class Ctx
         if (!condition)
         {
             Pass = false;
-            if (Status == QualificationStatus.Pass)
-                Status = QualificationStatus.Fail;
+            // A failed assertion is authoritative regardless of earlier skips:
+            // a scenario that skipped a prerequisite and then failed a real
+            // check must report FAIL, never remain green SKIP.
+            Status = QualificationStatus.Fail;
             FailureReasons.Add(what);
         }
     }
@@ -120,8 +122,10 @@ internal sealed class Ctx
     public void Skip(string reason)
     {
         GuardedProc.Log($"  SKIP: {reason}");
-        Status = QualificationStatus.Skip;
-        Pass = true;
+        // Skips never mask an already-decided failure.
+        if (Status != QualificationStatus.Fail)
+            Status = QualificationStatus.Skip;
+        Pass = Pass && Status != QualificationStatus.Fail;
         FailureReasons.Add(reason);
     }
 

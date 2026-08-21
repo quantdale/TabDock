@@ -540,6 +540,8 @@ public static partial class NativeMethods
         public const uint WM_WINDOWPOSCHANGED = 0x0047;
         public const uint WM_ENTERSIZEMOVE = 0x0231;
         public const uint WM_EXITSIZEMOVE = 0x0232;
+    public const uint WM_DPICHANGED = 0x02E0;
+    public const uint WM_DISPLAYCHANGE = 0x007E;
 
     public const uint MA_ACTIVATE = 1;
     public const uint MA_ACTIVATEANDEAT = 2;

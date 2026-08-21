@@ -87,7 +87,15 @@ public sealed class IconService
         }
 
         if (producer == null)
-            return waitFor!.Task.GetAwaiter().GetResult();
+        {
+            // The producer always completes (extraction failures are converted
+            // to a cached null), but the wait stays bounded so an anomalous
+            // producer can never pin this worker indefinitely. A timeout
+            // returns an uncached null; the next query retries.
+            if (!waitFor!.Task.Wait(TimeSpan.FromSeconds(5)))
+                return null;
+            return waitFor.Task.Result;
+        }
 
         ImageSource? result;
         try
