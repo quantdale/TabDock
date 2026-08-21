@@ -2222,15 +2222,21 @@ public partial class ContainerWindow : Window
             right = null;
         }
 
+        // Guest minima are scaled by the monitor the guests are PRESENTED on
+        // (this container's monitor), not by whichever monitor a guest last
+        // sat on — mixed-DPI moves must not under/over-constrain the panes.
+        IntPtr dpiTargetMonitor = _containerHwnd != IntPtr.Zero
+            ? NativeMethods.MonitorFromWindow(_containerHwnd, NativeMethods.MONITOR_DEFAULTTONEAREST)
+            : IntPtr.Zero;
         int lw = 0, lh = 0, rw = 0, rh = 0;
         if (left != null)
         {
-            var (mw, mh, ok) = _shepherd.GetEffectiveMinTrackSize(left);
+            var (mw, mh, ok) = _shepherd.GetEffectiveMinTrackSize(left, dpiTargetMonitor);
             if (ok) { lw = mw; lh = mh; }
         }
         if (right != null)
         {
-            var (mw, mh, ok) = _shepherd.GetEffectiveMinTrackSize(right);
+            var (mw, mh, ok) = _shepherd.GetEffectiveMinTrackSize(right, dpiTargetMonitor);
             if (ok) { rw = mw; rh = mh; }
         }
 

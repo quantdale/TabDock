@@ -1107,7 +1107,7 @@ public sealed class WindowShepherdService
     }
 
     /// <summary>Queries a captured guest's effective native minimum track size (the size it refuses to shrink below) via a bounded cross-process WM_GETMINMAXINFO probe. Returns the min width/height in physical pixels, plus whether the probe was available. Callers invoke this only on dirty constraint transitions; a timeout uses the last successful value for the same captured object.</summary>
-    public (int MinWidth, int MinHeight, bool Available) GetEffectiveMinTrackSize(CapturedWindow window)
+    public (int MinWidth, int MinHeight, bool Available) GetEffectiveMinTrackSize(CapturedWindow window, IntPtr? dpiTargetMonitor = null)
     {
         if (!NativeMethods.IsWindow(window.Hwnd)
             || !IsCurrentCapturedWindow(window, "min-track", verifyExecutable: true, verifyProcessInstance: true))
@@ -1142,8 +1142,8 @@ public sealed class WindowShepherdService
             mmi = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeMethods.MINMAXINFO>(lParam);
             int minW = Math.Max(0, mmi.ptMinTrackSize.x);
             int minH = Math.Max(0, mmi.ptMinTrackSize.y);
-            minW = ToPhysicalScaleForGuest(window.Hwnd, minW);
-            minH = ToPhysicalScaleForGuest(window.Hwnd, minH);
+            minW = ToPhysicalScaleForGuest(window.Hwnd, minW, dpiTargetMonitor);
+            minH = ToPhysicalScaleForGuest(window.Hwnd, minH, dpiTargetMonitor);
             _minTrackCache[window] = (minW, minH);
             return (minW, minH, true);
         }
@@ -1194,7 +1194,7 @@ public sealed class WindowShepherdService
     /// with the physical contract, and at 100% (any guest) the factor is 1, so
     /// this is a strict no-op except for an unaware guest on a scaled monitor.
     /// </summary>
-    private int ToPhysicalScaleForGuest(IntPtr guestHwnd, int value)
+    private int ToPhysicalScaleForGuest(IntPtr guestHwnd, int value, IntPtr? dpiTargetMonitor = null)
     {
         if (value <= 0)
             return value;
@@ -1207,7 +1207,13 @@ public sealed class WindowShepherdService
             if (!DpiCapturePolicy.IsKnownAwareness(awareness)
                 || awareness != DpiCapturePolicy.DpiAwarenessUnaware)
                 return value; // aware guest: value already in the physical contract.
-            IntPtr monitor = NativeMethods.MonitorFromWindow(guestHwnd, NativeMethods.MONITOR_DEFAULTTONEAREST);
+            // Scale by the monitor the guest is being PRESENTED on (the
+            // pane/container monitor when the caller supplies it), not blindly
+            // the guest's current nearest monitor: during split transitions a
+            // guest can still sit on its old lower/higher-DPI monitor while
+            // the constraint decision targets the container's monitor.
+            IntPtr monitor = dpiTargetMonitor
+                ?? NativeMethods.MonitorFromWindow(guestHwnd, NativeMethods.MONITOR_DEFAULTTONEAREST);
             uint dpi = _monitorDpiProbe.GetEffectiveDpi(monitor);
             // SplitGeometry owns the (pure, deterministic) logical->physical math;
             // here we only decide whether the guest is unaware and feed it the
