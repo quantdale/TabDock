@@ -1692,9 +1692,17 @@ internal static partial class Scenarios
                     break;
             }
 
+            // Selection-only command requery is dispatcher-queued (R21-018),
+            // so the enabled transition can land after the row-toggle settle.
+            // Poll the live UIA read instead of sampling once.
+            bool groupBtnEnabled = Util.WaitUntil(() =>
+            {
+                try { return groupBtn.Current.IsEnabled; }
+                catch { return false; }
+            }, 2000);
+            if (!groupBtnEnabled)
+                throw new InvalidOperationException("'Group these' button is still disabled 2s after the selected rows were verified On.");
             (int bx, int by) = Uia.Center(groupBtn);
-            if (!groupBtn.Current.IsEnabled)
-                throw new InvalidOperationException("'Group these' button is disabled after the selected rows were verified On.");
             IntPtr wfp = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = bx, y = by });
             IntPtr wfpRoot = NativeMethods.GetAncestor(wfp, NativeMethods.GA_ROOT);
             GuardedProc.Log($"  Clicking 'Group these' attempt {attempt + 1} at ({bx},{by}); windowFromPoint root=0x{wfpRoot.ToInt64():X} picker=0x{pickerHwnd.ToInt64():X} fg=0x{NativeMethods.GetForegroundWindow().ToInt64():X}.");
