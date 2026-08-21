@@ -1930,13 +1930,14 @@ public partial class ContainerWindow : Window
         if (!NativeMethods.IsWindow(expected.Hwnd))
             return false;
 
+        // Title is deliberately not compared: it is mutable display metadata,
+        // and a browser tab/editor renaming itself between picker selection
+        // and capture must not veto an otherwise-identical target.
         NativeMethods.GetWindowThreadProcessId(expected.Hwnd, out uint pid);
         string? className = NativeMethods.GetClassNameString(expected.Hwnd);
-        string title = NativeMethods.GetWindowTextString(expected.Hwnd) ?? string.Empty;
         string? exePath = NativeMethods.GetProcessImagePath(pid);
         return pid == expected.ProcessId
             && string.Equals(className, expected.ClassName, StringComparison.Ordinal)
-            && string.Equals(title, expected.Title, StringComparison.Ordinal)
             && string.Equals(exePath, expected.ExePath, StringComparison.OrdinalIgnoreCase);
     }
 

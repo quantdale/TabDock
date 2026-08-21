@@ -482,7 +482,6 @@ public sealed class WindowShepherdService
         }
 
         string? initialClass = _identityApi.GetClassName(hwnd);
-        string initialTitle = NativeMethods.GetWindowTextString(hwnd) ?? string.Empty;
         if (string.IsNullOrEmpty(initialClass))
         {
             error = "Could not verify the window's class identity.";
@@ -623,32 +622,14 @@ public sealed class WindowShepherdService
         }
 
         // The picker and the capture call race with normal window teardown.
-        // Recheck the identity after all metadata probes and before changing
-        // DWM state, so a recycled/dead HWND is not admitted as a member.
+        // Recheck identity through the SAME gate the journal-to-token boundary
+        // uses, so a recycled/dead HWND is not admitted as a member. Titles are
+        // deliberately absent from this comparison: they are mutable display
+        // metadata (browser tabs, editors, terminals rename themselves
+        // constantly), not identity.
         if (!NativeMethods.IsWindow(hwnd))
         {
             error = "The window closed while it was being captured.";
-            return null;
-        }
-        WindowProcessIdentity currentIdentity = _identityApi.GetProcessIdentity(hwnd);
-        uint currentPid = currentIdentity.ProcessId;
-        if (currentPid != pid || currentIdentity.ThreadId != initialIdentity.ThreadId)
-        {
-            error = "The window changed owners while it was being captured.";
-            _log.Log($"Shepherd capture blocked: HWND 0x{hwnd.ToInt64():X} changed process/thread identity.");
-            return null;
-        }
-
-        string? currentExePath = _identityApi.GetProcessImagePath(currentPid);
-        string? finalClass = _identityApi.GetClassName(hwnd);
-        string finalTitle = NativeMethods.GetWindowTextString(hwnd) ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(currentExePath)
-            || !string.Equals(currentExePath, exePath, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(finalClass, initialClass, StringComparison.Ordinal)
-            || !string.Equals(finalTitle, initialTitle, StringComparison.Ordinal))
-        {
-            error = "The window identity changed while it was being captured.";
-            _log.Log($"Shepherd capture blocked: HWND 0x{hwnd.ToInt64():X} failed final identity verification (pid={currentPid}, class/title changed or executable changed).");
             return null;
         }
 
@@ -657,6 +638,32 @@ public sealed class WindowShepherdService
         {
             error = "Could not verify the target process instance.";
             _log.Log($"Shepherd capture blocked: process-start identity could not be read for HWND 0x{hwnd.ToInt64():X} PID {pid}.");
+            return null;
+        }
+
+        string? finalClass = _identityApi.GetClassName(hwnd);
+        string finalTitle = NativeMethods.GetWindowTextString(hwnd) ?? string.Empty;
+        var admissionProbe = new CapturedWindow
+        {
+            Hwnd = hwnd,
+            ProcessId = pid,
+            WindowThreadId = initialIdentity.ThreadId,
+            ProcessStartTimeUtcTicks = processStartTimeUtcTicks,
+            ExePath = exePath,
+            OriginalClassName = initialClass ?? string.Empty,
+        };
+        WindowIdentityResult admission = WindowIdentityGate.EvaluateBeforeCaptureToken(
+            admissionProbe,
+            _identityApi,
+            verifyExecutable: true,
+            verifyProcessInstance: true,
+            out string admissionReason);
+        if (admission != WindowIdentityResult.Match)
+        {
+            error = admission == WindowIdentityResult.Mismatch
+                ? "The window changed owners while it was being captured."
+                : "The window identity could not be verified while it was being captured.";
+            _log.Log($"Shepherd capture blocked: HWND 0x{hwnd.ToInt64():X} admission result={admission} ({admissionReason}).");
             return null;
         }
 
@@ -1832,13 +1839,21 @@ public sealed class WindowShepherdService
                 _log.Log($"SetWindowPlacement failed for 0x{window.Hwnd.ToInt64():X}: {NativeMethods.FormatLastError()}");
                 if (!TryReleaseMutationBoundary(window, "release-before-placement-fallback", out WindowIdentityResult fallbackIdentity))
                     return ReleaseBoundaryFailure(window, fallbackIdentity, "release-placement-fallback");
+                // Fallback geometry must be the ORIGINAL NORMAL rectangle, not
+                // OriginalBounds: for a guest that was maximized/minimized at
+                // capture, OriginalBounds describes the zoomed/iconic screen
+                // rect, and restoring it would corrupt the un-maximize
+                // geometry. rcNormalPosition is the dedicated restore
+                // rectangle; the show command below re-applies the zoomed
+                // state itself.
+                NativeMethods.RECT normalRect = window.OriginalPlacement.rcNormalPosition;
                 placementRestored = _releaseApi.SetWindowPos(
                     window.Hwnd,
                     IntPtr.Zero,
-                    window.OriginalBounds.left,
-                    window.OriginalBounds.top,
-                    window.OriginalBounds.Width,
-                    window.OriginalBounds.Height,
+                    normalRect.left,
+                    normalRect.top,
+                    normalRect.Width,
+                    normalRect.Height,
                     NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
                 if (!placementRestored)
                     LogPositioningFailureOnce(window.Hwnd, "SetWindowPos(release-fallback)");
