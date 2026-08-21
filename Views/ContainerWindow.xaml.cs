@@ -799,12 +799,12 @@ public partial class ContainerWindow : Window
             ? (current - 1 + count) % count
             : (current + 1) % count;
 
+        // Selection sync happens via the ActiveTab/IsActive/IsSelected binding
+        // chain (ContainerWindow.xaml), same as every other active-tab switch —
+        // a manual TabsListBox.SelectedIndex write here would use a Tabs-space
+        // index against the shorter DisplayTabs collection whenever a split
+        // composite occupies two Tabs slots as one DisplayTabs slot.
         _viewModel.SetActiveTab(_viewModel.Tabs[next]);
-        // The strip is bound to DisplayTabs, which during split mode contains a
-        // composite item that does not correspond one-to-one with Tabs indices —
-        // only sync the ListBox selection when both collections line up.
-        if (!IsSplitPresented)
-            TabsListBox.SelectedIndex = next;
         e.Handled = true;
     }
 
@@ -2419,8 +2419,14 @@ public partial class ContainerWindow : Window
         // every frame (that is a resize war). Keep the guest pinned above the
         // container so the docked look holds, and skip the geometry write. The
         // refusal clears when the rect changes (container grows) or the guest
-        // becomes compliant, so a wider pane is re-glued normally.
-        if (IsRefusingPane(_shepherdActiveWindow, rect))
+        // becomes compliant, so a wider pane is re-glued normally. Only applies
+        // while the guest is actually visible at that refused rect — a guest
+        // hidden by container minimize must always get a fresh PositionAndShow
+        // on restore, even if the restored rect matches a stale refusal,
+        // otherwise it never becomes visible again (the refusal was recorded
+        // for "do not re-fight a currently-docked guest", not "never show a
+        // hidden one").
+        if (NativeMethods.IsWindowVisible(_shepherdActiveWindow.Hwnd) && IsRefusingPane(_shepherdActiveWindow, rect))
         {
             _shepherd.PairZOrderBehind(containerHwnd, _shepherdActiveWindow);
             return;
@@ -2694,8 +2700,13 @@ public partial class ContainerWindow : Window
         // every frame (resize war). Pin the container below the panes so the
         // docked look holds, and skip the geometry write. Refusals clear when
         // the rect changes or the guest becomes compliant, so a wider pane is
-        // re-glued normally.
-        if (IsRefusingPane(top, topRect) || IsRefusingPane(bottom, bottomRect))
+        // re-glued normally. Only applies while the member is actually visible
+        // at that refused rect — members hidden by container minimize must
+        // always get a fresh PositionGuestsDeferred on restore, even when the
+        // restored panes match a stale refusal, otherwise they never become
+        // visible again.
+        if ((NativeMethods.IsWindowVisible(top.Hwnd) && IsRefusingPane(top, topRect))
+            || (NativeMethods.IsWindowVisible(bottom.Hwnd) && IsRefusingPane(bottom, bottomRect)))
         {
             _shepherd.PairZOrderBehind(containerHwnd, bottom);
             return;

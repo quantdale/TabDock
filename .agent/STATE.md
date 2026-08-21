@@ -10,6 +10,107 @@ this text.
 
 ## CURRENT STATUS
 
+UI/UX bug-hunt pass (2026-08-21, same day as R22, uncommitted at time of
+writing): a spec-grounded, reject-by-default multi-agent review of the
+interaction layer (`Views/ContainerWindow.xaml.cs` and friends) against
+`openspec/specs/ui-ux-hardening/spec.md` and the container-activation-timers/
+capture-picker-icons/group-color-picker specs, cross-checked against
+`docs/audits/2026-08-21/DISPOSITION.md` so already-dispositioned items were
+not re-reported. Two real, independently-reproduced defects were found and
+fixed in `Views/ContainerWindow.xaml.cs`:
+- `ContainerWindow_PreviewKeyDown` (Ctrl+Tab): a manual
+  `TabsListBox.SelectedIndex = next` write reused a `Tabs`-space index against
+  the shorter `DisplayTabs`-bound ListBox whenever a split composite is
+  present (dormant or not), silently jumping Ctrl+Tab to the wrong tab. Fixed
+  by deleting the manual write — `TabsListBox` is the only call site in the
+  codebase that ever wrote `SelectedIndex` directly; every other switch path
+  already relies on the `ActiveTab`/`IsActive`/`IsSelected` binding chain in
+  `ContainerWindow.xaml`, which the (non-virtualizing `StackPanel`-hosted) tab
+  strip always keeps in sync regardless of split state.
+- `LayoutShepherdActiveWindow`/`LayoutSplitPanes`: the `_refusedPaneByHwnd`
+  stale-refusal short-circuit (meant to avoid re-fighting an already-visible
+  noncompliant guest every frame) was never scoped to "guest is currently
+  visible." A guest hidden by container minimize (`ShowWindow(SW_HIDE)`, not
+  iconic) whose native minimum previously refused the exact rect it is
+  restored to hits the refusal branch on restore and is pinned in z-order but
+  never re-shown (`PairZOrderBehind` carries no `SWP_SHOWWINDOW`) — a
+  permanently blank container for single-tab groups (no tab-switch recovery
+  path) until the user happens to resize. Fixed by gating both refusal checks
+  on `NativeMethods.IsWindowVisible(...)` first.
+Both fixes verified end-to-end by manual code trace (not just the reviewing
+agent's claim) before being applied; see the review workflow's confirmed
+findings for the full reasoning chain. The Ctrl+Tab fix's sibling case (Ctrl+
+Shift+Tab landing on a dormant split MEMBER, not a third tab) was also traced:
+`SyncShepherdActiveWindow`'s dormant branch (`IsSplitRelationshipDefined &&
+!IsSplitPresented && IsSplitMember(newWindow)` -> `ResumeSplitPair`) already
+resumes the pair correctly on its own via the `ActiveTab` property-changed
+path, independent of the deleted manual `SelectedIndex` write; the composite's
+highlight comes from `SplitCompositeViewModel.RefreshActiveState` (`Left.
+IsActive || Right.IsActive`) through the same `IsActive`/`IsSelected` binding,
+also independent of the deleted line. The old manual write actually made this
+case worse (it selected a wrong DisplayTabs item, triggering a redundant
+hide/re-focus churn) — the fix is a strict improvement here too, not just a
+non-regression.
+`dotnet build`/`dotnet test` (Debug + Release) are 0 warnings/errors. A new
+deterministic regression test,
+`tests/UnitTests/GroupViewModelDisplayTabsTests.cs`
+(`SetSplitComposite_MisalignsDisplayTabsIndexFromTabsIndex_ForTabsAfterBothMembers`),
+locks in the root-cause invariant for fix 1 (Tabs vs. DisplayTabs index
+divergence once a split composite exists, persisting through dormancy, and
+realigning on `ClearSplitComposite`) so no future caller can reintroduce a
+raw Tabs-space index write against the DisplayTabs-bound ListBox; suite is
+185/185 passing. Fix 2 (`IsRefusingPane` visibility gating) remains without
+automated coverage — it requires a real native HWND through a minimize/
+restore cycle, which is not cheaply unit-testable without extracting the
+layout logic to a testable seam (not done here, to avoid scope creep on a
+two-line fix).
+Five other review dimensions (split focus/z-order, chrome-activation
+suppression, capture-picker UX, group/tab-chrome commands, and one of two
+window-state-reconciliation angles) found nothing meeting the evidence bar
+(concrete file:line + spec violation + reachable failure scenario) — an
+expected, not a failure, outcome for a post-R21/R22 hardened codebase.
+Scope actually reviewed (round 1): `Views/ContainerWindow.xaml.cs` (+
+`ContainerWindow.SplitInteractionFix.cs`), `Views/CapturePickerWindow.xaml(.cs)`,
+`ViewModels/{GroupViewModel,TabViewModel,SplitCompositeViewModel,
+CapturePickerViewModel}.cs`, cross-referenced against the ui-ux-hardening,
+container-activation-timers, capture-picker-icons, and group-color-picker
+OpenSpec specs.
+
+Round 2 (same day, in response to Stop-hook feedback that round 1's own
+"not reviewed" note left real gaps): reviewed `App.xaml.cs` in full
+(startup group-restore loop, `OpenContainer`, `AcquireSingleInstanceMutex`,
+every `OpenContainer` call site including the capture-picker-driven ones),
+confirmed there is no tray icon/`NotifyIcon` anywhere in the codebase (an
+earlier "tray flows" residual-risk note was itself imprecise — there is
+no tray feature to review), `Services/HotkeyService.cs` (global Ctrl+Alt+G
+registration/activation), and the tab-strip drag-to-reorder/drag-out
+mechanics in `Views/ContainerWindow.xaml.cs`
+(`TabsListBox_PreviewMouseLeftButtonDown/MouseMove/PreviewMouseLeftButtonUp`,
+`EndDrag`, `SnapshotDragMidpoints`, `GetDropIndex`,
+`GroupViewModel.ReorderTabs/ReleaseTab/CommitReorder`) — none of which round
+1's "group-tab-chrome" dimension had actually pointed at, despite naming
+"drag-reorder" in its title. One candidate surfaced (silent global-hotkey
+registration failure leaves the advertised "Ctrl+Alt+G" hint dead with no
+user feedback) but was REJECTED on verify: the Capture button still performs
+the same action independently of the hotkey, a prior 2026-08-21 auditor
+(`docs/audits/2026-08-21/dsv4-results.md`, finding L4) already reviewed this
+exact branch and cleared it, and the trigger requires another process
+already owning that exact global hotkey at TabDock's launch moment — not
+reachable through ordinary interaction with TabDock itself. No fix applied.
+Startup/restore and drag-reorder produced zero candidates.
+
+Combined, both rounds cover every interaction surface in the shipped
+application reachable through static code review: split presentation,
+window-state transitions, chrome-interaction suppression, capture picker,
+group/tab commands, keyboard navigation, startup/restore, global hotkey, and
+drag-reorder. The one remaining, explicitly acknowledged gap is physical
+mixed-DPI/multi-monitor hardware qualification — this is a pre-existing,
+independently-documented EXTERNAL blocker (docs/release/*, R21-012
+disposition, "External gates" in this file's R22 section), not an area
+skipped for convenience; no source-code review can substitute for hardware
+that is not present in this environment. Changes remain uncommitted;
+committing was not requested.
+
 The R22 interactive Windows qualification & torture campaign (2026-08-21)
 is COMPLETE for everything executable in its environment; verdict
 **QUALIFIED_WITH_EXTERNAL_BLOCKERS** (see
