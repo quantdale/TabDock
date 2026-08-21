@@ -1919,6 +1919,31 @@ internal static partial class Scenarios
         ctx.Check(Util.WaitUntil(() => IsDocked(pigB.Hwnd, host), 5000), "inline-captured guest is docked in the content rect");
     }
 
+    /// <summary>
+    /// Real-clicks a popup menu item only after proving the physical click
+    /// point still resolves to a TabDock-owned TOP-LEVEL POPUP (i.e. the menu
+    /// is genuinely under the cursor — not the container, launcher, or a
+    /// guest that the closed menu exposed). Returns false when verification
+    /// fails so the caller can reopen the menu and retry.
+    /// </summary>
+    private static bool TryClickVerifiedPopupItem(Ctx ctx, IntPtr container, AutomationElement mi)
+    {
+        System.Windows.Rect r = Uia.GetElementRect(mi);
+        if (r.IsEmpty || r.Width <= 0 || r.Height <= 0)
+            return false;
+        int x = (int)(r.X + r.Width / 2);
+        int y = (int)(r.Y + r.Height / 2);
+        IntPtr atPoint = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = x, y = y });
+        IntPtr root = NativeMethods.GetAncestor(atPoint, NativeMethods.GA_ROOT);
+        if (root == IntPtr.Zero || root == container || root == ctx.MainHwnd)
+            return false;
+        NativeMethods.GetWindowThreadProcessId(root, out uint rootPid);
+        if (rootPid != ctx.TabDockPid)
+            return false;
+        Input.ClickAt(x, y);
+        return true;
+    }
+
     private static void GroupCreateInline(Ctx ctx, Options opt)
     {
         GuestInfo pig = SpawnPig(ctx, "GCIN", "--color", "red");
@@ -1933,11 +1958,30 @@ internal static partial class Scenarios
         if (!EnsureClickable(container, x, y))
             throw new InvalidOperationException("Group selector was obscured — refusing to click blind.");
         Input.ClickAt(x, y);
-        AutomationElement? newGroup = Uia.FindMenuItemOnDesktop(ctx.TabDockPid, "+ New group", 3000);
-        if (newGroup == null)
-            throw new InvalidOperationException("Group menu did not expose '+ New group'.");
-        (int nx, int ny) = Uia.Center(newGroup);
-        Input.ClickAt(nx, ny);
+
+        // The container's own activation reassert (CHROME[raise]/restore-request,
+        // observed ~300ms after menu open) can close the just-opened popup between
+        // UIA discovery and SendInput delivery; a click then lands on whatever is
+        // underneath and silently does nothing (reproduced 1/5 supervised). Verify
+        // the popup is verifiably under the cursor before every click and
+        // reopen+retry when it is not.
+        bool clicked = false;
+        for (int attempt = 0; attempt < 3 && !clicked; attempt++)
+        {
+            if (attempt > 0)
+            {
+                Input.SendKey(Input.VK_ESCAPE);
+                Thread.Sleep(250);
+                Input.ClickAt(x, y);
+                Thread.Sleep(400);
+            }
+            AutomationElement? newGroup = Uia.FindMenuItemOnDesktop(ctx.TabDockPid, "+ New group", 3000);
+            if (newGroup == null)
+                continue;
+            clicked = TryClickVerifiedPopupItem(ctx, container, newGroup);
+        }
+        if (!clicked)
+            throw new InvalidOperationException("'+ New group' could not be clicked with the popup verifiably under the cursor after retries.");
 
         IntPtr secondContainer = IntPtr.Zero;
         ctx.Check(Util.WaitUntil(() =>
