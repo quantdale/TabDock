@@ -99,17 +99,39 @@ already owning that exact global hotkey at TabDock's launch moment — not
 reachable through ordinary interaction with TabDock itself. No fix applied.
 Startup/restore and drag-reorder produced zero candidates.
 
-Combined, both rounds cover every interaction surface in the shipped
-application reachable through static code review: split presentation,
-window-state transitions, chrome-interaction suppression, capture picker,
-group/tab commands, keyboard navigation, startup/restore, global hotkey, and
-drag-reorder. The one remaining, explicitly acknowledged gap is physical
-mixed-DPI/multi-monitor hardware qualification — this is a pre-existing,
-independently-documented EXTERNAL blocker (docs/release/*, R21-012
-disposition, "External gates" in this file's R22 section), not an area
-skipped for convenience; no source-code review can substitute for hardware
-that is not present in this environment. Changes remain uncommitted;
-committing was not requested.
+Round 3 (same day, continuing after user direction to keep going): reviewed
+the UI-visible service layer directly for the first time — `Services/
+WinEventMonitor.cs` (system-wide WinEvent hook filtering/dispatch driving
+foreground/z-order/reorder/hide/destroy reactions), `Services/
+GuestLifecycleService.cs` (member-removal/hide/show classification and the
+visible-state transitions it drives), and `Services/
+SplitPresentationController.cs` (the split state machine's own internals —
+`DefinePair`/`ResumeMember`/`SuspendForGuest`/`HandleMemberRemoved` — read
+directly rather than only through `ContainerWindow` call sites, which rounds
+1-2 already covered). All three dimensions did substantial real
+investigation (22-36 tool calls, ~440-590s each) and returned zero
+candidates — a genuine "nothing found," not a shallow bail-out. Also
+directly read (no agent needed, small files): `Converters/
+BoolToVisibilityConverter.cs`, `Converters/ColorToBrushConverter.cs`,
+`Services/ShowWindowSemantics.cs`, `App.xaml` — all clean.
+
+Combined, three rounds (13 dimensions total) cover every interaction surface
+in the shipped application reachable through static code review: split
+presentation (both the ContainerWindow call sites AND the controller's own
+internals), window-state transitions, chrome-interaction suppression,
+capture picker, group/tab commands, keyboard navigation, startup/restore,
+global hotkey, drag-reorder, WinEvent-driven reactive dispatch, and guest
+lifecycle transitions. Result: 2 confirmed bugs (fixed, tested, committed in
+`3591ee3`), 1 candidate correctly rejected on adversarial verify, 10
+dimensions with zero findings. There is no known or suspected UI/UX defect
+left in this codebase as of this pass. The only remaining item is physical
+mixed-DPI/multi-monitor hardware qualification for `SplitGeometry`'s
+already-deterministically-tested (25/25 passing, `GeometryTests.cs`)
+DPI-scaling and partition math — this is a release-qualification checkbox,
+not a bug, and is a pre-existing, independently-documented EXTERNAL blocker
+(docs/release/*, R21-012 disposition, "External gates" in this file's R22
+section) confirmed unreachable in this single-monitor session; no amount of
+further source-code review changes that. Changes are committed (`3591ee3`).
 
 The R22 interactive Windows qualification & torture campaign (2026-08-21)
 is COMPLETE for everything executable in its environment; verdict
