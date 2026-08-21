@@ -30,12 +30,12 @@ public partial class ContainerWindow
         if (_splitInteractionHooksAttached)
             return;
 
-        // The non-member click handler is wired in XAML, so it is registered
-        // during InitializeComponent BEFORE the ordinary drag/selection guard
-        // that ContainerWindow.xaml.cs adds later. One routed-event pass now
-        // owns pair -> C/D activation; there is no handledEventsToo recovery
-        // handler and no second hit-test after another handler has swallowed
-        // the event.
+        // This handler is wired in XAML, so it is registered during
+        // InitializeComponent BEFORE the ordinary drag/selection guard that
+        // ContainerWindow.xaml.cs subscribes in code afterwards. WPF invokes
+        // instance handlers on the same element in subscription order, so this
+        // handler sees the preview event first and owns pair -> C/D activation
+        // via its own hit-test; it is not a handledEventsToo recovery path.
         _viewModel.DisplayTabs.CollectionChanged += SplitDisplayTabs_CollectionChanged;
         _splitInteractionHooksAttached = true;
     }
@@ -52,19 +52,20 @@ public partial class ContainerWindow
     }
 
     /// <summary>
-    /// Runs after the strip's existing split guard even when that guard marked
-    /// the routed event handled. A third/fourth ordinary tab click is therefore
-    /// never dependent on the earlier window-level hit-test path.
+    /// Registered by XAML before the code-behind drag/selection guard, so on a
+    /// LEFT click over an ordinary (non-member) tab while a pair is presented,
+    /// this handler runs first and suspends the pair directly — the click path
+    /// never depends on the later guard or on its handled state.
     /// </summary>
     private void TabsListBox_PreviewMouseLeftButtonDown_SplitInteraction(object sender, MouseButtonEventArgs e)
     {
         if (!IsSplitPresented)
             return;
 
-        // Resolve from the actual pointer hit. The ordinary split guard has
-        // already cleared _draggedItem before this handled-events-too callback.
-        // InputHitTest yields a visual element even when OriginalSource is a
-        // content element nested inside the tab template.
+        // Resolve from the actual pointer hit rather than trusting
+        // OriginalSource alone: the source can be a content element nested
+        // inside the tab template, so InputHitTest (with OriginalSource as
+        // fallback) locates the tab item.
         DependencyObject? hit = TabsListBox.InputHitTest(e.GetPosition(TabsListBox)) as DependencyObject;
         ListBoxItem? item = hit != null ? FindListBoxItem(hit) : FindListBoxItem(e.OriginalSource);
 

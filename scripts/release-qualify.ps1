@@ -28,6 +28,25 @@
     hash of the artifact as it exists at finalization time, so a signed
     release never ships checksums that describe the unsigned executable.
 
+    Production policy: when RELEASE_PRODUCTION_GATE=true (the
+    prepare-release-candidate workflow sets it for Stage A production
+    candidates), Authenticode signing becomes mandatory exactly as if
+    RELEASE_SIGNING_REQUIRED=true, the signing provider must be an APPROVED
+    production provider (currently digicert-stm, key protection class
+    CLOUD_HSM - a non-exportable private key held by the signing service),
+    the provider's credentials must be complete (BLOCKED_EXTERNAL otherwise,
+    BEFORE any build work), test-only mock signing is refused, the manifest
+    records releaseMode=PRODUCTION, and the CURRENT publisher identity policy
+    (SIGNING_EXPECTED_SUBJECT) must be configured and must equal the signed
+    certificate subject (the manifest also records the current
+    releasePolicySchemaVersion, which the Stage B gate requires). Local-PFX
+    signing (exportable key) is NEVER approved for production candidates.
+    External human gates (final smoke, mixed-DPI, Windows compatibility) are
+    NEVER verified by this script; productionReleaseEligibility is therefore
+    BLOCKED_EXTERNAL here and the publish-release workflow (Stage B)
+    independently validates the external evidence file before creating the
+    release.
+
 .PARAMETER Sha
     The exact source commit the release must be built from. When empty, HEAD
     is used and reported. A non-empty mismatch fails the qualification.
@@ -55,26 +74,6 @@
 .PARAMETER SkipOpenSpec
     Skip OpenSpec validation (local convenience when the pinned CLI is not
     installed and no global openspec exists).
-
-.DESCRIPTION
-    Production policy: when RELEASE_PRODUCTION_GATE=true (the
-    prepare-release-candidate workflow sets it for Stage A production
-    candidates), Authenticode signing becomes mandatory exactly as if
-    RELEASE_SIGNING_REQUIRED=true, the signing provider must be an APPROVED
-    production provider (currently digicert-stm, key protection class
-    CLOUD_HSM - a non-exportable private key held by the signing service),
-    the provider's credentials must be complete (BLOCKED_EXTERNAL otherwise,
-    BEFORE any build work), test-only mock signing is refused, the manifest
-    records releaseMode=PRODUCTION, and the CURRENT publisher identity policy
-    (SIGNING_EXPECTED_SUBJECT) must be configured and must equal the signed
-    certificate subject (the manifest also records the current
-    releasePolicySchemaVersion, which the Stage B gate requires). Local-PFX
-    signing (exportable key) is NEVER approved for production candidates.
-    External human gates (final smoke, mixed-DPI, Windows compatibility) are
-    NEVER verified by this script; productionReleaseEligibility is therefore
-    BLOCKED_EXTERNAL here and the publish-release workflow (Stage B)
-    independently validates the external evidence file before creating the
-    release.
 #>
 [CmdletBinding()]
 param(

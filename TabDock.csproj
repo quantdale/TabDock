@@ -31,7 +31,6 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishReadyToRun>true</PublishReadyToRun>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <TrimMode>partial</TrimMode>
   </PropertyGroup>
 
   <!-- These generated attributes are consumed by BuildIdentity. They are

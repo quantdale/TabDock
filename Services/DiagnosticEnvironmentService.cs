@@ -460,7 +460,6 @@ public static class DiagnosticEnvironmentService
 
     private static void InspectJsonFile(string path, bool isState, PersistenceSnapshot result)
     {
-        string status = isState ? result.StateStatus : result.JournalStatus;
         if (!File.Exists(path))
         {
             if (isState) result.StateStatus = "absent";

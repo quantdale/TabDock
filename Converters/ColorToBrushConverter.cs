@@ -8,7 +8,7 @@ namespace TabDock.Converters;
 [ValueConversion(typeof(string), typeof(Brush))]
 public sealed class ColorToBrushConverter : IValueConverter
 {
-    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         try
         {
@@ -22,7 +22,7 @@ public sealed class ColorToBrushConverter : IValueConverter
         }
     }
 
-    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         throw new NotSupportedException();
     }

@@ -1036,9 +1036,9 @@ public partial class ContainerWindow : Window
         _restoreMinimizedTimer?.Stop();
         _restoreMinimizedTimer = null;
         // _closePromptRaiseTimer is armed via ArmClosePromptRaise (50ms tick)
-        // and may still be pending when the container closes while its
-        // Dispatcher.BeginInvoke(Input) callback is queued. Null it so the tick
-        // keeps the window rooted one extra interval and fires post-close.
+        // and may still be pending when the container closes. Stop it and null
+        // the field so a pending tick cannot fire post-close against nulled
+        // state, and so the timer does not keep the closed window rooted.
         _closePromptRaiseTimer?.Stop();
         _closePromptRaiseTimer = null;
         // WndProc was added in OnSourceInitialized; remove explicitly so a

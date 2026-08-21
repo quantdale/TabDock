@@ -325,8 +325,6 @@ public static partial class NativeMethods
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref uint lpdwSize);
 
-    [DllImport("kernel32.dll")]
-    public static extern uint GetLastError();
 
     [DllImport("kernel32.dll")]
     public static extern uint GetCurrentProcessId();

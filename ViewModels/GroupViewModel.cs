@@ -102,7 +102,6 @@ public sealed class GroupViewModel : ViewModelBase
 
     public ICommand StartRenameCommand { get; }
     public ICommand FinishRenameCommand { get; }
-    public ICommand PickColorCommand { get; }
     public ICommand CloseGroupCommand { get; }
     public ICommand DeleteGroupCommand { get; }
 
@@ -156,13 +155,6 @@ public sealed class GroupViewModel : ViewModelBase
 
         StartRenameCommand = new RelayCommand(_ => IsRenaming = true);
         FinishRenameCommand = new RelayCommand(_ => IsRenaming = false);
-        // Intentional no-op placeholder pending future UI wiring (item #6 /
-        // investigation_findings.md:285): PickColorCommand is unbound in any
-        // XAML file, so nothing currently invokes it. It previously invoked
-        // AddWindowsRequested by mistake, which would have silently opened the
-        // capture picker instead of picking a color if it ever became
-        // reachable. Fixed to do nothing rather than the wrong thing.
-        PickColorCommand = new RelayCommand(_ => { });
         CloseGroupCommand = new RelayCommand(_ => CloseRequested?.Invoke(this, EventArgs.Empty));
         DeleteGroupCommand = new RelayCommand(_ => DeleteGroupRequested?.Invoke(this, EventArgs.Empty));
     }
@@ -460,11 +452,6 @@ public sealed class GroupViewModel : ViewModelBase
         // excluded because guests can change them while captured.
         if (!NativeMethods.PostMessage(hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero))
             _log.Log($"Close-window: PostMessage(WM_CLOSE) to 0x{hwnd.ToInt64():X} failed: {NativeMethods.FormatLastError()}");
-    }
-
-    public void RefreshIcon(TabViewModel tab)
-    {
-        tab.Icon = _icons.GetFileIcon(tab.Model.ExePath);
     }
 
     private void OnGroupPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)

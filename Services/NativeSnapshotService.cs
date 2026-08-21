@@ -146,6 +146,10 @@ public sealed class NativeSnapshotService
             snapshot.Visible = NativeMethods.IsWindowVisible(hwnd);
             snapshot.Iconic = NativeMethods.IsIconic(hwnd);
             snapshot.Zoomed = NativeMethods.IsZoomed(hwnd);
+            // Deliberately re-queried here rather than reused from the
+            // initializer above: the process/class/title probes in between can
+            // take milliseconds, and this flag must describe foreground-ness at
+            // snapshot completion time.
             snapshot.Foreground = NativeMethods.GetForegroundWindow() == hwnd;
             snapshot.Topmost = (NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE).ToInt64()
                 & NativeMethods.WS_EX_TOPMOST) != 0;

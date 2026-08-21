@@ -180,7 +180,7 @@ public sealed class WindowShepherdService
     // per-frame glue path, but a guest can still stop pumping messages between
     // refreshes. Keep the wait bounded and retain the last successful value for
     // this CapturedWindow object so a transient timeout cannot make the shell
-    // forget a known-safe minimum or freeze for 500 ms per guest.
+    // forget a known-safe minimum or freeze for 100 ms per guest.
     internal const uint MinTrackProbeTimeoutMilliseconds = 100;
     private readonly Dictionary<CapturedWindow, (int Width, int Height)> _minTrackCache = new();
     private readonly IWindowIdentityNativeApi _identityApi;
@@ -215,11 +215,28 @@ public sealed class WindowShepherdService
     /// </summary>
     private void LogPositioningFailureOnce(IntPtr hwnd, string operation)
     {
+        // Reserve the once-slot BEFORE formatting so a suppressed repeat does
+        // not pay for the error-formatting work at all.
+        if (!_positioningFailuresLogged.Add(hwnd.ToInt64()))
+        {
+            DiagnosticRuntime.Record("repair.native-failure", guest: hwnd, action: operation, result: "failed");
+            return;
+        }
         string error = NativeMethods.FormatLastError();
-        if (_positioningFailuresLogged.Add(hwnd.ToInt64()))
-            _log.Log($"SHEPHERD[position-fail] {operation} failed for 0x{hwnd.ToInt64():X}: {error} (subsequent failures for this window suppressed)");
+        _log.Log($"SHEPHERD[position-fail] {operation} failed for 0x{hwnd.ToInt64():X}: {error} (subsequent failures for this window suppressed)");
         DiagnosticRuntime.Record("repair.native-failure", guest: hwnd, action: operation, result: "failed",
             data: new Dictionary<string, string> { ["error"] = error });
+    }
+
+    /// <summary>
+    /// Drops per-HWND diagnostic suppression state. A raw HWND value is
+    /// recyclable: after release/destroy the slot must not suppress the first
+    /// failure log of whatever window inherits the value.
+    /// </summary>
+    private void ForgetDiagnosticSuppression(CapturedWindow window)
+    {
+        _positioningFailuresLogged.Remove(window.Hwnd.ToInt64());
+        _identityFailuresLogged.Remove(window.Hwnd.ToInt64());
     }
 
     private readonly string _journalPath;
@@ -1794,6 +1811,7 @@ public sealed class WindowShepherdService
             {
                 _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide)");
                 _minTrackCache.Remove(window);
+                ForgetDiagnosticSuppression(window);
                 HideProvenance?.ForgetWindow(window.Hwnd);
                 return WindowReleaseOutcome.Released;
             }
@@ -1916,6 +1934,7 @@ public sealed class WindowShepherdService
             {
                 _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) guest={_releaseApi.DescribeWindow(window.Hwnd)}");
                 _minTrackCache.Remove(window);
+                ForgetDiagnosticSuppression(window);
                 HideProvenance?.ForgetWindow(window.Hwnd);
                 return WindowReleaseOutcome.Released;
             }
@@ -2094,9 +2113,11 @@ public sealed class WindowShepherdService
     {
         // Loaded once per process lifetime, on first mutation (not eagerly at
         // construction): RescueOrphanedWindows runs before any Hide/Clear call
-        // and unconditionally deletes hidden-windows.json after consuming it, so
-        // loading here first would just re-read entries that rescue already
-        // consumed. All subsequent mutations act on this in-memory copy only.
+        // and disposes of hidden-windows.json according to outcome — deleted
+        // when every entry resolves, quarantined as pending evidence when it
+        // cannot — so loading here first would just re-read entries that rescue
+        // already consumed. All subsequent mutations act on this in-memory copy
+        // only.
         if (_journalCache == null)
         {
             _journalCache = LoadJournal();

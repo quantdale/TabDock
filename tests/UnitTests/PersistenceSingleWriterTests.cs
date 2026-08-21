@@ -63,7 +63,7 @@ public class PersistenceSingleWriterTests
     }
 
     [Fact]
-    public void SaveAsync_WritesOffThreadAndSettles()
+    public async Task SaveAsync_WritesOffThreadAndSettles()
     {
         var (dir, path, persistence) = MakeService();
         try
@@ -75,8 +75,7 @@ public class PersistenceSingleWriterTests
             // proven by the writer's construction (Task.Run in SaveAsync), not
             // by racing the filesystem for an absent file — a fast thread pool
             // may legitimately finish before this thread resumes.
-            persistence.WhenWritesSettledAsync().GetAwaiter().GetResult();
-
+            await persistence.WhenWritesSettledAsync();
             Assert.True(File.Exists(path), "settled SaveAsync never reached disk");
         }
         finally
@@ -86,7 +85,7 @@ public class PersistenceSingleWriterTests
     }
 
     [Fact]
-    public void SaveAsync_RapidCoalesce_WritesOnlyLatestGeneration()
+    public async Task SaveAsync_RapidCoalesce_WritesOnlyLatestGeneration()
     {
         var (dir, path, persistence) = MakeService();
         try
@@ -97,7 +96,7 @@ public class PersistenceSingleWriterTests
 
             // Barrier instead of a wall-clock poll: when all submitted writes
             // have settled, exactly the latest generation can be on disk.
-            persistence.WhenWritesSettledAsync().GetAwaiter().GetResult();
+            await persistence.WhenWritesSettledAsync();
 
             string expected = "gen-" + (count - 1);
             string finalJson = File.ReadAllText(path);

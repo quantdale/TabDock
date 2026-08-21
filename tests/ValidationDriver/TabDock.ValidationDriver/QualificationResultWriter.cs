@@ -139,15 +139,6 @@ internal static class QualificationResultWriter
 
         foreach (string line in TabDockLog.ReadNewLines(ctx.LogOffset))
         {
-            if (line.Contains("SPLIT[replace]", StringComparison.Ordinal))
-            {
-                left = null;
-                right = null;
-                active = null;
-                presented = false;
-                continue;
-            }
-
             Match enter = Regex.Match(line, @"SPLIT\[enter\] left=0x([0-9A-Fa-f]+) right=0x([0-9A-Fa-f]+)");
             if (enter.Success)
             {

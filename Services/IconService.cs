@@ -44,18 +44,6 @@ public sealed class IconService
         return NativeMethods.GetProcessImagePath(pid);
     }
 
-    public ImageSource? GetWindowIcon(IntPtr hwnd)
-    {
-        NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
-        if (pid == 0)
-            return null;
-
-        string? exe = GetProcessImagePath(pid);
-        if (string.IsNullOrEmpty(exe) || !File.Exists(exe))
-            return null;
-
-        return GetFileIcon(exe);
-    }
 
     /// <summary>Retrieves and caches the icon for an executable path, avoiding repeated ExtractIconEx calls for frequently-captured apps.</summary>
     public ImageSource? GetFileIcon(string exePath)
