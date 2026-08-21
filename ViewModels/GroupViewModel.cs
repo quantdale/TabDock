@@ -311,6 +311,14 @@ public sealed class GroupViewModel : ViewModelBase
 
             throw;
         }
+
+        // Capture completion is a durable semantic boundary: the tab metadata
+        // must reach state.json without waiting for a later mutation. The
+        // first tab of a new group cannot rely on SetActiveTab's debounced
+        // save — GroupManager.SetActiveTab treats "already active" as a no-op,
+        // so index 0 into an empty group saves nothing — and the group-created
+        // commit ran before any member existed.
+        _manager.RequestDurableSave("tab-captured");
     }
 
     /// <summary>

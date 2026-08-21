@@ -1528,6 +1528,18 @@ internal static partial class Scenarios
     /// are never confused with the new one).
     /// </summary>
     private static (IntPtr Container, IntPtr Host) CaptureIntoGroup(Ctx ctx, params GuestInfo[] guests)
+        => CaptureIntoGroupCore(ctx, exactRowMatch: false, guests);
+
+    /// <summary>
+    /// CaptureIntoGroup variant whose picker-row lookup requires EXACT title
+    /// equality. Required when one process owns multiple capturable windows
+    /// whose titles are prefixes of one another ('X' vs 'X-W2'): the default
+    /// substring row search is inherently ambiguous there and refuses.
+    /// </summary>
+    private static (IntPtr Container, IntPtr Host) CaptureIntoGroupExact(Ctx ctx, params GuestInfo[] guests)
+        => CaptureIntoGroupCore(ctx, exactRowMatch: true, guests);
+
+    private static (IntPtr Container, IntPtr Host) CaptureIntoGroupCore(Ctx ctx, bool exactRowMatch, GuestInfo[] guests)
     {
         var before = new HashSet<IntPtr>(Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true));
 
@@ -1572,7 +1584,7 @@ internal static partial class Scenarios
             int scrolls = 0;
             while (row == null && rowSw.ElapsedMilliseconds < 12000)
             {
-                try { row = FindPickerRow(picker, g.Title); }
+                try { row = FindPickerRow(picker, g.Title, exactRowMatch); }
                 catch (InvalidOperationException ex)
                 {
                     lastMiss = ex;
@@ -1833,19 +1845,21 @@ internal static partial class Scenarios
     /// <summary>
     /// Returns the CheckBox row for a guest, matched via its inner Text label (the
     /// CheckBox's own UIA Name is empty for image+text content). Refuses to return
-    /// an ambiguous match so an unverified row is never clicked.
+    /// an ambiguous match so an unverified row is never clicked. When
+    /// <paramref name="exactName"/> is set the label must equal the title exactly,
+    /// for same-process windows whose titles are prefixes of one another.
     /// </summary>
-    private static AutomationElement FindPickerRow(AutomationElement picker, string title)
+    private static AutomationElement FindPickerRow(AutomationElement picker, string title, bool exactName = false)
     {
         // Direct CheckBox-name match first (in case a future template sets it).
-        AutomationElement? el = Uia.FindDescendantByName(picker, ControlType.CheckBox, null, title, out int count);
+        AutomationElement? el = Uia.FindDescendantByName(picker, ControlType.CheckBox, exactName ? title : null, exactName ? null : title, out int count);
         if (el != null && count == 1)
             return el;
         if (count > 1)
             throw new InvalidOperationException($"Picker row for '{title}' is ambiguous ({count} CheckBox matches) — refusing to click an unverified row.");
 
         // Fall back to the inner Text label, then walk up to its ancestor CheckBox.
-        AutomationElement? text = Uia.FindDescendantByName(picker, ControlType.Text, null, title, out count);
+        AutomationElement? text = Uia.FindDescendantByName(picker, ControlType.Text, exactName ? title : null, exactName ? null : title, out count);
         if (text == null || count != 1)
             throw new InvalidOperationException($"Picker row for '{title}' not found or ambiguous ({count} Text matches) — refusing to click an unverified row.");
 

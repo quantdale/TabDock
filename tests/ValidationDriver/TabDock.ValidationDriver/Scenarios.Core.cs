@@ -662,6 +662,7 @@ internal static partial class Scenarios
             });
             ctx.TabDock = td2;
             ctx.TabDockPid = (uint)td2.Id;
+            TestRunProvenance.RegisterLaunchedProcess(td2, "TabDockUnderTest", out _);
             // The restored group's container opens during startup and HIDES the
             // launcher within ~50ms, so a visible "TabDock"-titled window may
             // never exist at poll time — wait for ANY visible top-level window
@@ -1083,6 +1084,7 @@ internal static partial class Scenarios
         });
         ctx.TabDock = td2;
         ctx.TabDockPid = (uint)td2.Id;
+        TestRunProvenance.RegisterLaunchedProcess(td2, "TabDockUnderTest", out _);
         // The restored group's container opens during startup and HIDES the
         // launcher within ~50ms, so a visible "TabDock"-titled window may never
         // exist at poll time (observed live as an intermittent flake) — wait
@@ -1153,6 +1155,7 @@ internal static partial class Scenarios
         Thread.Sleep(1000);
         ctx.TabDock = Relaunch();
         ctx.TabDockPid = (uint)ctx.TabDock.Id;
+        TestRunProvenance.RegisterLaunchedProcess(ctx.TabDock, "TabDockUnderTest", out _);
         // The restored group's container opens during startup and HIDES the
         // launcher within ~50ms, so a visible "TabDock"-titled window may never
         // exist at poll time (observed live as an intermittent flake) — wait
@@ -1189,6 +1192,7 @@ internal static partial class Scenarios
         Thread.Sleep(1000);
         ctx.TabDock = Relaunch();
         ctx.TabDockPid = (uint)ctx.TabDock.Id;
+        TestRunProvenance.RegisterLaunchedProcess(ctx.TabDock, "TabDockUnderTest", out _);
         ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
         if (ctx.MainHwnd != IntPtr.Zero)
             RememberMainWindow(ctx);

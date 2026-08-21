@@ -2248,6 +2248,7 @@ internal static partial class Scenarios
         });
         ctx.TabDock = td2;
         ctx.TabDockPid = (uint)td2.Id;
+        TestRunProvenance.RegisterLaunchedProcess(td2, "TabDockUnderTest", out _);
         ctx.MainHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "TabDock", 20000);
         ctx.Check(ctx.MainHwnd != IntPtr.Zero, "TabDock relaunched");
         if (ctx.MainHwnd != IntPtr.Zero)

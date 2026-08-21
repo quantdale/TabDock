@@ -14,6 +14,11 @@ internal static partial class Scenarios
     // repeatable and ensuring cleanup cannot leave real apps behind.
     private static void ThreeAppTorture(Ctx ctx, Options opt)
     {
+        if (!IsExecutableAvailable(ChromeExe))
+        {
+            ctx.Skip("SKIP_BROWSER_NOT_INSTALLED: three-app-torture requires Google Chrome for its browser leg.");
+            return;
+        }
         GuestInfo chrome = SpawnGuest(ctx, "chrome-normal");
         GuestInfo edge = SpawnGuest(ctx, "edge-normal");
         GuestInfo terminal = SpawnGuest(ctx, "wt");
@@ -553,7 +558,7 @@ internal static partial class Scenarios
         // --- Phase 1: YES closes both same-process windows. ---
         GuestInfo pig1 = SpawnPig(ctx, "TGC", "--color", "red", "--extra-windows", "1");
         GuestInfo w2a = AttachSecondPigWindow(ctx, pig1);
-        (IntPtr container1, IntPtr _) = CaptureIntoGroup(ctx, pig1, w2a);
+        (IntPtr container1, IntPtr _) = CaptureIntoGroupExact(ctx, pig1, w2a);
         ctx.Check(TabCount(container1) == 2, "phase 1: both same-process windows captured into one group");
         long off1 = TabDockLog.RecordLogLength();
 
@@ -571,7 +576,7 @@ internal static partial class Scenarios
         // --- Phase 2: NO releases both windows standalone, sending nothing. ---
         GuestInfo pig2 = SpawnPig(ctx, "TGN", "--color", "blue", "--extra-windows", "1");
         GuestInfo w2b = AttachSecondPigWindow(ctx, pig2);
-        (IntPtr container2, IntPtr host2) = CaptureIntoGroup(ctx, pig2, w2b);
+        (IntPtr container2, IntPtr host2) = CaptureIntoGroupExact(ctx, pig2, w2b);
         ctx.Check(TabCount(container2) == 2, "phase 2: both same-process windows captured into one group");
         int wmCloseBefore2 = PigLog.CountLines(pig2.Pid, "WM_CLOSE");
         long off2 = TabDockLog.RecordLogLength();
@@ -591,7 +596,7 @@ internal static partial class Scenarios
         // --- Phase 3: CANCEL leaves everything untouched. ---
         GuestInfo pig3 = SpawnPig(ctx, "TCC", "--color", "green", "--extra-windows", "1");
         GuestInfo w2c = AttachSecondPigWindow(ctx, pig3);
-        (IntPtr container3, IntPtr host3) = CaptureIntoGroup(ctx, pig3, w2c);
+        (IntPtr container3, IntPtr host3) = CaptureIntoGroupExact(ctx, pig3, w2c);
         ctx.Check(TabCount(container3) == 2, "phase 3: both same-process windows captured into one group");
         long off3 = TabDockLog.RecordLogLength();
 
@@ -698,6 +703,7 @@ internal static partial class Scenarios
             });
             ctx.TabDock = td2;
             ctx.TabDockPid = (uint)td2.Id;
+            TestRunProvenance.RegisterLaunchedProcess(td2, "TabDockUnderTest", out _);
             // The restored group's container can hide the launcher within ~50ms
             // (see PersistKill), so wait for ANY visible pid window first, then
             // locate the 'TabDock'-titled launcher regardless of visibility.
