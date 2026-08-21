@@ -311,7 +311,9 @@ the scenario actually verifies.
 
 **Test-only: `chrometabdrag` asserted log strings and behavior from the
 deleted Reparent backend.** It checked for `LAYOUT[capture]`/`LAYOUT[movesize]`
-log lines (Shepherd logs `SHEPHERD[position]`/`SHEPHERD[dragout]` instead) and
+log lines (Shepherd logs `SHEPHERD[position]`/`SHEPHERD[dragout]` instead —
+historical: the `SHEPHERD[dragout]` line itself was later removed from the
+source; no committed code emits it, per the note in `Scenarios.Drag.cs`) and
 expected a ~130×92px drag on Chrome's own tab strip to "snap back" to the host
 rect — the old Reparent-era continuous drift-watchdog behavior. Under
 Shepherd's `NoteGuestMoveSize`, any drag past `DragOutThresholdPx` (40px) is a

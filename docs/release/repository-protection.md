@@ -15,10 +15,12 @@ its exact qualified source commit. Nothing in this ruleset touches `main` or
 the solo/autonomous-agent direct-push workflow: a push to `main` still runs
 the canonical `build` workflow, and validated changes continue to reach `main`
 directly. The production release path is additionally gated by the
-dispatch-only `release.yml` workflow, which re-verifies artifact provenance,
-`SHA256SUMS.txt` consistency, the external evidence record, and the
-Authenticode signature before creating a `v*` tag (see
-`docs/release/publication-gates.md`).
+dispatch-only Stage B `publish-release.yml` workflow — the ONLY workflow that
+creates releases and `v*` tags (`gh release create`) — which re-verifies
+artifact provenance, `SHA256SUMS.txt` consistency, the external evidence
+record, and the Authenticode signature before publishing (see
+`docs/release/publication-gates.md`; `release.yml` is RC-qualification-only
+and has no publication path).
 
 ## Branch model — main only
 

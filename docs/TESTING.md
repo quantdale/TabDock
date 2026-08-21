@@ -353,12 +353,25 @@ Options:
 
 > **Note:** The `LAYOUT[drift]`/`LAYOUT[movesize]`/`LAYOUT[capture]` and `unhealthy`
 > log assertions that used to reference instrumentation absent from committed
-> source were removed or retargeted in the `expand-e2e-coverage` change. Every
+> source were removed or retargeted in the `expand-e2e-coverage` change, and the
+> legacy `SHEPHERD[dragout]` assertion was removed as well — no committed source
+> emits that line (the removal is noted in `Scenarios.Drag.cs`). Every
 > remaining log-substring assertion (e.g. `SHEPHERD[position]`,
-> `SHEPHERD[dragout]`, `SHEPHERD[rescue]`, `Reordered tab`, `hid itself`,
+> `SHEPHERD[rescue]`, `Reordered tab`, `hid itself`,
 > `destroyed; removing its tab`, `Global hotkey Ctrl+Alt+G pressed`) has been
 > verified against committed application source. No scenario may assert on
 > instrumentation absent from committed source — see §D.
+
+### Scenario status vocabulary
+
+Scenario results use four statuses: `PASS`, `FAIL`, `SKIP`, and `BLOCKED`
+(`QualificationStatus` in `Scenarios.cs`). A scenario starts `PASS`; a failed
+`Check` marks it `FAIL`, `Skip(reason)` marks it `SKIP`, and
+`Blocked(reason)` marks it `BLOCKED`. SKIP does not latch upward: a later
+failed `Check` demotes an already-skipped scenario to `FAIL` (a skip must
+never remain green when a real assertion fails). The runner treats only
+`PASS` and `SKIP` as success for exit-code purposes; `FAIL` and `BLOCKED`
+fail the run.
 
 ### Run constraints
 

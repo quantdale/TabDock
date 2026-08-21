@@ -387,7 +387,7 @@ retained bytes (no build, no sign)
   need evidence and their manifests honestly report
   `productionReleaseEligibility = BLOCKED_EXTERNAL`.
 - Release-tooling regression tests: `scripts/release-tooling-tests.ps1`
-  (138 deterministic adversarial cases, including signing-provider policy,
+  (150 deterministic adversarial cases, including signing-provider policy,
   the release-policy trust boundary (old candidates rejected under CURRENT
   policy, policy-schema contract, candidate-policy isolation, publisher
   identity policy, Stage A/B dispatch contracts), Stage B zero candidate
