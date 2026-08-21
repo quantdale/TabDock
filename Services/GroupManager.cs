@@ -397,7 +397,7 @@ public sealed class GroupManager
         RequestDurableSave(reason);
     }
 
-    public WindowReleaseOutcome ReleaseTab(Group group, int index, bool show = true)
+    public WindowReleaseOutcome ReleaseTab(Group group, int index, bool show = true, bool requestSave = true)
     {
         if (index < 0 || index >= group.Members.Count)
             return WindowReleaseOutcome.TargetGoneOrRecycled;
@@ -430,7 +430,8 @@ public sealed class GroupManager
 
         _log.Log($"Released tab {index} from group {group.Id}");
         DiagnosticRuntime.Record("guest.release", guest: cw.Hwnd, group: group.Id.ToString("N"), action: "release", result: "success");
-        RequestDurableSave("tab-released");
+        if (requestSave)
+            RequestDurableSave("tab-released");
         return outcome;
     }
 
@@ -498,7 +499,7 @@ public sealed class GroupManager
                     CapturedWindow cw = group.Members[i];
                     try
                     {
-                        WindowReleaseOutcome outcome = ReleaseTab(group, i, show: true);
+                        WindowReleaseOutcome outcome = ReleaseTab(group, i, show: true, requestSave: false);
                         if (outcome == WindowReleaseOutcome.RecoveryPending)
                             _log.Log($"EmergencyReleaseAll retained 0x{cw.Hwnd.ToInt64():X} in group {group.Id}: recovery pending.");
                     }
@@ -513,6 +514,10 @@ public sealed class GroupManager
         {
             _log.LogException("EmergencyReleaseAll enumeration", ex);
         }
+
+        // One durable save for the whole sweep instead of one synchronous
+        // state write per released member during shutdown paths.
+        RequestDurableSave("emergency-release-all");
     }
 
     /// <summary>

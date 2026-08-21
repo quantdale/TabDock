@@ -39,7 +39,7 @@ public sealed class PersistenceService
 
     // The exact JSON last written to disk, so an unchanged save can skip the
     // write + atomic-rename round trip entirely.
-    private string? _lastSavedJson;
+    private volatile string? _lastSavedJson;
 
     // A read/access failure or unsupported future file is not evidence that the
     // user's state is empty. Block later saves in that process.
@@ -78,6 +78,15 @@ public sealed class PersistenceService
         _getAttributes = getAttributes;
         _readAllText = readAllText;
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        if (string.IsNullOrWhiteSpace(statePath) && string.IsNullOrWhiteSpace(appData))
+        {
+            // An empty AppData path would silently relocate durable state to a
+            // process-relative (CWD-dependent) location. Fail closed instead.
+            _statePath = Path.Combine("TabDock", "state.json");
+            _storageAvailable = false;
+            _storageFailureReason = "The AppData folder path is unavailable; refusing to persist to a process-relative location.";
+            return;
+        }
         _statePath = string.IsNullOrWhiteSpace(statePath)
             ? Path.Combine(appData, "TabDock", "state.json")
             : Path.GetFullPath(statePath);
@@ -239,6 +248,13 @@ public sealed class PersistenceService
 
             try
             {
+                // The state directory can disappear externally between the
+                // constructor probe and this write; recreate it so one
+                // deletion does not disable persistence for the session.
+                string? directory = Path.GetDirectoryName(_statePath);
+                if (!string.IsNullOrEmpty(directory))
+                    Directory.CreateDirectory(directory);
+
                 // A backup copy is part of the same save transaction. If it cannot
                 // be made, the catch below prevents the primary from being touched.
                 if (File.Exists(_statePath))
