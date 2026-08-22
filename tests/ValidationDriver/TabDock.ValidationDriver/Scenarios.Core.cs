@@ -1241,8 +1241,9 @@ internal static partial class Scenarios
     // to interact against a 200ms timer — see the amended spec's NOTES), so the
     // scenario exercises the restore-first branch: the still-captured guest is
     // restored inside its tab, then released via container close, and the guard
-    // (ContainerWindow.xaml.cs stops the timers and nulls _shepherdActiveWindow
-    // on close) must keep the released guest at its pre-capture placement —
+    // (ContainerWindow.xaml.cs stops the timers and clears all presentation
+    // authority via SplitPresentationController.Clear() on close) must keep the
+    // released guest at its pre-capture placement —
     // not repositioned by any restore/reassert machinery tied to the now-defunct
     // container.
     // -------------------------------------------------------------------------

@@ -88,9 +88,9 @@ public sealed class ReplaceableDispatcherTimerTests
     public void CapturedState_IsTheScheduledSnapshot_NotLiveState()
     {
         // The handwritten idiom's snapshot-at-schedule contract: the CALLER
-        // copies live state into a local BEFORE arming (e.g. `CapturedWindow
-        // activeWindow = _shepherdActiveWindow;`) and the armed delegate closes
-        // over that local — so later external mutation of the live state cannot
+        // copies live state into a local BEFORE arming (e.g. `CapturedWindow?
+        // activeWindow = _splitController.Foreground;`) and the armed delegate
+        // closes over that local — so later external mutation of the live state cannot
         // reach the tick. This pins it so nobody converts a captured
         // guest/generation into "read current state at tick time".
         string liveState = "guest-A";

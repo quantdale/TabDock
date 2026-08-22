@@ -971,6 +971,9 @@ public partial class ContainerWindow : Window
         // settle so a queued Rendering handler does not fire against nulled
         // split members after close, and stop the activate reassert timer
         // before clearing the active guest it would reassert (Q5/Q8).
+        // OnClosed in ContainerWindow.Split.cs calls the same helper — both
+        // sites are deliberately idempotent because Closed cannot assume
+        // partial OnClosed ordering; this is the ONLY disarm path.
         DisarmSplitPresentationSettle();
         _activateReassertTimer.Cancel();
         CloseCapturePanel();

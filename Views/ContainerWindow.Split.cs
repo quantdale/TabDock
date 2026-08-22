@@ -11,18 +11,37 @@ using TabDock.ViewModels;
 namespace TabDock.Views;
 
 /// <summary>
-/// Split interaction transitions that intentionally sit above the ordinary tab
-/// selection/drag handlers. The split composite remains a persistent
-/// relationship while the user interacts with either member or merely
-/// hovers/right-clicks another tab; an explicit LEFT click on an ordinary
-/// non-member suspends the pair and presents that tab normally.
+/// The split-presentation concern of <see cref="ContainerWindow"/>: everything
+/// above the ordinary tab selection/drag handlers that keeps the split
+/// composite a persistent relationship while the user interacts with either
+/// member or merely hovers/right-clicks another tab. An explicit LEFT click on
+/// an ordinary non-member suspends the pair and presents that tab normally.
 ///
-/// This is kept in a partial file because the transition is a UI policy fix; it
-/// does not change the Shepherd/no-reparent native mutation core.
+/// Concerns owned here, in order:
+/// 1. Lifecycle hooks — split-interaction wiring plus settle disarm (below).
+/// 2. Non-member activation — the third-tab click that suspends a presented
+///    pair through SplitInteractionPolicy + SuspendForGuest.
+/// 3. Post-popup presentation settle — the CompositionTarget one-shot that
+///    re-glues and re-foregrounds the pair after chrome teardown.
+///
+/// All state decisions live in SplitPresentationController /
+/// SplitInteractionPolicy / SplitPresentationPolicy; this partial only owns
+/// WPF wiring for them. It does not touch the Shepherd/no-reparent native
+/// mutation core.
 /// </summary>
 public partial class ContainerWindow
 {
     private bool _splitInteractionHooksAttached;
+
+    // ------------------------------------------------------------------
+    // 1. Lifecycle hooks.
+    //
+    // Settle teardown is deliberately reachable from TWO sites: OnClosed here
+    // (this file's own hooks) and ContainerWindow_Closed in the main partial
+    // (which must not depend on partial OnClosed ordering). Both funnel into
+    // the ONE idempotent DisarmSplitPresentationSettle helper — there is no
+    // second unsubscribe path for CompositionTarget.Rendering anywhere.
+    // ------------------------------------------------------------------
 
     protected override void OnContentRendered(EventArgs e)
     {
@@ -50,6 +69,10 @@ public partial class ContainerWindow
         DisarmSplitPresentationSettle();
         base.OnClosed(e);
     }
+
+    // ------------------------------------------------------------------
+    // 2. Non-member activation (third-tab click suspends the pair).
+    // ------------------------------------------------------------------
 
     /// <summary>
     /// Registered by XAML before the code-behind drag/selection guard, so on a
@@ -199,6 +222,10 @@ public partial class ContainerWindow
             group: Group.Id.ToString("N"), action: "pair-to-single", result: "pair-retained-single-pass");
         return true;
     }
+
+    // ------------------------------------------------------------------
+    // 3. Post-popup presentation settle (CompositionTarget one-shot).
+    // ------------------------------------------------------------------
 
     /// <summary>
     /// Split creation is normally invoked from a WPF ContextMenu. EnterSplit
