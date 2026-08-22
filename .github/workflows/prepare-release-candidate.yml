@@ -37,7 +37,7 @@ name: prepare-release-candidate
 # release-policy generation, so the candidate can never supply its own
 # production signing/publication policy. Any disagreement fails BEFORE any
 # credentials are materialized and BEFORE any build. RC qualification
-# (release.yml) continues to support arbitrary SHAs; this production path
+# (qualify-candidate.yml) continues to support arbitrary SHAs; this production path
 # intentionally does not.
 #
 # SIGNING IS MANDATORY AND PROVIDER-AWARE ON THIS PATH. The signing backend
@@ -54,7 +54,7 @@ name: prepare-release-candidate
 # is MANDATORY here: the signed certificate subject must equal it. Without an
 # approved, fully configured provider the run fails with BLOCKED_EXTERNAL and
 # no candidate is produced. Qualification-only RC runs remain possible
-# through release.yml (unsigned or local-PFX signed, never published).
+# through qualify-candidate.yml (unsigned or local-PFX signed, never published).
 on:
   workflow_dispatch:
     inputs:

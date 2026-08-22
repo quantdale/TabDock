@@ -19,7 +19,7 @@ dispatch-only Stage B `publish-release.yml` workflow — the ONLY workflow that
 creates releases and `v*` tags (`gh release create`) — which re-verifies
 artifact provenance, `SHA256SUMS.txt` consistency, the external evidence
 record, and the Authenticode signature before publishing (see
-`docs/release/publication-gates.md`; `release.yml` is RC-qualification-only
+`docs/release/publication-gates.md`; `qualify-candidate.yml` is RC-qualification-only
 and has no publication path).
 
 ## Branch model — main only

@@ -150,7 +150,7 @@ A manually dispatched workflow that:
    must be the dispatch commit (`github.workflow_sha == github.sha`).
    Policy code and candidate source therefore start from the SAME trusted
    release-policy generation; production candidates are never prepared from
-   arbitrary historical SHAs (RC qualification in `release.yml` still
+   arbitrary historical SHAs (RC qualification in `qualify-candidate.yml` still
    supports arbitrary SHAs);
 2. checks out the exact SHA (== the trusted dispatch SHA) and verifies it;
 3. runs the canonical hermetic qualification;
@@ -198,7 +198,7 @@ production signer the run fails with `BLOCKED_EXTERNAL` and no candidate is
 produced. The legacy local-PFX secrets are NOT exposed to this production
 job at all (least privilege: the production HSM job must not receive unused
 exportable-PFX secrets). Qualification-only unsigned RC workflows
-(`release.yml`) remain separate and continue to work (`not-configured` or
+(`qualify-candidate.yml`) remain separate and continue to work (`not-configured` or
 `local-pfx`).
 
 ### STAGE B — `publish-release.yml` (publish existing qualified candidate)
@@ -320,7 +320,7 @@ verified same-run handoff (final hash identity check in the publish job).
 
 Every `actions/checkout` step in the release workflows
 (`publish-release.yml` — both trusted-policy checkouts and the
-candidate-source checkout; `prepare-release-candidate.yml`; `release.yml`;
+candidate-source checkout; `prepare-release-candidate.yml`; `qualify-candidate.yml`;
 `build.yml`) sets `persist-credentials: false`: none of these workflows
 performs an authenticated git push from a checkout, so no credentials are
 persisted in `.git/config` on the runner. This is a static, tested property
@@ -333,7 +333,7 @@ the per-job `github.token` as before.
 
 Every `uses: actions/...` step in the four release-adjacent workflows
 (`build.yml`, `prepare-release-candidate.yml`, `publish-release.yml`,
-`release.yml`) is pinned to an immutable full commit SHA with a trailing
+`qualify-candidate.yml`) is pinned to an immutable full commit SHA with a trailing
 `# vX.Y.Z` comment for human readability (the `digicert/...` signing action
 in Stage A was already pinned). No mutable `@v7` / `@v6` tags remain in
 the production signing/publication trust boundary, and `build.yml`
@@ -487,9 +487,9 @@ Validation rules (enforced by `Test-ExternalEvidenceFile`):
 
 ## RC qualification vs production publication
 
-| Property | RC qualification-only (`release.yml`) | Production (Stage A + Stage B) |
+| Property | RC qualification-only (`qualify-candidate.yml`) | Production (Stage A + Stage B) |
 |----------|---------------------------------------|--------------------------------|
-| Workflow | `release.yml`, dispatch with `sha` (+ optional `version`, `signing-required`) | Stage A: `prepare-release-candidate.yml`; Stage B: `publish-release.yml` |
+| Workflow | `qualify-candidate.yml`, dispatch with `sha` (+ optional `version`, `signing-required`) | Stage A: `prepare-release-candidate.yml`; Stage B: `publish-release.yml` |
 | External evidence | never required | required in Stage B: schema-v2 record with all gates PASS, bound to run + artifact + SHA + hash |
 | Signing | optional: `not-configured` (unsigned) or `local-pfx` (dev/private cert, never the public-GA signer) | mandatory in Stage A through the APPROVED production provider (`digicert-stm`, non-exportable `CLOUD_HSM` key; run fails `BLOCKED_EXTERNAL` without an approved configured signer); Stage B independently re-verifies `signtool verify /pa` + timestamp + certificate identity with no provider access |
 | Build/sign at publication | n/a (nothing is published) | Stage B downloads the Stage A artifact; ZERO rebuild, ZERO re-sign |
@@ -651,7 +651,7 @@ silently merely to pass the gate.
   (needs: verify; contents: write; final hash identity check; derived tag;
   release asset verification; no candidate execution, no build, no sign,
   no signing-provider authentication).
-- `.github/workflows/release.yml`: RC qualification-only (unsigned or
+- `.github/workflows/qualify-candidate.yml`: RC qualification-only (unsigned or
   `local-pfx`); no publication path.
 - `.github/workflows/build.yml`: hosted CI gates the release-control
   regression suite (`scripts/release-tooling-tests.ps1`).

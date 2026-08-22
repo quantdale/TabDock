@@ -1936,7 +1936,7 @@ try {
     }
 
     New-TestCase 'rc-workflow-has-no-publication-path' {
-        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\release.yml'))
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\qualify-candidate.yml'))
         Assert-True ($yml -notmatch 'gh release create') 'the RC workflow must never create a release'
         Assert-True ($yml -notmatch 'create-release') 'the RC workflow has no release-creation input'
         Assert-True ($yml -notmatch 'external-evidence') 'the RC workflow never consumes external evidence'
@@ -2108,7 +2108,7 @@ try {
     }
 
     New-TestCase 'release-workflow-checkouts-have-no-unnecessary-persisted-credentials' {
-        foreach ($wf in @('.github\workflows\publish-release.yml', '.github\workflows\prepare-release-candidate.yml', '.github\workflows\release.yml', '.github\workflows\build.yml')) {
+        foreach ($wf in @('.github\workflows\publish-release.yml', '.github\workflows\prepare-release-candidate.yml', '.github\workflows\qualify-candidate.yml', '.github\workflows\build.yml')) {
             $yml = [IO.File]::ReadAllText((Join-Path $repoRoot $wf))
             $checkouts = @(Get-CheckoutSteps $yml)
             Assert-True ($checkouts.Count -ge 1) "$wf must contain at least one checkout step"
@@ -2155,7 +2155,7 @@ try {
             '.github/workflows/build.yml',
             '.github/workflows/prepare-release-candidate.yml',
             '.github/workflows/publish-release.yml',
-            '.github/workflows/release.yml'
+            '.github/workflows/qualify-candidate.yml'
         )
         $expected = @{
             'actions/checkout'          = '3d3c42e5aac5ba805825da76410c181273ba90b1'
@@ -2205,7 +2205,7 @@ try {
         # In the main-only model there is no promotion/staging workflow. Only
         # the release publisher holds contents: write (to create releases/tags);
         # every other workflow must remain contents: read.
-        foreach ($wf in @('.github\workflows\build.yml', '.github\workflows\prepare-release-candidate.yml', '.github\workflows\release.yml')) {
+        foreach ($wf in @('.github\workflows\build.yml', '.github\workflows\prepare-release-candidate.yml', '.github\workflows\qualify-candidate.yml')) {
             $other = [IO.File]::ReadAllText((Join-Path $repoRoot $wf))
             Assert-True ($other -notmatch 'contents:\s*write') "$wf must remain contents: read (only publish-release holds write in the main-only model)"
         }
@@ -2438,16 +2438,16 @@ try {
         # R21-001c: a boolean dispatch input stringifies to 'true'/'false'.
         # The old `${{ inputs.signing-required == 'true' }}` compared a
         # boolean to a STRING and always rendered false.
-        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\release.yml'))
-        Assert-True ($yml -match [regex]::Escape('RELEASE_SIGNING_REQUIRED: ${{ inputs.signing-required }}')) 'release.yml must pass the boolean input through unmodified (stringifies to true/false)'
-        Assert-True ($yml -notmatch "inputs\.signing-required\s*==") "the boolean-to-string comparison form must be gone from release.yml"
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\qualify-candidate.yml'))
+        Assert-True ($yml -match [regex]::Escape('RELEASE_SIGNING_REQUIRED: ${{ inputs.signing-required }}')) 'qualify-candidate.yml must pass the boolean input through unmodified (stringifies to true/false)'
+        Assert-True ($yml -notmatch "inputs\.signing-required\s*==") "the boolean-to-string comparison form must be gone from qualify-candidate.yml"
     }
 
     New-TestCase 'rc-workflow-offers-no-digicert-provider' {
         # R21-001c: the RC-only path cannot provision DigiCert; production
         # DigiCert signing belongs exclusively to Stage A.
-        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\release.yml'))
-        Assert-True ($yml -notmatch 'digicert-stm') 'release.yml must not offer digicert-stm anywhere (choice list included)'
+        $yml = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\qualify-candidate.yml'))
+        Assert-True ($yml -notmatch 'digicert-stm') 'qualify-candidate.yml must not offer digicert-stm anywhere (choice list included)'
         Assert-True ($yml -match 'not-configured') 'the RC unsigned default provider must remain'
         Assert-True ($yml -match 'local-pfx') 'the RC development provider must remain'
     }
@@ -2456,11 +2456,11 @@ try {
         # R21-001d: jobs that call actions/upload-artifact need job-level
         # actions: write (top-level contents: read alone is insufficient);
         # jobs without uploads must not hold it. build.yml uploads nothing.
-        $rc = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\release.yml'))
+        $rc = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\qualify-candidate.yml'))
         $rcJob = $rc.Substring($rc.IndexOf('  qualify:'))
-        Assert-True ($rcJob -match 'permissions:') 'the release.yml upload job must declare job-level permissions'
-        Assert-True ($rcJob -match 'actions: write') 'the release.yml upload job must hold actions: write'
-        Assert-True ($rcJob -match 'contents: read') 'the release.yml upload job must keep contents: read'
+        Assert-True ($rcJob -match 'permissions:') 'the qualify-candidate.yml upload job must declare job-level permissions'
+        Assert-True ($rcJob -match 'actions: write') 'the qualify-candidate.yml upload job must hold actions: write'
+        Assert-True ($rcJob -match 'contents: read') 'the qualify-candidate.yml upload job must keep contents: read'
         $stageA = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\prepare-release-candidate.yml'))
         $stageAJob = $stageA.Substring($stageA.IndexOf('  prepare-candidate:'))
         Assert-True ($stageAJob -match 'permissions:') 'the Stage A upload job must declare job-level permissions'

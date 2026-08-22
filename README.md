@@ -364,7 +364,7 @@ retained bytes (no build, no sign)
   compilation, no second signing, no tag input, no candidate execution
   anywhere in Stage B (candidate source and candidate artifact are DATA ONLY
   in both jobs).
-- `release.yml` is the RC qualification-only workflow (dispatch-only, never
+- `qualify-candidate.yml` is the RC qualification-only workflow (dispatch-only, never
   publishes): it qualifies the exact SHA and retains
   `tabdock-rc-<sha>-<run-id>`; signing is optional (`NOT_CONFIGURED`
   allowed); RC artifacts can never be production-published (their manifest

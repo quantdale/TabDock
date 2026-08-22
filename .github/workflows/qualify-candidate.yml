@@ -5,7 +5,7 @@
 # Verify the SHA matches the intended release, replace the SHA in this file,
 # keep the `# vX.Y.Z` comment, then run `pwsh -File scripts/release-tooling-tests.ps1`.
 
-name: release
+name: qualify-candidate
 
 # RC QUALIFICATION-ONLY workflow (never publishes). Intentionally NOT
 # triggered by pushes: a main push produces a candidate build through
