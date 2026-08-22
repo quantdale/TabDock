@@ -39,9 +39,9 @@ public sealed class InteractionSourceContractTests
             handler);
 
         string xaml = Read("Views/ContainerWindow.xaml");
-        Assert.Contains("ItemsSource=\"{Binding DisplayTabs}\"", xaml, StringComparison.Ordinal);
-        Assert.Contains("SelectedItem=\"{Binding ActiveTab, Mode=OneWay}\"", xaml, StringComparison.Ordinal);
-        Assert.Contains("IsSelected\" Value=\"{Binding IsActive, Mode=TwoWay}\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("ItemsSource=\"{Binding DisplayTabs}\"", xaml);
+        Assert.Contains("SelectedItem=\"{Binding ActiveTab, Mode=OneWay}\"", xaml);
+        Assert.Contains("IsSelected\" Value=\"{Binding IsActive, Mode=TwoWay}\"", xaml);
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public sealed class InteractionSourceContractTests
         string split = Slice(
             code,
             "private void LayoutSplitPanes",
-            "private void RefreshSizeConstraint");
+            "private void EnterSplit");
         Assert.Matches(
             new Regex(
                 @"NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*top\s*\.\s*Hwnd\s*\)\s*&&\s*IsRefusingPane\s*\(\s*top\s*,\s*topRect\s*\)"),
