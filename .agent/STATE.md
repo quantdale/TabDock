@@ -17,7 +17,7 @@ Objective: act on `docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md` in waves
 ownership → 4 self-test migration → 5 repo hygiene), preserving every
 Shepherd/native-window invariant. Wave definitions are in the session goal.
 
-**STATUS: Waves 0–3 COMPLETE — implemented, verified, committed, pushed.**
+**STATUS: Waves 0–4 COMPLETE — implemented, verified, committed, pushed.**
 Wave 0 gate (executed by a healthy shell after the OpenCode Bash harness
 failure): Debug/Release builds 0w/0e; tests 214/214 both configs (+29 new
 regression tests); openspec 20/20; git diff --check clean.
@@ -176,6 +176,39 @@ non-negotiables preserved).
   Release builds 0w/0e; tests 302/302 both configs; release tooling 150/150;
   validate.ps1 -Ci PASS; git diff --check clean.
 
+**Wave 4 (self-test migration out of TabDock.exe) — COMPLETE:** plan and
+per-suite dispositions in `.agent/plans/wave4-selftest-migration.md`;
+OpenSpec change `wave4-selftest-migration`. Clusters 4A–4D (b890b4e,
+180656f, 44570d3, 1900ed5) moved ~6,000 lines of hermetic test code from
+`Services/*SelfTest*.cs` + embedded classes into `tests/UnitTests` as
+semantically named xUnit facts/theories with shared fixtures
+(`ShepherdTestFixtures`, `PendingRecoveryFixtures`). 4E (ad05818) deleted
+`DiagnosticSelfTest`, `DiagnosticCommandKind.SelfTest`, the
+`--selftest-diagnostics` parse entry/dispatch, `SplitGeometry.RunSelfTest`,
+and the `--selftest-geometry` startup branch; `GeometryTests` now owns the
+authoritative partition qualification (exhaustive widths 1..4096 × heights ×
+positive/zero/negative origins, odd-width cases, seeded fuzz 100k rects seed
+20260810, constraint-minimality math). `scripts/validate.ps1` qualifies
+hermetic behavior via headless xUnit plus the retained real-user32
+`--selftest-native-abi` probe (intentionally executable: WINDOWPLACEMENT ABI
+evidence requires a built Windows process); `release-qualify.ps1` runs native
+ABI against the exact published artifact. Closure commit 4dacf3a fixed every
+live stale reference (README Diagnostics, TESTING geometry/DPI/lifecycle/
+CLI-safe sections, ARCHITECTURE layout/diagnostics bullets, removed the dead
+`SELFTEST[geometry]` log-table row, docs/release publication-gates /
+mixed-dpi-qualification / compatibility-matrix), corrected both OpenSpec
+deltas for a clean future archive (ui-ux-hardening MODIFIED header aligned to
+the live requirement name; release-engineering delta is ADDED), and checked
+off tasks 3.1–3.5 after direct verification. Historical audits/execplans/
+waypoints intentionally untouched.
+
+Gate (2026-08-22): Debug/Release builds 0w/0e; Debug+Release xUnit 528/528
+each; release tooling 150/150; `validate.ps1 -Ci -Publish` PASS (native ABI
+probe PASS on Windows 11 build 26200; version/publish smokes bind commit
+ad05818); openspec 21/21; git diff --check clean. Note: the interrupted
+session left a stale WPF temp-project obj state (`*_wpftmp.csproj` duplicate-
+attribute errors); removing gitignored `obj`/`bin` debris fixed it.
+
 Audit revalidation complete (read-only, against 8ac6db8): all top findings
 confirmed live — budget sink never assigned anywhere; coordinator used for
 `RequestRelayout` only (its refusal API, generation guard,
@@ -194,14 +227,20 @@ hotkey-failure UX gap + hardcoded launcher hint confirmed.
 
 NEXT ACTIONS:
 
-1. WAVE 4 — self-test migration IN PROGRESS. Plan + full inventory +
-   dispositions: `.agent/plans/wave4-selftest-migration.md` (baseline
-   d3116ef: builds/tests/tooling/validation all green; diagnostics self-test
-   checks=229; geometry fuzz checks=14,719,158). Clusters 4A–4E per plan;
-   native ABI probe retained in TabDock.exe (Option A); diagnostics and
-   geometry executable commands removed at 4E.
-2. Wave 5 (repo hygiene) per the campaign goal ordering; then final
-   campaign wrap-up.
+1. WAVE 5 — repository hygiene per `docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md`
+   §3.6 and §5.5, evidence-first: archive genuinely complete OpenSpec changes
+   (incl. wave4-selftest-migration via the canonical CLI), re-audit the
+   2026-08-21 raw dump directory preserving DISPOSITION.md, resolve the root
+   working-note debt (tabdock_runtime_audit.md,
+   tabdock_runtime_stabilization_agent_prompt.txt, investigation_findings.md
+   — has live references, relocate atomically — goal.txt vs
+   docs/audits/2026-08-21/real-goal.txt divergence), rename the
+   qualification-only release.yml to qualify-candidate.yml + update live
+   references, keep all harness trees, add the generated-copy warning,
+   note digicert-research supersession. No application-behavior change.
+2. Campaign wrap-up: STATE.md campaign-complete record, final clean-tree
+   full qualification, push, remote reconciliation.
+3. Post-campaign: fresh assessment for the next milestone.
 
 UI/UX bug-hunt pass (2026-08-21, same day as R22, uncommitted at time of
 writing): a spec-grounded, reject-by-default multi-agent review of the
@@ -441,16 +480,17 @@ Canonical finding-by-finding disposition: `docs/audits/2026-08-21/DISPOSITION.md
 - Deferred-by-design items listed in DISPOSITION.md (stale-reorder cosmetic
   race, budget-sink production wiring, correlation IDs, harness scope).
 
-## VALIDATION RESULTS (2026-08-22, this campaign)
+## VALIDATION RESULTS (2026-08-22, Waves 0–4)
 
 - `dotnet build TabDock.sln -c Debug`: 0 errors, 0 warnings.
 - `dotnet build TabDock.sln -c Release`: 0 errors, 0 warnings.
-- `dotnet test tests/UnitTests/TabDock.UnitTests.csproj -c Debug`: 182 passed / 0 failed.
-- `dotnet test tests/UnitTests/TabDock.UnitTests.csproj -c Release`: 182 passed / 0 failed.
+- `dotnet test tests/UnitTests/TabDock.UnitTests.csproj -c Debug`: 528 passed / 0 failed.
+- `dotnet test tests/UnitTests/TabDock.UnitTests.csproj -c Release`: 528 passed / 0 failed.
 - `pwsh -NoProfile -File scripts/release-tooling-tests.ps1`: 150 passed / 0 failed.
-- `pwsh -NoProfile -File scripts/validate.ps1 -Configuration Release -Ci`: PASS (see git-hosted CI for the exact-SHA run).
-- `pwsh -NoProfile -File scripts/validate.ps1 -Configuration Release -Ci -Publish`: PASS.
-- `tools/openspec/.../openspec validate --all --no-interactive`: 20 passed / 0 failed.
+- `pwsh -NoProfile -File scripts/validate.ps1 -Configuration Release -Ci -Publish`: PASS
+  (includes headless xUnit 528/528, native ABI probe PASS on Windows 11 build
+  26200, version/publish smokes bound to commit ad05818).
+- `tools/openspec/node_modules/.bin/openspec validate --all --no-interactive`: 21 passed / 0 failed.
 - `git diff --check`: clean.
 - Historical counts elsewhere in this file are dated snapshots, not current truth.
 
