@@ -59,8 +59,13 @@ controller as single split authority; no view state reintroduced.
      finalization still returns Mismatch → TargetGoneOrRecycled).
    - Controller: SuspendForGuest hide loop aborts on TargetGoneOrRecycled like
      RecoveryPending; ResumeMember gains an `_isCurrent` liveness gate over the
-     resuming member AND both pair members before CommitDesired;
-     DefinePair's departing-hide loop treats TargetGoneOrRecycled as Pending.
+     resuming member AND both pair members before CommitDesired.
+     DefinePair analyzed and deliberately UNCHANGED: its TargetGoneOrRecycled
+     case only ever involves a DEPARTING member (the commit resolves identities
+     from the new arguments alone and never retains the dead reference), so
+     treating "already gone" as "nothing to hide" is correct there; aborting
+     would block legitimate reconfiguration until the destroy event lands for
+     no safety gain.
    - View: `ResumeSplitPair` pre-gates focused+partner liveness before hiding
      C; if `ResumeMember` still returns false (exotic re-entrancy), revert
      selection to C and re-present the single guest instead of laying out a

@@ -257,22 +257,39 @@ hotkey-failure UX gap + hardcoded launcher hint confirmed.
 
 NEXT ACTIONS:
 
-1. ACTIVE CAMPAIGN (2026-08-23): post-hardening stranded-guest tails — plan
-   `.agent/plans/post-hardening-stranded-guest-tails-2026-08-23.md`. Fresh
-   multi-domain audit (Shepherd/split/persistence/winevent+startup/tests+perf)
-   verified two HIGH defects: (SG-1) ReleaseIntentionalHide finalization
-   misclassifies own-token-removal as Mismatch after a JournalClear failure →
-   hidden guest detached with stale evidence; (SG-2) split Suspend/Resume
-   commit dead members (no liveness gate) → blank panes + foreground into a
-   hidden window. Plus SG-3 (LOW): suppression slots survive mismatch paths.
-   Fix = token-tolerant evaluation for the two post-token-removal boundaries
-   (existing EvaluateBeforeCaptureToken core), controller liveness gates,
-   view pre-gate, suppression eviction. Regression tests first.
-2. Queued follow-ups (verified, not this campaign): dormant-split drag-reorder
-   disablement (view), atomic .bak durability, Resolutions ledger bound +
-   orphaned .recovered sidecars, WinEvent double-probe cleanup,
-   UnchangedLayoutUpdated tautology test replacement, GroupViewModel
-   ReorderTabs VM-path tests (documented crash history).
+1. STRANDED-GUEST TAILS CAMPAIGN COMPLETE (2026-08-23, plan
+   `.agent/plans/post-hardening-stranded-guest-tails-2026-08-23.md`).
+   Fresh multi-domain audit verified two HIGH defects, both fixed with
+   regression tests-first:
+   - SG-1 `db59837`: ReleaseIntentionalHide finalization boundaries evaluate
+     through the pre-token identity core once THIS transaction removed its own
+     capture token (a JournalClear failure could previously be misread as
+     TargetGoneOrRecycled → hidden guest detached with cleared/stale evidence).
+     Genuine recycles still mismatch (guard test pins it). Also evicts
+     diagnostic suppression slots on Release/Hide mismatch paths (SG-3).
+   - SG-2 `cb9f90b`: SplitPresentationController SuspendForGuest treats a
+     member-hide TargetGoneOrRecycled as fail-closed like RecoveryPending;
+     ResumeMember gates liveness of the resuming member AND both pair members
+     before commit; ResumeSplitPair pre-gates strong identity on focused+
+     partner before hiding the single guest and re-presents the retained
+     single guest if ResumeMember still refuses. DefinePair deliberately
+     unchanged (departing dead member is never retained by that commit).
+   Gate: Debug+Release builds 0w/0e; Debug+Release xUnit 534/534 each (+6 new
+   regression tests); release tooling 150/150; validate.ps1 -Ci -Publish PASS
+   (native ABI PASS Win11 26200); openspec 25/25; git diff --check clean.
+   No OpenSpec delta needed — fixes bring behavior into compliance with
+   existing requirements (native-window-identity release-finalization;
+   ui-ux-hardening presented-pair visibility).
+2. QUEUED FOLLOW-UPS (verified during this audit, each self-contained):
+   dormant-split drag-reorder disablement (SnapshotDragMidpoints indexes
+   DisplayTabs containers with Tabs-space indices; fail-safe but silent feature
+   loss); atomic/durable .bak staging in PersistenceService.CommitJson;
+   PendingRecoveryService Resolutions ledger bound + orphaned .recovered
+   sidecars after source retirement; duplicate _isCapturedWindow probes in
+   WinEventMonitor Raise/dispatch; replace tautology test
+   UnchangedLayoutUpdated_ProducesNoRelayout with real dirty-check coverage;
+   GroupViewModel.ReorderTabs/CommitReorder/ReleaseTab VM-path tests
+   (documented ArgumentOutOfRangeException crash history, zero current tests).
 3. Standing external gates unchanged: supervised live-desktop acceptance,
    production signing credentials, human final smoke, physical mixed-DPI
    qualification, Windows 10 x64 compatibility.
