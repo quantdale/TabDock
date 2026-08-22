@@ -206,37 +206,6 @@ internal static class DiagnosticSelfTest
             if (!condition) failures++;
         }
 
-        Check(BuildIdentity.ParseCommitHash("1.2.3+abcdef0123456789") == "abcdef0123456789");
-        Check(BuildIdentity.ParseCommitHash("1.2.3") == null);
-        Check(BuildIdentity.ParseSemanticVersion("1.2.3+abcdef", new Version(9, 9)) == "1.2.3");
-        Check(BuildIdentity.ParseSemanticVersion(null, new Version(9, 9)) == "9.9");
-
-        // Windows product normalization: a Windows 11 build must never be
-        // mislabeled solely because the registry ProductName says Windows 10,
-        // and a real Windows 10 build must remain identifiable as Windows 10.
-        // The raw registry evidence stays available for forensics.
-        Check(DiagnosticEnvironmentService.NormalizeWindowsProductName("Windows 10 Pro", "19045") == "Windows 10 Pro");
-        Check(DiagnosticEnvironmentService.NormalizeWindowsProductName("Windows 10 Pro", "22631") == "Windows 11 Pro");
-        Check(DiagnosticEnvironmentService.NormalizeWindowsProductName("Windows 11 Pro", "22631") == "Windows 11 Pro");
-        Check(DiagnosticEnvironmentService.NormalizeWindowsProductName("Windows 10 Enterprise LTSC", "26100") == "Windows 11 Enterprise LTSC");
-        Check(DiagnosticEnvironmentService.NormalizeWindowsProductName("Windows 10 Pro", "21996") == "Windows 10 Pro");
-        Check(DiagnosticEnvironmentService.NormalizeWindowsProductName(null, "22631") == "Windows 11 (build 22631; raw ProductName: unavailable)");
-        Check(DiagnosticEnvironmentService.GetWindowsProductFamily("22631", "Windows 10 Pro") == "Windows 11");
-        Check(DiagnosticEnvironmentService.GetWindowsProductFamily("19045", "Windows 10 Pro") == "Windows 10 or earlier");
-        Check(DiagnosticEnvironmentService.GetWindowsProductFamily(null, "Windows 10 Pro") == "Windows 10 (raw registry evidence)");
-        Check(DiagnosticEnvironmentService.GetWindowsProductFamily(null, null) == "unavailable");
-
-        Check(DiagnosticCommandLine.TryParse(new[] { "--version" }, out DiagnosticCommandRequest version, out _)
-            && version.Kind == DiagnosticCommandKind.Version);
-        Check(DiagnosticCommandLine.TryParse(new[] { "--doctor", "--output", "report.txt" }, out DiagnosticCommandRequest doctor, out _)
-            && doctor.Kind == DiagnosticCommandKind.Doctor && doctor.OutputPath == "report.txt");
-        Check(DiagnosticCommandLine.TryParse(new[] { "--doctor", "--bad" }, out _, out string? parserError)
-            && parserError != null);
-        Check(DiagnosticCommandLine.TryParse(new[] { "--pending-recovery" }, out DiagnosticCommandRequest pending, out _)
-            && pending.Kind == DiagnosticCommandKind.PendingRecovery);
-        Check(DiagnosticCommandLine.TryParse(new[] { "--recover-pending" }, out DiagnosticCommandRequest recover, out _)
-            && recover.Kind == DiagnosticCommandKind.RecoverPending);
-
         var trace = new DiagnosticTrace(3);
         long first = trace.Record("one");
         long second = trace.Record("two");
@@ -246,44 +215,15 @@ internal static class DiagnosticSelfTest
         Check(second == first + 1);
         Check(events.Count == 3 && events[0].Kind == "two" && events[^1].Kind == "four");
         Check(events[0].Sequence < events[^1].Sequence);
-        var callerData = new Dictionary<string, string> { ["key"] = "before" };
-        var defensiveTrace = new DiagnosticTrace(2);
-        defensiveTrace.Record("defensive", data: callerData);
-        callerData["key"] = "after";
-        IReadOnlyList<DiagnosticEventRecord> defensiveSnapshot = defensiveTrace.Snapshot();
-        Check(defensiveSnapshot[0].Data["key"] == "before");
-        defensiveSnapshot[0].Data["key"] = "mutated-snapshot";
-        Check(defensiveTrace.Snapshot()[0].Data["key"] == "before");
-        defensiveTrace.Clear();
-        Check(defensiveTrace.Snapshot().Count == 0);
-        Check(DiagnosticEnvironmentService.HashTitle("secret") != "secret");
-        Check(DiagnosticEnvironmentService.ClassifyJsonText("{\"Version\":1,\"Groups\":[]}", isState: true) == "valid");
-        Check(DiagnosticEnvironmentService.ClassifyJsonText("not-json", isState: true).StartsWith("corrupt", StringComparison.Ordinal));
-        Check(ConsoleSessionSelfTest.UsesScopedStreams());
         Check(ProductMutationLeaseSelfTest.UserScopedNameRules());
         Check(ProductMutationLeaseSelfTest.AccessControlRulesAreUserScoped());
         Check(ProductMutationLeaseSelfTest.ExclusiveAndReusable());
         Check(ProductMutationLeaseSelfTest.AccessDeniedAndConstructionFailuresFailClosed());
         Check(ProductMutationLeaseSelfTest.DiagnosticCommandsRemainLeaseIndependent());
         Check(ProductMutationLeaseSelfTest.DifferentUserScopedLeasesCanCoexist());
-        Check(DeferredWindowPositionSelfTest.ChangedHandlesAreChained());
-        Check(DeferredWindowPositionSelfTest.FailedDeferAbandonsWithoutEnd());
-        Check(DeferredWindowPositionSelfTest.StaleGuestIsNotQueuedAndValidHdwpIsClosed());
-        Check(DeferredWindowPositionSelfTest.ValidatorRunsBeforeEachQueue());
-        Guid selectedGroupId = Guid.NewGuid();
-        var pickerOptions = new[]
-        {
-            new CapturePickerViewModel.GroupOption(Guid.Empty, "<New group>"),
-            new CapturePickerViewModel.GroupOption(selectedGroupId, "Existing"),
-        };
-        Check(CapturePickerViewModel.SelectGroupAfterRefresh(pickerOptions, selectedGroupId)?.Id == selectedGroupId);
-        Check(CapturePickerViewModel.SelectGroupAfterRefresh(pickerOptions, Guid.NewGuid())?.Id == Guid.Empty);
         Check(CapturePickerSelfTest.BackgroundIconResolutionIsGenerationSafe());
         Check(WinEventMonitorSelfTest.FailedInstallUnwindsAndFailsClosed());
         Check(WinEventMonitorSelfTest.DesktopReorderDropsUncapturedAndRejectsStaleDispatch());
-        Check(SessionEndingPolicySelfTest.TeardownIsOneWayAndIdempotent());
-        Check(MinTrackProbeSelfTest.InitializesEveryField());
-        Check(WindowShepherdService.MinTrackProbeTimeoutMilliseconds <= 100);
         Check(WindowIdentitySelfTest.CoversIdentityTiers());
         (int captureChecks, int captureFailures) = CaptureBoundarySelfTest.Run();
         checks += captureChecks;
@@ -292,10 +232,8 @@ internal static class DiagnosticSelfTest
         checks += releaseChecks;
         failures += releaseFailures;
         Check(MonitorDpiSelfTest.CoversProbeAndConversionSeam());
-        Check(ShowWindowSemanticsSelfTest.CoversPostStateSemantics());
         Check(NativeInteropSelfTest.PlacementContractIsStable());
         Check(NativeInteropSelfTest.PlacementRoundTripThroughUser32());
-        Check(ContainerGeometrySelfTest.UsesContainingMonitorWorkArea());
         (int journalChecks, int journalFailures) = RecoveryJournalSelfTest.Run();
         checks += journalChecks;
         failures += journalFailures;
@@ -311,52 +249,7 @@ internal static class DiagnosticSelfTest
         (int stabilizationChecks, int stabilizationFailures) = RuntimeStabilizationSelfTest.Run();
         checks += stabilizationChecks;
         failures += stabilizationFailures;
-        var concurrent = new DiagnosticTrace(128);
-        Parallel.For(0, 512, i => concurrent.Record("concurrent"));
-        Check(concurrent.Snapshot().Count == 128);
-        Check(concurrent.Snapshot().Zip(concurrent.Snapshot().Skip(1), (left, right) => left.Sequence < right.Sequence).All(value => value));
         return (checks, failures);
-    }
-}
-
-internal static class ShowWindowSemanticsSelfTest
-{
-    public static bool CoversPostStateSemantics()
-    {
-        // The first argument models ShowWindow's previous-visibility BOOL.
-        // It is deliberately false for hidden/minimized restore and must not
-        // turn a successful post-state into a failure.
-        bool hiddenRestore = ShowWindowSemantics.RestoreSucceeded(
-            previouslyVisible: false, visibleAfter: true, iconicAfter: false, zoomedAfter: false);
-        bool minimizedRestore = ShowWindowSemantics.RestoreSucceeded(
-            previouslyVisible: true, visibleAfter: true, iconicAfter: false, zoomedAfter: false);
-        bool visibleRestore = ShowWindowSemantics.RestoreSucceeded(
-            previouslyVisible: true, visibleAfter: true, iconicAfter: false, zoomedAfter: false);
-        bool hiddenNormalStillHidden = !ShowWindowSemantics.RestoreSucceeded(
-            previouslyVisible: false, visibleAfter: false, iconicAfter: false, zoomedAfter: false);
-        bool stillIconic = !ShowWindowSemantics.RestoreSucceeded(
-            previouslyVisible: false, visibleAfter: true, iconicAfter: true, zoomedAfter: false);
-        bool stillZoomed = !ShowWindowSemantics.RestoreSucceeded(
-            previouslyVisible: false, visibleAfter: true, iconicAfter: false, zoomedAfter: true);
-        bool hide = ShowWindowSemantics.VisibilitySucceeded(
-            previouslyVisible: true, visibleAfter: false, expectedVisible: false);
-        bool releaseShow = ShowWindowSemantics.VisibilitySucceeded(
-            previouslyVisible: false, visibleAfter: true, expectedVisible: true);
-        bool intentionalHide = ShowWindowSemantics.VisibilitySucceeded(
-            previouslyVisible: true, visibleAfter: false, expectedVisible: false);
-        bool failedVisibility = !ShowWindowSemantics.VisibilitySucceeded(
-            previouslyVisible: false, visibleAfter: false, expectedVisible: true);
-        var positioningFailuresLogged = new HashSet<IntPtr>();
-        if (!hiddenRestore)
-            positioningFailuresLogged.Add(new IntPtr(1));
-        bool genuineFailureWasRecorded = stillIconic
-            && positioningFailuresLogged.Add(new IntPtr(1));
-        bool benignFalseDidNotConsumeFailureSlot = genuineFailureWasRecorded;
-
-        return hiddenRestore && minimizedRestore && visibleRestore
-            && hiddenNormalStillHidden && stillIconic && stillZoomed
-            && hide && releaseShow && intentionalHide && failedVisibility
-            && benignFalseDidNotConsumeFailureSlot;
     }
 }
 
@@ -533,56 +426,6 @@ internal static class NativeInteropSelfTest
         {
             NativeMethods.DestroyWindow(hwnd);
         }
-    }
-}
-
-internal static class MinTrackProbeSelfTest
-{
-    public static bool InitializesEveryField()
-    {
-        IntPtr buffer = System.Runtime.InteropServices.Marshal.AllocHGlobal(
-            System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MINMAXINFO>());
-        try
-        {
-            // Poison the allocation first so the test proves the helper writes
-            // the complete structure rather than relying on allocator zeroing.
-            for (int i = 0; i < System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MINMAXINFO>(); i++)
-                System.Runtime.InteropServices.Marshal.WriteByte(buffer, i, 0xA5);
-
-            WindowShepherdService.InitializeMinTrackProbeBuffer(buffer);
-            NativeMethods.MINMAXINFO value = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeMethods.MINMAXINFO>(buffer);
-            return value.ptReserved.x == 0 && value.ptReserved.y == 0
-                && value.ptMaxSize.x == 0 && value.ptMaxSize.y == 0
-                && value.ptMaxPosition.x == 0 && value.ptMaxPosition.y == 0
-                && value.ptMinTrackSize.x == 0 && value.ptMinTrackSize.y == 0
-                && value.ptMaxTrackSize.x == 0 && value.ptMaxTrackSize.y == 0;
-        }
-        finally
-        {
-            System.Runtime.InteropServices.Marshal.FreeHGlobal(buffer);
-        }
-    }
-}
-
-internal static class ContainerGeometrySelfTest
-{
-    public static bool UsesContainingMonitorWorkArea()
-    {
-        var monitor = new NativeMethods.MONITORINFO
-        {
-            rcMonitor = new NativeMethods.RECT { left = 1920, top = -300, right = 3840, bottom = 1140 },
-            rcWork = new NativeMethods.RECT { left = 1920, top = -260, right = 3840, bottom = 1100 },
-        };
-        var minMax = new NativeMethods.MINMAXINFO
-        {
-            ptMaxPosition = new NativeMethods.POINT { x = -1, y = -1 },
-            ptMaxSize = new NativeMethods.POINT { x = -1, y = -1 },
-        };
-        ContainerWindow.ApplyMonitorMaximizeBounds(monitor, ref minMax);
-        return minMax.ptMaxPosition.x == 0
-            && minMax.ptMaxPosition.y == 40
-            && minMax.ptMaxSize.x == 1920
-            && minMax.ptMaxSize.y == 1360;
     }
 }
 
@@ -888,100 +731,6 @@ internal static class WinEventMonitorSelfTest
         public bool Unhook(IntPtr hook)
         {
             UnhookCount++;
-            return true;
-        }
-    }
-}
-
-internal static class DeferredWindowPositionSelfTest
-{
-    public static bool ChangedHandlesAreChained()
-    {
-        var api = new FakeApi(new[] { new IntPtr(0x22), new IntPtr(0x33), new IntPtr(0x44) });
-        DeferredWindowPositionResult result = DeferredWindowPositionBatch.Apply(api, Entries());
-        return result == DeferredWindowPositionResult.Applied
-            && api.DeferInputs.Count == 3
-            && api.DeferInputs[0] == new IntPtr(0x11)
-            && api.DeferInputs[1] == new IntPtr(0x22)
-            && api.DeferInputs[2] == new IntPtr(0x33)
-            && api.EndInput == new IntPtr(0x44);
-    }
-
-    public static bool FailedDeferAbandonsWithoutEnd()
-    {
-        var api = new FakeApi(new[] { new IntPtr(0x22), IntPtr.Zero, new IntPtr(0x44) });
-        DeferredWindowPositionResult result = DeferredWindowPositionBatch.Apply(api, Entries());
-        return result == DeferredWindowPositionResult.DeferFailed
-            && api.DeferInputs.Count == 2
-            && api.DeferInputs[0] == new IntPtr(0x11)
-            && api.DeferInputs[1] == new IntPtr(0x22)
-            && api.EndInput == IntPtr.Zero;
-    }
-
-    public static bool StaleGuestIsNotQueuedAndValidHdwpIsClosed()
-    {
-        var api = new FakeApi(new[] { new IntPtr(0x22), new IntPtr(0x33), new IntPtr(0x44) });
-        DeferredWindowPositionResult result = DeferredWindowPositionBatch.Apply(
-            api,
-            Entries(),
-            beforeDefer: index => index != 0);
-        return result == DeferredWindowPositionResult.ValidationFailed
-            && api.DeferInputs.Count == 0
-            && api.EndInput == new IntPtr(0x11);
-    }
-
-    public static bool ValidatorRunsBeforeEachQueue()
-    {
-        var api = new FakeApi(new[] { new IntPtr(0x22), new IntPtr(0x33), new IntPtr(0x44) });
-        var calls = new List<int>();
-        DeferredWindowPositionResult result = DeferredWindowPositionBatch.Apply(
-            api,
-            Entries(),
-            beforeDefer: index =>
-            {
-                calls.Add(index);
-                return index != 1;
-            });
-        return result == DeferredWindowPositionResult.ValidationFailed
-            && calls.SequenceEqual(new[] { 0, 1 })
-            && api.DeferInputs.Count == 1
-            && api.EndInput == new IntPtr(0x22);
-    }
-
-    private static IReadOnlyList<DeferredWindowPositionEntry> Entries()
-    {
-        return new[]
-        {
-            new DeferredWindowPositionEntry(new IntPtr(0x101), IntPtr.Zero, 1, 2, 3, 4, 5),
-            new DeferredWindowPositionEntry(new IntPtr(0x102), IntPtr.Zero, 6, 7, 8, 9, 10),
-            new DeferredWindowPositionEntry(new IntPtr(0x103), IntPtr.Zero, 11, 12, 13, 14, 15),
-        };
-    }
-
-    private sealed class FakeApi : IDeferredWindowPositionApi
-    {
-        private readonly IReadOnlyList<IntPtr> _returns;
-        private int _deferIndex;
-
-        public FakeApi(IReadOnlyList<IntPtr> returns)
-        {
-            _returns = returns;
-        }
-
-        public List<IntPtr> DeferInputs { get; } = new();
-        public IntPtr EndInput { get; private set; }
-
-        public IntPtr Begin(int windowCount) => new(0x11);
-
-        public IntPtr Defer(IntPtr hdwp, IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags)
-        {
-            DeferInputs.Add(hdwp);
-            return _returns[_deferIndex++];
-        }
-
-        public bool End(IntPtr hdwp)
-        {
-            EndInput = hdwp;
             return true;
         }
     }

@@ -194,12 +194,12 @@ hotkey-failure UX gap + hardcoded launcher hint confirmed.
 
 NEXT ACTIONS:
 
-1. WAVE 4 — self-test migration out of the product binary (audit §3.3 /
-   Top-Finding #3: ~5,900 lines of `Services/*SelfTest*.cs` + ~792 inline
-   self-test lines in DiagnosticCommandLine.cs; keep the narrow native-ABI
-   probe, move hermetic suites to tests/UnitTests via InternalsVisibleTo).
-   Read docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md §3.3 first and
-   re-validate against current source.
+1. WAVE 4 — self-test migration IN PROGRESS. Plan + full inventory +
+   dispositions: `.agent/plans/wave4-selftest-migration.md` (baseline
+   d3116ef: builds/tests/tooling/validation all green; diagnostics self-test
+   checks=229; geometry fuzz checks=14,719,158). Clusters 4A–4E per plan;
+   native ABI probe retained in TabDock.exe (Option A); diagnostics and
+   geometry executable commands removed at 4E.
 2. Wave 5 (repo hygiene) per the campaign goal ordering; then final
    campaign wrap-up.
 

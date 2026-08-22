@@ -156,17 +156,3 @@ internal sealed class ConsoleSession : IDisposable
         return NativeMethods.GetFileType(handle) != NativeMethods.FILE_TYPE_UNKNOWN;
     }
 }
-
-internal static class ConsoleSessionSelfTest
-{
-    internal static bool UsesScopedStreams()
-    {
-        using var input = new StringReader("answer\n");
-        using var output = new StringWriter();
-        using ConsoleSession session = ConsoleSession.ForTesting(input, output);
-        session.Output.Write("prompt: ");
-        session.Output.Flush();
-        return session.Input.ReadLine() == "answer"
-            && output.ToString() == "prompt: ";
-    }
-}

@@ -15,15 +15,3 @@ internal static class SessionEndingPolicy
         return true;
     }
 }
-
-internal static class SessionEndingPolicySelfTest
-{
-    public static bool TeardownIsOneWayAndIdempotent()
-    {
-        bool started = false;
-        return SessionEndingPolicy.TryBeginTeardown(ref started)
-            && started
-            && !SessionEndingPolicy.TryBeginTeardown(ref started)
-            && started;
-    }
-}
