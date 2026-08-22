@@ -51,7 +51,21 @@ public sealed class InteractionSourceContractTests
     [Fact]
     public void RefusedPaneCache_OnlyShortCircuitsGuestsThatAreStillVisible()
     {
+        // Wave 3C: refusal STORAGE lives behind PaneContainmentCoordinator
+        // (keyed by CapturedWindow reference); the DECISION remains in the pure
+        // PaneContainmentPolicy. The view must not hold a second copy of either.
+        string coordinator = Read("Services/PaneContainmentCoordinator.cs");
+        Assert.Matches(
+            new Regex(
+                @"PaneContainmentPolicy\s*\.\s*ShouldSuppressRepositioning\s*\(\s*guestCurrentlyVisible\s*,\s*refused\s*,\s*requestedRect\s*\)"),
+            coordinator);
+        Assert.Contains("Dictionary<CapturedWindow, NativeMethods.RECT>", coordinator);
+        Assert.DoesNotContain("long", Regex.Match(coordinator, @"private readonly Dictionary<[^>]+>").Value);
+
         string code = Read("Views/ContainerWindow.xaml.cs");
+        Assert.DoesNotContain("_refusedPaneByHwnd", code);
+        int invalidations = Regex.Matches(code, @"_paneContainment\s*\.\s*InvalidateAll\s*\(\s*\)").Count;
+        Assert.True(invalidations >= 12, $"expected all boundary invalidation sites routed through the owner, found {invalidations}");
 
         string single = Slice(
             code,
@@ -59,12 +73,12 @@ public sealed class InteractionSourceContractTests
             "private void LayoutSplitPanes");
         // Suppression is decided by PaneContainmentPolicy (Wave-0 seam): visible
         // guest + same refused rect => suppress; hidden guest => never. Each
-        // call site must feed the policy the CURRENT visibility so a guest
-        // hidden by container minimize always receives a fresh position attempt
-        // on restore instead of being pinned invisible (regression 3591ee3).
+        // call site must feed CURRENT visibility (sampled at decision time) so a
+        // guest hidden by container minimize always receives a fresh position
+        // attempt on restore instead of being pinned invisible (3591ee3).
         Assert.Matches(
             new Regex(
-                @"PaneContainmentPolicy\s*\.\s*ShouldSuppressRepositioning\s*\(\s*guestCurrentlyVisible\s*:\s*NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*ShepherdActiveWindow\s*\.\s*Hwnd\s*\)"),
+                @"_paneContainment\s*\.\s*ShouldSuppressRepositioning\s*\(\s*ShepherdActiveWindow\s*,\s*guestCurrentlyVisible\s*:\s*NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*ShepherdActiveWindow\s*\.\s*Hwnd\s*\)"),
             single);
         Assert.Matches(
             new Regex(@"_shepherd\s*\.\s*PositionAndShow\s*\(\s*ShepherdActiveWindow\s*,\s*containerHwnd\s*,\s*rect\s*\)\s*;"),
@@ -76,11 +90,11 @@ public sealed class InteractionSourceContractTests
             "private void EnterSplit");
         Assert.Matches(
             new Regex(
-                @"PaneContainmentPolicy\s*\.\s*ShouldSuppressRepositioning\s*\(\s*guestCurrentlyVisible\s*:\s*NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*top\s*\.\s*Hwnd\s*\)"),
+                @"_paneContainment\s*\.\s*ShouldSuppressRepositioning\s*\(\s*top\s*,\s*guestCurrentlyVisible\s*:\s*NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*top\s*\.\s*Hwnd\s*\)"),
             split);
         Assert.Matches(
             new Regex(
-                @"PaneContainmentPolicy\s*\.\s*ShouldSuppressRepositioning\s*\(\s*guestCurrentlyVisible\s*:\s*NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*bottom\s*\.\s*Hwnd\s*\)"),
+                @"_paneContainment\s*\.\s*ShouldSuppressRepositioning\s*\(\s*bottom\s*,\s*guestCurrentlyVisible\s*:\s*NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*bottom\s*\.\s*Hwnd\s*\)"),
             split);
         Assert.Matches(
             new Regex(@"_shepherd\s*\.\s*PositionGuestsDeferred\s*\(\s*top\s*,\s*topRect\s*,\s*bottom\s*,\s*bottomRect\s*,\s*containerHwnd\s*\)\s*;"),

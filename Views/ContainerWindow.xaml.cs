@@ -76,9 +76,12 @@ public partial class ContainerWindow : Window
     private bool _constraintDirty = true;
     // Bounded non-compliance guard: a guest that refuses its assigned pane (its
     // native minimum grew larger than the pane — e.g. a browser sidebar opened)
-    // must never be re-fought every frame (resize war). Records the pane rect
-    // each guest last refused; the layout skips re-positioning that exact rect.
-    private readonly Dictionary<long, NativeMethods.RECT> _refusedPaneByHwnd = new();
+    // must never be re-fought every frame (resize war). Wave 3C: the refusal
+    // STORAGE lives behind PaneContainmentCoordinator (keyed by CapturedWindow
+    // reference, so a recycled HWND value cannot inherit an occupant's
+    // refusal); decisions stay in PaneContainmentPolicy. This window only
+    // triggers invalidation at the semantic boundaries listed on InvalidateAll.
+    private readonly PaneContainmentCoordinator _paneContainment;
 
     // Debounced refresh of the guest minima while a guest is visible, so a
     // dynamic native minimum (browser UI state, sidebar, toolbar) is respected
@@ -279,6 +282,7 @@ public partial class ContainerWindow : Window
         _splitController = new SplitPresentationController(
             ops: new ShepherdPresentationOps(this),
             isCurrent: w => _shepherd.IsCurrentCapturedWindow(w));
+        _paneContainment = new PaneContainmentCoordinator(message => _log.Log(message));
         DataContext = viewModel;
         InitializeComponent();
         Loaded += ContainerWindow_Loaded;
@@ -483,7 +487,7 @@ public partial class ContainerWindow : Window
             // native minima (a size change can accompany a UI-state shift) and
             // schedule the coalesced post-layout reconciliation.
             _constraintDirty = true;
-            _refusedPaneByHwnd.Clear();
+            _paneContainment.InvalidateAll();
             // The native move/size loop has fully unwound and the container's
             // final position is authoritative. Windows keeps a dragged window
             // at the top of the z-order for the whole modal loop, and its
@@ -554,7 +558,7 @@ public partial class ContainerWindow : Window
             // guest-minimum cache are keyed to the old scale; recompute.
             MonitorDpiService.InvalidateDpiCache();
             _constraintDirty = true;
-            _refusedPaneByHwnd.Clear();
+            _paneContainment.InvalidateAll();
         }
         else if ((uint)msg == NativeMethods.WM_DISPLAYCHANGE)
         {
@@ -562,7 +566,7 @@ public partial class ContainerWindow : Window
             // every cached DPI answer and geometry refusal is stale.
             MonitorDpiService.InvalidateDpiCache();
             _constraintDirty = true;
-            _refusedPaneByHwnd.Clear();
+            _paneContainment.InvalidateAll();
         }
         return IntPtr.Zero;
     }
@@ -660,7 +664,7 @@ public partial class ContainerWindow : Window
                 // relayout re-evaluates every visible guest against its current
                 // native minimum — a bounded retry (once per interval), never a
                 // per-frame resize war.
-                _refusedPaneByHwnd.Clear();
+                _paneContainment.InvalidateAll();
             }
         }, repeatEveryInterval: true);
     }
@@ -971,7 +975,7 @@ public partial class ContainerWindow : Window
         _activateReassertTimer.Cancel();
         CloseCapturePanel();
         _constraintRefreshTimer.Cancel();
-        _refusedPaneByHwnd.Clear();
+        _paneContainment.InvalidateAll();
         _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
         _viewModel.EmptiedByPopOut -= ViewModel_EmptiedByPopOut;
         // Detach unsubscribes Group.PropertyChanged + Tabs.CollectionChanged
@@ -2077,7 +2081,7 @@ public partial class ContainerWindow : Window
         // The single visible guest changed: its native minimum may differ, so
         // recompute the container's minimum size and clear refusals.
         _constraintDirty = true;
-        _refusedPaneByHwnd.Clear();
+        _paneContainment.InvalidateAll();
 
         if (newWindow != null && NativeMethods.IsWindow(newWindow.Hwnd))
         {
@@ -2226,19 +2230,19 @@ public partial class ContainerWindow : Window
         return true;
     }
 
-    /// <summary>Records that <paramref name="guest"/> refused <paramref name="rect"/> (bounded, one diagnostic per refusal).</summary>
+    /// <summary>
+    /// Records that <paramref name="guest"/> refused <paramref name="rect"/>
+    /// (bounded, one diagnostic per distinct refusal). Storage AND decision
+    /// authority live behind <see cref="PaneContainmentCoordinator"/> /
+    /// <see cref="PaneContainmentPolicy"/> (Wave 3C); this wrapper only keeps
+    /// the layout call sites readable.
+    /// </summary>
     private void MarkRefusingPane(CapturedWindow guest, NativeMethods.RECT rect)
-    {
-        if (_refusedPaneByHwnd.TryGetValue(guest.Hwnd.ToInt64(), out NativeMethods.RECT prior)
-            && PaneContainmentPolicy.IsExactSameRect(prior, rect))
-            return; // already recorded this exact refusal
-        _refusedPaneByHwnd[guest.Hwnd.ToInt64()] = rect;
-        _log.Log($"SHEPHERD[size-constraint] guest=0x{guest.Hwnd.ToInt64():X} refused pane {rect.left},{rect.top},{rect.Width}x{rect.Height}; guest cannot fit the assigned pane (native minimum).");
-    }
+        => _paneContainment.MarkRefusingPane(guest, rect);
 
     /// <summary>Clears the refusal record for <paramref name="guest"/> (re-glue succeeded or rect changed).</summary>
     private void ClearRefusingPane(CapturedWindow guest)
-        => _refusedPaneByHwnd.Remove(guest.Hwnd.ToInt64());
+        => _paneContainment.ClearRefusingPane(guest);
 
     /// <summary>
     /// True when <paramref name="guest"/>'s observed rect matches <paramref name="rect"/>
@@ -2350,10 +2354,9 @@ public partial class ContainerWindow : Window
         // otherwise it never becomes visible again (the refusal was recorded
         // for "do not re-fight a currently-docked guest", not "never show a
         // hidden one").
-        if (_refusedPaneByHwnd.TryGetValue(ShepherdActiveWindow.Hwnd.ToInt64(), out NativeMethods.RECT refusedActive)
-            && PaneContainmentPolicy.ShouldSuppressRepositioning(
+        if (_paneContainment.ShouldSuppressRepositioning(
+                ShepherdActiveWindow,
                 guestCurrentlyVisible: NativeMethods.IsWindowVisible(ShepherdActiveWindow.Hwnd),
-                refusedRect: refusedActive,
                 requestedRect: rect))
         {
             _shepherd.PairZOrderBehind(containerHwnd, ShepherdActiveWindow);
@@ -2628,16 +2631,14 @@ public partial class ContainerWindow : Window
         // always get a fresh PositionGuestsDeferred on restore, even when the
         // restored panes match a stale refusal, otherwise they never become
         // visible again.
-        bool topSuppressed = _refusedPaneByHwnd.TryGetValue(top.Hwnd.ToInt64(), out NativeMethods.RECT topRefused)
-            && PaneContainmentPolicy.ShouldSuppressRepositioning(
-                guestCurrentlyVisible: NativeMethods.IsWindowVisible(top.Hwnd),
-                refusedRect: topRefused,
-                requestedRect: topRect);
-        bool bottomSuppressed = _refusedPaneByHwnd.TryGetValue(bottom.Hwnd.ToInt64(), out NativeMethods.RECT bottomRefused)
-            && PaneContainmentPolicy.ShouldSuppressRepositioning(
-                guestCurrentlyVisible: NativeMethods.IsWindowVisible(bottom.Hwnd),
-                refusedRect: bottomRefused,
-                requestedRect: bottomRect);
+        bool topSuppressed = _paneContainment.ShouldSuppressRepositioning(
+            top,
+            guestCurrentlyVisible: NativeMethods.IsWindowVisible(top.Hwnd),
+            requestedRect: topRect);
+        bool bottomSuppressed = _paneContainment.ShouldSuppressRepositioning(
+            bottom,
+            guestCurrentlyVisible: NativeMethods.IsWindowVisible(bottom.Hwnd),
+            requestedRect: bottomRect);
         if (topSuppressed || bottomSuppressed)
         {
             _shepherd.PairZOrderBehind(containerHwnd, bottom);
@@ -2715,7 +2716,7 @@ public partial class ContainerWindow : Window
         // The visible set changed: recompute the container's minimum size from
         // the new pair's native minima, and clear refusals (fresh panes).
         _constraintDirty = true;
-        _refusedPaneByHwnd.Clear();
+        _paneContainment.InvalidateAll();
 
         var leftTab = _viewModel.Tabs.FirstOrDefault(t => t.Model == left);
         if (leftTab != null)
@@ -2776,7 +2777,7 @@ public partial class ContainerWindow : Window
         _splitController.ResumeMember(focused);
         DisarmSplitPresentationSettle();
         _constraintDirty = true;
-        _refusedPaneByHwnd.Clear();
+        _paneContainment.InvalidateAll();
         _viewModel.SetActiveTab(focusedTab);
         LayoutSplitPanes();
         // Resuming from a composite-half click does not pass through the
@@ -2832,7 +2833,7 @@ public partial class ContainerWindow : Window
             _splitController.HandleMemberRemoved(_splitController.Left!);
             DisarmSplitPresentationSettle();
             _constraintDirty = true;
-            _refusedPaneByHwnd.Clear();
+            _paneContainment.InvalidateAll();
             _viewModel.ClearSplitComposite();
             _log.Log("SPLIT[exit] dormant pair cleared");
             DiagnosticRuntime.Record("split.exit", _containerHwnd, current?.Hwnd ?? IntPtr.Zero,
@@ -2867,7 +2868,7 @@ public partial class ContainerWindow : Window
         DisarmSplitPresentationSettle();
         // Back to single-guest mode: refresh the constraint and clear refusals.
         _constraintDirty = true;
-        _refusedPaneByHwnd.Clear();
+        _paneContainment.InvalidateAll();
 
         // Restore the ordinary one-tab-per-member strip.
         _viewModel.ClearSplitComposite();
@@ -2935,7 +2936,7 @@ public partial class ContainerWindow : Window
         DisarmSplitPresentationSettle();
         // Back to single-guest mode: refresh the constraint and clear refusals.
         _constraintDirty = true;
-        _refusedPaneByHwnd.Clear();
+        _paneContainment.InvalidateAll();
 
         // Restore the ordinary one-tab-per-member strip.
         _viewModel.ClearSplitComposite();
@@ -3087,7 +3088,7 @@ public partial class ContainerWindow : Window
             return;
 
         _constraintDirty = true;
-        _refusedPaneByHwnd.Clear();
+        _paneContainment.InvalidateAll();
 
         // Measure against the member's OWN pane rect in split mode so the
         // re-glue path is deterministic even when the other pane is foreground.
@@ -3123,7 +3124,7 @@ public partial class ContainerWindow : Window
             if (IsSplitPresented && IsSplitMember(window))
             {
                 _constraintDirty = true;
-                _refusedPaneByHwnd.Clear();
+                _paneContainment.InvalidateAll();
                 LayoutSplitPanes();
             }
             else if (!IsSplitPresented && ReferenceEquals(ShepherdActiveWindow, window))

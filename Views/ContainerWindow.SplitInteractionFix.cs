@@ -183,7 +183,7 @@ public partial class ContainerWindow
         // container keeps constraint/refusal concerns.
         DisarmSplitPresentationSettle();
         _constraintDirty = true;
-        _refusedPaneByHwnd.Clear();
+        _paneContainment.InvalidateAll();
 
         // Project the committed authority into the UI selection. The sync this
         // triggers observes Foreground == ActiveTab.Model and no-ops.
