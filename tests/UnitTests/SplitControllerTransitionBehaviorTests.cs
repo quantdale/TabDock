@@ -159,4 +159,111 @@ public sealed class SplitControllerTransitionBehaviorTests
         Assert.True(ctrl.IsPresented);
         Assert.Single(ops.HideAttempts);               // exactly one native attempt, no storm
     }
+
+    /// <summary>
+    /// SG-2 fixture: hide outcomes plus a controllable liveness oracle wired
+    /// in as the controller's <c>isCurrent</c> seam (production wires the
+    /// shepherd identity gate there).
+    /// </summary>
+    private sealed class LivenessOps : IPresentationOperations
+    {
+        private readonly Queue<WindowHideOutcome> _hideOutcomes = new();
+        public HashSet<CapturedWindow> Dead { get; } = new();
+        public List<CapturedWindow> HideAttempts { get; } = new();
+
+        public void QueueHideOutcome(WindowHideOutcome outcome) => _hideOutcomes.Enqueue(outcome);
+
+        public WindowHideOutcome Hide(CapturedWindow window)
+        {
+            HideAttempts.Add(window);
+            return _hideOutcomes.Count > 0 ? _hideOutcomes.Dequeue() : WindowHideOutcome.Hidden;
+        }
+
+        public void PositionAndShow(CapturedWindow window, IntPtr containerHwnd, NativeMethods.RECT screenRect) { }
+        public void PositionGuestsDeferred(CapturedWindow top, NativeMethods.RECT topRect, CapturedWindow bottom, NativeMethods.RECT bottomRect, IntPtr containerHwnd) { }
+        public void SetForeground(CapturedWindow window) { }
+        public void PairZOrderBehind(IntPtr containerHwnd, CapturedWindow guest) { }
+        public bool IsCurrentCapturedWindow(CapturedWindow window) => !Dead.Contains(window);
+    }
+
+    // F (SG-2): resuming with a DEAD pair member must fail closed without
+    // committing a presented pair that references an unreachable HWND — the
+    // all-or-nothing deferred positioning would otherwise leave the surviving
+    // member hidden over blank content.
+    [Fact]
+    public void ResumeMember_DeadPairMember_FailsClosedWithoutCommit()
+    {
+        var ops = new LivenessOps();
+        var ctrl = new SplitPresentationController(ops, w => !ops.Dead.Contains(w));
+        CapturedWindow a = W(0x1001), b = W(0x1002), c = W(0x1003);
+        Assert.True(ctrl.DefinePair(a, b, a).Committed);
+        Assert.True(ctrl.SuspendForGuest(c));
+        ops.HideAttempts.Clear();
+
+        ops.Dead.Add(a); // partner died; EVENT_OBJECT_DESTROY not yet dispatched
+        bool committed = ctrl.ResumeMember(b);
+
+        Assert.False(committed);
+        Assert.False(ctrl.IsPresented);                 // dormant state retained
+        Assert.Same(c, ctrl.Foreground);                // single-guest authority untouched
+        Assert.Empty(ops.HideAttempts);                 // C was never journal-safely hidden for a doomed resume
+    }
+
+    // G (SG-2): the resuming member itself being dead also fails closed.
+    [Fact]
+    public void ResumeMember_DeadResumingMember_FailsClosedWithoutCommit()
+    {
+        var ops = new LivenessOps();
+        var ctrl = new SplitPresentationController(ops, w => !ops.Dead.Contains(w));
+        CapturedWindow a = W(0x1001), b = W(0x1002), c = W(0x1003);
+        Assert.True(ctrl.DefinePair(a, b, a).Committed);
+        Assert.True(ctrl.SuspendForGuest(c));
+        ops.HideAttempts.Clear();
+
+        ops.Dead.Add(b);
+        bool committed = ctrl.ResumeMember(b);
+
+        Assert.False(committed);
+        Assert.False(ctrl.IsPresented);
+        Assert.Same(c, ctrl.Foreground);
+        Assert.Empty(ops.HideAttempts);
+    }
+
+    // H (SG-2): a member hide answering TargetGoneOrRecycled during suspension
+    // is a dead member — treating it as success would commit a dormant pair
+    // referencing an unreachable HWND. It must fail closed like RecoveryPending.
+    [Fact]
+    public void SuspendForGuest_MemberHideTargetGone_FailsClosedLikePending()
+    {
+        var ops = new LivenessOps();
+        ops.QueueHideOutcome(WindowHideOutcome.TargetGoneOrRecycled); // first member already gone
+        var ctrl = new SplitPresentationController(ops, w => !ops.Dead.Contains(w));
+        CapturedWindow a = W(0x1001), b = W(0x1002), c = W(0x1003);
+        Assert.True(ctrl.DefinePair(a, b, a).Committed);
+
+        bool committed = ctrl.SuspendForGuest(c);
+
+        Assert.False(committed);
+        Assert.True(ctrl.IsPresented);                  // authoritative pair retained
+        Assert.Single(ops.HideAttempts);                // no second native attempt after stale evidence
+    }
+
+    // I (SG-2): same fail-closed atomicity when the SECOND member's hide
+    // reports the dead window — nothing may commit with a dead member inside.
+    [Fact]
+    public void SuspendForGuest_SecondHideTargetGone_FailsClosedLikePending()
+    {
+        var ops = new LivenessOps();
+        ops.QueueHideOutcome(WindowHideOutcome.Hidden);
+        ops.QueueHideOutcome(WindowHideOutcome.TargetGoneOrRecycled);
+        var ctrl = new SplitPresentationController(ops, w => !ops.Dead.Contains(w));
+        CapturedWindow a = W(0x1001), b = W(0x1002), c = W(0x1003);
+        Assert.True(ctrl.DefinePair(a, b, a).Committed);
+
+        bool committed = ctrl.SuspendForGuest(c);
+
+        Assert.False(committed);
+        Assert.True(ctrl.IsPresented);
+        Assert.Equal(2, ops.HideAttempts.Count);
+    }
 }

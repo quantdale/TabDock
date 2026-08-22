@@ -2750,6 +2750,18 @@ public partial class ContainerWindow : Window
         if (!IsSplitRelationshipDefined || !IsSplitMember(focused))
             return;
 
+        // Stranded-guest pre-gate (strong identity, mirroring EnterSplit): a
+        // member that died before its destroy event dispatched must not enter
+        // a presented-pair commit. Keep the dormant single-guest presentation
+        // authoritative; membership heals when the destruction is processed.
+        if (!_shepherd.IsCurrentCapturedWindow(focused))
+            return;
+        CapturedWindow? resumePartner = ReferenceEquals(_splitController.Left, focused)
+            ? _splitController.Right
+            : _splitController.Left;
+        if (resumePartner != null && !_shepherd.IsCurrentCapturedWindow(resumePartner))
+            return;
+
         CapturedWindow? current = ShepherdActiveWindow;
         if (current != null && !IsSplitMember(current)
             && NativeMethods.IsWindowVisible(current.Hwnd))
@@ -2777,7 +2789,23 @@ public partial class ContainerWindow : Window
         // dormant single guest was already hidden journal-safely above (with
         // its own RecoveryPending rollback), so NO currentSingleGuest is
         // passed here — exactly-once hides are preserved.
-        _splitController.ResumeMember(focused);
+        if (!_splitController.ResumeMember(focused))
+        {
+            // Exotic re-entrancy: a member went stale after the pre-gate (for
+            // example while C's guarded hide ran native work). Nothing was
+            // committed, but C was already hidden journal-safely above —
+            // re-present the retained single-guest state instead of laying
+            // out a stale pair.
+            TabViewModel? currentTab = current == null
+                ? null
+                : _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, current));
+            if (currentTab != null && !ReferenceEquals(_viewModel.ActiveTab, currentTab))
+                _viewModel.SetActiveTab(currentTab);
+            LayoutShepherdActiveWindow();
+            DiagnosticRuntime.Record("split.resume", _containerHwnd, focused.Hwnd,
+                group: Group.Id.ToString("N"), action: "single-to-pair", result: "member-stale-retained-single");
+            return;
+        }
         DisarmSplitPresentationSettle();
         _constraintDirty = true;
         _paneContainment.InvalidateAll();

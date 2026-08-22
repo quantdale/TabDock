@@ -167,8 +167,12 @@ public sealed class SplitPresentationController
         foreach (CapturedWindow member in new[] { left, right })
         {
             WindowHideOutcome outcome = _ops != null ? _ops.Hide(member) : WindowHideOutcome.Hidden;
-            if (outcome == WindowHideOutcome.RecoveryPending)
+            if (outcome == WindowHideOutcome.RecoveryPending || outcome == WindowHideOutcome.TargetGoneOrRecycled)
                 return false; // Authoritative pair retained; caller re-presents it.
+                               // TargetGoneOrRecycled is a member that died before its
+                               // destroy event dispatched: committing a dormant pair
+                               // referencing it would strand the survivor behind the
+                               // all-or-nothing positioning identity gate on resume.
         }
 
         if (_isCurrent != null && !_isCurrent(guest))
@@ -182,6 +186,18 @@ public sealed class SplitPresentationController
     public bool ResumeMember(CapturedWindow member, CapturedWindow? currentSingleGuest = null)
     {
         if (!IsRelationshipDefined || !IsMember(member))
+            return false;
+
+        // Liveness gate: a presented pair must reference only live members. A
+        // member that died before its destroy event dispatched would otherwise
+        // be committed into PairPresented and then defeat the all-or-nothing
+        // deferred positioning (blank panes, foreground handed to a hidden
+        // window) until membership heals. Fail closed instead; the caller
+        // retains the dormant single-guest presentation.
+        if (_isCurrent != null
+            && (!_isCurrent(member)
+                || (_left != null && !_isCurrent(_left))
+                || (_right != null && !_isCurrent(_right))))
             return false;
 
         // Pure authority: single -> pair with the member focused.
