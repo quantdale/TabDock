@@ -3,9 +3,9 @@
 **Status: NOT PERFORMED — BLOCKED_EXTERNAL until executed on real mixed-DPI
 hardware against the exact Stage A candidate bytes.**
 
-Deterministic repository tests (`--selftest-geometry`, `MonitorDpiSelfTest`)
-are **not** equivalent to physical mixed-DPI hardware qualification. This
-procedure is the required human/hardware gate. It must be executed against the
+Deterministic repository tests (the headless xUnit geometry and monitor-DPI
+suites) are **not** equivalent to physical mixed-DPI hardware qualification.
+This procedure is the required human/hardware gate. It must be executed against the
 **exact release candidate artifact** (byte-identical to the FINAL distributed
 `TabDock.exe` from Stage A — same SHA-256 as `release-manifest.json`
 `finalSignedSha256` / `SHA256SUMS.txt`; signing changes the bytes, so

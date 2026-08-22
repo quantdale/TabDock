@@ -14,15 +14,15 @@ Evidence is produced by the fail-loud native ABI self-test:
 `TabDock.exe --selftest-native-abi` runs against real user32 on whatever
 machine executes it and prints a per-machine environment report (OS
 family/build, accepted length, `GetWindowPlacement` length write-back,
-`SetWindowPlacement(44)` result, `SetWindowPlacement(60)` result). The same
-checks run inside `--selftest-diagnostics` (used by every qualification run),
-so every qualifying machine contributes evidence.
+`SetWindowPlacement(44)` result, `SetWindowPlacement(60)` result). Every
+qualification run (`scripts/validate.ps1`, `scripts/release-qualify.ps1`
+against the published artifact) executes this probe directly.
 
 ## Matrix
 
 | Environment | OS build (evidence) | 44-byte contract | Get length write-back | Set(44) | Set(60) rejected | Status |
 |-------------|---------------------|------------------|------------------------|---------|------------------|--------|
-| Hosted CI `windows-latest` | Server SKU, current image | proven by every qualification run (`--selftest-diagnostics`) | proven | proven | proven | PROVEN (per run) |
+| Hosted CI `windows-latest` | Server SKU, current image | proven by every qualification run (`--selftest-native-abi`) | proven | proven | proven | PROVEN (per run) |
 | Hosted CI `windows-2022` (build.yml `native-abi-evidence` job) | Server 2022 (build 20348 family) | proven by `--selftest-native-abi` | proven | proven | proven | PROVEN (per run) |
 | Windows 11 x64 workstation | 10.0.26200 (Windows 11) | proven (native round trip, set/get, 60-rejection) | proven | proven | proven | PROVEN |
 | Windows 11 x64 (other builds) | untested | not claimed | not claimed | not claimed | not claimed | EXTERNAL — required |
@@ -31,8 +31,7 @@ so every qualifying machine contributes evidence.
 
 ## Rules
 
-- A row is marked PROVEN only when `--selftest-native-abi` (or the
-  equivalent checks inside `--selftest-diagnostics`) passed on that exact
+- A row is marked PROVEN only when `--selftest-native-abi` passed on that exact
   machine/build and the environment report was captured.
 - The 44-byte contract is the empirically validated runtime behavior on the
   tested builds; the SDK documents 60 bytes. The discrepancy is documented in
@@ -82,13 +81,11 @@ record PASS evidence in `release-external-evidence.json`
 2. **Windows 11 x64** (`windows11`: same structure; build recorded — the
    10.0.26200 workstation already proven locally may be cited);
 3. the hosted Windows CI environment (proven automatically on every run:
-   every qualification executes the native ABI checks through
-   `--selftest-diagnostics`, and `build.yml` runs `--selftest-native-abi`
-   independently on windows-2022).
+   `validate.ps1 -Ci` executes `--selftest-native-abi` directly, and
+   `build.yml` runs it independently on windows-2022).
 
 Each external entry needs the machine's OS build and the `--selftest-native-abi`
-environment report (or a `--selftest-diagnostics` run log) recorded with the
-release evidence. The Stage B publication gate fails closed when
+environment report recorded with the release evidence. The Stage B publication gate fails closed when
 `windowsCompatibility` is missing, malformed, `FAIL`, `BLOCKED_EXTERNAL`, or
 lacks either the Windows 10 or the Windows 11 entry. Externally visible gate
 statuses are exactly `PASS` / `FAIL` / `BLOCKED_EXTERNAL` /

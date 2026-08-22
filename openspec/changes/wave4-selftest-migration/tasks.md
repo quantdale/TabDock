@@ -25,16 +25,16 @@
 
 ## 3. Executable command removal
 
-- [ ] 3.1 Delete `DiagnosticSelfTest`, `DiagnosticCommandKind.SelfTest`, the
+- [x] 3.1 Delete `DiagnosticSelfTest`, `DiagnosticCommandKind.SelfTest`, the
       `--selftest-diagnostics` parse entry, and its dispatch case.
-- [ ] 3.2 Move the full partition matrix/fuzz/constraint qualification into
+- [x] 3.2 Move the full partition matrix/fuzz/constraint qualification into
       `GeometryTests`; delete `SplitGeometry.RunSelfTest` and the
       `--selftest-geometry` startup branch.
-- [ ] 3.3 Update `scripts/validate.ps1` (drop both app launches; keep native
+- [x] 3.3 Update `scripts/validate.ps1` (drop both app launches; keep native
       ABI) and `scripts/release-qualify.ps1` (published artifact runs native
       ABI instead of removed commands).
-- [ ] 3.4 Update `.github/workflows/build.yml` hermetic-gate comment.
-- [ ] 3.5 Update README/TESTING/ARCHITECTURE references to the removed modes;
+- [x] 3.4 Update `.github/workflows/build.yml` hermetic-gate comment.
+- [x] 3.5 Update README/TESTING/ARCHITECTURE references to the removed modes;
       leave historical audit/spec archives untouched.
 
 ## 4. Gates

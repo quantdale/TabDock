@@ -259,8 +259,8 @@ an in-window panel; the standalone picker remains for the fallback path.
   is ever released by a split transition.
 - **Layout** — `LayoutSplitPanes` derives LEFT/RIGHT halves from the content
   rect via `SplitGeometry.Partition` (`leftW = Width/2`, right gets the
-  remainder; no DPI conversion; the single deterministic definition, also
-  exercised by `--selftest-geometry`) and establishes the local order
+  remainder; no DPI conversion; the single deterministic definition, qualified
+  by the headless xUnit geometry suite) and establishes the local order
   `foreground guest → partner guest → container`. The 1px redundant-glue guard
   is per-pane; when a re-glue is needed both panes plus the container pin are
   written in ONE compositor transaction (`PositionGuestsDeferred`:
@@ -521,11 +521,12 @@ placeholders until the user repopulates or deletes them.
   monitor, DPI, guest), and the `STATE[settled]` snapshot carries the platform
   and guest executable. Bounded — never per-frame — so customer logs are
   self-describing.
-- **Deterministic partition and identity/DPI self-tests**: `TabDock.exe
-  --selftest-geometry` runs the partition matrix; `--selftest-diagnostics`
-  covers post-state `ShowWindow` semantics, the two identity tiers including
-  same-process HWND recycling, recovery identity, and the injectable monitor-DPI
-  conversion seam.
+- **Deterministic partition qualification**: the exhaustive partition matrix,
+  seeded fuzz, and size-constraint math live in the headless xUnit suite
+  (`tests/UnitTests/GeometryTests.cs`). The product executable retains only the
+  `--selftest-native-abi` probe, which produces real-user32 `WINDOWPLACEMENT`
+  ABI evidence (44-byte contract, get/set round trip) plus a per-machine
+  environment report for the compatibility matrix.
 
 ## 3. WinEvent pipeline: event → handler → effect
 
@@ -674,7 +675,6 @@ journal can be durably written.
 | `SHEPHERD[split-foreground]` | `WindowShepherdService.cs` (`SetForeground`) | Split member given real foreground |
 | `STATE[transition] winState=… hostRect=…` | `ContainerWindow.xaml.cs` (`StateChanged`) | One line per window-state transition (pre-layout rect diagnostic) |
 | `ENV[startup]` / `ENV[launcher]` / `ENV[container]` | `App.xaml.cs` / `ContainerWindow.xaml.cs` | Environment fingerprint (startup, launcher DPI, per-container) |
-| `SELFTEST[geometry]` | `App.xaml.cs` (`--selftest-geometry`) | Deterministic partition self-test result |
 | `Shepherd capture blocked: …dpi::probe-failed…` | `WindowShepherdService.cs` (`Capture`) | Guest awareness/target-monitor DPI probe failed closed |
 
 Rules:

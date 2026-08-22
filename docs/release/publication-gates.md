@@ -595,8 +595,8 @@ for both:
 - **Windows 11 x64** (real machine, build recorded, `--selftest-native-abi`
   PASS recorded).
 - Hosted Windows CI is proven automatically by every qualification run
-  (`--selftest-diagnostics` includes the native ABI checks; `build.yml` also
-  runs `--selftest-native-abi` on `windows-2022`).
+  (`scripts/validate.ps1` runs `--selftest-native-abi` directly, and
+  `build.yml` also runs it on `windows-2022`).
 
 Evidence must NOT be fabricated: if no real Windows 10 environment exists,
 the gate stays `BLOCKED_EXTERNAL` and v1.0.0 is not published. Dropping the

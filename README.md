@@ -460,22 +460,21 @@ and installed with `npm ci --ignore-scripts`.
 
 ## Diagnostics
 
-- **Deterministic geometry self-test:** `TabDock.exe --selftest-geometry` runs
-  the split-partition matrix + seeded fuzz (14.7M checks) with no UI and no
-  input; exit code 0 = all pass. Safe to run on any machine, including a
-  customer's, to validate the pane math without touching the desktop.
-- **Diagnostics/privacy self-test:** `TabDock.exe --selftest-diagnostics`
-  exercises native deferred-position chaining, persistence backup/version and
+- **Hermetic behavioral qualification (xUnit):** all hermetic behavioral checks
+  — the split-partition matrix + seeded fuzz, persistence backup/version and
   unreadable-file handling, journal identity gates, monitor failure policy,
-  storage degradation, and adversarial support-bundle sanitization. It creates
-  only disposable temp fixtures and exits nonzero on any failure.
+  storage degradation, and adversarial support-bundle sanitization — run in the
+  headless xUnit suite (`tests/UnitTests`) against the same product sources in
+  every qualification run (`scripts/validate.ps1`). They create only disposable
+  temp fixtures and fail the gate on any failure. Wave 4 removed the former
+  `--selftest-geometry`/`--selftest-diagnostics` executable modes.
 - **Native ABI self-test:** `TabDock.exe --selftest-native-abi` proves the
   44-byte `WINDOWPLACEMENT` user32 contract on the machine that runs it
   (structure size/offsets, get/set round trip, zero-length and 60-byte
   rejection) and prints a per-machine environment report (OS build, accepted
-  length, get/set behavior). Every qualification run executes these checks
-  via `--selftest-diagnostics`; the compatibility evidence is tracked in
-  `docs/release/compatibility-matrix.md`.
+  length, get/set behavior). Every qualification run executes it directly, and
+  `build.yml` additionally runs it on `windows-2022`; the compatibility evidence
+  is tracked in `docs/release/compatibility-matrix.md`.
 - **Environment fingerprint:** every startup writes `ENV[startup]` (OS, .NET,
   bitness, monitor layout) and `ENV[launcher]` (system DPI); every container
   logs `ENV[container]` (rects, monitor, DPI, guest). For support, use the

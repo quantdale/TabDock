@@ -12,8 +12,7 @@ dotnet build TabDock.csproj -c Release
 & .\bin\Release\net8.0-windows\win-x64\TabDock.exe --version
 & .\bin\Release\net8.0-windows\win-x64\TabDock.exe --doctor
 & .\bin\Release\net8.0-windows\win-x64\TabDock.exe --pending-recovery
-& .\bin\Release\net8.0-windows\win-x64\TabDock.exe --selftest-geometry
-& .\bin\Release\net8.0-windows\win-x64\TabDock.exe --selftest-diagnostics
+& .\bin\Release\net8.0-windows\win-x64\TabDock.exe --selftest-native-abi
 ```
 
 `--doctor` must exit 0 when state is absent, malformed, or an optional native
@@ -226,29 +225,27 @@ remainder) within the existing tolerance — never `GetParent`. The scenarios
 assert the `SPLIT[enter]`/`[exit]`/`[member-gone]` log lines, which are emitted
 by committed application source.
 
-**Deterministic geometry check (no input, any machine):**
-`TabDock.exe --selftest-geometry` runs the partition matrix + seeded fuzz
-(`SplitGeometry.RunSelfTest`, seed 20260810; widths 1..4096 × heights ×
-origins incl. negative, odd widths 799..1921, 100 k fuzz rects) and exits 0
-only when every invariant holds; the result is logged as
-`SELFTEST[geometry] … result=PASS|FAIL`. It runs before the single-instance
-mutex/UI and is safe unattended — use it for cross-machine pane-math
-verification and as a fast smoke after any split-geometry change.
+**Hermetic geometry qualification (headless xUnit, no input, any machine):**
+`tests/UnitTests/GeometryTests.cs` owns the partition qualification: the
+exhaustive matrix (`SplitGeometry.Partition`, seed 20260810; widths 1..4096 ×
+heights × origins incl. negative, odd widths 799..1921, 100 k fuzz rects) plus
+the size-constraint minimality math. Wave 4 removed the former
+`--selftest-geometry` executable mode and `SplitGeometry.RunSelfTest`; the same
+invariants run as an ordinary xUnit fact in every `scripts/validate.ps1` gate.
+Use it for cross-machine pane-math verification and as a fast check after any
+split-geometry change.
 
-The diagnostics self-test also poisons and verifies the synthetic
-`WM_GETMINMAXINFO` probe buffer. This catches the cross-process difference
-between a real USER32 message (which supplies initialized `MINMAXINFO` storage)
-and TabDock's manually allocated probe buffer.
-
-The same self-test locks in the empirically-validated `WINDOWPLACEMENT` interop
-contract (structure size/offsets plus a native get/set round trip on a
-self-created, never-shown window): modern Windows 10/11 user32 requires
-`length == 44` — the SDK header's trailing `rcDevice` (60 bytes on x64) is
-never populated, and `SetWindowPlacement` rejects `length == 60` with
-`ERROR_INVALID_PARAMETER`, so the field is intentionally not declared.
-`GetWindowPlacement` is passed by reference and every caller must initialize
-`length` before the call; the self-test fails loudly if a supported Windows
-build ever changes that contract.
+The retained executable probe is `--selftest-native-abi`. It locks in the
+empirically-validated `WINDOWPLACEMENT` interop contract (structure size/offsets
+plus a native get/set round trip on a self-created, never-shown window): modern
+Windows 10/11 user32 requires `length == 44` — the SDK header's trailing
+`rcDevice` (60 bytes on x64) is never populated, and `SetWindowPlacement`
+rejects `length == 60` with `ERROR_INVALID_PARAMETER`, so the field is
+intentionally not declared. `GetWindowPlacement` is passed by reference and
+every caller must initialize `length` before the call; the probe fails loudly if
+a supported Windows build ever changes that contract. The former in-product
+diagnostics self-test (including its poisoned synthetic `WM_GETMINMAXINFO`
+probe buffer check) moved to xUnit in Wave 4.
 
 ### Split qualification orchestrator and input provenance
 
@@ -587,12 +584,13 @@ recovery.
   `Services/MonitorDpiService.cs` and `GetDpiForWindow(helper)`; an unaware
   guest's own `GetDpiForWindow` result of 96 is therefore not used as the
   monitor scale.
-- `--selftest-diagnostics` exercises the injectable DPI helper lifecycle and
-  probe/conversion seams. The deterministic contract is: known DPI-unaware
-  plus a valid monitor DPI is accepted; unknown/unreadable awareness or monitor
-  DPI is refused; a 96-DPI logical minimum-track value of 500 becomes 750 at
-  144 DPI and remains 500 at 96 DPI; aware guests do not receive unaware
-  scaling. These checks do not pretend to qualify physical mixed-DPI hardware.
+- The injectable DPI helper lifecycle and probe/conversion seams are qualified
+  by headless xUnit tests (`MonitorDpiSeamTests`). The deterministic contract
+  is: known DPI-unaware plus a valid monitor DPI is accepted;
+  unknown/unreadable awareness or monitor DPI is refused; a 96-DPI logical
+  minimum-track value of 500 becomes 750 at 144 DPI and remains 500 at 96 DPI;
+  aware guests do not receive unaware scaling. These checks do not pretend to
+  qualify physical mixed-DPI hardware.
 - Move a container between monitors with different scaling (e.g. 100% and 150%).
 - Verify the content area re-lays out and the active guest fills it.
 - Maximize on a larger secondary monitor (1440p/4K), including negative monitor
@@ -600,15 +598,17 @@ recovery.
   bounds and taskbar clearance.
 - Repeat normal → maximize → restore and maximize → minimize → maximize with an
   active split; both panes must remain an exact partition.
-- For a deterministic no-hardware check, run `--selftest-geometry`; the real
-  multi-monitor/DPI matrix remains supervised hardware validation.
+- For a deterministic no-hardware check, run the headless xUnit geometry/DPI
+  suites (`dotnet test`); the real multi-monitor/DPI matrix remains supervised
+  hardware validation.
 
 ### 6. Lifecycle and diagnostics hardening
 
-- Use the diagnostics self-test to exercise persistence versions, valid backup
-  recovery, unreadable-primary protection, monitor-hook failure injection,
-  storage-degraded startup fixtures, native deferred-position chaining, and
-  adversarial support-bundle sanitization.
+- Persistence versions, valid backup recovery, unreadable-primary protection,
+  monitor-hook failure injection, storage-degraded startup fixtures, native
+  deferred-position chaining, and adversarial support-bundle sanitization are
+  exercised by headless xUnit tests (Wave 4 migrated the former diagnostics
+  self-test out of the product executable).
 - A real support ZIP must be inspected entry-by-entry for the username,
   profile/AppData paths, executable paths, and credential-like values.
 - Hook-install failure after the bounded retry budget must release guests,

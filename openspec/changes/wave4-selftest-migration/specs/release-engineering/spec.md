@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Release candidate qualification uses one exact binary
 The executable that passes `--version` identity checks and the native ABI
