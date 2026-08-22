@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using TabDock.Models;
 using TabDock.Services;
@@ -252,6 +253,86 @@ public class ReleaseTransactionTests
         Assert.Equal(WindowReleaseOutcome.RecoveryPending, result);
         Assert.Equal(0, fixture.Native.MutationCount);
         Assert.Single(fixture.ReadEntries());
+    }
+
+    [Fact]
+    public void IntentionalHide_JournalClearFailsAfterOwnTokenRemoval_RecoveryPendingAndGuestReshow()
+    {
+        // SG-1 regression: once THIS transaction has removed the capture token,
+        // a failed JournalClear must NOT be misread as "target gone or
+        // recycled" at the finalization boundaries. The live token is absent
+        // by our own hand; identity strength there comes from HWND/PID/thread/
+        // class. The only correct outcome is RecoveryPending with the guest
+        // re-shown and ownership retained.
+        FileStream? journalLock = null;
+        ReleaseTestFixture? holder = null;
+        try
+        {
+            ReleaseTestFixture fixture = ReleaseTestFixture.Create(sequencingHook: (stage, _) =>
+            {
+                if (stage == "release-intentional-hide-before-token-removal.before" && journalLock == null)
+                {
+                    // Hold the journal file exclusively so the marker write
+                    // (already durable) succeeds but the later clear's atomic
+                    // move onto the locked destination throws.
+                    journalLock = new FileStream(
+                        holder!.JournalPath, FileMode.Open, FileAccess.Read, FileShare.None);
+                }
+            });
+            holder = fixture;
+            using (fixture)
+            {
+                WindowReleaseOutcome result = fixture.Service.Release(fixture.Captured, show: false);
+
+                // Release the exclusive hold before reading the journal back.
+                journalLock.Dispose();
+                journalLock = null;
+
+                Assert.Equal(WindowReleaseOutcome.RecoveryPending, result);
+                // SW_HIDE (the intentional hide) plus the recovery re-show.
+                Assert.Equal(2, fixture.Native.ShowWindowCount);
+                Assert.Equal(IntPtr.Zero, fixture.Identity.CaptureToken);
+                HiddenWindowEntry retained = Assert.Single(fixture.ReadEntries());
+                Assert.True(retained.DoNotRescue);
+            }
+        }
+        finally
+        {
+            journalLock?.Dispose();
+        }
+    }
+
+    [Fact]
+    public void IntentionalHide_GenuineRecycleAtFinalization_StillStaleNotPending()
+    {
+        // The SG-1 fix must not weaken recycle protection: if the HWND really
+        // dies between hide and finalization, the pre-token boundary still
+        // yields Mismatch and the release stays TargetGoneOrRecycled.
+        FileStream? journalLock = null;
+        ReleaseTestFixture? holder = null;
+        try
+        {
+            ReleaseTestFixture fixture = ReleaseTestFixture.Create(sequencingHook: (stage, identity) =>
+            {
+                if (stage == "release-intentional-hide-before-token-removal.before" && journalLock == null)
+                {
+                    journalLock = new FileStream(
+                        holder!.JournalPath, FileMode.Open, FileAccess.Read, FileShare.None);
+                }
+                if (stage == "release-intentional-hide-finalization-before-show.before")
+                    identity.IsWindowAlive = false;
+            });
+            holder = fixture;
+            using (fixture)
+            {
+                WindowReleaseOutcome result = fixture.Service.Release(fixture.Captured, show: false);
+                Assert.Equal(WindowReleaseOutcome.TargetGoneOrRecycled, result);
+            }
+        }
+        finally
+        {
+            journalLock?.Dispose();
+        }
     }
 
     [Fact]

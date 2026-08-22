@@ -1499,6 +1499,7 @@ public sealed class WindowShepherdService
         {
             bool journalCleared = JournalClear(window);
             HideProvenance?.ForgetWindow(window.Hwnd);
+            ForgetDiagnosticSuppression(window);
             _log.Log($"SHEPHERD[hide-decision] guest=0x{window.Hwnd.ToInt64():X} identity mismatch; journalCleared={journalCleared}.");
             return WindowHideOutcome.TargetGoneOrRecycled;
         }
@@ -1739,6 +1740,7 @@ public sealed class WindowShepherdService
                 LogIdentityReleaseOutcome(window, identityResult, journalCleared
                     ? "positive mismatch; old journal evidence cleared"
                     : "positive mismatch; old journal evidence retained after clear failure");
+                ForgetDiagnosticSuppression(window);
                 UnregisterCapturedIdentity(window);
                 return WindowReleaseOutcome.TargetGoneOrRecycled;
             }
@@ -1774,6 +1776,45 @@ public sealed class WindowShepherdService
             operation,
             verifyExecutable: false,
             verifyProcessInstance: false);
+        return result == WindowIdentityResult.Match;
+    }
+
+    /// <summary>
+    /// Mutation-boundary evaluation for the intentional-hide FINALIZATION tail:
+    /// this transaction itself removed the capture token one step earlier, so
+    /// the live HWND property cannot be required there — requiring it would
+    /// misread our own release step as a positive recycle and strand the hidden
+    /// guest with its tab detached. Identity strength is preserved through
+    /// HWND existence, PID/GUI-thread, and class identity via the pre-token
+    /// core; a genuine recycle or death still fails as Mismatch.
+    /// </summary>
+    private bool TryReleaseMutationBoundaryAfterOwnTokenRemoval(
+        CapturedWindow window,
+        string operation,
+        out WindowIdentityResult result)
+    {
+        TestSequence(operation + ".before");
+        string reason;
+        if (!_capturedByHwnd.IsCurrent(window))
+        {
+            result = WindowIdentityResult.Mismatch;
+            reason = "captured object is no longer the current HWND binding";
+        }
+        else
+        {
+            result = WindowIdentityGate.EvaluateBeforeCaptureToken(
+                window,
+                _identityApi,
+                verifyExecutable: false,
+                verifyProcessInstance: false,
+                out reason);
+        }
+
+        if (result != WindowIdentityResult.Match && _identityFailuresLogged.Add(window.Hwnd.ToInt64()))
+        {
+            _log.Log($"SHEPHERD[identity-blocked] {operation} refused for 0x{window.Hwnd.ToInt64():X}: result={result} reason={reason}.");
+        }
+
         return result == WindowIdentityResult.Match;
     }
 
@@ -1822,6 +1863,7 @@ public sealed class WindowShepherdService
             return ReleaseBoundaryFailure(window, postHideIdentity, "intentional-hide-transitions");
         }
         bool transitionsRestored = hidden && RestoreOriginalTransitions(window);
+        bool ownTokenRemoved = false;
         if (hidden && transitionsRestored)
         {
             if (!TryReleaseMutationBoundary(window, "release-intentional-hide-before-token-removal", out WindowIdentityResult tokenIdentity))
@@ -1837,6 +1879,7 @@ public sealed class WindowShepherdService
                     ? ReleaseBoundaryFailure(window, afterTokenFailure, "intentional-hide-token-failure")
                     : WindowReleaseOutcome.RecoveryPending;
             }
+            ownTokenRemoved = true;
             if (JournalClear(window))
             {
                 _log.Log($"Shepherd-released 0x{window.Hwnd.ToInt64():X} ({window.OriginalTitle}) hidden (guest-initiated hide)");
@@ -1848,20 +1891,45 @@ public sealed class WindowShepherdService
         }
 
         // Never leave an ambiguous hidden guest after finalization failed.
-        if (!TryReleaseMutationBoundary(window, "release-intentional-hide-finalization-before-show", out WindowIdentityResult finalizationShowIdentity))
+        // When THIS transaction already removed the capture token, the live
+        // token check would force Mismatch against our own release step, so
+        // those boundaries evaluate through the pre-token core instead (full
+        // HWND/PID/thread/class strength; genuine recycles still mismatch).
+        if (!TryReleaseFinalizationBoundary(
+                window,
+                ownTokenRemoved,
+                "release-intentional-hide-finalization-before-show",
+                out WindowIdentityResult finalizationShowIdentity))
             return ReleaseBoundaryFailure(window, finalizationShowIdentity, "intentional-hide-finalization-show");
         bool visibleAfterFailure = ShowWindowVerified(
             window,
             NativeMethods.SW_SHOW,
             expectedVisible: true,
             "ShowWindow(SW_SHOW) after journal finalization failure");
-        if (!TryReleaseMutationBoundary(window, "release-intentional-hide-finalization-before-transitions", out WindowIdentityResult finalizationTransitionIdentity))
+        if (!TryReleaseFinalizationBoundary(
+                window,
+                ownTokenRemoved,
+                "release-intentional-hide-finalization-before-transitions",
+                out WindowIdentityResult finalizationTransitionIdentity))
             return ReleaseBoundaryFailure(window, finalizationTransitionIdentity, "intentional-hide-finalization-transitions");
         bool transitionsAfterFailure = RestoreOriginalTransitions(window);
         _log.Log($"SHEPHERD[release-pending] guest=0x{window.Hwnd.ToInt64():X}: intentional-hide finalization failed; visible={visibleAfterFailure}, transitions={transitionsAfterFailure}; journal retained.");
         _minTrackCache.Remove(window);
         return WindowReleaseOutcome.RecoveryPending;
     }
+
+    /// <summary>
+    /// Finalization-boundary dispatcher: the standard live-token gate until
+    /// this transaction has removed the token itself, then the pre-token core.
+    /// </summary>
+    private bool TryReleaseFinalizationBoundary(
+        CapturedWindow window,
+        bool ownTokenRemoved,
+        string operation,
+        out WindowIdentityResult result)
+        => ownTokenRemoved
+            ? TryReleaseMutationBoundaryAfterOwnTokenRemoval(window, operation, out result)
+            : TryReleaseMutationBoundary(window, operation, out result);
 
     private WindowReleaseOutcome ReleaseVisible(CapturedWindow window)
     {
