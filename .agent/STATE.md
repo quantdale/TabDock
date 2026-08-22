@@ -10,6 +10,40 @@ this text.
 
 ## CURRENT STATUS
 
+## DURABLE STATE & RECOVERY CAMPAIGN (started 2026-08-23, IN PROGRESS)
+
+Objective: close the two verified persistence/recovery follow-ups queued by
+the stranded-guest tails campaign — C-1 (`PersistenceService.CommitJson`
+copies the new backup over the live `state.json.bak` with
+`File.Copy(overwrite:true)`, so a failure/power loss mid-copy destroys the
+previous known-good backup before the new primary is installed) and C-2
+(pending-recovery `Resolutions` are never compacted and fully-retired sources
+leave orphan `<source>.recovered` sidecars that later same-filename
+generations keep appending to). Plan:
+`.agent/plans/post-hardening-durable-state-recovery-2026-08-23.md`.
+Canonical OpenSpec change: `durable-state-recovery-hardening`.
+
+Design (verified against baseline `9965702` source before any edit):
+- C-1: stage the backup inside the existing `_writeGate`/generation gates —
+  read primary once → durable `state.json.bak.tmp` → atomic Move-over of
+  `.bak` → only then write/install the primary; missing primary skips the
+  stage so an existing valid `.bak` survives; test seam = three optional ctor
+  delegates (readAllBytes/writeDurableBytes/atomicMove), no storage
+  abstraction.
+- C-2: liveness compaction of Resolutions wherever a sidecar is rewritten for
+  a live source (keep same-file+same-instance+live-SHA records plus empty-keyed
+  legacy markers for null-id sources; never touch non-retired transactions);
+  RetireEntry deletes `<source>.recovered` immediately after deleting the
+  fully-resolved source; crash window converges via a new orphan-sidecar sweep
+  in RunInteractive ONLY (read-only Discover stays untouched): unreadable or
+  non-retired-transaction-holding orphans retained fail-closed.
+- Known test re-anchoring required: `ResolvedEntryRetirement_CanBeRetriedToCompletion`
+  and `UnreadablePendingSibling_DoesNotBlockOtherDiskOnlyCleanup` pin the OLD
+  orphan-sidecar retention; same-generation replay and legacy replay tests must
+  be re-anchored on marker-and-source-coexist states.
+
+STATUS: plan + OpenSpec change written; implementation not yet started.
+
 ## ARCHITECTURE-HARDENING CAMPAIGN (started 2026-08-22, IN PROGRESS)
 
 Objective: act on `docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md` in waves
