@@ -10,6 +10,61 @@ this text.
 
 ## CURRENT STATUS
 
+## ARCHITECTURE-HARDENING CAMPAIGN (started 2026-08-22, IN PROGRESS)
+
+Objective: act on `docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md` in waves
+(0 regression net → 1 dead scaffolding → 2 correctness dedup → 3 presentation
+ownership → 4 self-test migration → 5 repo hygiene), preserving every
+Shepherd/native-window invariant. Wave definitions are in the session goal.
+
+**STATUS: Wave 0 COMPLETE — implemented AND verified; committed and pushed.**
+The previously broken OpenCode Bash harness is no longer in the picture (a
+healthy shell executed the full gate). Full Wave-0 gate results:
+Debug build 0w/0e; Release build 0w/0e; Debug tests 214/214; Release tests
+214/214 (was 185 before Wave 0 — +29 new regression tests); openspec
+validate --all 20/20; git diff --check clean. Committed separately from this
+state file; pushed to origin/main.
+
+Wave 0 changes:
+- NEW `Services/TabNavigationPolicy.cs`: pure Ctrl+Tab decision seam;
+  returns the authoritative target `CapturedWindow`, never an index.
+- `Views/ContainerWindow.xaml.cs` `ContainerWindow_PreviewKeyDown`: routed
+  through the policy; no index math remains on the view path.
+- NEW `Services/PaneContainmentPolicy.cs`: refusal-suppression decision
+  (visible+same-rect ⇒ suppress; hidden ⇒ never) plus epsilon/exact rect
+  matchers. `LayoutShepherdActiveWindow` / `LayoutSplitPanes` /
+  `MarkRefusingPane` now route through it; storage intentionally stays in
+  `_refusedPaneByHwnd` until Wave 3 ownership migration. Former private
+  `IsRefusingPane` removed (its only callers moved onto the policy).
+- `HotkeyService.GlobalHotkeyRegistered`; `MainViewModel.CaptureButtonText`
+  drops the "(Ctrl+Alt+G)" hint when registration failed; XAML binds it;
+  `App.xaml.cs` sets the flag after `Register()`.
+- NEW tests: `TabNavigationPolicyTests.cs` (policy matrix + source-contract
+  + real-VM integration), `PaneContainmentPolicyTests.cs`,
+  `HotkeyAvailabilityTests.cs`.
+
+Audit revalidation complete (read-only, against 8ac6db8): all top findings
+confirmed live — budget sink never assigned anywhere; coordinator used for
+`RequestRelayout` only (its refusal API, generation guard,
+`CoalesceAndExecute`, `NeedsPanePositionForTest`, unread counters dead);
+controller hand-commits with mixed generation math (`= desired.Generation`
+×3, `_generation++` ×2, `ExplicitExit` result discarded);
+`_shepherdActiveWindow` hand-synced at ~11 sites; Spike orphan referenced
+only by sln/docs/perf.ps1; `WindowIdentityGate` pair differs only by the
+capture-token block + success string; shepherd recovery identity pair
+differs only by exe/start probes (`PendingRecoveryService:1083` also has its
+own `EvaluateRecoveryGeneration`); `BringToFront`/`SetForeground` share the
+nudge-retry sequence; DispatcherTimer stale-guard idiom ×5;
+`DescribeTransaction` lives on `SplitInteractionPolicy`, not
+`SplitPresentationPolicy` as the audit's table implied (still test-only);
+hotkey-failure UX gap + hardcoded launcher hint confirmed.
+
+NEXT ACTIONS:
+1. WAVE 1 — remove proven dead scaffolding (budget machinery, coordinator
+   test shims, dead policy API, orphan Spike), independently verifying zero
+   production value before each deletion; standard wave gate after.
+2. Waves 2–5 per the campaign goal ordering; per-wave commit + push.
+
 UI/UX bug-hunt pass (2026-08-21, same day as R22, uncommitted at time of
 writing): a spec-grounded, reject-by-default multi-agent review of the
 interaction layer (`Views/ContainerWindow.xaml.cs` and friends) against
