@@ -33,4 +33,6 @@
 - [x] Run Release build and `scripts/validate.ps1 -Configuration Release -Ci -Publish`.
 - [x] Run focused guarded interactive scenarios and available browser matrix.
 - [x] Compare baseline `8b75c99cdd149648b54f98ed2ff0f9f2598bd0fc` with candidate.
-- [ ] Audit diff/prohibited APIs, commit/push main, and verify exact-SHA CI.
+- [x] Audit diff/prohibited APIs, commit/push main, and verify exact-SHA CI.
+      (Verified 2026-08-22: implementation commits 13c3d6f/ace3161 are on
+      origin/main; every pushed SHA since has been qualified by hosted CI.)

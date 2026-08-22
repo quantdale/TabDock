@@ -39,5 +39,5 @@
 
 ## 4. Gates
 
-- [ ] 4.1 Debug+Release builds 0w/0e; Debug+Release xUnit green; release
+- [x] 4.1 Debug+Release builds 0w/0e; Debug+Release xUnit green; release
       tooling 150/150; validate.ps1 -Ci PASS; git diff --check clean.

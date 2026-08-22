@@ -563,7 +563,7 @@ write-capable credential while it evaluates the candidate.
 ### Requirement: Release checkouts do not persist credentials
 Every `actions/checkout` step in the release workflows
 (`publish-release.yml` — the trusted policy checkouts and the
-candidate-source checkout — `prepare-release-candidate.yml`, `release.yml`,
+candidate-source checkout — `prepare-release-candidate.yml`, `qualify-candidate.yml`,
 and `build.yml`) SHALL set `persist-credentials: false`, because none of
 these workflows performs an authenticated git push from a checkout and no
 credentials SHALL be persisted in `.git/config` on the runner. The cross-run
@@ -600,4 +600,14 @@ at Stage B; `timestampStatus == VERIFIED` remains mandatory.
   absent or disagrees with the actual bytes
 - **THEN** Stage A fails and the Stage B publication gate rejects the
   artifact
+
+### Requirement: Release candidate qualification uses one exact binary
+The executable that passes `--version` identity checks and the native ABI
+self-test is the same binary that is hashed, manifested, and available for
+publication. Hermetic behavioral qualification is owned by the xUnit suite,
+which compiles against the same product sources in the same CI gate.
+
+#### Scenario: The published executable must be the qualified executable
+- **WHEN** a release candidate is qualified
+- **THEN** the executable that passes `--version` identity and `--selftest-native-abi` is the same binary that is hashed, manifested, and available for publication
 

@@ -2,9 +2,7 @@
 
 ## Purpose
 Crash, shutdown, and fatal-error paths in TabDock remain internally consistent and do not corrupt persisted state, leave live hooks over unmanaged windows, or prompt the user during a teardown they cannot control.
-
 ## Requirements
-
 ### Requirement: The AppDomain unhandled-exception handler never touches UI-thread-affined state off-thread
 `CurrentDomain_UnhandledException` SHALL NOT enumerate `GroupManager`'s collections, mutate the journal cache, or stop `DispatcherTimer`s from the faulting thread. When `e.IsTerminating` is true, the handler SHALL restrict itself to thread-safe logging; when false, it SHALL marshal the save/release/flush work onto the dispatcher with a bounded timeout, falling back to log-only if the dispatch cannot complete.
 
@@ -50,3 +48,13 @@ While the close-confirm `MessageBox` is open (a nested dispatcher loop), WinEven
 #### Scenario: A guest destroying itself mid-prompt cannot re-enter Close
 - **WHEN** the close-confirm prompt is open and the active guest destroys itself, emptying the tab list via the WinEvent handler
 - **THEN** no second `Close()` is initiated on the window already inside `Closing`, and after the prompt returns the chosen action operates on the current (re-validated) tab list
+
+### Requirement: Session-ending teardown SHALL be one-way and idempotent
+Once `Application_SessionEnding` begins guest release, TabDock SHALL normalize
+its model/container state, stop monitoring, and deliberately call `Shutdown`.
+It SHALL NOT attempt to resume as an operational app if another process cancels
+the Windows logoff/shutdown sequence.
+
+#### Scenario: Session teardown cannot leave a hookless half-running app
+- **WHEN** session-ending teardown has released and normalized captured guests
+- **THEN** TabDock exits through its normal `Application_Exit` path and repeated exit cleanup is harmless

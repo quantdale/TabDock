@@ -2,9 +2,7 @@
 
 ## Purpose
 The end-to-end scenario inventory that `all` runs, including the regression-specific scenarios added in the expand-e2e-coverage change (H2 oscillation bounds, H4 render liveness, H6 minimize-retains-tabs, and the picker/persistence/no-nesting behavioral coverage).
-
 ## Requirements
-
 ### Requirement: Assertions only reference instrumentation present in committed source
 No scenario SHALL assert on a log line, event, or signal that committed TabDock source does not emit. Before an assertion on log output is added or kept, the asserted substring SHALL be verified against the application source; assertions that fail this check SHALL be retargeted at an observable equivalent or removed.
 
@@ -83,3 +81,24 @@ The suite SHALL include a scenario that verifies the launcher's "No groups yet" 
 #### Scenario: The hint appears with no groups and disappears once one exists
 - **WHEN** TabDock is launched fresh with zero groups
 - **THEN** the launcher's empty-state hint is visible (not offscreen/collapsed), and after a group is created the hint is no longer visible
+
+### Requirement: New safety regressions SHALL have deterministic or supervised coverage
+The suite SHALL include regression coverage for changed HDWP chaining and
+failure, full-state recovery fixtures, corrupt/backup/version persistence,
+monitor failure injection, bundle privacy, hung-guest probing, and semantic
+persistence durability. Hardware/session/real-input limitations SHALL be
+reported as blocked rather than represented as green.
+
+#### Scenario: A hermetic safety regression is red
+- **WHEN** a deterministic seam or fixture violates its contract
+- **THEN** the self-test/CI qualification exits nonzero
+
+#### Scenario: A required desktop test is unavailable
+- **WHEN** hardware or supervised input is unavailable
+- **THEN** the validation ledger records `BLOCKED_ENVIRONMENT` with the exact follow-up procedure
+
+#### Scenario: A synthetic native probe starts from a defined buffer
+- **WHEN** TabDock sends `WM_GETMINMAXINFO` to a captured guest for a dirty
+  constraint refresh
+- **THEN** the complete `MINMAXINFO` buffer is initialized before dispatch, and
+  an indeterminate field cannot become a false container minimum
