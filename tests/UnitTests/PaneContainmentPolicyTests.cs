@@ -74,6 +74,75 @@ public class PaneContainmentPolicyTests
         Assert.False(PaneContainmentPolicy.MatchesWithinEpsilon(refused, Rect(2, 0, 302, 202)));
     }
 
+    // ---- Wave 2D: the epsilon authority's full edge contract ----------------
+    // Every ContainerWindow ±1px comparison routes through MatchesWithinEpsilon,
+    // so its per-edge behavior is now load-bearing for layout equivalence too.
+
+    [Fact]
+    public void Epsilon_ExactMatch_IsTrue()
+    {
+        var a = Rect(-1920, -500, 300, 200);
+        Assert.True(PaneContainmentPolicy.MatchesWithinEpsilon(a, a));
+    }
+
+    [Fact]
+    public void Epsilon_EachEdgeIndependently_ToleratesOnePixel()
+    {
+        var baseRect = Rect(100, 100, 400, 300);
+        Assert.True(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(101, 100, 400, 300))); // left +1
+        Assert.True(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(99, 100, 400, 300)));  // left -1
+        Assert.True(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(100, 101, 400, 300))); // top +1
+        Assert.True(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(100, 99, 400, 300)));  // top -1
+        Assert.True(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(100, 100, 401, 300))); // right +1
+        Assert.True(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(100, 100, 399, 300))); // right -1
+        Assert.True(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(100, 100, 400, 301))); // bottom +1
+        Assert.True(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(100, 100, 400, 299))); // bottom -1
+    }
+
+    [Fact]
+    public void Epsilon_TwoPixelsOnAnyEdge_IsRejected()
+    {
+        var baseRect = Rect(100, 100, 400, 300);
+        Assert.False(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(102, 100, 400, 300))); // left +2
+        Assert.False(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(98, 100, 400, 300)));  // left -2
+        Assert.False(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(100, 102, 400, 300))); // top +2
+        Assert.False(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(100, 98, 400, 300)));  // top -2
+        Assert.False(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(100, 100, 402, 300))); // right +2
+        Assert.False(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(100, 100, 398, 300))); // right -2
+        Assert.False(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(100, 100, 400, 302))); // bottom +2
+        Assert.False(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(100, 100, 400, 298))); // bottom -2
+    }
+
+    [Fact]
+    public void Epsilon_OnePixelOnEachEdgeSimultaneously_IsTolerated()
+    {
+        var baseRect = Rect(100, 100, 400, 300);
+        // All four edges off by one in mixed directions at once: the glue
+        // epsilon is per-edge, not a total-difference budget.
+        Assert.True(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(99, 101, 399, 301)));
+        Assert.True(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(101, 99, 401, 299)));
+    }
+
+    [Fact]
+    public void Epsilon_NegativeScreenCoordinates_BehaveIdentically()
+    {
+        // Left-of-primary monitor geometry (negative origins are normal on
+        // multi-monitor desktops).
+        var baseRect = Rect(-1920, -1080, -1600, -800);
+        Assert.True(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(-1919, -1079, -1599, -799)));
+        Assert.False(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect(-1918, -1080, -1600, -800)));
+    }
+
+    [Fact]
+    public void Epsilon_LargePositiveCoordinates_BehaveIdentically()
+    {
+        // Far-right/bottom monitor geometry; no overflow or magnitude effects.
+        long big = 2_000_000_000;
+        var baseRect = Rect((int)big, (int)big, (int)(big + 800), (int)(big + 600));
+        Assert.True(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect((int)big + 1, (int)big - 1, (int)(big + 801), (int)(big + 599))));
+        Assert.False(PaneContainmentPolicy.MatchesWithinEpsilon(baseRect, Rect((int)big + 2, (int)big, (int)(big + 800), (int)(big + 600))));
+    }
+
     // ---- presented split pair ----------------------------------------------
 
     private static readonly NativeMethods.RECT LeftPane = Rect(0, 0, 400, 600);

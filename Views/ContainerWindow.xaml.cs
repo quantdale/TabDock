@@ -711,10 +711,7 @@ public partial class ContainerWindow : Window
             return;
 
         if (_hasObservedContentRect
-            && Math.Abs(rect.left - _lastObservedContentRect.left) <= 1
-            && Math.Abs(rect.top - _lastObservedContentRect.top) <= 1
-            && Math.Abs(rect.right - _lastObservedContentRect.right) <= 1
-            && Math.Abs(rect.bottom - _lastObservedContentRect.bottom) <= 1)
+            && PaneContainmentPolicy.MatchesWithinEpsilon(_lastObservedContentRect, rect))
         {
             return;
         }
@@ -2304,11 +2301,7 @@ public partial class ContainerWindow : Window
         if (!NativeMethods.IsWindow(hwnd) || !NativeMethods.IsWindowVisible(hwnd))
             return false;
         NativeMethods.GetWindowRect(hwnd, out NativeMethods.RECT guest);
-        const int epsilon = 1;
-        return Math.Abs(guest.left - rect.left) <= epsilon
-            && Math.Abs(guest.top - rect.top) <= epsilon
-            && Math.Abs(guest.right - rect.right) <= epsilon
-            && Math.Abs(guest.bottom - rect.bottom) <= epsilon;
+        return PaneContainmentPolicy.MatchesWithinEpsilon(guest, rect);
     }
 
     /// <summary>
@@ -2360,14 +2353,10 @@ public partial class ContainerWindow : Window
         // snap-back re-glues a guest dragged a few pixels away from an
         // otherwise-unchanged docked rect, and a tab switch targets a different
         // (previously hidden) guest at the same rect — both must still re-glue.
-        const int epsilon = 1;
         if (NativeMethods.IsWindowVisible(_shepherdActiveWindow.Hwnd))
         {
             NativeMethods.GetWindowRect(_shepherdActiveWindow.Hwnd, out NativeMethods.RECT guest);
-            if (Math.Abs(guest.left - rect.left) <= epsilon &&
-                Math.Abs(guest.top - rect.top) <= epsilon &&
-                Math.Abs(guest.right - rect.right) <= epsilon &&
-                Math.Abs(guest.bottom - rect.bottom) <= epsilon)
+            if (PaneContainmentPolicy.MatchesWithinEpsilon(guest, rect))
             {
                 if (forceZOrder)
                 {
@@ -2588,14 +2577,10 @@ public partial class ContainerWindow : Window
     {
         if (!NativeMethods.IsWindow(member.Hwnd))
             return false; // cannot position a dead window
-        const int epsilon = 1;
         if (NativeMethods.IsWindowVisible(member.Hwnd))
         {
             NativeMethods.GetWindowRect(member.Hwnd, out NativeMethods.RECT guest);
-            if (Math.Abs(guest.left - rect.left) <= epsilon &&
-                Math.Abs(guest.top - rect.top) <= epsilon &&
-                Math.Abs(guest.right - rect.right) <= epsilon &&
-                Math.Abs(guest.bottom - rect.bottom) <= epsilon)
+            if (PaneContainmentPolicy.MatchesWithinEpsilon(guest, rect))
                 return false;
         }
         return true;

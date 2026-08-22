@@ -120,6 +120,23 @@ public sealed class InteractionSourceContractTests
         Assert.Contains("bring-to-front-before-foreground", code);
     }
 
+    [Fact]
+    public void ContainerWindow_HasNoHandwrittenOnePixelRectComparisons()
+    {
+        string code = Read("Views/ContainerWindow.xaml.cs");
+
+        // Wave 2D consolidation: every requested-vs-observed ±1px pane/content
+        // comparison routes through PaneContainmentPolicy.MatchesWithinEpsilon
+        // (the Wave-0 authority). A second handwritten per-edge epsilon compare
+        // in the view risks drifting to a different tolerance/order.
+        Assert.DoesNotMatch(
+            new Regex(@"Math\s*\.\s*Abs\s*\(\s*\w+\s*\.\s*(left|top|right|bottom)\s*-"),
+            code);
+        Assert.DoesNotContain("const int epsilon = 1;", code);
+        // The authority is genuinely used by the four consolidated call sites.
+        Assert.Equal(4, Regex.Matches(code, @"PaneContainmentPolicy\s*\.\s*MatchesWithinEpsilon\s*").Count);
+    }
+
     private static string Read(string relativePath)
         => File.ReadAllText(Path.Combine(RepoRoot, relativePath));
 
