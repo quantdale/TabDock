@@ -120,8 +120,6 @@ public static class DiagnosticCommandLine
                 case DiagnosticCommandKind.SelfTest:
                     (int checks, int failures) = DiagnosticSelfTest.Run();
                     Write($"SELFTEST[diagnostics] checks={checks} failures={failures} result={(failures == 0 ? "PASS" : "FAIL")}");
-                    if (PersistenceSelfTest.LastAccessDeniedFixtureStatus is string aclStatus && aclStatus != "pass")
-                        Write($"SELFTEST[diagnostics] persistence-acl-fixture={aclStatus}");
                     return failures == 0 ? 0 : 1;
                 case DiagnosticCommandKind.SelfTestNativeAbi:
                     bool contractOk = NativeInteropSelfTest.PlacementContractIsStable();
@@ -212,18 +210,9 @@ internal static class DiagnosticSelfTest
         Check(MonitorDpiSelfTest.CoversProbeAndConversionSeam());
         Check(NativeInteropSelfTest.PlacementContractIsStable());
         Check(NativeInteropSelfTest.PlacementRoundTripThroughUser32());
-        (int journalChecks, int journalFailures) = RecoveryJournalSelfTest.Run();
-        checks += journalChecks;
-        failures += journalFailures;
-        (int persistenceChecks, int persistenceFailures) = PersistenceSelfTest.Run();
-        checks += persistenceChecks;
-        failures += persistenceFailures;
         (int privacyChecks, int privacyFailures) = DiagnosticPrivacySelfTest.Run();
         checks += privacyChecks;
         failures += privacyFailures;
-        (int pendingChecks, int pendingFailures) = PendingRecoverySelfTest.Run();
-        checks += pendingChecks;
-        failures += pendingFailures;
         return (checks, failures);
     }
 }

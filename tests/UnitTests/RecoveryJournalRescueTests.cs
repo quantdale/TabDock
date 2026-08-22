@@ -2,51 +2,26 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 using System.Text;
+using System.Text.Json;
 using TabDock.Models;
+using TabDock.Services;
+using TabDock.UnitTests.TestInfrastructure;
+using Xunit;
 
-namespace TabDock.Services;
+namespace TabDock.UnitTests;
 
 /// <summary>
-/// Deterministic coverage for recovery schema compatibility and identity-safe
-/// rescue. Fixtures for v1 and v2 are literal historical JSON shapes rather
-/// than current DTO instances, so a new field cannot accidentally make a
-/// legacy fixture look current.
+/// Migrated from the former RecoveryJournalSelfTest (Wave 4): deterministic
+/// coverage for recovery schema compatibility and identity-safe rescue. The v1
+/// and v2 fixtures are literal historical JSON shapes rather than current DTO
+/// instances, so a new field cannot accidentally make a legacy fixture look
+/// current.
 /// </summary>
-internal static class RecoveryJournalSelfTest
+public class RecoveryJournalRescueTests
 {
-    public static (int Checks, int Failures) Run()
-    {
-        int checks = 0;
-        int failures = 0;
-        void Check(bool condition)
-        {
-            checks++;
-            if (!condition)
-                failures++;
-        }
-
-        Check(HiddenWindowJournalFile.CurrentVersion == 3);
-        Check(LegacyV1IsPreserved());
-        Check(LegacyV2IsPreserved());
-        Check(ValidV3Rescues());
-        Check(FutureVersionIsUntouched());
-        Check(MalformedJournalIsQuarantined());
-        Check(V3MissingTokenIsPreserved());
-        Check(MixedV3EvidenceIsPreservedTogether());
-        Check(V3TokenMismatchIsStaleWithoutMutation());
-        Check(StartProbeUnavailableIsRetried());
-        Check(IdentityChangeAfterPlacementStopsRescue());
-        Check(IdentityChangeAfterVisibilityStopsDwmRescue());
-        Check(IdentityChangeBeforeTokenRemovalStopsCleanup());
-        Check(LegacyReadCannotBeDowngraded());
-        Check(LegacyWriteCannotDowngradeSchema());
-        Check(UnverifiableHidePreservesJournal());
-        return (checks, failures);
-    }
-
-    private static bool LegacyV1IsPreserved()
+    [Fact]
+    public void LegacyV1Journal_IsPreservedAsPendingEvidenceWithoutMutation()
     {
         const string legacyV1 = "{\"Entries\":[{\"Hwnd\":1,\"Pid\":11,\"ExePath\":\"guest-11.exe\"}]}";
         byte[] legacyBytes = Encoding.UTF8.GetBytes(legacyV1);
@@ -57,22 +32,20 @@ internal static class RecoveryJournalSelfTest
             using var log = new LoggingService(Path.Combine(root, "logs"));
             var api = new FakeRecoveryApi();
             WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
-            string pending = journalPath + ".pending";
-            return !File.Exists(journalPath)
-                && File.Exists(pending)
-                && File.ReadAllBytes(pending).SequenceEqual(legacyBytes)
-                && api.NativeMutationCount == 0;
+
+            Assert.False(File.Exists(journalPath));
+            byte[] pending = File.ReadAllBytes(journalPath + ".pending");
+            Assert.True(pending.SequenceEqual(legacyBytes), "pending sidecar must preserve the exact original bytes");
+            Assert.Equal(0, api.NativeMutationCount);
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
-    private static bool LegacyV2IsPreserved()
+    [Fact]
+    public void LegacyV2Journal_IsPreservedAsPendingEvidenceWithoutMutation()
     {
-        // Exact c6b119a/f1dc7ab journal shape: Version 2, no
-        // WindowThreadId and no WindowIdentityToken.
+        // Exact c6b119a/f1dc7ab journal shape: Version 2, no WindowThreadId and
+        // no WindowIdentityToken.
         const string legacyV2 = "{\n  \"Version\": 2,\n  \"Entries\": [\n    {\n      \"Hwnd\": 1,\n      \"Pid\": 11,\n      \"ExePath\": \"guest-11.exe\",\n      \"ClassName\": \"Pig\",\n      \"ProcessStartTimeUtcTicks\": 101,\n      \"OriginallyVisible\": true,\n      \"HasOriginalPlacement\": true,\n      \"OriginalPlacementFlags\": 0,\n      \"OriginalShowCommand\": 5,\n      \"OriginalMinPositionX\": 0,\n      \"OriginalMinPositionY\": 0,\n      \"OriginalMaxPositionX\": 0,\n      \"OriginalMaxPositionY\": 0,\n      \"OriginalNormalLeft\": 0,\n      \"OriginalNormalTop\": 0,\n      \"OriginalNormalRight\": 400,\n      \"OriginalNormalBottom\": 300,\n      \"HasOriginalTransitionsState\": false,\n      \"OriginalTransitionsDisabled\": false,\n      \"DoNotRescue\": false\n    }\n  ]\n}";
         byte[] legacyBytes = Encoding.UTF8.GetBytes(legacyV2);
         string root = CreateRoot(out string journalPath);
@@ -82,19 +55,17 @@ internal static class RecoveryJournalSelfTest
             using var log = new LoggingService(Path.Combine(root, "logs"));
             var api = new FakeRecoveryApi();
             WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
-            string pending = journalPath + ".pending";
-            return !File.Exists(journalPath)
-                && File.Exists(pending)
-                && File.ReadAllBytes(pending).SequenceEqual(legacyBytes)
-                && api.NativeMutationCount == 0;
+
+            Assert.False(File.Exists(journalPath));
+            byte[] pending = File.ReadAllBytes(journalPath + ".pending");
+            Assert.True(pending.SequenceEqual(legacyBytes), "pending sidecar must preserve the exact original bytes");
+            Assert.Equal(0, api.NativeMutationCount);
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
-    private static bool ValidV3Rescues()
+    [Fact]
+    public void ValidV3Journal_RescuesTheGuestAndClearsTheToken()
     {
         string root = CreateRoot(out string journalPath);
         try
@@ -103,19 +74,17 @@ internal static class RecoveryJournalSelfTest
             using var log = new LoggingService(Path.Combine(root, "logs"));
             var api = new FakeRecoveryApi();
             WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
-            bool result = !File.Exists(journalPath)
-                && api.Shown.Contains(new IntPtr(1))
-                && api.CaptureTokens[new IntPtr(1)] == IntPtr.Zero
-                && api.NativeMutationCount > 0;
-            return result;
+
+            Assert.False(File.Exists(journalPath));
+            Assert.Contains(new IntPtr(1), api.Shown);
+            Assert.Equal(IntPtr.Zero, api.CaptureTokens[new IntPtr(1)]);
+            Assert.True(api.NativeMutationCount > 0);
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
-    private static bool FutureVersionIsUntouched()
+    [Fact]
+    public void FutureVersionJournal_IsUntouched()
     {
         const string future = "{\"Version\":4,\"Entries\":[]}";
         string root = CreateRoot(out string journalPath);
@@ -125,17 +94,16 @@ internal static class RecoveryJournalSelfTest
             using var log = new LoggingService(Path.Combine(root, "logs"));
             var api = new FakeRecoveryApi();
             WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
-            return File.Exists(journalPath)
-                && File.ReadAllText(journalPath) == future
-                && api.NativeMutationCount == 0;
+
+            Assert.True(File.Exists(journalPath));
+            Assert.Equal(future, File.ReadAllText(journalPath));
+            Assert.Equal(0, api.NativeMutationCount);
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
-    private static bool MalformedJournalIsQuarantined()
+    [Fact]
+    public void MalformedJournal_IsQuarantined()
     {
         const string malformed = "{not-json";
         string root = CreateRoot(out string journalPath);
@@ -144,16 +112,15 @@ internal static class RecoveryJournalSelfTest
             File.WriteAllText(journalPath, malformed);
             using var log = new LoggingService(Path.Combine(root, "logs"));
             WindowShepherdService.RescueOrphanedWindows(log, journalPath, new FakeRecoveryApi());
-            return !File.Exists(journalPath)
-                && Directory.GetFiles(root, "hidden-windows.json.corrupt.*").Length == 1;
+
+            Assert.False(File.Exists(journalPath));
+            Assert.Single(Directory.GetFiles(root, "hidden-windows.json.corrupt.*"));
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
-    private static bool V3MissingTokenIsPreserved()
+    [Fact]
+    public void V3EntryMissingToken_IsPreservedWithoutMutation()
     {
         string root = CreateRoot(out string journalPath);
         try
@@ -166,18 +133,16 @@ internal static class RecoveryJournalSelfTest
             using var log = new LoggingService(Path.Combine(root, "logs"));
             var api = new FakeRecoveryApi();
             WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
-            return !File.Exists(journalPath)
-                && File.Exists(journalPath + ".pending")
-                && File.ReadAllText(journalPath + ".pending") == json
-                && api.NativeMutationCount == 0;
+
+            Assert.False(File.Exists(journalPath));
+            Assert.Equal(json, File.ReadAllText(journalPath + ".pending"));
+            Assert.Equal(0, api.NativeMutationCount);
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
-    private static bool MixedV3EvidenceIsPreservedTogether()
+    [Fact]
+    public void MixedV3Evidence_ValidAndTokenless_ArePreservedTogether()
     {
         string root = CreateRoot(out string journalPath);
         try
@@ -191,18 +156,16 @@ internal static class RecoveryJournalSelfTest
             using var log = new LoggingService(Path.Combine(root, "logs"));
             var api = new FakeRecoveryApi();
             WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
-            return !File.Exists(journalPath)
-                && File.Exists(journalPath + ".pending")
-                && File.ReadAllText(journalPath + ".pending") == json
-                && api.NativeMutationCount == 0;
+
+            Assert.False(File.Exists(journalPath));
+            Assert.Equal(json, File.ReadAllText(journalPath + ".pending"));
+            Assert.Equal(0, api.NativeMutationCount);
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
-    private static bool V3TokenMismatchIsStaleWithoutMutation()
+    [Fact]
+    public void V3TokenMismatch_IsStaleWithoutMutation()
     {
         string root = CreateRoot(out string journalPath);
         try
@@ -212,15 +175,15 @@ internal static class RecoveryJournalSelfTest
             var api = new FakeRecoveryApi();
             api.Identity[new IntPtr(1)] = (11, 1101, "guest-11.exe", "Pig", 101, 2002);
             WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
-            return !File.Exists(journalPath) && api.NativeMutationCount == 0;
+
+            Assert.False(File.Exists(journalPath));
+            Assert.Equal(0, api.NativeMutationCount);
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
-    private static bool StartProbeUnavailableIsRetried()
+    [Fact]
+    public void StartProbeUnavailable_RetriesLaterAndCompletes()
     {
         string root = CreateRoot(out string journalPath);
         try
@@ -229,19 +192,20 @@ internal static class RecoveryJournalSelfTest
             using var log = new LoggingService(Path.Combine(root, "logs"));
             var api = new FakeRecoveryApi { StartProbeUnavailable = true };
             WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
-            bool retained = File.Exists(journalPath) && api.NativeMutationCount == 0;
+            Assert.True(File.Exists(journalPath));
+            Assert.Equal(0, api.NativeMutationCount);
+
             api.StartProbeUnavailable = false;
             WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
-            bool result = retained && !File.Exists(journalPath) && api.Shown.Contains(new IntPtr(1));
-            return result;
+
+            Assert.False(File.Exists(journalPath));
+            Assert.Contains(new IntPtr(1), api.Shown);
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
-    private static bool IdentityChangeAfterPlacementStopsRescue()
+    [Fact]
+    public void IdentityChangeAfterPlacement_StopsRescueBeforeVisibility()
     {
         string root = CreateRoot(out string journalPath);
         try
@@ -250,19 +214,18 @@ internal static class RecoveryJournalSelfTest
             using var log = new LoggingService(Path.Combine(root, "logs"));
             var api = new FakeRecoveryApi { ChangeTokenAfterPlacement = true };
             WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
-            return !File.Exists(journalPath)
-                && api.PlacementMutationCount == 1
-                && api.VisibilityMutationCount == 0
-                && api.TransitionMutationCount == 0
-                && api.TokenRemovalCount == 0;
+
+            Assert.False(File.Exists(journalPath));
+            Assert.Equal(1, api.PlacementMutationCount);
+            Assert.Equal(0, api.VisibilityMutationCount);
+            Assert.Equal(0, api.TransitionMutationCount);
+            Assert.Equal(0, api.TokenRemovalCount);
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
-    private static bool IdentityChangeAfterVisibilityStopsDwmRescue()
+    [Fact]
+    public void IdentityChangeAfterVisibility_StopsDwmRescue()
     {
         string root = CreateRoot(out string journalPath);
         try
@@ -271,19 +234,18 @@ internal static class RecoveryJournalSelfTest
             using var log = new LoggingService(Path.Combine(root, "logs"));
             var api = new FakeRecoveryApi { ChangeTokenAfterShow = true };
             WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
-            return !File.Exists(journalPath)
-                && api.PlacementMutationCount == 1
-                && api.VisibilityMutationCount == 1
-                && api.TransitionMutationCount == 0
-                && api.TokenRemovalCount == 0;
+
+            Assert.False(File.Exists(journalPath));
+            Assert.Equal(1, api.PlacementMutationCount);
+            Assert.Equal(1, api.VisibilityMutationCount);
+            Assert.Equal(0, api.TransitionMutationCount);
+            Assert.Equal(0, api.TokenRemovalCount);
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
-    private static bool IdentityChangeBeforeTokenRemovalStopsCleanup()
+    [Fact]
+    public void IdentityChangeBeforeTokenRemoval_StopsCleanup()
     {
         string root = CreateRoot(out string journalPath);
         try
@@ -292,19 +254,18 @@ internal static class RecoveryJournalSelfTest
             using var log = new LoggingService(Path.Combine(root, "logs"));
             var api = new FakeRecoveryApi { ChangeTokenAfterTransitions = true };
             WindowShepherdService.RescueOrphanedWindows(log, journalPath, api);
-            return !File.Exists(journalPath)
-                && api.PlacementMutationCount == 1
-                && api.VisibilityMutationCount == 1
-                && api.TransitionMutationCount == 1
-                && api.TokenRemovalCount == 0;
+
+            Assert.False(File.Exists(journalPath));
+            Assert.Equal(1, api.PlacementMutationCount);
+            Assert.Equal(1, api.VisibilityMutationCount);
+            Assert.Equal(1, api.TransitionMutationCount);
+            Assert.Equal(0, api.TokenRemovalCount);
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
-    private static bool LegacyReadCannotBeDowngraded()
+    [Fact]
+    public void LegacyRead_CannotBeDowngradedToLegacySchemaOnReleaseMismatch()
     {
         const string legacyV2 = "{\"Version\":2,\"Entries\":[{\"Hwnd\":1,\"Pid\":11,\"ExePath\":\"guest-11.exe\",\"ClassName\":\"Pig\",\"ProcessStartTimeUtcTicks\":101}]}";
         string root = CreateRoot(out string journalPath);
@@ -312,29 +273,23 @@ internal static class RecoveryJournalSelfTest
         {
             File.WriteAllText(journalPath, legacyV2);
             using var log = new LoggingService(Path.Combine(root, "logs"));
-            var identity = new FakeIdentityApi
-            {
-                Identity = new WindowProcessIdentity(11, 20),
-                CaptureToken = new IntPtr(1001),
-                ExePath = "guest-11.exe",
-                ClassName = "Pig",
-                ProcessStartTicks = 101,
-            };
-            var service = new WindowShepherdService(log, journalPath, identity, new FakeMonitorDpiProbe(), new FakeReleaseApi());
+            var identity = ShepherdFakeIdentityApi.For(1, 11, 101, 1001);
+            identity.Identity = new WindowProcessIdentity(11, 20);
+            var service = new WindowShepherdService(log, journalPath, identity, new FakeMonitorDpiProbe(), new ShepherdFakeReleaseApi());
             var captured = Captured(1, 11, 20, 1001, 101);
             service.BindCapturedWindowForTesting(captured);
             identity.CaptureToken = new IntPtr(2002);
+
             WindowReleaseOutcome outcome = service.Release(captured);
-            return outcome == WindowReleaseOutcome.TargetGoneOrRecycled
-                && File.ReadAllText(journalPath) == legacyV2;
+
+            Assert.Equal(WindowReleaseOutcome.TargetGoneOrRecycled, outcome);
+            Assert.Equal(legacyV2, File.ReadAllText(journalPath));
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
-    private static bool LegacyWriteCannotDowngradeSchema()
+    [Fact]
+    public void HideAgainstLegacyJournal_CannotDowngradeSchema()
     {
         const string legacyV2 = "{\"Version\":2,\"Entries\":[{\"Hwnd\":1,\"Pid\":11,\"ExePath\":\"guest-11.exe\",\"ClassName\":\"Pig\",\"ProcessStartTimeUtcTicks\":101}]}";
         string root = CreateRoot(out string journalPath);
@@ -342,29 +297,22 @@ internal static class RecoveryJournalSelfTest
         {
             File.WriteAllText(journalPath, legacyV2);
             using var log = new LoggingService(Path.Combine(root, "logs"));
-            var identity = new FakeIdentityApi
-            {
-                Identity = new WindowProcessIdentity(11, 20),
-                CaptureToken = new IntPtr(1001),
-                ExePath = "guest-11.exe",
-                ClassName = "Pig",
-                ProcessStartTicks = 101,
-            };
-            var native = new FakeReleaseApi();
-            var service = new WindowShepherdService(log, journalPath, identity, new FakeMonitorDpiProbe(), native);
+            var identity = ShepherdFakeIdentityApi.For(1, 11, 101, 1001);
+            identity.Identity = new WindowProcessIdentity(11, 20);
+            var service = new WindowShepherdService(log, journalPath, identity, new FakeMonitorDpiProbe(), new ShepherdFakeReleaseApi());
             var captured = Captured(1, 11, 20, 1001, 101);
             service.BindCapturedWindowForTesting(captured);
+
             WindowHideOutcome outcome = service.Hide(captured);
-            return outcome == WindowHideOutcome.RecoveryPending
-                && File.ReadAllText(journalPath) == legacyV2;
+
+            Assert.Equal(WindowHideOutcome.RecoveryPending, outcome);
+            Assert.Equal(legacyV2, File.ReadAllText(journalPath));
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
-    private static bool UnverifiableHidePreservesJournal()
+    [Fact]
+    public void UnverifiableHide_PreservesV3Journal()
     {
         string root = CreateRoot(out string journalPath);
         try
@@ -375,25 +323,19 @@ internal static class RecoveryJournalSelfTest
                 TabDockJsonContext.Default.HiddenWindowJournalFile);
             File.WriteAllText(journalPath, json);
             using var log = new LoggingService(Path.Combine(root, "logs"));
-            var identity = new FakeIdentityApi
-            {
-                Identity = new WindowProcessIdentity(11, 20),
-                CaptureToken = new IntPtr(1001),
-                ExePath = "guest-11.exe",
-                ClassName = "Pig",
-                ProcessStartTicks = 0,
-            };
-            var service = new WindowShepherdService(log, journalPath, identity, new FakeMonitorDpiProbe(), new FakeReleaseApi());
+            var identity = ShepherdFakeIdentityApi.For(1, 11, 101, 1001);
+            identity.Identity = new WindowProcessIdentity(11, 20);
+            identity.ProcessStartTicks = 0; // strong start evidence unavailable -> fail closed
+            var service = new WindowShepherdService(log, journalPath, identity, new FakeMonitorDpiProbe(), new ShepherdFakeReleaseApi());
             var captured = Captured(1, 11, 20, 1001, 101);
             service.BindCapturedWindowForTesting(captured);
+
             WindowHideOutcome outcome = service.Hide(captured);
-            return outcome == WindowHideOutcome.RecoveryPending
-                && File.ReadAllText(journalPath) == json;
+
+            Assert.Equal(WindowHideOutcome.RecoveryPending, outcome);
+            Assert.Equal(json, File.ReadAllText(journalPath));
         }
-        finally
-        {
-            DeleteRoot(root);
-        }
+        finally { DeleteRoot(root); }
     }
 
     private static void WriteV3(string path, HiddenWindowEntry entry)
@@ -444,7 +386,7 @@ internal static class RecoveryJournalSelfTest
 
     private static string CreateRoot(out string journalPath)
     {
-        string root = Path.Combine(Path.GetTempPath(), "TabDock-journal-selftest-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(Path.GetTempPath(), "TabDock-journal-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         journalPath = Path.Combine(root, "hidden-windows.json");
         return root;
@@ -543,47 +485,5 @@ internal static class RecoveryJournalSelfTest
             Identity[hwnd] = (pid, threadId, exe, className, startTicks, 2002);
         }
     }
-
-    private sealed class FakeIdentityApi : IWindowIdentityNativeApi
-    {
-        public WindowProcessIdentity Identity { get; set; }
-        public IntPtr CaptureToken { get; set; }
-        public string ExePath { get; set; } = string.Empty;
-        public string ClassName { get; set; } = string.Empty;
-        public long ProcessStartTicks { get; set; }
-        public IntPtr GetCaptureIdentityToken(IntPtr hwnd) => CaptureToken;
-        public bool IsWindow(IntPtr hwnd) => hwnd != IntPtr.Zero;
-        public WindowProcessIdentity GetProcessIdentity(IntPtr hwnd) => Identity;
-        public string? GetProcessImagePath(uint pid) => ExePath;
-        public string? GetClassName(IntPtr hwnd) => ClassName;
-        public long GetProcessStartTimeUtcTicks(uint pid) => ProcessStartTicks;
-        public bool RemoveCaptureIdentityToken(IntPtr hwnd, IntPtr expectedToken)
-        {
-            if (CaptureToken != expectedToken)
-                return false;
-            CaptureToken = IntPtr.Zero;
-            return true;
-        }
-
-        public IntPtr GetReleasedCloseNonce(IntPtr hwnd) => IntPtr.Zero;
-        public bool InstallReleasedCloseNonce(IntPtr hwnd, IntPtr nonce) => false;
-        public bool ConsumeReleasedCloseNonce(IntPtr hwnd, IntPtr expectedNonce) => false;
-    }
-
-    private sealed class FakeReleaseApi : IWindowReleaseNativeApi
-    {
-        public bool SetWindowPlacement(IntPtr hwnd, ref NativeMethods.WINDOWPLACEMENT placement) => true;
-        public bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags) => true;
-        public bool ShowWindow(IntPtr hwnd, int command) => false;
-        public bool IsWindowVisible(IntPtr hwnd) => true;
-        public bool SetForegroundWindow(IntPtr hwnd) => true;
-        public IntPtr GetForegroundWindow() => IntPtr.Zero;
-        public int SetTransitionsDisabled(IntPtr hwnd, int value) => 0;
-        public string DescribeWindow(IntPtr hwnd) => "fake";
-    }
-
-    private sealed class FakeMonitorDpiProbe : IMonitorDpiProbe
-    {
-        public uint GetEffectiveDpi(IntPtr monitor) => 96;
-    }
 }
+
