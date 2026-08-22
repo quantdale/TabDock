@@ -697,6 +697,6 @@ Rules:
   (index resolution, hook gating, cheap `SHEPHERD[position]`, held-open log file).
 - `docs/internal/deep-audit-2026-07-17.md` — Shepherd migration rationale (section 6, §6.5:
   backend + crash-recovery journal); `docs/internal/audit-2026-07-25.md` — later audit.
-- `KNOWN_ISSUES.md` / `investigation_findings.md` — historical bug-hunt logs (H/M/L-series,
+- `KNOWN_ISSUES.md` / `docs/internal/investigation_findings.md` — historical bug-hunt logs (H/M/L-series,
   harness flakes); read before "discovering" anything already documented. `README.md` —
   user-facing manual test checklist and known limitations.

@@ -255,7 +255,7 @@ The `openspec/` directory holds an OpenSpec workflow (`schema: spec-driven` in `
 
 ### Issue history documents
 
-`KNOWN_ISSUES.md` and `investigation_findings.md` are running logs of past bug-hunt sessions (H/M/L-series issues, the Shepherd migration, harness findings). They are historical records, not a backlog — check them before "discovering" an already-documented issue or a known harness flake. `docs/internal/` also holds the original test plan (`TEST_PLAN.md`) and audit reports (`deep-audit-2026-07-17.md`, `audit-2026-07-25.md`).
+`KNOWN_ISSUES.md` and `docs/internal/investigation_findings.md` are running logs of past bug-hunt sessions (H/M/L-series issues, the Shepherd migration, harness findings). They are historical records, not a backlog — check them before "discovering" an already-documented issue or a known harness flake. `docs/internal/` also holds the original test plan (`TEST_PLAN.md`) and audit reports (`deep-audit-2026-07-17.md`, `audit-2026-07-25.md`).
 
 ---
 
@@ -296,6 +296,6 @@ These limitations are documented in `README.md` and should not be treated as bug
 - `docs/TESTING.md` — consolidated testing/validation playbook (harness reference, scenario list, repro techniques).
 - `docs/internal/guarded-spawn-pattern.md` — mandatory guardrails for any process-spawning code.
 - `docs/internal/perf-2026-07-25.md` — performance invariants and the reasoning behind them.
-- `KNOWN_ISSUES.md` / `investigation_findings.md` — historical bug-hunt and migration records.
+- `KNOWN_ISSUES.md` / `docs/internal/investigation_findings.md` — historical bug-hunt and migration records.
 - `NativeMethods.cs` — authoritative reference for all native interop used by the project.
 - `docs/ARCHITECTURE.md` — system map, WinEvent event→handler table, log-line index.

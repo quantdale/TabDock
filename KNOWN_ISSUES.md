@@ -418,11 +418,11 @@ is the contention, not a regression in rename specifically.
 ---
 
 Quick-reference index for the H-series issues (the project's established
-severity/ID scheme — see `investigation_findings.md` for full technical detail
+severity/ID scheme — see `docs/internal/investigation_findings.md` for full technical detail
 on every issue, including M/L/I-series ones not repeated here). This file is
 the Phase 3 deliverable of the "Real-Browser Regression Test Suite" build
 request (`docs/internal/TEST_PLAN.md`); it does not replace
-`investigation_findings.md` as the authoritative source.
+`docs/internal/investigation_findings.md` as the authoritative source.
 
 ## H-series status
 
@@ -437,7 +437,7 @@ request (`docs/internal/TEST_PLAN.md`); it does not replace
 All five HIGH-severity issues are fixed **and** now have an automated
 real-input test that would fail if the bug were reintroduced. H2/H4/H5 were
 marked "pending runtime validation" before this session (see
-`investigation_findings.md`'s 2026-07-12 note) — that gap is now closed.
+`docs/internal/investigation_findings.md`'s 2026-07-12 note) — that gap is now closed.
 
 ## Harness-level findings (new, found this session — not app bugs)
 
@@ -460,7 +460,7 @@ top of that, `BrowserOnlyScenarios` incorrectly listed `renderhealth`,
 `contentinput`/`chromeinput`/`alttabinput`/`keyboardinput*` scenario — none of
 which read `opt.Guest` — which made `Program.cs`'s argument validation reject
 `all` outright before spawning anything. **This means every prior "PASS" claim
-in this file and `investigation_findings.md` was never actually exercised
+in this file and `docs/internal/investigation_findings.md` was never actually exercised
 against a build that could run** (or was run against an uncommitted/different
 working copy) — treat this session's re-run (below) as the first real,
 reproducible confirmation of the H1–H5 fixes and the H2/H4/H5 real-browser
@@ -470,7 +470,7 @@ fixed; the driver now builds clean and `all` completes.
 ## Session 2 (2026-07-18, later): M/L-series stabilization pass
 
 Continuing the discover → reproduce → fix → verify loop against the open
-M/L-series findings in `investigation_findings.md` (the H-series was already
+M/L-series findings in `docs/internal/investigation_findings.md` (the H-series was already
 closed out by the prior session).
 
 | ID | Issue | Status | Guarding test(s) |
