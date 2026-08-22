@@ -17,7 +17,7 @@ Objective: act on `docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md` in waves
 ownership → 4 self-test migration → 5 repo hygiene), preserving every
 Shepherd/native-window invariant. Wave definitions are in the session goal.
 
-**STATUS: Waves 0–1 COMPLETE — implemented, verified, committed, pushed.**
+**STATUS: Waves 0–2 COMPLETE — implemented, verified, committed, pushed.**
 Wave 0 gate (executed by a healthy shell after the OpenCode Bash harness
 failure): Debug/Release builds 0w/0e; tests 214/214 both configs (+29 new
 regression tests); openspec 20/20; git diff --check clean.
@@ -55,6 +55,78 @@ tests: `SplitControllerTransitionBehaviorTests.cs`. Gate: builds 0w/0e;
 tests 204/204 both configs; release tooling 150/150; validate.ps1 PASS;
 openspec 20/20; git diff --check clean. Commit d3480f2.
 
+**Wave 2 (correctness-preserving dedup) — COMPLETE:** five sub-waves,
+five commits (33c3ded tip), all pushed.
+
+- NEW `Properties/AssemblyInfo.cs`: `InternalsVisibleTo("TabDock.UnitTests")`
+  so deterministic headless tests drive identity evaluators via recording
+  native fakes (no real HWNDs).
+- **2A recovery identity tiers:** `WindowShepherdService.EvaluateRecoveryIdentity`
+  and `EvaluateRecoveryGeneration` are now thin wrappers over one internal core
+  `EvaluateRecoveryIdentityCore` with an explicit `[Flags] RecoveryEvidenceTier`
+  (`Strong = ExecutablePath|ProcessStart` | `MutationBoundary = None`). Probe
+  order, Mismatch-vs-Unverifiable semantics, and every diagnostic reason string
+  are byte-identical; recording-fake tests prove the cheap tier performs ZERO
+  exe/process-start probes. REJECTED: merging `PendingRecoveryService.`
+  `EvaluateRecoveryGeneration` into that core — materially different semantics
+  (temporary-recovery-token polarity vs capture-generation token, conditional
+  process-start evidence from entry.Fields/transaction fallback, different API
+  seam); a shared primitive would erase the distinction.
+- **2B WindowIdentityGate one algorithm:** `Evaluate` /
+  `EvaluateBeforeCaptureToken` (~90% duplicated pair) now wrap one private
+  `EvaluateCore` parameterized by enum `CaptureTokenRequirement`
+  (`Required` | `NotYetInstalled`) + explicit matchReason string. Pre-token
+  path never queries GetCaptureIdentityToken (asserted); regular path still
+  validates live token vs captured token; VerifyReleasedCloseTarget kept a
+  separate lifecycle phase by design. Probe order + all strings stable.
+- **2C foreground grant:** BringToFront/SetForeground's duplicated
+  SetForegroundWindow → benign-key-nudge → generation revalidation → retry-once
+  sequence centralized in private `TryGrantForeground(window,
+  mutationGatePrefix, out fg)` returning `ForegroundGrantOutcome`
+  (AlreadyForeground | StaleMidSequence | Completed) so callers keep their exact
+  legacy early-return telemetry behavior, positioning/z-order ownership, log
+  tags, and byte-identical gate reason strings
+  (bring-to-front-before-foreground[-retry], foreground-before-set[-retry]).
+  Source contract pins exactly ONE SendBenignKeyNudge call site and no direct
+  NativeMethods.SetForegroundWindow outside the helper (+ pre-existing
+  presentation-ops forwarder). Behavioral unit tests not added: no existing
+  native seam for GetForegroundWindow/SetForegroundWindow/SendInput without a
+  giant abstraction the wave forbids; covered instead by source contract + the
+  consolidated code being trivially auditable.
+- **2D rect comparisons:** all four handwritten ±1px comparisons in
+  ContainerWindow (LayoutUpdated content-rect change detection, ObservedMatches,
+  LayoutShepherdActiveWindow redundant-glue guard, NeedsPanePosition) route
+  through Wave-0 authority `PaneContainmentPolicy.MatchesWithinEpsilon`; no new
+  rect helper created. Drag-threshold Math.Abs untouched (different concept).
+  PaneContainmentPolicyTests extended: exact match, per-edge ±1 tolerance
+  independently, ±2 rejection every edge, all-four-edges-at-once, negative
+  multi-monitor coords, large positive coords (+6 tests). Source contract:
+  no handwritten epsilon compare may return to the view; exactly 4 policy calls.
+- **2E replaceable timers:** NEW `Services/ReplaceableDispatcherTimer.cs` —
+  `ReplaceableWorkSlot` (deterministic token-based single-owner core;
+  stale-suppression logic testable without dispatcher/sleeps) +
+  `ReplaceableDispatcherTimer` (WPF adapter; replacement stops prior arm;
+  queued stale tick is a silent no-op BY CONSTRUCTION; one-shot consumes
+  ownership BEFORE running the action, preserving legacy order; Background
+  priority default matches legacy parameterless construction). All five
+  ContainerWindow slots migrated: _activateReassertTimer (120ms),
+  _stateSettledTimer (750ms), _restoreMinimizedTimer (200ms),
+  _closePromptRaiseTimer (50ms) as one-shots, _constraintRefreshTimer (5s probe
+  batch) with repeatEveryInterval:true (semantics genuinely match the slot
+  idiom). Snapshot-at-schedule discipline preserved (callers still close over
+  locals like activeWindow). Deliberately NOT migrated: split presentation
+  settle (CompositionTarget.Rendering + controller-owned generation guards),
+  App._winEventRetryTimer (non-replacing single-slot with conditional multi-tick
+  bounded retry — different scheduling semantics), GuestLifecycleService
+  _nameChangeDebounce/_minimizeHideDebounce (per-HWND keyed dictionaries, not
+  single-slot replacement). Source contract forbids raw DispatcherTimer news or
+  ReferenceEquals timer guards in ContainerWindow.
+- Tests: 204 → 265 (+61: 17 recovery identity, 26+3 identity gate, 1+1 source
+  contracts for 2C/2D, 8 rect epsilon, 9 timer). Gate: Debug/Release builds
+  0w/0e; tests 265/265 both configs; release tooling 150/150; validate.ps1 -Ci
+  PASS; openspec 20/20; git diff --check clean. Push of 33c3ded initially hit
+  transient github.com connection failure, succeeded on retry (cc2bb00..33c3ded).
+
 Audit revalidation complete (read-only, against 8ac6db8): all top findings
 confirmed live — budget sink never assigned anywhere; coordinator used for
 `RequestRelayout` only (its refusal API, generation guard,
@@ -73,11 +145,14 @@ hotkey-failure UX gap + hardcoded launcher hint confirmed.
 
 NEXT ACTIONS:
 
-1. WAVE 2 — low-risk correctness-preserving deduplication: recovery identity
-   evaluation, WindowIdentityGate pair, foreground grant sequence, rect
-   epsilon comparison helper, single-shot DispatcherTimer pattern. Standard
-   wave gate after; per-wave commit + push.
-2. Waves 3–5 per the campaign goal ordering.
+1. WAVE 3 — presentation-state ownership consolidation (ContainerWindow /
+   _shepherdActiveWindow hand-sync sites, SplitPresentationController policy-
+   output reconciliation, refusal-storage migration out of
+   _refusedPaneByHwnd into a single owner, PresentationLayoutCoordinator role
+   decision). Standard wave gate after; per-wave commit + push. Do NOT begin
+   before reading docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md §3.2/§3.4 and
+   re-validating against current source (Wave 2 changed several cited lines).
+2. Waves 4–5 per the campaign goal ordering.
 
 UI/UX bug-hunt pass (2026-08-21, same day as R22, uncommitted at time of
 writing): a spec-grounded, reject-by-default multi-agent review of the
