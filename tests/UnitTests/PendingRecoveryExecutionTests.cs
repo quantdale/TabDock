@@ -381,17 +381,14 @@ public class PendingRecoveryExecutionTests
             using var input = new StringReader("abandon P01-E001\n");
             using var output = new StringWriter();
             int result = PendingRecoveryService.RunInteractive(input, output, root, api, Array.Empty<PendingRecoveryCandidate>());
-            JsonObject ledger = JsonNode.Parse(File.ReadAllText(path + ".recovered"))!.AsObject();
 
             Assert.Equal(0, result);
             Assert.False(File.Exists(path));
+            // Full retirement consumes the sidecar together with the source:
+            // the abandoned-target-gone marker is written durably before that
+            // point, and its lifetime now ends with the evidence it completes.
+            Assert.False(File.Exists(path + ".recovered"));
             Assert.Equal(mutationsBefore, api.MutationCount);
-            Assert.Equal(
-                "abandoned-target-gone",
-                ledger["Resolutions"]!.AsArray().Single()!.AsObject()["Result"]?.GetValue<string>());
-            Assert.Equal(
-                PendingRecoveryService.RecoveryPhase.Retired,
-                ledger["Transactions"]!.AsArray().Single()!.AsObject()["Phase"]?.GetValue<string>());
         }
         finally { DeleteRoot(root); }
     }

@@ -158,6 +158,9 @@ internal static class PendingRecoveryService
         Func<string, bool>? faultInjector = null)
     {
         IPendingRecoveryNativeApi native = api ?? NativePendingRecoveryNativeApi.Instance;
+        string root = directory ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "TabDock");
         PendingRecoveryCatalog catalog = Discover(directory, api);
         output.WriteLine("TabDock supervised pending recovery");
         output.WriteLine("This command is user-initiated. Startup never performs tokenless legacy recovery.");
@@ -181,6 +184,14 @@ internal static class PendingRecoveryService
         {
             output.WriteLine($"Pending evidence in {SanitizeConsoleDisplayValue(unreadableFileName)} is unreadable; it was skipped and retained.");
         }
+
+        // Crash convergence for sidecar retirement: a ledger left behind by an
+        // interrupted previous invocation (source deleted, sidecar not) is pure
+        // bookkeeping and can be removed here — but only on this MUTATING,
+        // lease-holding supervised path, never during read-only discovery.
+        // Unreadable orphans and orphans still recording a non-retired
+        // transaction are retained fail-closed.
+        SweepOrphanedResolutionSidecars(root, output);
 
         // A transaction that already durably completed native recovery is a
         // disk-cleanup job, not a new supervised native operation. This is the
@@ -900,6 +911,7 @@ internal static class PendingRecoveryService
         }
         try
         {
+            CompactUnreachableResolutions(ledger, entry.FileName, entry.SourceInstanceId, entry.SourceFileSha256);
             CompactRetiredTransactions(ledger);
             WriteDurableJson(path, ledger);
             return true;
@@ -1427,6 +1439,64 @@ internal static class PendingRecoveryService
             .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Best-effort convergence sweep for orphaned resolution sidecars on the
+    /// MUTATING supervised recovery path. A <c>&lt;source&gt;.recovered</c>
+    /// ledger whose source file no longer exists is historical bookkeeping —
+    /// its source generation can never return (fresh generations get fresh
+    /// SourceInstanceIds). Such an orphan is deleted only when it parses and
+    /// records no non-retired transaction; an unreadable orphan or one that
+    /// still records a live/interrupted transaction is retained fail-closed so
+    /// possible interrupted-recovery traces stay reviewable. Read-only
+    /// discovery never performs this cleanup.
+    /// </summary>
+    private static void SweepOrphanedResolutionSidecars(string root, TextWriter output)
+    {
+        try
+        {
+            foreach (string sidecar in Directory.GetFiles(root, PendingFilePrefix + "*.recovered"))
+            {
+                string sourcePath = sidecar.Substring(0, sidecar.Length - ".recovered".Length);
+                if (File.Exists(sourcePath))
+                    continue;
+                string displayName = Path.GetFileName(sidecar);
+                if (!TryReadLedger(sidecar, out ResolutionLedger ledger, out _))
+                {
+                    output.WriteLine($"Orphaned recovery ledger {SanitizeConsoleDisplayValue(displayName)} is unreadable; it was retained for review.");
+                    continue;
+                }
+                bool hasLiveTransaction = false;
+                foreach (PendingRecoveryTransaction transaction in ledger.Transactions)
+                {
+                    if (transaction != null
+                        && !string.Equals(transaction.Phase, RecoveryPhase.Retired, StringComparison.Ordinal))
+                    {
+                        hasLiveTransaction = true;
+                        break;
+                    }
+                }
+                if (hasLiveTransaction)
+                {
+                    output.WriteLine($"Orphaned recovery ledger {SanitizeConsoleDisplayValue(displayName)} records an unfinished recovery transaction; it was retained for review.");
+                    continue;
+                }
+                try
+                {
+                    File.Delete(sidecar);
+                    output.WriteLine($"Retired orphaned recovery ledger {SanitizeConsoleDisplayValue(displayName)}.");
+                }
+                catch (Exception)
+                {
+                    // Undeletable bookkeeping stays in place; the next run retries.
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Hygiene sweeping must never fail the supervised run.
+        }
+    }
+
+    /// <summary>
     /// Best-effort hygiene sweep for orphaned recovery temp files. A
     /// <c>*.tmp</c> fragment exists only when a process died between the
     /// durable temp write and the atomic move; it is an incomplete write, not
@@ -1474,6 +1544,62 @@ internal static class PendingRecoveryService
             return;
         foreach (PendingRecoveryTransaction victim in retired.Skip(RetiredLedgerCompactionLimit))
             ledger.Transactions.Remove(victim);
+    }
+
+    /// <summary>
+    /// Bounds growth of the resolution sidecar ledger by source-generation
+    /// liveness instead of a global newest-N tail. A record survives only when
+    /// the CURRENT source generation can still reach it: same file name, same
+    /// SourceInstanceId (null on both sides for pre-upgrade evidence), and the
+    /// live source SHA. Everything else — records left by earlier generations
+    /// of a reused pending filename, stale-SHA records after an external
+    /// rewrite, cross-file junk — is unreachable bookkeeping. Records required
+    /// by sibling retirement checks and, while a legacy (no-instance-id) source
+    /// is live, the empty-keyed fingerprint-only migration markers are always
+    /// kept. Transactions are deliberately not touched here; their own
+    /// compaction never removes a non-retired record.
+    /// </summary>
+    private static void CompactUnreachableResolutions(
+        ResolutionLedger ledger,
+        string fileName,
+        string? sourceInstanceId,
+        string sourceSha256)
+    {
+        ledger.Resolutions.RemoveAll(item =>
+        {
+            if (string.Equals(item.SourceFileId, fileName, StringComparison.Ordinal)
+                && SameSourceInstance(item.SourceInstanceId, sourceInstanceId)
+                && string.Equals(item.SourceFileSha256, sourceSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            return !(sourceInstanceId == null
+                && string.IsNullOrEmpty(item.SourceFileId)
+                && string.IsNullOrEmpty(item.SourceInstanceId)
+                && string.IsNullOrEmpty(item.SourceFileSha256));
+        });
+    }
+
+    /// <summary>
+    /// Removes the resolution ledger of a fully retired pending source. By the
+    /// time the source itself was deleted, every sibling had a durable
+    /// resolution marker and no non-retired transaction lacked one, so the
+    /// remaining content is provably historical: a fresh generation always
+    /// receives a new SourceInstanceId and can never inherit it. Best-effort —
+    /// an undeletable ledger is orphan bookkeeping that the supervised sweep
+    /// converges on later.
+    /// </summary>
+    private static void DeleteRetiredSourceLedger(string ledgerPath)
+    {
+        try
+        {
+            File.Delete(ledgerPath);
+        }
+        catch (Exception)
+        {
+            // Fail-safe: retention is always acceptable; convergence happens
+            // on a later supervised invocation.
+        }
     }
 
     private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
@@ -1763,6 +1889,7 @@ internal static class PendingRecoveryService
                 else
                     persisted.Phase = RecoveryPhase.Retired;
             }
+            CompactUnreachableResolutions(ledger, entry.FileName, entry.SourceInstanceId, entry.SourceFileSha256);
             CompactRetiredTransactions(ledger);
             WriteDurableJson(path, ledger);
             return true;
@@ -1877,6 +2004,8 @@ internal static class PendingRecoveryService
             {
                 File.Delete(entry.FullPath);
                 InjectFault(faultInjector, "after-retirement");
+                DeleteRetiredSourceLedger(entry.FullPath + ".recovered");
+                InjectFault(faultInjector, "after-ledger-retirement");
             }
             return true;
         }

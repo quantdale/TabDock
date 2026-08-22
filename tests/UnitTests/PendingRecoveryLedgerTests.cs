@@ -84,7 +84,8 @@ public class PendingRecoveryLedgerTests
 
             Assert.Equal(0, result);
             Assert.False(File.Exists(path));
-            Assert.True(File.Exists(path + ".recovered"));
+            // Full retirement takes its now-historical sidecar with it.
+            Assert.False(File.Exists(path + ".recovered"));
             Assert.Equal(0, api.MutationCount);
         }
         finally { DeleteRoot(root); }
@@ -292,13 +293,33 @@ public class PendingRecoveryLedgerTests
             Assert.Equal(1, oldEntry.EntryIndex);
             Assert.False(string.Equals(oldEntry.SourceFileSha256, rebound.SourceFileSha256, StringComparison.OrdinalIgnoreCase), "the rebound transaction must reference the rewritten source SHA");
 
-            int result = RunInteractiveFor(rebound, api, root);
+            // Interrupt disk-only cleanup right between the durable retired
+            // marker and source deletion so the converged ledger is
+            // observable, then let a plain retry converge the rest.
+            bool injected = false;
+            try
+            {
+                PendingRecoveryService.RunInteractive(
+                    new StringReader(string.Empty),
+                    new StringWriter(),
+                    root,
+                    api,
+                    Array.Empty<PendingRecoveryCandidate>(),
+                    faultInjector: stage => stage == "during-retirement");
+            }
+            catch (Exception ex) when (ex.Message.Contains("Injected recovery fault", StringComparison.Ordinal))
+            {
+                injected = true;
+            }
+            Assert.True(injected);
+
             bool ledgerConverged = LedgerHasSingleRetiredCurrentTransaction(
                 path + ".recovered",
                 rebound.SourceFileSha256,
                 rebound.EntryIndex,
                 rebound.EntryFingerprint,
                 recoveryToken);
+
             int repeated = PendingRecoveryService.RunInteractive(
                 new StringReader(string.Empty),
                 new StringWriter(),
@@ -306,7 +327,6 @@ public class PendingRecoveryLedgerTests
                 api,
                 Array.Empty<PendingRecoveryCandidate>());
 
-            Assert.Equal(0, result);
             Assert.Equal(placementBefore, api.PlacementCount);
             Assert.Equal(showBefore, api.ShowCount);
             Assert.Equal(transitionBefore, api.TransitionCount);
@@ -314,6 +334,8 @@ public class PendingRecoveryLedgerTests
             Assert.Equal(IntPtr.Zero, api.Targets[new IntPtr(1211)].RecoveryToken);
             Assert.True(ledgerConverged);
             Assert.False(File.Exists(path));
+            // Full retirement consumed the sidecar with the source.
+            Assert.False(File.Exists(path + ".recovered"));
             Assert.Equal(0, repeated);
             Assert.Empty(PendingRecoveryService.Discover(root, api).Files);
         }
@@ -347,7 +369,25 @@ public class PendingRecoveryLedgerTests
             Assert.Equal(PendingRecoveryService.RecoveryPhase.NativeRecoveryComplete, rebound.Transaction?.Phase);
             Assert.False(string.Equals(oldEntry.SourceFileSha256, rebound.SourceFileSha256, StringComparison.OrdinalIgnoreCase), "the rebound transaction must reference the rewritten source SHA");
 
-            int result = RunInteractiveFor(rebound, api, root);
+            // Interrupt disk-only cleanup between the durable retired marker
+            // and source deletion, then converge with a plain retry.
+            bool injected = false;
+            try
+            {
+                PendingRecoveryService.RunInteractive(
+                    new StringReader(string.Empty),
+                    new StringWriter(),
+                    root,
+                    api,
+                    Array.Empty<PendingRecoveryCandidate>(),
+                    faultInjector: stage => stage == "during-retirement");
+            }
+            catch (Exception ex) when (ex.Message.Contains("Injected recovery fault", StringComparison.Ordinal))
+            {
+                injected = true;
+            }
+            Assert.True(injected);
+
             bool ledgerConverged = LedgerHasSingleRetiredCurrentTransaction(
                 path + ".recovered",
                 rebound.SourceFileSha256,
@@ -355,7 +395,13 @@ public class PendingRecoveryLedgerTests
                 rebound.EntryFingerprint,
                 recoveryToken);
 
-            Assert.Equal(0, result);
+            int result = PendingRecoveryService.RunInteractive(
+                new StringReader(string.Empty),
+                new StringWriter(),
+                root,
+                api,
+                Array.Empty<PendingRecoveryCandidate>());
+
             Assert.Equal(placementBefore, api.PlacementCount);
             Assert.Equal(showBefore, api.ShowCount);
             Assert.Equal(transitionBefore, api.TransitionCount);
@@ -363,6 +409,7 @@ public class PendingRecoveryLedgerTests
             Assert.Equal(IntPtr.Zero, api.Targets[new IntPtr(1221)].RecoveryToken);
             Assert.True(ledgerConverged);
             Assert.False(File.Exists(path));
+            Assert.False(File.Exists(path + ".recovered"));
         }
         finally { DeleteRoot(root); }
     }
@@ -662,6 +709,9 @@ public class PendingRecoveryLedgerTests
             PendingRecoveryEntry first = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
             Assert.Equal(0, RunInteractiveFor(first, api, root));
             Assert.False(File.Exists(path));
+            // Full retirement removed generation A's sidecar; generation B
+            // starts with clean bookkeeping under the same filename.
+            Assert.False(File.Exists(path + ".recovered"));
 
             // Generation B: byte-identical JSON under a DIFFERENT
             // SourceInstanceId. It must not match generation A's resolution.
@@ -687,15 +737,25 @@ public class PendingRecoveryLedgerTests
         {
             string path = Path.Combine(root, "hidden-windows.json.pending");
             var api = new FakePendingApi(PendingTarget.For(1510, 172, 1172, "replay.exe", "Modern", 17201));
-            string body = JournalJson(2, "33333333-3333-3333-3333-333333333333", EntryV2(1510, 172, "replay.exe", 17201));
-            File.WriteAllText(path, body);
+            File.WriteAllText(path, JournalJson(2, "33333333-3333-3333-3333-333333333333", EntryV2(1510, 172, "replay.exe", 17201)));
             PendingRecoveryEntry entry = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
-            Assert.Equal(0, RunInteractiveFor(entry, api, root));
-            Assert.False(File.Exists(path));
 
-            // Identical bytes AND identical SourceInstanceId: dedup within one
-            // generation still resolves as already handled.
-            File.WriteAllText(path, body);
+            // Interrupt exactly between the durable resolution marker and the
+            // source deletion: source AND sidecar still exist, so the next
+            // invocation must dedup from the ledger without repeating native
+            // work.
+            bool injected = false;
+            try
+            {
+                RunInteractiveWithFault(entry, api, root, "during-retirement");
+            }
+            catch (Exception ex) when (ex.Message.Contains("Injected recovery fault", StringComparison.Ordinal))
+            {
+                injected = true;
+            }
+            Assert.True(injected);
+            Assert.True(File.Exists(path));
+
             PendingRecoveryEntry replay = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
             int result = PendingRecoveryService.RunInteractive(
                 new StringReader(string.Empty),
@@ -707,6 +767,8 @@ public class PendingRecoveryLedgerTests
             Assert.True(replay.AlreadyResolved);
             Assert.Equal(0, result);
             Assert.False(File.Exists(path));
+            // Full retirement now removes the sidecar as well.
+            Assert.False(File.Exists(path + ".recovered"));
             Assert.Equal(1, api.PlacementCount);
         }
         finally { DeleteRoot(root); }
@@ -720,21 +782,29 @@ public class PendingRecoveryLedgerTests
         {
             string path = Path.Combine(root, "hidden-windows.json.pending");
             var api = new FakePendingApi(PendingTarget.For(1525, 173, 1173, "legacy-migration.exe", "Modern", 17301));
-            string body = JournalJson(2, EntryV2(1525, 173, "legacy-migration.exe", 17301));
-            File.WriteAllText(path, body);
+            File.WriteAllText(path, JournalJson(2, EntryV2(1525, 173, "legacy-migration.exe", 17301)));
             PendingRecoveryEntry entry = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
-            Assert.Equal(0, RunInteractiveFor(entry, api, root));
-            Assert.False(File.Exists(path));
 
-            // Pre-upgrade evidence keeps its bounded legacy matching: an
-            // identical no-id replay is consumed by the fingerprint fallback,
-            // and the ledger stored whatever identity was available (null).
-            File.WriteAllText(path, body);
-            PendingRecoveryEntry replay = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
+            // Interrupt after the durable marker but before retirement so the
+            // pre-upgrade evidence and its null-instance ledger shape stay on
+            // disk together and can be inspected.
+            bool injected = false;
+            try
+            {
+                RunInteractiveWithFault(entry, api, root, "during-retirement");
+            }
+            catch (Exception ex) when (ex.Message.Contains("Injected recovery fault", StringComparison.Ordinal))
+            {
+                injected = true;
+            }
+            Assert.True(injected);
+
             JsonObject ledger = JsonNode.Parse(File.ReadAllText(path + ".recovered"))!.AsObject();
             bool resolutionStoredWithoutInstance = ledger["Resolutions"]!.AsArray()
                 .All(item => item!.AsObject()["SourceInstanceId"] == null
                     || string.IsNullOrEmpty(item.AsObject()["SourceInstanceId"]?.GetValue<string>()));
+            PendingRecoveryEntry replay = PendingRecoveryService.Discover(root, api).Files.Single().Entries.Single();
+
             int result = PendingRecoveryService.RunInteractive(
                 new StringReader(string.Empty),
                 new StringWriter(),
@@ -746,6 +816,7 @@ public class PendingRecoveryLedgerTests
             Assert.True(replay.AlreadyResolved);
             Assert.Equal(0, result);
             Assert.False(File.Exists(path));
+            Assert.False(File.Exists(path + ".recovered"));
         }
         finally { DeleteRoot(root); }
     }
@@ -810,7 +881,9 @@ public class PendingRecoveryLedgerTests
             Assert.Equal(2, result);
             Assert.False(File.Exists(readablePath));
             Assert.True(File.Exists(unreadablePath));
-            Assert.True(File.Exists(readablePath + ".recovered"));
+            // The readable file's full retirement removed its sidecar; only
+            // the unreadable PENDING evidence is retained.
+            Assert.False(File.Exists(readablePath + ".recovered"));
             Assert.Equal(1, api.RemovePropertyCount);
             Assert.Equal(1, api.PlacementCount);
         }
