@@ -17,15 +17,13 @@ Objective: act on `docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md` in waves
 ownership → 4 self-test migration → 5 repo hygiene), preserving every
 Shepherd/native-window invariant. Wave definitions are in the session goal.
 
-**STATUS: Wave 0 COMPLETE — implemented AND verified; committed and pushed.**
-The previously broken OpenCode Bash harness is no longer in the picture (a
-healthy shell executed the full gate). Full Wave-0 gate results:
-Debug build 0w/0e; Release build 0w/0e; Debug tests 214/214; Release tests
-214/214 (was 185 before Wave 0 — +29 new regression tests); openspec
-validate --all 20/20; git diff --check clean. Committed separately from this
-state file; pushed to origin/main.
+**STATUS: Waves 0–1 COMPLETE — implemented, verified, committed, pushed.**
+Wave 0 gate (executed by a healthy shell after the OpenCode Bash harness
+failure): Debug/Release builds 0w/0e; tests 214/214 both configs (+29 new
+regression tests); openspec 20/20; git diff --check clean.
 
 Wave 0 changes:
+
 - NEW `Services/TabNavigationPolicy.cs`: pure Ctrl+Tab decision seam;
   returns the authoritative target `CapturedWindow`, never an index.
 - `Views/ContainerWindow.xaml.cs` `ContainerWindow_PreviewKeyDown`: routed
@@ -42,6 +40,20 @@ Wave 0 changes:
 - NEW tests: `TabNavigationPolicyTests.cs` (policy matrix + source-contract
   + real-VM integration), `PaneContainmentPolicyTests.cs`,
   `HotkeyAvailabilityTests.cs`.
+- Integration: a parallel session pushed its own interaction source-contract
+  guards written against the pre-Wave-0 shapes; re-pointed them at the policy
+  seams (`55bc516`) — same invariants, current call sites.
+
+**Wave 1 (dead scaffolding removal) — COMPLETE:** budget sink seam deleted
+(never assigned anywhere in production), coordinator test shims/unread
+counters/refusal dict/zero-caller accessors removed,
+`DescribeTransaction` + unreachable `Classify` branch removed,
+`SeedState` removed, `IPresentationOperations` preserved (live),
+`ResolveNativeTransition` deliberately KEPT for Wave 3D. Spike orphan was
+removed by the parallel session (cd38c92..2906d95). Replacement behavioral
+tests: `SplitControllerTransitionBehaviorTests.cs`. Gate: builds 0w/0e;
+tests 204/204 both configs; release tooling 150/150; validate.ps1 PASS;
+openspec 20/20; git diff --check clean. Commit d3480f2.
 
 Audit revalidation complete (read-only, against 8ac6db8): all top findings
 confirmed live — budget sink never assigned anywhere; coordinator used for
@@ -60,10 +72,12 @@ nudge-retry sequence; DispatcherTimer stale-guard idiom ×5;
 hotkey-failure UX gap + hardcoded launcher hint confirmed.
 
 NEXT ACTIONS:
-1. WAVE 1 — remove proven dead scaffolding (budget machinery, coordinator
-   test shims, dead policy API, orphan Spike), independently verifying zero
-   production value before each deletion; standard wave gate after.
-2. Waves 2–5 per the campaign goal ordering; per-wave commit + push.
+
+1. WAVE 2 — low-risk correctness-preserving deduplication: recovery identity
+   evaluation, WindowIdentityGate pair, foreground grant sequence, rect
+   epsilon comparison helper, single-shot DispatcherTimer pattern. Standard
+   wave gate after; per-wave commit + push.
+2. Waves 3–5 per the campaign goal ordering.
 
 UI/UX bug-hunt pass (2026-08-21, same day as R22, uncommitted at time of
 writing): a spec-grounded, reject-by-default multi-agent review of the
@@ -73,6 +87,7 @@ capture-picker-icons/group-color-picker specs, cross-checked against
 `docs/audits/2026-08-21/DISPOSITION.md` so already-dispositioned items were
 not re-reported. Two real, independently-reproduced defects were found and
 fixed in `Views/ContainerWindow.xaml.cs`:
+
 - `ContainerWindow_PreviewKeyDown` (Ctrl+Tab): a manual
   `TabsListBox.SelectedIndex = next` write reused a `Tabs`-space index against
   the shorter `DisplayTabs`-bound ListBox whenever a split composite is
