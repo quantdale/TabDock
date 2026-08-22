@@ -524,6 +524,72 @@ public class SplitPresentationPolicyTests
     }
 
     // --------------------------------------------------------------------
+    // Wave 3 additions: preferred-survivor explicit exit + focus switch
+    // --------------------------------------------------------------------
+
+    [Fact]
+    public void ExplicitExit_PreferredSurvivor_WinsWhenItIsAMember()
+    {
+        var pair = SplitPresentationPolicy.DefinePair("A", "B", "A");
+
+        var exited = SplitPresentationPolicy.ExplicitExit(pair, preferredSurvivor: "B");
+
+        Assert.False(exited.RelationshipDefined);
+        Assert.Equal("B", exited.ActiveGuest);
+        Assert.Equal(pair.Generation + 1, exited.Generation);
+    }
+
+    [Fact]
+    public void ExplicitExit_PreferredSurvivor_NonMemberIgnored_KeepsActiveGuest()
+    {
+        var dormant = SplitPresentationPolicy.SelectNonMember(
+            SplitPresentationPolicy.DefinePair("A", "B", "A"), "C");
+
+        var exited = SplitPresentationPolicy.ExplicitExit(dormant, preferredSurvivor: "Z");
+
+        // "Z" is not one of the two members: the preference cannot take effect,
+        // so the dormant active non-member guest stays.
+        Assert.Equal("C", exited.ActiveGuest);
+        Assert.Equal(dormant.Generation + 1, exited.Generation);
+    }
+
+    [Fact]
+    public void ExplicitExit_NoPreferred_KeepsDormantActiveGuest()
+    {
+        var dormant = SplitPresentationPolicy.SelectNonMember(
+            SplitPresentationPolicy.DefinePair("A", "B", "A"), "C");
+
+        var exited = SplitPresentationPolicy.ExplicitExit(dormant);
+
+        Assert.Equal("C", exited.ActiveGuest);
+        Assert.Equal(dormant.Generation + 1, exited.Generation);
+    }
+
+    [Fact]
+    public void FocusMember_SwitchesActiveGuestWithinPair_GenerationUnchanged()
+    {
+        var pair = SplitPresentationPolicy.DefinePair("A", "B", "A");
+
+        var focused = SplitPresentationPolicy.FocusMember(pair, "B");
+
+        Assert.Equal("B", focused.ActiveGuest);
+        Assert.Equal(pair.Generation, focused.Generation);
+        Assert.True(focused.PairPresented);
+        Assert.Equal(pair.Left, focused.Left);
+        Assert.Equal(pair.Right, focused.Right);
+    }
+
+    [Theory]
+    [InlineData("C")] // non-member
+    [InlineData("A")] // already active: no change
+    public void FocusMember_NonMemberOrUnchanged_IsNoOp(string target)
+    {
+        var pair = SplitPresentationPolicy.DefinePair("A", "B", "A");
+
+        Assert.Equal(pair, SplitPresentationPolicy.FocusMember(pair, target));
+    }
+
+    // --------------------------------------------------------------------
     // SplitInteractionPolicy integration smoke (button / hover bypass)
     // --------------------------------------------------------------------
 

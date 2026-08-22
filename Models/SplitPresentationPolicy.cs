@@ -97,12 +97,36 @@ public static class SplitPresentationPolicy
     /// <summary>
     /// Explicit exit removes only the relationship. A dormant non-member stays
     /// active; an active presented pair member remains the ordinary survivor.
+    /// <paramref name="preferredSurvivor"/> lets the caller honor an explicit
+    /// "exit keeping THIS member active" request: when it names one of the two
+    /// members it wins over the current active guest; otherwise the active
+    /// guest (dormant non-member included) is kept.
     /// </summary>
-    public static SplitPresentationState ExplicitExit(SplitPresentationState current)
+    public static SplitPresentationState ExplicitExit(
+        SplitPresentationState current,
+        string? preferredSurvivor = null)
     {
         if (!current.RelationshipDefined)
             return current;
-        return NoPair(current.ActiveGuest, current.Generation + 1);
+        string? survivor = preferredSurvivor != null && current.IsMember(preferredSurvivor)
+            ? preferredSurvivor
+            : current.ActiveGuest;
+        return NoPair(survivor, current.Generation + 1);
+    }
+
+    /// <summary>
+    /// Switches the focused member of a defined pair WITHOUT ending or changing
+    /// the presentation mode and without bumping the generation: a z-top focus
+    /// switch inside a live pair is not a presentation-world transition (the
+    /// settle callback re-reads the foreground at fire time).
+    /// </summary>
+    public static SplitPresentationState FocusMember(SplitPresentationState current, string member)
+    {
+        if (!current.RelationshipDefined
+            || !current.IsMember(member)
+            || string.Equals(current.ActiveGuest, member, StringComparison.Ordinal))
+            return current;
+        return current with { ActiveGuest = member };
     }
 
     /// <summary>

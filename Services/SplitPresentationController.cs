@@ -20,13 +20,16 @@ public readonly record struct SplitTransitionResult(
 /// only owns WPF wiring. Keeps cross-handle identity by <see cref="CapturedWindow"/>
 /// reference (never positional index) and preserves LEFT/RIGHT orientation.
 ///
-/// Every transition follows one pattern: the pure policy computes the desired
-/// logical state from the authoritative state, guarded native operations
-/// execute the required diff, and the desired state is committed only when ALL
-/// of that native work succeeded. On a pending/failed native operation the
-/// authoritative state is retained untouched (the container re-presents it),
-/// so logical state and visible state can never disagree about whether the
-/// pair is presented. The controller never restates transition semantics the
+/// Every transition follows ONE pattern (Wave 3 canonical commit): the pure
+/// policy computes the desired logical state from the authoritative state,
+/// guarded native operations execute the required diff, and the desired state
+/// is committed ONLY when ALL of that native work succeeded — through the
+/// single <see cref="CommitDesired"/> helper. There are no other writers of
+/// _left/_right/_presented/_foreground/_generation: no transition re-derives a
+/// policy decision by hand and no code path increments the generation outside
+/// the committed policy result. On a pending/failed native operation nothing
+/// commits, so the authoritative state remains exactly S0 and the caller can
+/// re-present it. The controller never restates transition semantics the
 /// policy already owns.
 /// </summary>
 public sealed class SplitPresentationController
@@ -72,10 +75,53 @@ public sealed class SplitPresentationController
             _generation);
 
     /// <summary>
+    /// THE one canonical commit path. Applies a policy-computed desired state
+    /// to the runtime fields. The policy speaks in stable string identities;
+    /// this adapter resolves them back to live references using ONLY the
+    /// candidate arguments this very transition already holds — never a global
+    /// HWND lookup that would undermine captured-object identity.
+    /// Callers must have completed ALL guarded native work successfully before
+    /// invoking this; on RecoveryPending/identity rejection they return without
+    /// committing, so the authoritative state stays at S0.
+    /// </summary>
+    private void CommitDesired(
+        SplitPresentationState desired,
+        CapturedWindow? resolvedLeft,
+        CapturedWindow? resolvedRight,
+        CapturedWindow? resolvedForeground)
+    {
+        _left = resolvedLeft;
+        _right = resolvedRight;
+        _presented = desired.PairPresented;
+        _foreground = resolvedForeground;
+        _generation = desired.Generation;
+    }
+
+    /// <summary>
+    /// Resolves a policy string identity back to one of the supplied live
+    /// references from this transition's own arguments.
+    /// </summary>
+    private static CapturedWindow? Resolve(string? identity, params CapturedWindow?[] candidates)
+    {
+        if (identity == null)
+            return null;
+        foreach (CapturedWindow? candidate in candidates)
+        {
+            if (candidate != null && string.Equals(Id(candidate), identity, StringComparison.Ordinal))
+                return candidate;
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Defines (or reconfigures) the pair. Departing members are hidden through
     /// the guarded presentation seam while the old relationship is still
     /// authoritative; a RecoveryPending hide commits nothing so the caller can
     /// re-present the retained state instead of stranding a half-hidden pair.
+    /// The committed state is exactly the policy result
+    /// (<see cref="SplitPresentationPolicy.DefinePair"/> /
+    /// <see cref="SplitPresentationPolicy.Reconfigure"/>) including which
+    /// member holds focus.
     /// </summary>
     public SplitTransitionResult DefinePair(CapturedWindow left, CapturedWindow right, CapturedWindow? focusedMember = null)
     {
@@ -101,14 +147,8 @@ public sealed class SplitPresentationController
         }
 
         // All native work succeeded: commit the policy's desired state.
-        _left = left;
-        _right = right;
-        _presented = true;
-        _foreground = focusedMember != null && IsMember(focusedMember) ? focusedMember : left;
-        _generation = desired.Generation;
-        DisarmSettle();
-        _settlePending = true;
-        _settleGeneration = _generation;
+        CommitDesired(desired, left, right, Resolve(desired.ActiveGuest, focusedMember, left, right));
+        ArmSettle();
         return SplitTransitionResult.Succeeded();
     }
 
@@ -134,9 +174,7 @@ public sealed class SplitPresentationController
         if (_isCurrent != null && !_isCurrent(guest))
             return false;
 
-        _presented = false;
-        _foreground = guest;
-        _generation = desired.Generation;
+        CommitDesired(desired, left, right, Resolve(desired.ActiveGuest, guest));
         DisarmSettle();
         return true;
     }
@@ -156,9 +194,7 @@ public sealed class SplitPresentationController
                 return false; // Single-guest presentation retained.
         }
 
-        _presented = true;
-        _foreground = member;
-        _generation = desired.Generation;
+        CommitDesired(desired, _left, _right, Resolve(desired.ActiveGuest, member));
         DisarmSettle();
         return true;
     }
@@ -177,21 +213,9 @@ public sealed class SplitPresentationController
             return null;
 
         SplitPresentationState desired = SplitPresentationPolicy.RemoveMember(ToState(), Id(removed));
-        CapturedWindow? survivor;
-        if (_foreground == null || ReferenceEquals(_foreground, removed))
-        {
-            survivor = ReferenceEquals(removed, _left) ? _right : _left;
-        }
-        else
-        {
-            survivor = _foreground;
-        }
-
-        _left = null;
-        _right = null;
-        _presented = false;
-        _foreground = desired.ActiveGuest != null ? survivor : null;
-        _generation++;
+        CapturedWindow? other = ReferenceEquals(removed, _left) ? _right : _left;
+        CapturedWindow? survivor = Resolve(desired.ActiveGuest, _foreground, other);
+        CommitDesired(desired, null, null, survivor);
         DisarmSettle();
         return survivor;
     }
@@ -200,19 +224,19 @@ public sealed class SplitPresentationController
     /// Commits an explicit split exit after the caller has executed the
     /// journal-safe hides for every departing member. Applies
     /// <see cref="SplitPresentationPolicy.ExplicitExit"/>: only the
-    /// relationship is removed and <paramref name="survivor"/> becomes the
-    /// ordinary active guest.
+    /// relationship is removed and the preferred survivor (an explicit
+    /// "keep THIS member active" request) or the current active guest becomes
+    /// the ordinary active guest.
     /// </summary>
-    public void CommitExplicitExit(CapturedWindow? survivor)
+    public void CommitExplicitExit(CapturedWindow? preferredSurvivor)
     {
         if (!IsRelationshipDefined)
             return;
-        SplitPresentationPolicy.ExplicitExit(ToState());
-        _left = null;
-        _right = null;
-        _presented = false;
-        _foreground = survivor;
-        _generation++;
+        SplitPresentationState desired = SplitPresentationPolicy.ExplicitExit(
+            ToState(),
+            preferredSurvivor == null ? null : Id(preferredSurvivor));
+        CapturedWindow? resolved = Resolve(desired.ActiveGuest, preferredSurvivor, _foreground);
+        CommitDesired(desired, null, null, resolved);
         DisarmSettle();
     }
 
@@ -231,10 +255,19 @@ public sealed class SplitPresentationController
         _settlePending = false;
     }
 
+    /// <summary>
+    /// Switches the focused member of the defined pair (z-top + logical active).
+    /// Commits the pure <see cref="SplitPresentationPolicy.FocusMember"/> result:
+    /// no generation bump, no mode change, non-members ignored.
+    /// </summary>
     public void FocusMember(CapturedWindow member)
     {
         if (!IsMember(member)) return;
-        _foreground = member;
+        CommitDesired(
+            SplitPresentationPolicy.FocusMember(ToState(), Id(member)),
+            _left,
+            _right,
+            member);
     }
 
     private static string Id(CapturedWindow window) => window.Hwnd.ToString("X");
