@@ -38,7 +38,7 @@ Wave 0 changes:
   drops the "(Ctrl+Alt+G)" hint when registration failed; XAML binds it;
   `App.xaml.cs` sets the flag after `Register()`.
 - NEW tests: `TabNavigationPolicyTests.cs` (policy matrix + source-contract
-  + real-VM integration), `PaneContainmentPolicyTests.cs`,
+  - real-VM integration), `PaneContainmentPolicyTests.cs`,
   `HotkeyAvailabilityTests.cs`.
 - Integration: a parallel session pushed its own interaction source-contract
   guards written against the pre-Wave-0 shapes; re-pointed them at the policy
