@@ -87,6 +87,39 @@ public sealed class InteractionSourceContractTests
             split);
     }
 
+    [Fact]
+    public void ForegroundGrantSequence_ExistsExactlyOnce_InShepherd()
+    {
+        string code = Read("Services/WindowShepherdService.cs");
+
+        // Wave 2C consolidation: BringToFront and SetForeground previously
+        // hand-duplicated SetForegroundWindow -> benign key nudge -> generation
+        // revalidation -> retry. The subtle sequence now lives only in
+        // TryGrantForeground; callers keep positioning/z-order/telemetry.
+        // A second handwritten copy anywhere in the file is a drift regression:
+        // exactly one nudge call site (the helper) and no direct
+        // SetForegroundWindow outside the helper may exist.
+        int nudgeCallSites = Regex.Matches(code, @"(?<!static void )SendBenignKeyNudge\s*\(").Count;
+        Assert.Equal(1, nudgeCallSites);
+
+        // Direct native foreground calls live ONLY in the helper (initial
+        // attempt + single retry) plus the pre-existing single-line
+        // presentation-operations forwarder near the top of the file. A fourth
+        // occurrence would mean someone hand-rolled the grant sequence again.
+        int setFgCallsWholeFile = Regex.Matches(code, @"NativeMethods\s*\.\s*SetForegroundWindow\s*\(").Count;
+        Assert.Equal(3, setFgCallsWholeFile);
+
+        string helper = Slice(
+            code,
+            "private ForegroundGrantOutcome TryGrantForeground",
+            "private static void SendBenignKeyNudge");
+        Assert.Equal(2, Regex.Matches(helper, @"SetForegroundWindow\s*\(").Count);
+
+        Assert.Contains("TryGrantForeground(", code);
+        Assert.Contains("foreground-before-set", code);
+        Assert.Contains("bring-to-front-before-foreground", code);
+    }
+
     private static string Read(string relativePath)
         => File.ReadAllText(Path.Combine(RepoRoot, relativePath));
 

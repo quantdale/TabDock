@@ -1572,6 +1572,64 @@ public sealed class WindowShepherdService
         return WindowHideOutcome.Hidden;
     }
 
+    /// <summary>Outcome of the shared foreground-grant sequence.</summary>
+    private enum ForegroundGrantOutcome
+    {
+        /// <summary>The guest already owned the foreground; no probe or write ran and the caller skips telemetry (legacy early-return).</summary>
+        AlreadyForeground,
+
+        /// <summary>A mutation-generation/identity revalidation failed mid-sequence; the caller must not touch the guest further (legacy silent return).</summary>
+        StaleMidSequence,
+
+        /// <summary>The grant sequence ran to completion; <paramref name="foregroundGranted"/> carries the legacy final fg value for telemetry.</summary>
+        Completed,
+    }
+
+    /// <summary>
+    /// Single authority for the subtle focus-steal-guard sequence both
+    /// BringToFront and SetForeground must run: SetForegroundWindow -> benign
+    /// key nudge on rejection -> mutation-generation revalidation -> one retry.
+    /// The retry exists because Windows' foreground-change guard can reject an
+    /// otherwise-legal activation even when TabDock's process legitimately owns
+    /// foreground rights; the revalidation between attempts ensures a stale or
+    /// recycled HWND is never retried against.
+    /// Callers keep their own positioning, z-order, telemetry-record format,
+    /// and log tags; only the acquisition/retry mechanics are centralized here.
+    /// </summary>
+    /// <param name="window">Guest to activate.</param>
+    /// <param name="mutationGatePrefix">
+    /// Exact prefix of this caller's generation-check diagnostic reason (e.g.
+    /// "bring-to-front-before-foreground"); the retry check appends "-retry"
+    /// exactly as the pre-consolidation code did.
+    /// </param>
+    /// <param name="foregroundGranted">Final fg value for the Completed outcome.</param>
+    private ForegroundGrantOutcome TryGrantForeground(
+        CapturedWindow window,
+        string mutationGatePrefix,
+        out bool foregroundGranted)
+    {
+        foregroundGranted = false;
+        if (NativeMethods.GetForegroundWindow() == window.Hwnd)
+            return ForegroundGrantOutcome.AlreadyForeground;
+        if (!IsCurrentMutationGeneration(window, mutationGatePrefix))
+            return ForegroundGrantOutcome.StaleMidSequence;
+        bool fg = NativeMethods.SetForegroundWindow(window.Hwnd);
+        if (!fg && NativeMethods.GetForegroundWindow() != window.Hwnd)
+        {
+            // Windows' focus-stealing guard can still reject this even though
+            // the container just legitimately activated (the WM_ACTIVATE that
+            // triggers this call). A benign key-up is the standard,
+            // documented way to (re-)grant this process foreground-change
+            // rights before retrying once.
+            SendBenignKeyNudge();
+            if (!IsCurrentMutationGeneration(window, mutationGatePrefix + "-retry"))
+                return ForegroundGrantOutcome.StaleMidSequence;
+            fg = NativeMethods.SetForegroundWindow(window.Hwnd);
+        }
+        foregroundGranted = fg;
+        return ForegroundGrantOutcome.Completed;
+    }
+
     /// <summary>
     /// Re-asserts the guest's overlay position/z-order and gives it real
     /// foreground activation. Called when the container itself becomes the
@@ -1586,32 +1644,24 @@ public sealed class WindowShepherdService
             return;
 
         PositionAndShowCore(window, containerHwnd, screenRect, verifyProcessInstance: true);
-        if (NativeMethods.GetForegroundWindow() == window.Hwnd)
+        ForegroundGrantOutcome grant = TryGrantForeground(
+            window,
+            "bring-to-front-before-foreground",
+            out bool fg);
+        if (grant != ForegroundGrantOutcome.Completed)
         {
-            // Already foreground — most commonly the container received this
-            // WM_ACTIVATE as a side effect of the user clicking directly into
-            // one of the guest's own child controls (which legitimately
-            // activates the guest first). Calling SetForegroundWindow again
-            // here is not just redundant: it can interrupt that click's own
-            // mouse-capture/click-tracking mid-gesture (observed: a WinForms
-            // button's Click event silently failed to fire when this ran
-            // between its mouse-down and mouse-up).
+            if (grant == ForegroundGrantOutcome.AlreadyForeground)
+            {
+                // Already foreground — most commonly the container received this
+                // WM_ACTIVATE as a side effect of the user clicking directly into
+                // one of the guest's own child controls (which legitimately
+                // activates the guest first). Calling SetForegroundWindow again
+                // here is not just redundant: it can interrupt that click's own
+                // mouse-capture/click-tracking mid-gesture (observed: a WinForms
+                // button's Click event silently failed to fire when this ran
+                // between its mouse-down and mouse-up).
+            }
             return;
-        }
-        if (!IsCurrentMutationGeneration(window, "bring-to-front-before-foreground"))
-            return;
-        bool fg = NativeMethods.SetForegroundWindow(window.Hwnd);
-        if (!fg && NativeMethods.GetForegroundWindow() != window.Hwnd)
-        {
-            // Windows' focus-stealing guard can still reject this even though
-            // the container just legitimately activated (the WM_ACTIVATE that
-            // triggers this call). A benign key-up is the standard,
-            // documented way to (re-)grant this process foreground-change
-            // rights before retrying once.
-            SendBenignKeyNudge();
-            if (!IsCurrentMutationGeneration(window, "bring-to-front-before-foreground-retry"))
-                return;
-            fg = NativeMethods.SetForegroundWindow(window.Hwnd);
         }
         DiagnosticRuntime.Record("repair.foreground", containerHwnd, window.Hwnd,
             foreground: NativeMethods.GetForegroundWindow(), action: "SetForegroundWindow",
@@ -1632,18 +1682,9 @@ public sealed class WindowShepherdService
         RuntimeTelemetry.Instance.RecordSetForeground();
         if (!IsCurrentCapturedWindow(window, "foreground", verifyExecutable: true, verifyProcessInstance: true))
             return;
-        if (NativeMethods.GetForegroundWindow() == window.Hwnd)
+        ForegroundGrantOutcome grant = TryGrantForeground(window, "foreground-before-set", out bool fg);
+        if (grant != ForegroundGrantOutcome.Completed)
             return;
-        if (!IsCurrentMutationGeneration(window, "foreground-before-set"))
-            return;
-        bool fg = NativeMethods.SetForegroundWindow(window.Hwnd);
-        if (!fg && NativeMethods.GetForegroundWindow() != window.Hwnd)
-        {
-            SendBenignKeyNudge();
-            if (!IsCurrentMutationGeneration(window, "foreground-before-set-retry"))
-                return;
-            fg = NativeMethods.SetForegroundWindow(window.Hwnd);
-        }
         DiagnosticRuntime.Record("repair.foreground", guest: window.Hwnd,
             foreground: NativeMethods.GetForegroundWindow(), action: "SetForegroundWindow",
             result: fg && NativeMethods.GetForegroundWindow() == window.Hwnd ? "success" : "refused-or-changed");
