@@ -36,6 +36,10 @@ public sealed class PersistenceService
     private readonly string? _storageFailureReason;
     private readonly Func<string, FileAttributes> _getAttributes;
     private readonly Func<string, string> _readAllText;
+    private readonly Func<string, byte[]> _readAllBytes;
+    private readonly Action<string, byte[]> _writeDurableBytes;
+    private readonly Action<string, string> _writeDurableText;
+    private readonly Action<string, string> _atomicMove;
 
     // The exact JSON last written to disk, so an unchanged save can skip the
     // write + atomic-rename round trip entirely.
@@ -72,11 +76,22 @@ public sealed class PersistenceService
         LoggingService log,
         string? statePath,
         Func<string, FileAttributes> getAttributes,
-        Func<string, string> readAllText)
+        Func<string, string> readAllText,
+        Func<string, byte[]>? readAllBytes = null,
+        Action<string, byte[]>? writeDurableBytes = null,
+        Action<string, string>? writeDurableText = null,
+        Action<string, string>? atomicMove = null)
     {
         _log = log;
         _getAttributes = getAttributes;
         _readAllText = readAllText;
+        // Fault-injection seams for the backup/primary transaction stages.
+        // Production resolves them to the real operations; deterministic tests
+        // substitute throwing delegates per path to prove each failure window.
+        _readAllBytes = readAllBytes ?? File.ReadAllBytes;
+        _writeDurableBytes = writeDurableBytes ?? WriteDurableBytes;
+        _writeDurableText = writeDurableText ?? WriteDurableText;
+        _atomicMove = atomicMove ?? ((sourcePath, destinationPath) => File.Move(sourcePath, destinationPath, overwrite: true));
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         if (string.IsNullOrWhiteSpace(statePath) && string.IsNullOrWhiteSpace(appData))
         {
@@ -255,14 +270,26 @@ public sealed class PersistenceService
                 if (!string.IsNullOrEmpty(directory))
                     Directory.CreateDirectory(directory);
 
-                // A backup copy is part of the same save transaction. If it cannot
-                // be made, the catch below prevents the primary from being touched.
+                // The backup replacement is itself a durability boundary. A
+                // direct overwrite (File.Copy over the live .bak) truncates
+                // the previous known-good backup before the new primary even
+                // exists, so a failure or power loss mid-copy could destroy
+                // the last recovery evidence. Instead: read the primary once,
+                // durably flush a candidate beside it, then install it with
+                // one atomic move. Every failure below leaves the previous
+                // .bak and the primary untouched; a missing primary skips the
+                // stage entirely so an existing valid backup survives.
                 if (File.Exists(_statePath))
-                    File.Copy(_statePath, BackupPath, overwrite: true);
+                {
+                    byte[] primaryBytes = _readAllBytes(_statePath);
+                    string backupCandidatePath = BackupPath + ".tmp";
+                    _writeDurableBytes(backupCandidatePath, primaryBytes);
+                    _atomicMove(backupCandidatePath, BackupPath);
+                }
 
                 string tempPath = _statePath + ".tmp";
-                WriteDurableText(tempPath, json);
-                File.Move(tempPath, _statePath, overwrite: true);
+                _writeDurableText(tempPath, json);
+                _atomicMove(tempPath, _statePath);
                 _lastSavedJson = json;
                 _log.Log($"Saved state to {DiagnosticEnvironmentService.RedactPath(_statePath)} (schema={PersistedState.CurrentVersion})");
             }
@@ -718,8 +745,10 @@ public sealed class PersistenceService
     }
 
     private static void WriteDurableText(string path, string contents)
+        => WriteDurableBytes(path, System.Text.Encoding.UTF8.GetBytes(contents));
+
+    private static void WriteDurableBytes(string path, byte[] bytes)
     {
-        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(contents);
         using var stream = new FileStream(
             path,
             FileMode.Create,
