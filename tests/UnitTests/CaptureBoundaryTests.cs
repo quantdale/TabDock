@@ -1,95 +1,94 @@
 using System;
 using System.IO;
 using TabDock.Models;
+using TabDock.Services;
+using TabDock.UnitTests.TestInfrastructure;
+using Xunit;
 
-namespace TabDock.Services;
+namespace TabDock.UnitTests;
 
 /// <summary>
-/// Deterministic coverage for the JournalCapture -> SetProp -> DWM boundary.
-/// The injected APIs model HWND reuse without touching a real external window.
+/// Migrated from the former CaptureBoundarySelfTest (Wave 4): deterministic
+/// coverage for the JournalCapture → SetProp → DWM boundary. The injected APIs
+/// model HWND reuse without touching a real external window; every failure case
+/// must stop before the next mutation stage.
 /// </summary>
-internal static class CaptureBoundarySelfTest
+public class CaptureBoundaryTests
 {
-    public static (int Checks, int Failures) Run()
-    {
-        int checks = 0;
-        int failures = 0;
-        void Check(bool condition)
-        {
-            checks++;
-            if (!condition)
-                failures++;
-        }
-
-        Check(ValidTargetIsTaggedAndDwmMutated());
-        Check(TargetExitAfterJournalNeverGetsSetProp());
-        Check(PidChangeAfterJournalNeverGetsSetProp());
-        Check(ThreadChangeAfterJournalNeverGetsSetProp());
-        Check(ProcessStartChangeAfterJournalNeverGetsSetProp());
-        Check(TokenChangeBeforeDwmStopsDwmMutation());
-        Check(PendingRecoveryTokenBlocksCapture());
-        return (checks, failures);
-    }
-
-    private static bool ValidTargetIsTaggedAndDwmMutated()
+    [Fact]
+    public void CompleteCapture_ValidTarget_TagsTokenAndMutatesDwm()
     {
         CaptureCaseResult result = RunCase(null);
-        return result.Completed
-            && result.SetPropertyCount == 1
-            && result.DwmMutationCount == 1
-            && result.CaptureToken == new IntPtr(1001)
-            && result.ReleasedCloseNonce != IntPtr.Zero;
+        Assert.True(result.Completed);
+        Assert.Equal(1, result.SetPropertyCount);
+        Assert.Equal(1, result.DwmMutationCount);
+        Assert.Equal(new IntPtr(1001), result.CaptureToken);
+        Assert.NotEqual(IntPtr.Zero, result.ReleasedCloseNonce);
     }
 
-    private static bool TargetExitAfterJournalNeverGetsSetProp()
+    [Fact]
+    public void CompleteCapture_TargetExitAfterJournal_NeverInstallsTokenOrDwm()
     {
         CaptureCaseResult result = RunCase(api => api.IsWindowAlive = false);
-        return !result.Completed && result.SetPropertyCount == 0 && result.DwmMutationCount == 0;
+        Assert.False(result.Completed);
+        Assert.Equal(0, result.SetPropertyCount);
+        Assert.Equal(0, result.DwmMutationCount);
     }
 
-    private static bool PidChangeAfterJournalNeverGetsSetProp()
+    [Fact]
+    public void CompleteCapture_PidChangeAfterJournal_NeverInstallsTokenOrDwm()
     {
         CaptureCaseResult result = RunCase(api => api.Identity = new WindowProcessIdentity(99, 20));
-        return !result.Completed && result.SetPropertyCount == 0 && result.DwmMutationCount == 0;
+        Assert.False(result.Completed);
+        Assert.Equal(0, result.SetPropertyCount);
+        Assert.Equal(0, result.DwmMutationCount);
     }
 
-    private static bool ThreadChangeAfterJournalNeverGetsSetProp()
+    [Fact]
+    public void CompleteCapture_ThreadChangeAfterJournal_NeverInstallsTokenOrDwm()
     {
         CaptureCaseResult result = RunCase(api => api.Identity = new WindowProcessIdentity(10, 21));
-        return !result.Completed && result.SetPropertyCount == 0 && result.DwmMutationCount == 0;
+        Assert.False(result.Completed);
+        Assert.Equal(0, result.SetPropertyCount);
+        Assert.Equal(0, result.DwmMutationCount);
     }
 
-    private static bool ProcessStartChangeAfterJournalNeverGetsSetProp()
+    [Fact]
+    public void CompleteCapture_ProcessStartChangeAfterJournal_NeverInstallsTokenOrDwm()
     {
         CaptureCaseResult result = RunCase(api => api.ProcessStartTicks = 202);
-        return !result.Completed && result.SetPropertyCount == 0 && result.DwmMutationCount == 0;
+        Assert.False(result.Completed);
+        Assert.Equal(0, result.SetPropertyCount);
+        Assert.Equal(0, result.DwmMutationCount);
     }
 
-    private static bool TokenChangeBeforeDwmStopsDwmMutation()
+    [Fact]
+    public void CompleteCapture_TokenChangeBeforeDwm_StopsDwmMutationAndCleansNonce()
     {
         CaptureCaseResult result = RunCase(null, mutateBeforeDwm: api => api.CaptureToken = new IntPtr(2002));
-        return !result.Completed
-            && result.SetPropertyCount == 1
-            && result.DwmMutationCount == 0
-            && result.CaptureToken == new IntPtr(2002)
-            // The installed released-close nonce is cleaned up when the
-            // capture boundary rejects after installation.
-            && result.ReleasedCloseNonce == IntPtr.Zero;
+        Assert.False(result.Completed);
+        Assert.Equal(1, result.SetPropertyCount);
+        Assert.Equal(0, result.DwmMutationCount);
+        Assert.Equal(new IntPtr(2002), result.CaptureToken);
+        // The installed released-close nonce is cleaned up when the capture
+        // boundary rejects after installation.
+        Assert.Equal(IntPtr.Zero, result.ReleasedCloseNonce);
     }
 
-    private static bool PendingRecoveryTokenBlocksCapture()
+    [Fact]
+    public void CompleteCapture_PendingRecoveryToken_BlocksCapture()
     {
         CaptureCaseResult result = RunCase(api => api.PendingRecoveryToken = new IntPtr(3003));
-        return !result.Completed
-            && result.SetPropertyCount == 0
-            && result.DwmMutationCount == 0;
+        Assert.False(result.Completed);
+        Assert.Equal(0, result.SetPropertyCount);
+        Assert.Equal(0, result.DwmMutationCount);
     }
 
     private static CaptureCaseResult RunCase(
         Action<FakeCaptureApi>? mutateAfterJournal,
         Action<FakeCaptureApi>? mutateBeforeDwm = null)
     {
-        string root = Path.Combine(Path.GetTempPath(), "TabDock-capture-boundary-selftest-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(Path.GetTempPath(), "TabDock-capture-boundary-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         string journalPath = Path.Combine(root, "hidden-windows.json");
         using var log = new LoggingService(Path.Combine(root, "logs"));
@@ -118,12 +117,12 @@ internal static class CaptureBoundarySelfTest
             journalPath,
             api,
             new FakeMonitorDpiProbe(),
-            new FakeReleaseApi(),
+            new FakeReleaseOnlyApi(),
             api,
             hook);
         service.BindCapturedWindowForTesting(captured);
         bool completed = service.CompleteCaptureAfterJournalForTesting(captured, out _, out _);
-        CaptureCaseResult result = new(completed, api.SetPropertyCount, api.DwmMutationCount, api.CaptureToken, api.ReleasedCloseNonce);
+        var result = new CaptureCaseResult(completed, api.SetPropertyCount, api.DwmMutationCount, api.CaptureToken, api.ReleasedCloseNonce);
         log.Dispose();
         try
         {
@@ -204,7 +203,7 @@ internal static class CaptureBoundarySelfTest
         }
     }
 
-    private sealed class FakeReleaseApi : IWindowReleaseNativeApi
+    private sealed class FakeReleaseOnlyApi : IWindowReleaseNativeApi
     {
         public bool SetWindowPlacement(IntPtr hwnd, ref NativeMethods.WINDOWPLACEMENT placement) => true;
         public bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags) => true;
@@ -214,10 +213,5 @@ internal static class CaptureBoundarySelfTest
         public IntPtr GetForegroundWindow() => IntPtr.Zero;
         public int SetTransitionsDisabled(IntPtr hwnd, int value) => 0;
         public string DescribeWindow(IntPtr hwnd) => "fake";
-    }
-
-    private sealed class FakeMonitorDpiProbe : IMonitorDpiProbe
-    {
-        public uint GetEffectiveDpi(IntPtr monitor) => 96;
     }
 }

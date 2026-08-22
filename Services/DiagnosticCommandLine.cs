@@ -206,31 +206,9 @@ internal static class DiagnosticSelfTest
             if (!condition) failures++;
         }
 
-        var trace = new DiagnosticTrace(3);
-        long first = trace.Record("one");
-        long second = trace.Record("two");
-        trace.Record("three");
-        trace.Record("four");
-        IReadOnlyList<TabDock.Models.DiagnosticEventRecord> events = trace.Snapshot();
-        Check(second == first + 1);
-        Check(events.Count == 3 && events[0].Kind == "two" && events[^1].Kind == "four");
-        Check(events[0].Sequence < events[^1].Sequence);
-        Check(ProductMutationLeaseSelfTest.UserScopedNameRules());
-        Check(ProductMutationLeaseSelfTest.AccessControlRulesAreUserScoped());
-        Check(ProductMutationLeaseSelfTest.ExclusiveAndReusable());
-        Check(ProductMutationLeaseSelfTest.AccessDeniedAndConstructionFailuresFailClosed());
-        Check(ProductMutationLeaseSelfTest.DiagnosticCommandsRemainLeaseIndependent());
-        Check(ProductMutationLeaseSelfTest.DifferentUserScopedLeasesCanCoexist());
         Check(CapturePickerSelfTest.BackgroundIconResolutionIsGenerationSafe());
         Check(WinEventMonitorSelfTest.FailedInstallUnwindsAndFailsClosed());
         Check(WinEventMonitorSelfTest.DesktopReorderDropsUncapturedAndRejectsStaleDispatch());
-        Check(WindowIdentitySelfTest.CoversIdentityTiers());
-        (int captureChecks, int captureFailures) = CaptureBoundarySelfTest.Run();
-        checks += captureChecks;
-        failures += captureFailures;
-        (int releaseChecks, int releaseFailures) = WindowReleaseSelfTest.Run();
-        checks += releaseChecks;
-        failures += releaseFailures;
         Check(MonitorDpiSelfTest.CoversProbeAndConversionSeam());
         Check(NativeInteropSelfTest.PlacementContractIsStable());
         Check(NativeInteropSelfTest.PlacementRoundTripThroughUser32());
@@ -246,9 +224,6 @@ internal static class DiagnosticSelfTest
         (int pendingChecks, int pendingFailures) = PendingRecoverySelfTest.Run();
         checks += pendingChecks;
         failures += pendingFailures;
-        (int stabilizationChecks, int stabilizationFailures) = RuntimeStabilizationSelfTest.Run();
-        checks += stabilizationChecks;
-        failures += stabilizationFailures;
         return (checks, failures);
     }
 }
