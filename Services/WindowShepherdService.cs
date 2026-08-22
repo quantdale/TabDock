@@ -2326,10 +2326,51 @@ public sealed class WindowShepherdService
         }
     }
 
+    /// <summary>
+    /// Selects which native evidence a recovery identity evaluation requires.
+    /// <see cref="Strong"/> proves executable and process-start identity once
+    /// at rescue transaction entry; <see cref="MutationBoundary"/> deliberately
+    /// omits those expensive probes because strong identity was already proven
+    /// there and the gate immediately before each native write must stay cheap.
+    /// The tiers share one evaluation core so their shared evidence (HWND, PID,
+    /// GUI thread, class, per-capture generation token) can never drift apart.
+    /// </summary>
+    [Flags]
+    internal enum RecoveryEvidenceTier
+    {
+        None = 0,
+        ExecutablePath = 1 << 0,
+        ProcessStart = 1 << 1,
+
+        /// <summary>Full strong identity required at rescue transaction entry.</summary>
+        Strong = ExecutablePath | ProcessStart,
+
+        /// <summary>Cheap post-strong-check gate immediately before a native write.</summary>
+        MutationBoundary = None,
+    }
+
     private static WindowIdentityResult EvaluateRecoveryIdentity(
         HiddenWindowEntry entry,
         IntPtr hwnd,
         IRecoveryNativeApi api,
+        out string reason)
+        => EvaluateRecoveryIdentityCore(entry, hwnd, api, RecoveryEvidenceTier.Strong, out reason);
+
+    /// <summary>
+    /// Single authority for both recovery identity tiers. Probe ORDER is part
+    /// of the observable diagnostic behavior and is preserved exactly: HWND →
+    /// PID → GUI thread → [executable] → class → [process start] → capture
+    /// generation token, where bracketed probes run only when the tier selects
+    /// them. Any probe exception fails closed to Unverifiable.
+    /// Internal (not private) solely so deterministic tests can drive both
+    /// tiers against a recording fake; production reaches it only through the
+    /// two named wrappers above.
+    /// </summary>
+    internal static WindowIdentityResult EvaluateRecoveryIdentityCore(
+        HiddenWindowEntry entry,
+        IntPtr hwnd,
+        IRecoveryNativeApi api,
+        RecoveryEvidenceTier tier,
         out string reason)
     {
         try
@@ -2364,16 +2405,19 @@ public sealed class WindowShepherdService
                 return WindowIdentityResult.Mismatch;
             }
 
-            string? currentExe = api.GetProcessImagePath(currentPid);
-            if (string.IsNullOrWhiteSpace(currentExe))
+            if ((tier & RecoveryEvidenceTier.ExecutablePath) != 0)
             {
-                reason = "executable identity could not be read";
-                return WindowIdentityResult.Unverifiable;
-            }
-            if (!string.Equals(currentExe, entry.ExePath, StringComparison.OrdinalIgnoreCase))
-            {
-                reason = "executable identity differs";
-                return WindowIdentityResult.Mismatch;
+                string? currentExe = api.GetProcessImagePath(currentPid);
+                if (string.IsNullOrWhiteSpace(currentExe))
+                {
+                    reason = "executable identity could not be read";
+                    return WindowIdentityResult.Unverifiable;
+                }
+                if (!string.Equals(currentExe, entry.ExePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    reason = "executable identity differs";
+                    return WindowIdentityResult.Mismatch;
+                }
             }
 
             string? currentClass = api.GetClassName(hwnd);
@@ -2388,16 +2432,19 @@ public sealed class WindowShepherdService
                 return WindowIdentityResult.Mismatch;
             }
 
-            long currentStart = api.GetProcessStartTimeUtcTicks(currentPid);
-            if (currentStart == 0)
+            if ((tier & RecoveryEvidenceTier.ProcessStart) != 0)
             {
-                reason = "process-start identity could not be read";
-                return WindowIdentityResult.Unverifiable;
-            }
-            if (currentStart != entry.ProcessStartTimeUtcTicks)
-            {
-                reason = "process-start identity differs";
-                return WindowIdentityResult.Mismatch;
+                long currentStart = api.GetProcessStartTimeUtcTicks(currentPid);
+                if (currentStart == 0)
+                {
+                    reason = "process-start identity could not be read";
+                    return WindowIdentityResult.Unverifiable;
+                }
+                if (currentStart != entry.ProcessStartTimeUtcTicks)
+                {
+                    reason = "process-start identity differs";
+                    return WindowIdentityResult.Mismatch;
+                }
             }
 
             if (api.GetCaptureIdentityToken(hwnd) != new IntPtr(entry.WindowIdentityToken))
@@ -2406,12 +2453,16 @@ public sealed class WindowShepherdService
                 return WindowIdentityResult.Mismatch;
             }
 
-            reason = "all recovery identity evidence matched";
+            bool strong = (tier & RecoveryEvidenceTier.Strong) == RecoveryEvidenceTier.Strong;
+            reason = strong ? "all recovery identity evidence matched" : "cheap recovery generation matched";
             return WindowIdentityResult.Match;
         }
         catch (Exception ex)
         {
-            reason = $"recovery identity probe threw {ex.GetType().Name}";
+            string source = (tier & RecoveryEvidenceTier.Strong) == RecoveryEvidenceTier.Strong
+                ? "recovery identity"
+                : "recovery generation";
+            reason = $"{source} probe threw {ex.GetType().Name}";
             return WindowIdentityResult.Unverifiable;
         }
     }
@@ -2427,66 +2478,7 @@ public sealed class WindowShepherdService
         IntPtr hwnd,
         IRecoveryNativeApi api,
         out string reason)
-    {
-        try
-        {
-            if (!api.IsWindow(hwnd))
-            {
-                reason = "HWND no longer exists";
-                return WindowIdentityResult.Mismatch;
-            }
-
-            uint currentPid = api.GetProcessId(hwnd);
-            if (currentPid == 0)
-            {
-                reason = "live PID could not be read";
-                return WindowIdentityResult.Unverifiable;
-            }
-            if (currentPid != entry.Pid)
-            {
-                reason = "PID differs";
-                return WindowIdentityResult.Mismatch;
-            }
-
-            uint currentThread = api.GetWindowThreadId(hwnd);
-            if (currentThread == 0)
-            {
-                reason = "GUI thread identity could not be read";
-                return WindowIdentityResult.Unverifiable;
-            }
-            if (currentThread != entry.WindowThreadId)
-            {
-                reason = "GUI thread identity differs";
-                return WindowIdentityResult.Mismatch;
-            }
-
-            string? currentClass = api.GetClassName(hwnd);
-            if (string.IsNullOrWhiteSpace(currentClass))
-            {
-                reason = "window class identity could not be read";
-                return WindowIdentityResult.Unverifiable;
-            }
-            if (!string.Equals(currentClass, entry.ClassName, StringComparison.Ordinal))
-            {
-                reason = "window class differs";
-                return WindowIdentityResult.Mismatch;
-            }
-
-            if (api.GetCaptureIdentityToken(hwnd) != new IntPtr(entry.WindowIdentityToken))
-            {
-                reason = "HWND generation token differs";
-                return WindowIdentityResult.Mismatch;
-            }
-
-            reason = "cheap recovery generation matched";
-            return WindowIdentityResult.Match;
-        }
-        catch (Exception ex)
-        {
-            reason = $"recovery generation probe threw {ex.GetType().Name}";
-            return WindowIdentityResult.Unverifiable;
-        }
-    }
+        => EvaluateRecoveryIdentityCore(entry, hwnd, api, RecoveryEvidenceTier.MutationBoundary, out reason);
 
     private void SaveJournal(HiddenWindowJournalFile file)
     {
