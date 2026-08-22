@@ -216,93 +216,51 @@ internal static class WindowIdentityGate
         while (true);
     }
 
+    /// <summary>
+    /// Capture-token policy distinguishing the two evaluation boundaries. The
+    /// token is an explicit tier here so the single evaluation core can never
+    /// accidentally require the per-capture HWND property before it exists
+    /// (capture admission) or forget to require it after installation
+    /// (every captured-window mutation).
+    /// </summary>
+    internal enum CaptureTokenRequirement
+    {
+        /// <summary>
+        /// The window is already captured: the captured object must carry a
+        /// nonzero token and the live HWND property must equal it.
+        /// </summary>
+        Required,
+
+        /// <summary>
+        /// Evaluation runs at the journal-to-token boundary, strictly before
+        /// SetProp installs the per-capture token. The token property is
+        /// neither queried nor required; every other strong field must still
+        /// match immediately before installation.
+        /// </summary>
+        NotYetInstalled,
+    }
+
     public static WindowIdentityResult Evaluate(
         CapturedWindow captured,
         IWindowIdentityNativeApi api,
         bool verifyExecutable,
         bool verifyProcessInstance,
         out string reason)
-    {
-        try
-        {
-            if (!api.IsWindow(captured.Hwnd))
-                return Mismatch("HWND no longer exists", out reason);
-
-            if (captured.WindowIdentityToken == 0)
-                return Unverifiable("captured HWND token is unavailable", out reason);
-
-            IntPtr currentToken = api.GetCaptureIdentityToken(captured.Hwnd);
-            if (currentToken != new IntPtr(captured.WindowIdentityToken))
-                return Mismatch("HWND capture token differs", out reason);
-
-            if (captured.ProcessId == 0 || captured.WindowThreadId == 0)
-                return Unverifiable("captured process/thread identity is unavailable", out reason);
-
-            WindowProcessIdentity current = api.GetProcessIdentity(captured.Hwnd);
-            if (current.ProcessId == 0 || current.ThreadId == 0)
-                return Unverifiable("live process/thread identity could not be read", out reason);
-            if (current.ProcessId != captured.ProcessId)
-                return Mismatch("process ID differs", out reason);
-            if (current.ThreadId != captured.WindowThreadId)
-                return Mismatch("GUI thread ID differs", out reason);
-
-            if (string.IsNullOrWhiteSpace(captured.OriginalClassName))
-                return Unverifiable("captured window class is unavailable", out reason);
-            string? currentClass = api.GetClassName(captured.Hwnd);
-            if (string.IsNullOrWhiteSpace(currentClass))
-                return Unverifiable("window class could not be read", out reason);
-            if (!string.Equals(currentClass, captured.OriginalClassName, StringComparison.Ordinal))
-                return Mismatch("window class differs", out reason);
-
-            if (verifyExecutable)
-            {
-                if (string.IsNullOrWhiteSpace(captured.ExePath))
-                    return Unverifiable("captured executable identity is unavailable", out reason);
-                string? currentExe = api.GetProcessImagePath(current.ProcessId);
-                if (string.IsNullOrWhiteSpace(currentExe))
-                    return Unverifiable("executable identity could not be read", out reason);
-                if (!string.Equals(currentExe, captured.ExePath, StringComparison.OrdinalIgnoreCase))
-                    return Mismatch("executable identity differs", out reason);
-            }
-
-            if (verifyProcessInstance)
-            {
-                if (captured.ProcessStartTimeUtcTicks == 0)
-                    return Unverifiable("captured process-start identity is unavailable", out reason);
-                long currentStart = api.GetProcessStartTimeUtcTicks(current.ProcessId);
-                if (currentStart == 0)
-                    return Unverifiable("process-start identity could not be read", out reason);
-                if (currentStart != captured.ProcessStartTimeUtcTicks)
-                    return Mismatch("process-start identity differs", out reason);
-            }
-
-            reason = "all required identity evidence matched";
-            return WindowIdentityResult.Match;
-        }
-        catch (Exception ex)
-        {
-            reason = $"identity probe threw {ex.GetType().Name}";
-            return WindowIdentityResult.Unverifiable;
-        }
-
-        static WindowIdentityResult Mismatch(string message, out string resultReason)
-        {
-            resultReason = message;
-            return WindowIdentityResult.Mismatch;
-        }
-
-        static WindowIdentityResult Unverifiable(string message, out string resultReason)
-        {
-            resultReason = message;
-            return WindowIdentityResult.Unverifiable;
-        }
-    }
+        => EvaluateCore(
+            captured,
+            api,
+            CaptureTokenRequirement.Required,
+            verifyExecutable,
+            verifyProcessInstance,
+            matchReason: "all required identity evidence matched",
+            out reason);
 
     /// <summary>
     /// Evaluates the strong identity fields before the per-capture HWND token
     /// has been installed. This is the capture journal-to-token boundary: the
     /// token cannot be required yet, but every other strong field must still
-    /// match immediately before SetProp.
+    /// match immediately before SetProp. The pre-token policy means this path
+    /// never even queries GetCaptureIdentityToken.
     /// </summary>
     public static WindowIdentityResult EvaluateBeforeCaptureToken(
         CapturedWindow captured,
@@ -310,11 +268,51 @@ internal static class WindowIdentityGate
         bool verifyExecutable,
         bool verifyProcessInstance,
         out string reason)
+        => EvaluateCore(
+            captured,
+            api,
+            CaptureTokenRequirement.NotYetInstalled,
+            verifyExecutable,
+            verifyProcessInstance,
+            matchReason: "all pre-token identity evidence matched",
+            out reason);
+
+    /// <summary>
+    /// Single authority for captured-window identity evaluation. Both public
+    /// entry points differ ONLY by the capture-token policy and the success
+    /// reason string; HWND existence, PID/GUI-thread identity, class identity,
+    /// optional executable identity, optional process-instance identity, and
+    /// exception-to-Unverifiable handling are implemented exactly once here.
+    /// Probe order is part of the observable diagnostic behavior and is
+    /// preserved exactly: HWND, [capture token], PID/thread, class, [exe],
+    /// [process start] - where the token block runs only under
+    /// <see cref="CaptureTokenRequirement.Required"/> and each bracketed probe
+    /// runs only when its verification flag is set. Any probe exception fails
+    /// closed to Unverifiable.
+    /// </summary>
+    private static WindowIdentityResult EvaluateCore(
+        CapturedWindow captured,
+        IWindowIdentityNativeApi api,
+        CaptureTokenRequirement captureTokenRequirement,
+        bool verifyExecutable,
+        bool verifyProcessInstance,
+        string matchReason,
+        out string reason)
     {
         try
         {
             if (!api.IsWindow(captured.Hwnd))
                 return Mismatch("HWND no longer exists", out reason);
+
+            if (captureTokenRequirement == CaptureTokenRequirement.Required)
+            {
+                if (captured.WindowIdentityToken == 0)
+                    return Unverifiable("captured HWND token is unavailable", out reason);
+
+                IntPtr currentToken = api.GetCaptureIdentityToken(captured.Hwnd);
+                if (currentToken != new IntPtr(captured.WindowIdentityToken))
+                    return Mismatch("HWND capture token differs", out reason);
+            }
 
             if (captured.ProcessId == 0 || captured.WindowThreadId == 0)
                 return Unverifiable("captured process/thread identity is unavailable", out reason);
@@ -357,7 +355,7 @@ internal static class WindowIdentityGate
                     return Mismatch("process-start identity differs", out reason);
             }
 
-            reason = "all pre-token identity evidence matched";
+            reason = matchReason;
             return WindowIdentityResult.Match;
         }
         catch (Exception ex)
