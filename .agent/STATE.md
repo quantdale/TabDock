@@ -17,7 +17,9 @@ Objective: act on `docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md` in waves
 ownership → 4 self-test migration → 5 repo hygiene), preserving every
 Shepherd/native-window invariant. Wave definitions are in the session goal.
 
-**STATUS: Waves 0–4 COMPLETE — implemented, verified, committed, pushed.**
+**STATUS: ARCHITECTURE-HARDENING CAMPAIGN COMPLETE — Waves 0–5 implemented,
+verified, committed, pushed.** Wave definitions were in the session goal
+(`docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md` is the originating review).
 Wave 0 gate (executed by a healthy shell after the OpenCode Bash harness
 failure): Debug/Release builds 0w/0e; tests 214/214 both configs (+29 new
 regression tests); openspec 20/20; git diff --check clean.
@@ -209,6 +211,34 @@ ad05818); openspec 21/21; git diff --check clean. Note: the interrupted
 session left a stale WPF temp-project obj state (`*_wpftmp.csproj` duplicate-
 attribute errors); removing gitignored `obj`/`bin` debris fixed it.
 
+**Wave 5 (repository hygiene) — COMPLETE:** four commits (9f257f6, e8adac0,
+48ee552, 0dac181), no application-source change. All seven completed OpenSpec
+changes archived via the canonical CLI (`openspec/changes/` now holds only
+`archive/`); deltas applied to main specs where they were never synced and
+matched cleanly (+~50 requirements across 14 new/updated specs, verified
+no duplicates), archived ledger-only with `--skip-specs` where live specs had
+already evolved past the delta wording (persistent-split-pair-presentation —
+all 8 of its requirements confirmed present in refined form in ui-ux-hardening;
+final-production-readiness-closure — superseded by post-R21 syncs). wave4's
+deltas applied cleanly after aligning its MODIFIED header with the live
+requirement name. Byte-identical `sonnet-results.md` replaced with a pointer
+(canonical: CODEBASE_AUDIT_v3.md, matching the existing MUSE-RESULTS pointer);
+DISPOSITION.md and unique per-model dumps preserved. Root working notes
+relocated: tabdock_runtime_audit.md + stabilization agent prompt →
+docs/audits/2026-08-21/, investigation_findings.md → docs/internal/ (14 live
+references updated atomically across KNOWN_ISSUES/ARCHITECTURE/AGENT_GUIDE/
+audit-2026-07-25/perf-2026-07-25), goal.txt →
+docs/internal/deep-audit-remediation-goal.txt (real-goal.txt remains the
+canonical read-only audit directive beside its audit set). Qualification-only
+workflow renamed release.yml → qualify-candidate.yml (display name too) with
+release-tooling-tests.ps1 assertions, README, publication-gates,
+repository-protection, prepare-release-candidate comments, and the live
+release-engineering spec updated. Harness trees intentionally preserved;
+canonical AGENTS.md now warns that generated copies are silently overwritten
+by sync-agent-configs.ps1. digicert-research README notes its supersession by
+scripts/sign-release.ps1 while retaining provenance. Gates: openspec 25/25,
+release tooling 150/150 (after rename), git diff --check clean.
+
 Audit revalidation complete (read-only, against 8ac6db8): all top findings
 confirmed live — budget sink never assigned anywhere; coordinator used for
 `RequestRelayout` only (its refusal API, generation guard,
@@ -227,20 +257,17 @@ hotkey-failure UX gap + hardcoded launcher hint confirmed.
 
 NEXT ACTIONS:
 
-1. WAVE 5 — repository hygiene per `docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md`
-   §3.6 and §5.5, evidence-first: archive genuinely complete OpenSpec changes
-   (incl. wave4-selftest-migration via the canonical CLI), re-audit the
-   2026-08-21 raw dump directory preserving DISPOSITION.md, resolve the root
-   working-note debt (tabdock_runtime_audit.md,
-   tabdock_runtime_stabilization_agent_prompt.txt, investigation_findings.md
-   — has live references, relocate atomically — goal.txt vs
-   docs/audits/2026-08-21/real-goal.txt divergence), rename the
-   qualification-only release.yml to qualify-candidate.yml + update live
-   references, keep all harness trees, add the generated-copy warning,
-   note digicert-research supersession. No application-behavior change.
-2. Campaign wrap-up: STATE.md campaign-complete record, final clean-tree
-   full qualification, push, remote reconciliation.
-3. Post-campaign: fresh assessment for the next milestone.
+1. CAMPAIGN CLOSED (2026-08-23). All five waves landed: 0 regression net,
+   1 dead scaffolding, 2 correctness dedup, 3 presentation ownership,
+   4 self-test migration, 5 repo hygiene. See per-wave records above and
+   `docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md` for origin.
+2. Post-campaign: fresh assessment of the current codebase for the next
+   milestone (correctness/safety first, then UX/reliability/performance).
+   Reuse of the August-22 audit is explicitly discouraged — its top findings
+   are all implemented.
+3. Standing external gates unchanged: supervised live-desktop acceptance,
+   production signing credentials, human final smoke, physical mixed-DPI
+   qualification, Windows 10 x64 compatibility.
 
 UI/UX bug-hunt pass (2026-08-21, same day as R22, uncommitted at time of
 writing): a spec-grounded, reject-by-default multi-agent review of the
