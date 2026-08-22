@@ -28,14 +28,18 @@ public sealed class InteractionSourceContractTests
         // Regression 3591ee3: Tabs is the identity/order collection, while the
         // ListBox is bound to DisplayTabs. Once A+B become one split-composite
         // slot, a Tabs-space integer is not a valid DisplayTabs-space integer.
-        // The handler must switch the authoritative ActiveTab and let bindings
-        // select the visual item; writing SelectedIndex here reintroduces the
-        // exact bug even though GroupViewModelDisplayTabsTests still passes.
-        Assert.Matches(
-            new Regex(@"_viewModel\s*\.\s*SetActiveTab\s*\(\s*_viewModel\s*\.\s*Tabs\s*\[\s*next\s*\]\s*\)\s*;"),
-            handler);
+        // The navigation DECISION is owned by TabNavigationPolicy (Wave-0 seam)
+        // and returns the authoritative target tab itself; the view resolves it
+        // back to its TabViewModel and applies it through the canonical
+        // activation paths (SetActiveTab / FocusSplitMember), letting bindings
+        // select the visual item. Neither a SelectedIndex write nor any other
+        // presentation-space index math may return to this handler.
+        Assert.Contains("TabNavigationPolicy.ResolveCtrlTab", handler);
         Assert.DoesNotMatch(
             new Regex(@"TabsListBox\s*\.\s*SelectedIndex\s*="),
+            handler);
+        Assert.DoesNotMatch(
+            new Regex(@"_viewModel\s*\.\s*Tabs\s*\["),
             handler);
 
         string xaml = Read("Views/ContainerWindow.xaml");
@@ -53,9 +57,14 @@ public sealed class InteractionSourceContractTests
             code,
             "private void LayoutShepherdActiveWindow",
             "private void LayoutSplitPanes");
+        // Suppression is decided by PaneContainmentPolicy (Wave-0 seam): visible
+        // guest + same refused rect => suppress; hidden guest => never. Each
+        // call site must feed the policy the CURRENT visibility so a guest
+        // hidden by container minimize always receives a fresh position attempt
+        // on restore instead of being pinned invisible (regression 3591ee3).
         Assert.Matches(
             new Regex(
-                @"NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*_shepherdActiveWindow\s*\.\s*Hwnd\s*\)\s*&&\s*IsRefusingPane\s*\(\s*_shepherdActiveWindow\s*,\s*rect\s*\)"),
+                @"PaneContainmentPolicy\s*\.\s*ShouldSuppressRepositioning\s*\(\s*guestCurrentlyVisible\s*:\s*NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*_shepherdActiveWindow\s*\.\s*Hwnd\s*\)"),
             single);
         Assert.Matches(
             new Regex(@"_shepherd\s*\.\s*PositionAndShow\s*\(\s*_shepherdActiveWindow\s*,\s*containerHwnd\s*,\s*rect\s*\)\s*;"),
@@ -67,11 +76,11 @@ public sealed class InteractionSourceContractTests
             "private void EnterSplit");
         Assert.Matches(
             new Regex(
-                @"NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*top\s*\.\s*Hwnd\s*\)\s*&&\s*IsRefusingPane\s*\(\s*top\s*,\s*topRect\s*\)"),
+                @"PaneContainmentPolicy\s*\.\s*ShouldSuppressRepositioning\s*\(\s*guestCurrentlyVisible\s*:\s*NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*top\s*\.\s*Hwnd\s*\)"),
             split);
         Assert.Matches(
             new Regex(
-                @"NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*bottom\s*\.\s*Hwnd\s*\)\s*&&\s*IsRefusingPane\s*\(\s*bottom\s*,\s*bottomRect\s*\)"),
+                @"PaneContainmentPolicy\s*\.\s*ShouldSuppressRepositioning\s*\(\s*guestCurrentlyVisible\s*:\s*NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*bottom\s*\.\s*Hwnd\s*\)"),
             split);
         Assert.Matches(
             new Regex(@"_shepherd\s*\.\s*PositionGuestsDeferred\s*\(\s*top\s*,\s*topRect\s*,\s*bottom\s*,\s*bottomRect\s*,\s*containerHwnd\s*\)\s*;"),
