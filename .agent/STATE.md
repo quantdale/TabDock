@@ -257,14 +257,22 @@ hotkey-failure UX gap + hardcoded launcher hint confirmed.
 
 NEXT ACTIONS:
 
-1. CAMPAIGN CLOSED (2026-08-23). All five waves landed: 0 regression net,
-   1 dead scaffolding, 2 correctness dedup, 3 presentation ownership,
-   4 self-test migration, 5 repo hygiene. See per-wave records above and
-   `docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md` for origin.
-2. Post-campaign: fresh assessment of the current codebase for the next
-   milestone (correctness/safety first, then UX/reliability/performance).
-   Reuse of the August-22 audit is explicitly discouraged — its top findings
-   are all implemented.
+1. ACTIVE CAMPAIGN (2026-08-23): post-hardening stranded-guest tails — plan
+   `.agent/plans/post-hardening-stranded-guest-tails-2026-08-23.md`. Fresh
+   multi-domain audit (Shepherd/split/persistence/winevent+startup/tests+perf)
+   verified two HIGH defects: (SG-1) ReleaseIntentionalHide finalization
+   misclassifies own-token-removal as Mismatch after a JournalClear failure →
+   hidden guest detached with stale evidence; (SG-2) split Suspend/Resume
+   commit dead members (no liveness gate) → blank panes + foreground into a
+   hidden window. Plus SG-3 (LOW): suppression slots survive mismatch paths.
+   Fix = token-tolerant evaluation for the two post-token-removal boundaries
+   (existing EvaluateBeforeCaptureToken core), controller liveness gates,
+   view pre-gate, suppression eviction. Regression tests first.
+2. Queued follow-ups (verified, not this campaign): dormant-split drag-reorder
+   disablement (view), atomic .bak durability, Resolutions ledger bound +
+   orphaned .recovered sidecars, WinEvent double-probe cleanup,
+   UnchangedLayoutUpdated tautology test replacement, GroupViewModel
+   ReorderTabs VM-path tests (documented crash history).
 3. Standing external gates unchanged: supervised live-desktop acceptance,
    production signing credentials, human final smoke, physical mixed-DPI
    qualification, Windows 10 x64 compatibility.
