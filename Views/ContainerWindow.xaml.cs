@@ -767,44 +767,44 @@ public partial class ContainerWindow : Window
         if (e.Key != Key.Tab)
             return;
 
-        int count = _viewModel.Tabs.Count;
-        if (count <= 1)
+        // The navigation DECISION is owned by TabNavigationPolicy: it returns
+        // the authoritative target tab (never a presentation-space index), so
+        // the split composite's Tabs/DisplayTabs divergence cannot misdirect
+        // this shortcut. Selection sync happens via the ActiveTab/IsActive/
+        // IsSelected binding chain (ContainerWindow.xaml), same as every other
+        // active-tab switch.
+        var decision = TabNavigationPolicy.ResolveCtrlTab(
+            _viewModel.Tabs.Select(t => t.Model).ToArray(),
+            _viewModel.ActiveTab?.Model,
+            backward: (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift,
+            splitPresented: IsSplitPresented,
+            splitLeft: _splitController.Left,
+            splitRight: _splitController.Right,
+            splitForeground: _splitController.Foreground);
+        if (decision.Kind == TabNavigationPolicy.NavigationKind.NotNavigable)
             return;
 
-        if (IsSplitPresented)
+        if (decision.Kind == TabNavigationPolicy.NavigationKind.FocusSplitMember)
         {
             // The split pair is the selected tab-strip unit: Ctrl+Tab cycles
-            // between the two members only. A non-member tab is never reached
-            // through ordinary tab switching while the pair is active (the
-            // SyncShepherdActiveWindow revert would no-op it anyway; this keeps
-            // the shortcut useful instead of dead).
-            TabViewModel? currentMember = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, _splitController.Foreground));
-            TabViewModel? other = ReferenceEquals(currentMember?.Model, _splitController.Left)
-                ? _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, _splitController.Right))
-                : _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, _splitController.Left));
-            if (other != null)
-                FocusSplitMember(other);
+            // between the two members only (FocusSplitMember resumes a dormant
+            // pair through its own path when needed).
+            if (decision.Target != null)
+            {
+                TabViewModel? member = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, decision.Target));
+                if (member != null)
+                    FocusSplitMember(member);
+            }
             e.Handled = true;
             return;
         }
 
-        bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
-        int current = _viewModel.ActiveTab != null
-            ? _viewModel.Tabs.IndexOf(_viewModel.ActiveTab)
-            : 0;
-        if (current < 0)
-            current = 0;
-
-        int next = shift
-            ? (current - 1 + count) % count
-            : (current + 1) % count;
-
-        // Selection sync happens via the ActiveTab/IsActive/IsSelected binding
-        // chain (ContainerWindow.xaml), same as every other active-tab switch —
-        // a manual TabsListBox.SelectedIndex write here would use a Tabs-space
-        // index against the shorter DisplayTabs collection whenever a split
-        // composite occupies two Tabs slots as one DisplayTabs slot.
-        _viewModel.SetActiveTab(_viewModel.Tabs[next]);
+        if (decision.Target != null)
+        {
+            TabViewModel? next = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, decision.Target));
+            if (next != null)
+                _viewModel.SetActiveTab(next);
+        }
         e.Handled = true;
     }
 
@@ -2281,23 +2281,11 @@ public partial class ContainerWindow : Window
         return true;
     }
 
-    /// <summary>True when <paramref name="guest"/> is currently marked as refusing <paramref name="rect"/> (a prior re-glue to that exact rect did not take).</summary>
-    private bool IsRefusingPane(CapturedWindow guest, NativeMethods.RECT rect)
-    {
-        if (!_refusedPaneByHwnd.TryGetValue(guest.Hwnd.ToInt64(), out NativeMethods.RECT refused))
-            return false;
-        const int epsilon = 1;
-        return Math.Abs(refused.left - rect.left) <= epsilon
-            && Math.Abs(refused.top - rect.top) <= epsilon
-            && Math.Abs(refused.right - rect.right) <= epsilon
-            && Math.Abs(refused.bottom - rect.bottom) <= epsilon;
-    }
-
     /// <summary>Records that <paramref name="guest"/> refused <paramref name="rect"/> (bounded, one diagnostic per refusal).</summary>
     private void MarkRefusingPane(CapturedWindow guest, NativeMethods.RECT rect)
     {
         if (_refusedPaneByHwnd.TryGetValue(guest.Hwnd.ToInt64(), out NativeMethods.RECT prior)
-            && prior.left == rect.left && prior.top == rect.top && prior.right == rect.right && prior.bottom == rect.bottom)
+            && PaneContainmentPolicy.IsExactSameRect(prior, rect))
             return; // already recorded this exact refusal
         _refusedPaneByHwnd[guest.Hwnd.ToInt64()] = rect;
         _log.Log($"SHEPHERD[size-constraint] guest=0x{guest.Hwnd.ToInt64():X} refused pane {rect.left},{rect.top},{rect.Width}x{rect.Height}; guest cannot fit the assigned pane (native minimum).");
@@ -2426,7 +2414,11 @@ public partial class ContainerWindow : Window
         // otherwise it never becomes visible again (the refusal was recorded
         // for "do not re-fight a currently-docked guest", not "never show a
         // hidden one").
-        if (NativeMethods.IsWindowVisible(_shepherdActiveWindow.Hwnd) && IsRefusingPane(_shepherdActiveWindow, rect))
+        if (_refusedPaneByHwnd.TryGetValue(_shepherdActiveWindow.Hwnd.ToInt64(), out NativeMethods.RECT refusedActive)
+            && PaneContainmentPolicy.ShouldSuppressRepositioning(
+                guestCurrentlyVisible: NativeMethods.IsWindowVisible(_shepherdActiveWindow.Hwnd),
+                refusedRect: refusedActive,
+                requestedRect: rect))
         {
             _shepherd.PairZOrderBehind(containerHwnd, _shepherdActiveWindow);
             return;
@@ -2705,8 +2697,17 @@ public partial class ContainerWindow : Window
         // always get a fresh PositionGuestsDeferred on restore, even when the
         // restored panes match a stale refusal, otherwise they never become
         // visible again.
-        if ((NativeMethods.IsWindowVisible(top.Hwnd) && IsRefusingPane(top, topRect))
-            || (NativeMethods.IsWindowVisible(bottom.Hwnd) && IsRefusingPane(bottom, bottomRect)))
+        bool topSuppressed = _refusedPaneByHwnd.TryGetValue(top.Hwnd.ToInt64(), out NativeMethods.RECT topRefused)
+            && PaneContainmentPolicy.ShouldSuppressRepositioning(
+                guestCurrentlyVisible: NativeMethods.IsWindowVisible(top.Hwnd),
+                refusedRect: topRefused,
+                requestedRect: topRect);
+        bool bottomSuppressed = _refusedPaneByHwnd.TryGetValue(bottom.Hwnd.ToInt64(), out NativeMethods.RECT bottomRefused)
+            && PaneContainmentPolicy.ShouldSuppressRepositioning(
+                guestCurrentlyVisible: NativeMethods.IsWindowVisible(bottom.Hwnd),
+                refusedRect: bottomRefused,
+                requestedRect: bottomRect);
+        if (topSuppressed || bottomSuppressed)
         {
             _shepherd.PairZOrderBehind(containerHwnd, bottom);
             return;

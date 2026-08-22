@@ -28,6 +28,18 @@ public sealed class MainViewModel : ViewModelBase
     public ICommand CaptureCommand { get; }
     public ICommand ExitCommand { get; }
 
+    /// <summary>
+    /// Whether the global Ctrl+Alt+G hotkey registered successfully at
+    /// startup. Set once by App before the launcher is shown; when false the
+    /// Capture button must not advertise the shortcut (another process owns
+    /// it). The button itself stays the always-available fallback.
+    /// </summary>
+    public bool GlobalHotkeyAvailable { get; set; } = true;
+
+    public string CaptureButtonText => GlobalHotkeyAvailable
+        ? "Capture windows (Ctrl+Alt+G)"
+        : "Capture windows (shortcut unavailable)";
+
     public event EventHandler? NewGroupRequested;
     public event EventHandler? CaptureRequested;
     public event EventHandler? ExitRequested;

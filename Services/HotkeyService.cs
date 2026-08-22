@@ -27,6 +27,13 @@ public sealed class HotkeyService : IDisposable
     public event EventHandler? HotkeyPressed;
     public event EventHandler? DiagnosticHotkeyPressed;
 
+    /// <summary>
+    /// True when the global Ctrl+Alt+G registration succeeded. When false,
+    /// another process owns the combination and the UI must not advertise the
+    /// shortcut as available (the Capture button remains the fallback path).
+    /// </summary>
+    public bool GlobalHotkeyRegistered => _registered;
+
     public HotkeyService(LoggingService log)
     {
         _log = log;

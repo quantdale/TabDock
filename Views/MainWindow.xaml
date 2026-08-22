@@ -81,7 +81,7 @@
 
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
             <Button Content="New group" Width="100" Height="32" Margin="0,0,8,0" Command="{Binding NewGroupCommand}" />
-            <Button Content="Capture windows (Ctrl+Alt+G)" Width="200" Height="32" Margin="0,0,8,0" Command="{Binding CaptureCommand}" />
+            <Button Content="{Binding CaptureButtonText}" Width="200" Height="32" Margin="0,0,8,0" Command="{Binding CaptureCommand}" />
             <Button Content="Exit" Width="80" Height="32" Command="{Binding ExitCommand}" />
         </StackPanel>
     </Grid>

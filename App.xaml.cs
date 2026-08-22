@@ -174,6 +174,10 @@ _shepherd.HideProvenance = hideProvenance;
                 _mainWindow = null;
             };
             _hotkey.Register();
+            // Do not advertise the shortcut when another process owns it: the
+            // launcher's Capture button drops the "(Ctrl+Alt+G)" hint while
+            // remaining the always-available fallback path.
+            _mainViewModel.GlobalHotkeyAvailable = _hotkey.GlobalHotkeyRegistered;
             _hotkey.HotkeyPressed += (_, _) => OnCaptureRequested(this, EventArgs.Empty);
             _hotkey.DiagnosticHotkeyPressed += (_, _) => ExportDiagnosticsFromHotkey();
             _mainWindow.Show();
