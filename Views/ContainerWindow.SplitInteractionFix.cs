@@ -138,12 +138,13 @@ public partial class ContainerWindow
     /// each pair member is hidden once, C/D is positioned/shown once, and then
     /// foreground is requested once.
     ///
-    /// The shepherd active reference is set before ActiveTab. That is deliberate:
-    /// ActiveTab notification normally enters SyncShepherdActiveWindow, whose
-    /// ordinary single-tab path would otherwise hide the already-hidden focused
-    /// split member a second time and re-run presentation work. With the target
-    /// already authoritative, that notification becomes a no-op and this method
-    /// performs the single explicit layout below.
+    /// SuspendForGuest commits Foreground=guest BEFORE returning, so by the
+    /// time SetActiveTab raises the ActiveTab notification the presentation
+    /// authority already names the target: SyncShepherdActiveWindow's
+    /// ReferenceEquals guard makes that notification a no-op and this method
+    /// performs the single explicit layout below. (Pre-Wave-3 this required
+    /// hand-pre-seeding a separate view field; the ordering trick is now just
+    /// "commit, then project".)
     /// </summary>
     private bool SuspendPresentedPairForUserSelection(TabViewModel targetTab)
     {
@@ -162,33 +163,30 @@ public partial class ContainerWindow
             return false;
         }
 
-        CapturedWindow? previousActive = _shepherdActiveWindow;
         // SuspendForGuest hides both members via the production shim and
-        // re-validates current identity; on failure it leaves the pair
-        // presented and authoritative, so re-present it exactly once. Each
-        // native hide registers its provenance with GuestHideProvenance, so
-        // the queued EVENT_OBJECT_HIDE for either member can never be
+        // re-validates current identity; on failure it commits NOTHING — the
+        // authoritative pair (and its foreground) is retained untouched, so
+        // there is no rollback write to make — re-present it exactly once.
+        // Each native hide registers its provenance with GuestHideProvenance,
+        // so the queued EVENT_OBJECT_HIDE for either member can never be
         // misread as a guest tray-close.
         if (!_splitController.SuspendForGuest(guest))
         {
-            _shepherdActiveWindow = previousActive;
             LayoutSplitPanes();
             DiagnosticRuntime.Record("split.suspend", _containerHwnd, guest.Hwnd,
                 group: Group.Id.ToString("N"), action: "pair-to-single", result: "recovery-pending-pair-retained");
             return false;
         }
 
-        // Controller owns _splitPairPresented/_splitPresentationGeneration (it
-        // bumped the generation and disarmed its own settle while suspending);
-        // the container keeps its settle arming and constraint/refusal concerns.
+        // Controller owns presented/foreground/generation (it bumped the
+        // generation and disarmed its own settle while suspending); the
+        // container keeps constraint/refusal concerns.
         DisarmSplitPresentationSettle();
         _constraintDirty = true;
         _refusedPaneByHwnd.Clear();
 
-        // Pre-seed presentation authority before SetActiveTab. This prevents the
-        // ActiveTab notification from entering the ordinary hide-old/show-new
-        // path and repeating work that this transaction has already completed.
-        _shepherdActiveWindow = guest;
+        // Project the committed authority into the UI selection. The sync this
+        // triggers observes Foreground == ActiveTab.Model and no-ops.
         if (!ReferenceEquals(_viewModel.ActiveTab, targetTab))
             _viewModel.SetActiveTab(targetTab);
 

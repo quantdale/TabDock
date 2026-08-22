@@ -337,4 +337,76 @@ public class SplitControllerPolicyAuthorityTests
         Assert.True(controller.IsCurrentSettle(controller.SettleGeneration));
         Assert.False(controller.IsCurrentSettle(armedGeneration));
     }
+
+    // ---- Wave 3B: single active-guest authority across ALL modes ------------
+
+    [Fact]
+    public void SelectGuest_Standalone_CommitsExactlyPolicySelectGuestResult()
+    {
+        CapturedWindow a = W("A"), b = W("B");
+        var (controller, _) = Create();
+
+        controller.SelectGuest(a);
+        AssertState(controller, SplitPresentationPolicy.SelectGuest(SplitPresentationPolicy.NoPair(), "1"));
+
+        SplitPresentationState before = controller.ToState();
+        controller.SelectGuest(b); // ordinary standalone tab switch
+        AssertState(controller, SplitPresentationPolicy.SelectGuest(before, "2"));
+    }
+
+    [Fact]
+    public void SelectGuest_DormantSwitch_KeepsRelationshipDefined_MovesActiveGuest()
+    {
+        CapturedWindow a = W("A"), b = W("B"), c = W("C"), d = W("D");
+        var (controller, _) = Create();
+        controller.DefinePair(a, b, a);
+        controller.SuspendForGuest(c);
+        SplitPresentationState before = controller.ToState();
+
+        controller.SelectGuest(d);
+
+        AssertState(controller, SplitPresentationPolicy.SelectGuest(before, "4"));
+        Assert.True(controller.IsRelationshipDefined); // relationship survives
+        Assert.False(controller.IsPresented);
+        Assert.Same(d, controller.Foreground);
+    }
+
+    [Fact]
+    public void SelectGuest_PresentedPair_FailClosedNoOp()
+    {
+        CapturedWindow a = W("A"), b = W("B"), c = W("C");
+        var (controller, _) = Create();
+        controller.DefinePair(a, b, a);
+        SplitPresentationState before = controller.ToState();
+
+        controller.SelectGuest(c); // must never bypass SuspendForGuest's guarded hides
+
+        AssertState(controller, before);
+        Assert.True(controller.IsPresented);
+    }
+
+    [Fact]
+    public void Clear_RemovesAuthorityEvenFromPresentedAndDormantPairs()
+    {
+        CapturedWindow a = W("A"), b = W("B"), c = W("C");
+
+        var presented = new SplitPresentationController();
+        presented.DefinePair(a, b, a);
+        long genBefore = presented.Generation;
+        presented.Clear();
+        Assert.False(presented.IsRelationshipDefined);
+        Assert.Null(presented.Foreground);
+        Assert.Equal(genBefore + 1, presented.Generation);
+        Assert.False(presented.SettlePending);
+        Assert.False(presented.IsCurrentSettle(genBefore)); // pre-teardown callbacks invalidated
+
+        // The ghost-foreground regression: teardown of a DORMANT pair used to
+        // leave the non-member as Foreground via HandleMemberRemoved.
+        var dormant = new SplitPresentationController();
+        dormant.DefinePair(a, b, a);
+        dormant.SuspendForGuest(c);
+        dormant.Clear();
+        Assert.False(dormant.IsRelationshipDefined);
+        Assert.Null(dormant.Foreground); // no ghost non-member survives teardown
+    }
 }

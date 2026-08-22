@@ -41,24 +41,25 @@ public partial class ContainerWindow : Window
     private CapturePickerViewModel? _capturePicker;
     internal SplitPresentationController SplitController => _splitController;
 
-    // The shepherded active-tab guest. Never bound through a WPF dependency
-    // property (a shepherd guest is a sibling top-level window, not content
-    // hosted inside anything) — this field and the methods around it are this
-    // container's entire sync loop for the active tab.
-    private CapturedWindow? _shepherdActiveWindow;
+    // The shepherded active guest is OWNED by SplitPresentationController
+    // (Wave 3): Foreground is the single runtime authority for "the guest the
+    // native presentation currently presents as active" across ALL modes —
+    // the focused member while a pair is presented, the single full-width
+    // guest otherwise (standalone or dormant). There is no second stored copy
+    // in this view to hand-sync or drift; this alias keeps the many reader
+    // sites readable and never assigns.
+    private CapturedWindow? ShepherdActiveWindow => _splitController.Foreground;
 
     // Vertical split-screen state is owned by SplitPresentationController
-    // (_splitController): left/right/presented/foreground/generation are its
-    // get-only properties. A dormant relationship may coexist with a non-member
-    // full-width _shepherdActiveWindow. Identity is by CapturedWindow reference
-    // (never positional index), so LEFT/RIGHT survive tab reordering and
-    // ordinary non-member selection. The container only owns the WPF-wiring
-    // concerns below (_constraintDirty, _refusedPaneByHwnd)
-    // and routes every member/present/foreground/generation transition through
-    // the controller (DefinePair/SuspendForGuest/ResumeMember/ExplicitExit/
-    // HandleMemberRemoved/FocusMember) so there is a single runtime authority
-    // (no parallel state machine). The isCurrent lambda and the production
-    // shim only touch _shepherd at invocation time, after construction.
+    // (_splitController): left/right/presented/foreground/active-guest/
+    // generation are its get-only properties, committed exclusively from
+    // SplitPresentationPolicy output (Wave 3 canonical commit path). A dormant
+    // relationship may coexist with a non-member full-width active guest.
+    // Identity is by CapturedWindow reference (never positional index), so
+    // LEFT/RIGHT survive tab reordering and ordinary non-member selection. The
+    // container only owns WPF-wiring concerns (constraint cache, refusal
+    // invalidation triggers) and routes every transition through controller
+    // methods so there is exactly one runtime authority.
     private readonly SplitPresentationController _splitController;
 
     // Size-constraint state (post-audit containment finding). The container
@@ -209,8 +210,8 @@ public partial class ContainerWindow : Window
             WindowState = WindowState.ToString(),
             Minimized = WindowState == WindowState.Minimized,
             Maximized = WindowState == WindowState.Maximized,
-            ActiveMemberKey = _shepherdActiveWindow == null ? null : DiagnosticMemberKey(_shepherdActiveWindow),
-            ActiveGuestHwnd = _shepherdActiveWindow?.Hwnd.ToInt64() ?? 0,
+            ActiveMemberKey = ShepherdActiveWindow == null ? null : DiagnosticMemberKey(ShepherdActiveWindow),
+            ActiveGuestHwnd = ShepherdActiveWindow?.Hwnd.ToInt64() ?? 0,
             SplitActive = _splitController.IsRelationshipDefined,
             SplitPresented = _splitController.IsPresented,
             SplitLeftMemberKey = _splitController.Left == null ? null : DiagnosticMemberKey(_splitController.Left),
@@ -253,7 +254,7 @@ public partial class ContainerWindow : Window
                 memberSnapshot.ExpectedPaneRect = DiagnosticRect.From(left);
             else if (IsSplitPresented && ReferenceEquals(member, _splitController.Right))
                 memberSnapshot.ExpectedPaneRect = DiagnosticRect.From(right);
-            else if (!IsSplitPresented && ReferenceEquals(member, _shepherdActiveWindow) && content.Width > 0 && content.Height > 0)
+            else if (!IsSplitPresented && ReferenceEquals(member, ShepherdActiveWindow) && content.Width > 0 && content.Height > 0)
                 memberSnapshot.ExpectedPaneRect = DiagnosticRect.From(content);
             snapshot.Members.Add(memberSnapshot);
         }
@@ -405,7 +406,7 @@ public partial class ContainerWindow : Window
         if ((uint)msg == NativeMethods.WM_ACTIVATE)
         {
             uint activateKind = (uint)(wParam.ToInt64() & 0xFFFF);
-            DiagnosticRuntime.Record("container.wm-activate", hwnd, _shepherdActiveWindow?.Hwnd ?? IntPtr.Zero,
+            DiagnosticRuntime.Record("container.wm-activate", hwnd, ShepherdActiveWindow?.Hwnd ?? IntPtr.Zero,
                 group: Group.Id.ToString("N"), action: "observe", result: activateKind.ToString(),
                 data: new Dictionary<string, string>
                 {
@@ -421,7 +422,7 @@ public partial class ContainerWindow : Window
             // completely untouched (no attach/detach state to manage: the
             // guest is a real top-level window the whole time).
             if ((activateKind == NativeMethods.WA_ACTIVE || activateKind == NativeMethods.WA_CLICKACTIVE) &&
-                _shepherdActiveWindow != null)
+                ShepherdActiveWindow != null)
             {
                 // Because the container is kept z-order-paired immediately
                 // behind its active guest, the guest hiding ITSELF (e.g. a
@@ -433,10 +434,10 @@ public partial class ContainerWindow : Window
                 // fight that intentional hide. Defer briefly and re-check
                 // visibility right before acting, so an in-flight self-hide
                 // has settled either way by the time this decides.
-                CapturedWindow activeWindow = _shepherdActiveWindow;
+                CapturedWindow activeWindow = ShepherdActiveWindow;
                 _activateReassertTimer.Schedule(TimeSpan.FromMilliseconds(120), () =>
                 {
-                    if (_shepherdActiveWindow == activeWindow
+                    if (ShepherdActiveWindow == activeWindow
                         && !NativeMethods.IsIconic(activeWindow.Hwnd)
                         && NativeMethods.IsWindowVisible(activeWindow.Hwnd)
                         && !_inNativeMoveLoop && !_isDragging && !IsContainerChromeInteractionActive())
@@ -475,7 +476,7 @@ public partial class ContainerWindow : Window
         }
         else if ((uint)msg == NativeMethods.WM_EXITSIZEMOVE)
         {
-            DiagnosticRuntime.Record("container.wm-exitsizemove", hwnd, _shepherdActiveWindow?.Hwnd ?? IntPtr.Zero,
+            DiagnosticRuntime.Record("container.wm-exitsizemove", hwnd, ShepherdActiveWindow?.Hwnd ?? IntPtr.Zero,
                 group: Group.Id.ToString("N"), action: "reconcile-request", result: "queued");
             _inNativeMoveLoop = false;
             // The container's resize just ended: re-probe the visible guest(s)'
@@ -650,7 +651,7 @@ public partial class ContainerWindow : Window
         _constraintRefreshTimer.Schedule(TimeSpan.FromSeconds(5), () =>
         {
             bool hasVisible = IsSplitPresented
-                || (_shepherdActiveWindow != null && NativeMethods.IsWindowVisible(_shepherdActiveWindow.Hwnd));
+                || (ShepherdActiveWindow != null && NativeMethods.IsWindowVisible(ShepherdActiveWindow.Hwnd));
             if (hasVisible)
             {
                 _constraintDirty = true;
@@ -980,18 +981,12 @@ public partial class ContainerWindow : Window
         // wiring mistakes; rely on the single Detach path.
         _viewModel.Detach();
 
-        // Drop the active guest reference so any pending WM_ACTIVATE or restore
+        // Drop the active-guest authority so any pending WM_ACTIVATE or restore
         // timer that fires after the window has closed cannot act on a released
-        // guest (finding #3). Disarm + timer stop already done at top of
-        // handler; do not re-add them here.
-        _shepherdActiveWindow = null;
-        // Clear split logical state without re-hiding the guests that are being
-        // released or closed with this window. HandleMemberRemoved nulls
-        // left/right/foreground/presented and bumps generation without issuing
-        // native hides; the settle is already disarmed above, so no async reader
-        // can observe the cleared state.
-        if (_splitController.IsRelationshipDefined)
-            _splitController.HandleMemberRemoved(_splitController.Left!);
+        // guest (finding #3). Clear() removes the relationship AND the active
+        // guest in one controller-owned commit (no ghost dormant non-member),
+        // bumps the generation, and disarms the settle.
+        _splitController.Clear();
         _guestMoveSizeActive = false;
         _guestMoveSizeGeneration++;
         _stateSettledTimer.Cancel();
@@ -1035,7 +1030,7 @@ public partial class ContainerWindow : Window
     {
         MaximizeButton.Content = WindowState == WindowState.Maximized ? "" : "";
 
-        if (_shepherdActiveWindow != null || IsSplitPresented)
+        if (ShepherdActiveWindow != null || IsSplitPresented)
         {
             // A minimized container has no visible content area to overlay;
             // hide the docked guest(s) along with it. Restoring re-positions and
@@ -1051,10 +1046,10 @@ public partial class ContainerWindow : Window
                     WindowHideOutcome rightOutcome = _shepherd.Hide(_splitController.Right!);
                     LogHidePending(_splitController.Right!, rightOutcome);
                 }
-                else if (_shepherdActiveWindow != null)
+                else if (ShepherdActiveWindow != null)
                 {
-                    WindowHideOutcome outcome = _shepherd.Hide(_shepherdActiveWindow);
-                    LogHidePending(_shepherdActiveWindow, outcome);
+                    WindowHideOutcome outcome = _shepherd.Hide(ShepherdActiveWindow);
+                    LogHidePending(ShepherdActiveWindow, outcome);
                 }
             }
             else
@@ -1193,12 +1188,10 @@ public partial class ContainerWindow : Window
     /// </summary>
     internal void ClearReleasedTabsAfterSessionEnding()
     {
-        _shepherdActiveWindow = null;
-        // Clear split logical state without re-hiding guests the app has already
-        // released during session ending. HandleMemberRemoved nulls the
-        // relationship and bumps generation without issuing native hides.
-        if (_splitController.IsRelationshipDefined)
-            _splitController.HandleMemberRemoved(_splitController.Left!);
+        // One controller commit clears relationship + active guest + settle
+        // (generation bumped) without issuing native hides — the app has
+        // already released the guests during session ending.
+        _splitController.Clear();
         _guestMoveSizeActive = false;
         _guestMoveSizeGeneration++;
         _activateReassertTimer.Cancel();
@@ -1971,8 +1964,8 @@ public partial class ContainerWindow : Window
     /// or journal durability is uncertain, the logical active tab is rolled
     /// back so an old visible guest cannot coexist with a new logical guest.
     ///
-    /// Q3: When SuspendPresentedPairForUserSelection pre-seeds
-    /// _shepherdActiveWindow to the target BEFORE calling SetActiveTab, this
+    /// Q3: When SuspendPresentedPairForUserSelection has already committed the
+    /// target as the presentation authority BEFORE calling SetActiveTab, this
     /// notification would otherwise repeat the entire hide-old/show-new
     /// transaction transactionally already done. The ReferenceEquals guard
     /// above makes that notification a no-op in that path — no duplicate
@@ -1981,7 +1974,7 @@ public partial class ContainerWindow : Window
     private void SyncShepherdActiveWindow()
     {
         CapturedWindow? newWindow = _viewModel.ActiveTab?.Model;
-        CapturedWindow? oldWindow = _shepherdActiveWindow;
+        CapturedWindow? oldWindow = ShepherdActiveWindow;
         if (ReferenceEquals(oldWindow, newWindow))
             return;
 
@@ -2075,7 +2068,12 @@ public partial class ContainerWindow : Window
             oldWindowHidden = true;
         }
 
-        _shepherdActiveWindow = newWindow;
+        // The controller commit IS the presentation authority update (Wave 3):
+        // SelectGuest advances the policy epoch and stores the single active
+        // guest; there is no second view-side copy. Ordering preserved: the
+        // guarded hide-old above already succeeded (or was skipped), the late
+        // journal-safe fallback hide below is unchanged.
+        _splitController.SelectGuest(newWindow);
         // The single visible guest changed: its native minimum may differ, so
         // recompute the container's minimum size and clear refusals.
         _constraintDirty = true;
@@ -2099,7 +2097,7 @@ public partial class ContainerWindow : Window
     /// partner via the ordinary single-tab visibility transition.
     ///
     /// It updates the focused split member (SplitPresentationController.Foreground),
-    /// the logical active member (<see cref="_shepherdActiveWindow"/> + the
+    /// the logical active member (<see cref="ShepherdActiveWindow"/> + the
     /// view-model active tab, which drives the half highlight and
     /// Group.ActiveIndex), emits the bounded SPLIT[focus] diagnostic (only when
     /// the focused member actually changes), and re-glues both panes with the
@@ -2116,11 +2114,12 @@ public partial class ContainerWindow : Window
             return;
         }
 
-        bool changed = !ReferenceEquals(_splitController.Foreground, member.Model)
-            || !ReferenceEquals(_shepherdActiveWindow, member.Model);
+        bool changed = !ReferenceEquals(_splitController.Foreground, member.Model);
 
+        // The controller commit IS the active-guest update (Wave 3): there is
+        // no second view-side copy to write. SetActiveTab below projects the
+        // committed authority into the UI selection.
         _splitController.FocusMember(member.Model);
-        _shepherdActiveWindow = member.Model;
         // No-op when the member is already the logical active tab; still
         // re-syncs Group.ActiveIndex through the view model.
         _viewModel.SetActiveTab(member);
@@ -2162,9 +2161,9 @@ public partial class ContainerWindow : Window
             left = _splitController.Left;
             right = _splitController.Right;
         }
-        else if (_shepherdActiveWindow != null && NativeMethods.IsWindow(_shepherdActiveWindow.Hwnd))
+        else if (ShepherdActiveWindow != null && NativeMethods.IsWindow(ShepherdActiveWindow.Hwnd))
         {
-            left = _shepherdActiveWindow;
+            left = ShepherdActiveWindow;
             right = null;
         }
 
@@ -2262,7 +2261,7 @@ public partial class ContainerWindow : Window
 
     private void LayoutShepherdActiveWindow(bool forceZOrder = false)
     {
-        if (_shepherdActiveWindow == null)
+        if (ShepherdActiveWindow == null)
             return;
         // Q10: If this is called while split is presented (stale callback,
         // re-entrancy), do nothing — split mode owns both panes. RelayoutGuests
@@ -2275,7 +2274,7 @@ public partial class ContainerWindow : Window
         // let a concurrent container relayout re-show an iconic guest between
         // the guest's minimize and the bounded restore decision; tray-style
         // guests commonly follow minimize with Hide() in the same close path.
-        if (NativeMethods.IsIconic(_shepherdActiveWindow.Hwnd))
+        if (NativeMethods.IsIconic(ShepherdActiveWindow.Hwnd))
             return;
 
         IntPtr containerHwnd = _containerHwnd;
@@ -2303,14 +2302,14 @@ public partial class ContainerWindow : Window
         // snap-back re-glues a guest dragged a few pixels away from an
         // otherwise-unchanged docked rect, and a tab switch targets a different
         // (previously hidden) guest at the same rect — both must still re-glue.
-        if (NativeMethods.IsWindowVisible(_shepherdActiveWindow.Hwnd))
+        if (NativeMethods.IsWindowVisible(ShepherdActiveWindow.Hwnd))
         {
-            NativeMethods.GetWindowRect(_shepherdActiveWindow.Hwnd, out NativeMethods.RECT guest);
+            NativeMethods.GetWindowRect(ShepherdActiveWindow.Hwnd, out NativeMethods.RECT guest);
             if (PaneContainmentPolicy.MatchesWithinEpsilon(guest, rect))
             {
                 if (forceZOrder)
                 {
-                    _shepherd.PositionAndShow(_shepherdActiveWindow, containerHwnd, rect);
+                    _shepherd.PositionAndShow(ShepherdActiveWindow, containerHwnd, rect);
                     return;
                 }
                 // Geometry alone cannot prove the guest is correctly
@@ -2334,8 +2333,8 @@ public partial class ContainerWindow : Window
                 // When the container is above the guest, pin it behind the
                 // guest — one write, no geometry churn, idempotent once
                 // healthy.
-                if (!_shepherd.IsContainerBelowGuest(containerHwnd, _shepherdActiveWindow.Hwnd))
-                    _shepherd.PairZOrderBehind(containerHwnd, _shepherdActiveWindow);
+                if (!_shepherd.IsContainerBelowGuest(containerHwnd, ShepherdActiveWindow.Hwnd))
+                    _shepherd.PairZOrderBehind(containerHwnd, ShepherdActiveWindow);
                 return;
             }
         }
@@ -2351,24 +2350,24 @@ public partial class ContainerWindow : Window
         // otherwise it never becomes visible again (the refusal was recorded
         // for "do not re-fight a currently-docked guest", not "never show a
         // hidden one").
-        if (_refusedPaneByHwnd.TryGetValue(_shepherdActiveWindow.Hwnd.ToInt64(), out NativeMethods.RECT refusedActive)
+        if (_refusedPaneByHwnd.TryGetValue(ShepherdActiveWindow.Hwnd.ToInt64(), out NativeMethods.RECT refusedActive)
             && PaneContainmentPolicy.ShouldSuppressRepositioning(
-                guestCurrentlyVisible: NativeMethods.IsWindowVisible(_shepherdActiveWindow.Hwnd),
+                guestCurrentlyVisible: NativeMethods.IsWindowVisible(ShepherdActiveWindow.Hwnd),
                 refusedRect: refusedActive,
                 requestedRect: rect))
         {
-            _shepherd.PairZOrderBehind(containerHwnd, _shepherdActiveWindow);
+            _shepherd.PairZOrderBehind(containerHwnd, ShepherdActiveWindow);
             return;
         }
-        _shepherd.PositionAndShow(_shepherdActiveWindow, containerHwnd, rect);
+        _shepherd.PositionAndShow(ShepherdActiveWindow, containerHwnd, rect);
         // Requested-vs-observed confirmation: PositionAndShow issues SetWindowPos
         // with the desired rect, but the guest may refuse it (native minimum). If
         // the observed rect still differs, mark the guest refusing so the next
         // pass does not repeat the write.
-        if (!ObservedMatches(_shepherdActiveWindow.Hwnd, rect))
-            MarkRefusingPane(_shepherdActiveWindow, rect);
+        if (!ObservedMatches(ShepherdActiveWindow.Hwnd, rect))
+            MarkRefusingPane(ShepherdActiveWindow, rect);
         else
-            ClearRefusingPane(_shepherdActiveWindow);
+            ClearRefusingPane(ShepherdActiveWindow);
     }
 
     /// <summary>
@@ -2451,14 +2450,14 @@ public partial class ContainerWindow : Window
             return;
         }
 
-        if (_shepherdActiveWindow == null || _shepherdActiveWindow.Hwnd != foregroundHwnd)
+        if (ShepherdActiveWindow == null || ShepherdActiveWindow.Hwnd != foregroundHwnd)
             return;
 
         IntPtr containerHwnd = _containerHwnd;
         if (containerHwnd == IntPtr.Zero)
             return;
 
-        _shepherd.PairZOrderBehind(containerHwnd, _shepherdActiveWindow);
+        _shepherd.PairZOrderBehind(containerHwnd, ShepherdActiveWindow);
     }
 
     #endregion
@@ -2676,7 +2675,7 @@ public partial class ContainerWindow : Window
         // Remember the previously visible guest so it can be hidden if it is not
         // part of the new pair (a pre-split single active tab, or a member of a
         // replaced split pair).
-        CapturedWindow? priorVisible = _shepherdActiveWindow;
+        CapturedWindow? priorVisible = ShepherdActiveWindow;
 
         // Hide the guest that was visible before the split if it is not one of
         // the new pair before changing split/model state. A pending hide must
@@ -2721,7 +2720,8 @@ public partial class ContainerWindow : Window
         var leftTab = _viewModel.Tabs.FirstOrDefault(t => t.Model == left);
         if (leftTab != null)
         {
-            _shepherdActiveWindow = left;
+            // DefinePair already committed Foreground=left (Wave 3: one
+            // authority); SetActiveTab only projects it into the strip.
             _viewModel.SetActiveTab(leftTab);
         }
 
@@ -2746,7 +2746,7 @@ public partial class ContainerWindow : Window
         if (!IsSplitRelationshipDefined || !IsSplitMember(focused))
             return;
 
-        CapturedWindow? current = _shepherdActiveWindow;
+        CapturedWindow? current = ShepherdActiveWindow;
         if (current != null && !IsSplitMember(current)
             && NativeMethods.IsWindowVisible(current.Hwnd))
         {
@@ -2769,11 +2769,12 @@ public partial class ContainerWindow : Window
         }
 
         // ResumeMember is the runtime authority for presented/foreground/
-        // generation; the container keeps its settle arming and the active-window
-        // sync (the single guest that was on top before the split re-presented).
+        // generation; its commit IS the active-guest update (Wave 3). The
+        // dormant single guest was already hidden journal-safely above (with
+        // its own RecoveryPending rollback), so NO currentSingleGuest is
+        // passed here — exactly-once hides are preserved.
         _splitController.ResumeMember(focused);
         DisarmSplitPresentationSettle();
-        _shepherdActiveWindow = focused;
         _constraintDirty = true;
         _refusedPaneByHwnd.Clear();
         _viewModel.SetActiveTab(focusedTab);
@@ -2807,7 +2808,7 @@ public partial class ContainerWindow : Window
         // must not promote either former member or hide the current guest.
         if (!IsSplitPresented)
         {
-            CapturedWindow? current = _shepherdActiveWindow;
+            CapturedWindow? current = ShepherdActiveWindow;
             // Hide only still-visible former members (a dormant pair's members
             // are already hidden by the suspend that created it, so this is
             // normally a no-op). Native hide + journaling is preserved exactly;
@@ -2844,7 +2845,7 @@ public partial class ContainerWindow : Window
         // Decide the survivor against the still-intact pair, BEFORE clearing it.
         CapturedWindow? survivor = (keepActive != null && _viewModel.Tabs.Any(t => t.Model == keepActive))
             ? keepActive
-            : (IsSplitMember(_shepherdActiveWindow) ? _shepherdActiveWindow : oldLeft);
+            : (IsSplitMember(ShepherdActiveWindow) ? ShepherdActiveWindow : oldLeft);
 
         // Hide every departing member (the non-survivor) while the split model
         // is still intact; the survivor is kept visible for promotion below.
@@ -2879,7 +2880,8 @@ public partial class ContainerWindow : Window
             var survivorTab = _viewModel.Tabs.FirstOrDefault(t => t.Model == survivor);
             if (survivorTab != null)
             {
-                _shepherdActiveWindow = survivor;
+                // CommitExplicitExit already committed Foreground=survivor
+                // (Wave 3); SetActiveTab only projects it into the strip.
                 _viewModel.SetActiveTab(survivorTab);
                 LayoutShepherdActiveWindow();
             }
@@ -2924,7 +2926,7 @@ public partial class ContainerWindow : Window
         if (!IsSplitRelationshipDefined)
             return;
         bool wasPresented = IsSplitPresented;
-        CapturedWindow? current = _shepherdActiveWindow;
+        CapturedWindow? current = ShepherdActiveWindow;
         _log.Log($"SPLIT[member-gone] member=0x{removed.Hwnd.ToInt64():X} left split");
         // HandleMemberRemoved is the runtime authority: it clears the
         // relationship (no native hide — the departing member was already
@@ -2942,7 +2944,8 @@ public partial class ContainerWindow : Window
         {
             if (current != null && _viewModel.Tabs.Any(t => ReferenceEquals(t.Model, current)))
             {
-                _shepherdActiveWindow = current;
+                // HandleMemberRemoved already preserved the dormant non-member
+                // as Foreground (Wave 3: one authority); just re-glue it.
                 LayoutShepherdActiveWindow();
             }
             return;
@@ -2951,7 +2954,7 @@ public partial class ContainerWindow : Window
         if (survivor != null && _viewModel.Tabs.Any(t => t.Model == survivor))
         {
             var survivorTab = _viewModel.Tabs.First(t => t.Model == survivor);
-            _shepherdActiveWindow = survivor;
+            // HandleMemberRemoved already committed Foreground=survivor.
             _viewModel.SetActiveTab(survivorTab);
             LayoutShepherdActiveWindow();
         }
@@ -3027,7 +3030,7 @@ public partial class ContainerWindow : Window
                 if (!IsSplitMember(window))
                     return;
             }
-            else if (_shepherdActiveWindow != window || _viewModel.ActiveTab?.Model != window)
+            else if (ShepherdActiveWindow != window || _viewModel.ActiveTab?.Model != window)
             {
                 return;
             }
@@ -3123,7 +3126,7 @@ public partial class ContainerWindow : Window
                 _refusedPaneByHwnd.Clear();
                 LayoutSplitPanes();
             }
-            else if (!IsSplitPresented && ReferenceEquals(_shepherdActiveWindow, window))
+            else if (!IsSplitPresented && ReferenceEquals(ShepherdActiveWindow, window))
             {
                 LayoutShepherdActiveWindow(forceZOrder: true);
             }

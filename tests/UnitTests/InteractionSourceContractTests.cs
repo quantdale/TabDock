@@ -64,10 +64,10 @@ public sealed class InteractionSourceContractTests
         // on restore instead of being pinned invisible (regression 3591ee3).
         Assert.Matches(
             new Regex(
-                @"PaneContainmentPolicy\s*\.\s*ShouldSuppressRepositioning\s*\(\s*guestCurrentlyVisible\s*:\s*NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*_shepherdActiveWindow\s*\.\s*Hwnd\s*\)"),
+                @"PaneContainmentPolicy\s*\.\s*ShouldSuppressRepositioning\s*\(\s*guestCurrentlyVisible\s*:\s*NativeMethods\s*\.\s*IsWindowVisible\s*\(\s*ShepherdActiveWindow\s*\.\s*Hwnd\s*\)"),
             single);
         Assert.Matches(
-            new Regex(@"_shepherd\s*\.\s*PositionAndShow\s*\(\s*_shepherdActiveWindow\s*,\s*containerHwnd\s*,\s*rect\s*\)\s*;"),
+            new Regex(@"_shepherd\s*\.\s*PositionAndShow\s*\(\s*ShepherdActiveWindow\s*,\s*containerHwnd\s*,\s*rect\s*\)\s*;"),
             single);
 
         string split = Slice(

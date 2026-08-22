@@ -56,6 +56,21 @@ public sealed class Wave3PresentationOwnershipContractTests
         Assert.Contains("private void CommitDesired(", code);
     }
 
+    [Fact]
+    public void View_DeclaresNoParallelActiveGuestField()
+    {
+        // Wave 3B: the active presentation guest lives ONLY in
+        // SplitPresentationController.Foreground. The former view-side field
+        // (hand-synced at ~11 sites with nothing enforcing the equality) must
+        // not return under any name — reads go through the derived alias,
+        // writes are impossible by construction.
+        foreach (string viewFile in Directory.GetFiles(Path.Combine(RepoRoot, "Views"), "*.cs"))
+        {
+            string code = File.ReadAllText(viewFile);
+            Assert.DoesNotContain("_shepherdActiveWindow", code);
+        }
+    }
+
     private static string Read(string relativePath)
         => File.ReadAllText(Path.Combine(RepoRoot, relativePath));
 

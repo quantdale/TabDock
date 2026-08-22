@@ -85,6 +85,23 @@ public static class SplitPresentationPolicy
         return current with { PairPresented = false, ActiveGuest = guest, Generation = current.Generation + 1 };
     }
 
+    /// <summary>
+    /// Presents <paramref name="guest"/> as the single active guest in the
+    /// standalone (no relationship) or dormant modes. This is the ordinary
+    /// tab-switch authority: the same NoPair/dormant shape either way, with
+    /// the presentation epoch advanced so a queued settle can never alias an
+    /// older single-guest world. A PRESENTED pair is never changed here —
+    /// suspension goes through <see cref="SelectNonMember"/> after its guarded
+    /// member hides succeed — and a null/blank guest clears the active guest
+    /// (teardown / empty group).
+    /// </summary>
+    public static SplitPresentationState SelectGuest(SplitPresentationState current, string? guest)
+    {
+        if (current.RelationshipDefined && current.PairPresented)
+            return current; // fail-closed: presented pairs suspend via SelectNonMember
+        return current with { PairPresented = false, ActiveGuest = guest, Generation = current.Generation + 1 };
+    }
+
     public static SplitPresentationState SelectMember(
         SplitPresentationState current,
         string member)

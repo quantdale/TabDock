@@ -270,5 +270,50 @@ public sealed class SplitPresentationController
             member);
     }
 
+    /// <summary>
+    /// Commits <paramref name="guest"/> as the presented single active guest
+    /// (standalone or dormant mode) — the ordinary tab-switch transition, and
+    /// the ONE replacement for what used to be a bare view-side write of a
+    /// parallel active-guest field. The caller performs its guarded native
+    /// work around this commit exactly as before (hide-old before, show-new/
+    /// layout after); a null guest models teardown/empty-group. Presented
+    /// pairs never pass through here — suspension is
+    /// <see cref="SuspendForGuest"/> — so a presented state is left untouched
+    /// (fail-closed).
+    /// </summary>
+    public void SelectGuest(CapturedWindow? guest)
+    {
+        if (IsPresented)
+            return;
+        CommitDesired(
+            SplitPresentationPolicy.SelectGuest(ToState(), guest == null ? null : Id(guest)),
+            _left,
+            _right,
+            guest);
+        DisarmSettle();
+    }
+
+    /// <summary>
+    /// Clears ALL presentation authority: relationship, presented flag, active
+    /// guest, settle. Used by container teardown / session ending, replacing
+    /// the former combination of a view-field null-out plus a conditional
+    /// HandleMemberRemoved (which could leave a dormant non-member as a ghost
+    /// Foreground on a dead container). Bumps the generation so any callback
+    /// that captured pre-teardown state is invalidated by construction.
+    /// </summary>
+    public void Clear()
+    {
+        // Deliberately NOT routed through SelectGuest: its policy form no-ops
+        // on a PRESENTED pair, and teardown must clear even that. NoPair is the
+        // policy's canonical empty state; the explicit epoch bump invalidates
+        // every callback captured before teardown.
+        CommitDesired(
+            SplitPresentationPolicy.NoPair(generation: _generation + 1),
+            null,
+            null,
+            null);
+        DisarmSettle();
+    }
+
     private static string Id(CapturedWindow window) => window.Hwnd.ToString("X");
 }
