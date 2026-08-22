@@ -47,11 +47,12 @@ jobs:
         working-directory: tools/openspec
         run: npm ci --ignore-scripts
 
-      # This is intentionally the hermetic qualification entry point. It runs
-      # audited restore, Release builds, native/geometry/diagnostics/persistence
-      # self-tests, doctor/version/bundle privacy checks, OpenSpec validation,
-      # and a publish --version smoke. SendInput/hardware scenarios remain
-      # supervised and are never run on the hosted runner.
+      # This is intentionally the qualification entry point. It runs audited
+      # restore, Release builds, the headless xUnit suite (the hermetic
+      # behavioral authority), the executable native-ABI probe, doctor/version/
+      # bundle privacy smokes, OpenSpec validation, and a publish --version
+      # smoke. SendInput/hardware scenarios remain supervised and are never run
+      # on the hosted runner.
       - name: Run Release qualification
         shell: pwsh
         env:

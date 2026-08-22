@@ -337,8 +337,7 @@ try {
     Write-Host "published exe informational version: $infoVersion" -ForegroundColor Green
     Write-Host "published exe self-reported sha256: $selfSha" -ForegroundColor Green
 
-    Invoke-Executable 'Published geometry self-test (exact artifact)' $ArtifactExe @('--selftest-geometry')
-    Invoke-Executable 'Published diagnostics self-test (exact artifact)' $ArtifactExe @('--selftest-diagnostics')
+    Invoke-Executable 'Published native ABI self-test (exact artifact)' $ArtifactExe @('--selftest-native-abi')
 
     if ($Ci) {
         $env:OPENSPEC_NO_UPDATE_CHECK = '1'

@@ -108,6 +108,15 @@ public class GeometryTests
     [InlineData(500, 192u, 1000)]
     [InlineData(0, 120u, 0)]
     [InlineData(1, 96u, 1)]
+    [InlineData(0, 96u, 0)]
+    [InlineData(0, 0u, 0)]
+    [InlineData(-5, 120u, -5)]
+    [InlineData(500, 0u, 500)]
+    [InlineData(10, 120u, 13)]
+    [InlineData(1, 240u, 3)]
+    [InlineData(100, 120u, 125)]
+    [InlineData(99, 120u, 124)]
+    [InlineData(643, 120u, 804)]
     public void ScaleUnawareLogicalToPhysical_MatchesExpected(int value, uint dpi, int expected)
     {
         Assert.Equal(expected, SplitGeometry.ScaleUnawareLogicalToPhysical(value, dpi));
@@ -131,11 +140,102 @@ public class GeometryTests
         }
     }
 
+    /// <summary>
+    /// The authoritative partition qualification (Wave 4: migrated from the
+    /// former SplitGeometry.RunSelfTest and its --selftest-geometry executable
+    /// mode). An exhaustive matrix — every width 1..4096, representative
+    /// heights, positive/zero/negative origins — plus targeted odd widths, a
+    /// seeded fuzz sweep (100,000 rects, fixed seed 20260810), and the
+    /// size-constraint minimality math. Asserts exact coverage, zero overlap,
+    /// zero gap, and no overflow for every rect.
+    /// </summary>
     [Fact]
-    public void RunSelfTest_ReportsZeroFailures()
+    public void Partition_ExhaustiveMatrixSeededFuzzAndConstraintMath_AllInvariantsHold()
     {
-        var (checks, failures) = SplitGeometry.RunSelfTest();
-        Assert.True(checks > 0, "self-test should execute checks");
-        Assert.Equal(0, failures);
+        void VerifyRect(NativeMethods.RECT content)
+        {
+            var (left, right) = SplitGeometry.Partition(content);
+
+            Assert.Equal(content.left, left.left);
+            Assert.Equal(content.top, left.top);
+            Assert.Equal(content.top, right.top);
+            Assert.Equal(content.bottom, left.bottom);
+            Assert.Equal(content.bottom, right.bottom);
+            Assert.Equal(left.right, right.left);
+            Assert.Equal(content.right, right.right);
+            Assert.True(left.Width >= 0);
+            Assert.True(right.Width >= 0);
+            Assert.Equal(content.Width, left.Width + right.Width);
+            // No overflow / wrap: all edges of both panes stay in range when
+            // the content rect itself is.
+            Assert.True(left.left <= left.right);
+            Assert.True(right.left <= right.right);
+            Assert.True(left.top <= left.bottom);
+        }
+
+        // --- Matrix: every width 1..4096, representative heights, origins
+        // covering positive, zero, and negative. ---
+        int[] heights = { 1, 2, 3, 10, 100, 1000, 4096 };
+        int[] originsX = { -1920, -1, 0, 1, 1920, 5000 };
+        int[] originsY = { -1080, -1, 0, 1, 1080, 3000 };
+        for (int w = 1; w <= 4096; w++)
+        {
+            foreach (int h in heights)
+            {
+                foreach (int ox in originsX)
+                {
+                    foreach (int oy in originsY)
+                    {
+                        try { VerifyRect(new NativeMethods.RECT { left = ox, top = oy, right = ox + w, bottom = oy + h }); }
+                        catch (Exception ex) { throw new Xunit.Sdk.XunitException($"matrix w={w} h={h} origin=({ox},{oy}): {ex.Message}"); }
+                    }
+                }
+            }
+        }
+
+        // --- Targeted odd widths at positive and negative origins. ---
+        foreach (int w in new[] { 799, 800, 801, 1023, 1024, 1025, 1919, 1920, 1921 })
+        {
+            VerifyRect(new NativeMethods.RECT { left = 0, top = 0, right = w, bottom = 1080 });
+            VerifyRect(new NativeMethods.RECT { left = -1920, top = -1080, right = -1920 + w, bottom = 0 });
+        }
+
+        // --- Seeded fuzz: deterministic across machines. ---
+        var rng = new Random(20260810);
+        for (int i = 0; i < 100_000; i++)
+        {
+            int ox = rng.Next(-10000, 10001);
+            int oy = rng.Next(-10000, 10001);
+            int w = rng.Next(1, 10001);
+            int h = rng.Next(1, 10001);
+            try { VerifyRect(new NativeMethods.RECT { left = ox, top = oy, right = ox + w, bottom = oy + h }); }
+            catch (Exception ex) { throw new Xunit.Sdk.XunitException($"fuzz#{i} x={ox} y={oy} w={w} h={h}: {ex.Message}"); }
+        }
+
+        // --- Size-constraint math: MinContentWidth must be the smallest width
+        // at which the exact partition still fits both guests, and no width
+        // below it may fit. ---
+        int[] minWidths = { 0, 1, 100, 200, 500, 643, 1024 };
+        foreach (int lm in minWidths)
+        {
+            foreach (int rm in minWidths)
+            {
+                int minW = SplitGeometry.MinContentWidth(split: true, lm, rm);
+                Assert.True(minW / 2 >= lm, $"split lm={lm} rm={rm} minW={minW}: LEFT below minimum");
+                Assert.True(minW - (minW / 2) >= rm, $"split lm={lm} rm={rm} minW={minW}: RIGHT below minimum");
+                if (minW > 0)
+                {
+                    int leftAtMinus1 = (minW - 1) / 2;
+                    int rightAtMinus1 = (minW - 1) - leftAtMinus1;
+                    Assert.False(
+                        leftAtMinus1 >= lm && rightAtMinus1 >= rm,
+                        $"split lm={lm} rm={rm}: width minW-1 still fits both panes");
+                }
+
+                Assert.Equal(lm, SplitGeometry.MinContentWidth(split: false, lm, rm));
+                Assert.Equal(Math.Max(lm, rm), SplitGeometry.MinContentHeight(split: true, lm, rm));
+                Assert.Equal(lm, SplitGeometry.MinContentHeight(split: false, lm, rm));
+            }
+        }
     }
 }

@@ -4,8 +4,9 @@
 .DESCRIPTION
     Builds the solution once (covering the main app and Spike) plus the
     ValidationDriver, GuineaPig, and non-gating Performance projects, then runs
-    the hermetic diagnostics/geometry/persistence/privacy qualification.
-    Real-input ValidationDriver execution is opt-in and remains supervised.
+    the headless xUnit suite (the hermetic behavioral authority) plus the
+    executable native-ABI probe and real process/command smokes. Real-input
+    ValidationDriver execution is opt-in and remains supervised.
 .PARAMETER Configuration
     Build configuration. Debug is the local default; CI uses Release.
 .PARAMETER Ci
@@ -235,8 +236,9 @@ try {
         dotnet test $UnitTestProject -c $Configuration --nologo @noRestore
     }
 
-    Invoke-Executable "Geometry self-test ($Configuration)" $AppExe @('--selftest-geometry')
-    Invoke-Executable "Diagnostics/persistence/privacy self-tests ($Configuration)" $AppExe @('--selftest-diagnostics')
+    # Hermetic behavior is qualified by the xUnit suite above. The remaining
+    # executable commands qualify real process behavior only: the user32
+    # WINDOWPLACEMENT ABI probe and actual command lifecycle smokes.
     Invoke-Executable "Native ABI contract self-test ($Configuration)" $AppExe @('--selftest-native-abi')
     Invoke-Executable "Version smoke ($Configuration)" $AppExe @('--version')
 

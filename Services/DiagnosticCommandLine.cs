@@ -12,7 +12,6 @@ public enum DiagnosticCommandKind
     Version,
     Doctor,
     SupportBundle,
-    SelfTest,
     SelfTestNativeAbi,
     PendingRecovery,
     RecoverPending,
@@ -40,7 +39,9 @@ public static class DiagnosticCommandLine
             "--version" => DiagnosticCommandKind.Version,
             "--doctor" => DiagnosticCommandKind.Doctor,
             "--support-bundle" => DiagnosticCommandKind.SupportBundle,
-            "--selftest-diagnostics" => DiagnosticCommandKind.SelfTest,
+            // --selftest-native-abi is intentionally hidden/qualification-only:
+            // it produces real user32 WINDOWPLACEMENT evidence for the
+            // compatibility matrix and never mutates product state.
             "--selftest-native-abi" => DiagnosticCommandKind.SelfTestNativeAbi,
             "--pending-recovery" => DiagnosticCommandKind.PendingRecovery,
             "--recover-pending" => DiagnosticCommandKind.RecoverPending,
@@ -109,10 +110,6 @@ public static class DiagnosticCommandLine
                     string bundle = DiagnosticReportService.ExportBundle(request.OutputPath);
                     Write($"support bundle: {bundle}");
                     return 0;
-                case DiagnosticCommandKind.SelfTest:
-                    (int checks, int failures) = DiagnosticSelfTest.Run();
-                    Write($"SELFTEST[diagnostics] checks={checks} failures={failures} result={(failures == 0 ? "PASS" : "FAIL")}");
-                    return failures == 0 ? 0 : 1;
                 case DiagnosticCommandKind.SelfTestNativeAbi:
                     bool contractOk = NativeInteropSelfTest.PlacementContractIsStable();
                     bool roundTripOk = NativeInteropSelfTest.PlacementRoundTripThroughUser32();
@@ -181,24 +178,6 @@ public static class DiagnosticCommandLine
                 try { NativeMethods.FreeConsole(); } catch { }
             }
         }
-    }
-}
-
-internal static class DiagnosticSelfTest
-{
-    public static (int Checks, int Failures) Run()
-    {
-        int checks = 0;
-        int failures = 0;
-        void Check(bool condition)
-        {
-            checks++;
-            if (!condition) failures++;
-        }
-
-        Check(NativeInteropSelfTest.PlacementContractIsStable());
-        Check(NativeInteropSelfTest.PlacementRoundTripThroughUser32());
-        return (checks, failures);
     }
 }
 
