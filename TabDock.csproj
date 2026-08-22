@@ -16,10 +16,10 @@
          command-line properties take precedence over this local default. -->
     <NuGetAudit Condition="'$(NuGetAudit)' == ''">false</NuGetAudit>
     <!--
-      The repository root also contains spike/test projects. Exclude their build artifacts
-      and source trees from the main WPF project so the SDK default globs don't pull them in.
+      The repository root also contains test projects and documentation. Exclude their build
+      artifacts and source trees from the main WPF project so SDK default globs don't pull them in.
     -->
-    <DefaultItemExcludes>$(DefaultItemExcludes);bin/**;obj/**;Spike/**;tests/**;docs/**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin/**;obj/**;tests/**;docs/**</DefaultItemExcludes>
 
     <!--
       Native AOT is not practical for WPF: WPF relies on COM activation, reflection emit,
