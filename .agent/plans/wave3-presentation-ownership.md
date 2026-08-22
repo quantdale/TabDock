@@ -1,11 +1,13 @@
-# Wave 3 — Presentation-State Ownership Map (pre-implementation)
+# Wave 3 — Presentation-State Ownership Map (COMPLETE)
 
 Campaign: architecture hardening, Wave 3 only (presentation ownership).
-Baseline: main @ acdf680, clean, == origin/main. Builds 0w/0e both configs;
-tests 265/265 both configs; git diff --check clean. This file is the
-working design record for the wave; revise as implementation uncovers
-subtleties. Final dispositions are mirrored into `.agent/STATE.md` when the
-wave completes.
+Baseline: main @ acdf680, clean. Final tip: de69e01 (pushed). This file is the
+working design record for the wave; final dispositions below mirror
+`.agent/STATE.md`.
+
+OUTCOME: all six sub-waves implemented and verified. Gate: Debug/Release
+builds 0w/0e; unit tests 302/302 both configs; release tooling 150/150;
+validate.ps1 -Ci PASS; git diff --check clean.
 
 ## A. Semantics inventory
 
@@ -202,25 +204,36 @@ wave completes.
   controller level (VM projection order asserted in view-level source
   contract comments, behavioral proof lives in ValidationDriver scenarios).
 
-## B. Sub-wave sequence
+## B. Sub-wave sequence (final dispositions)
 
-1. 3A: canonical commit helper in SplitPresentationController; all six
-   transitions commit exclusively from policy output (DefinePair,
-   Reconfigure-via-DefinePair, SuspendForGuest, ResumeMember,
-   HandleMemberRemoved, CommitExplicitExit, FocusMember). Add
-   ResolveCommit(desired) private helper; delete mixed generation math.
-   Cross-check tests: ToState() == policy result for every listed transition.
-2. 3B: add controller.SelectGuest/Clear; migrate all `_shepherdActiveWindow`
-   sites; DELETE the field; source-contract test.
-3. 3C: PaneContainmentCoordinator (reference-keyed) replaces the view dict;
-   route all 14 classified events; policy untouched; new lifecycle tests.
-4. 3D: Model B simplification of PresentationLayoutCoordinator (remove dead
-   generation machinery, keep coalescing/final-pass).
-5. 3E/3F: consolidate split teardown to single Disarm path usage; rename
-   `ContainerWindow.SplitInteractionFix.cs` → `ContainerWindow.Split.cs`;
-   concern-region comments; no behavior change.
-6. Async callback audit (§12) documented + deterministic stale tests where
-   missing; diagnostics snapshot follows new authority (#13).
+1. 3A DONE (ffb2794): canonical `CommitDesired` helper; all transitions commit
+   exclusively from policy output; mixed generation math deleted;
+   ToState()==policy cross-check tests added.
+2. 3B DONE (5e49018): controller.SelectGuest/Clear added; all
+   `_shepherdActiveWindow` sites migrated; field DELETED (derived alias
+   `ShepherdActiveWindow => _splitController.Foreground`); source-contract
+   test forbids its return.
+3. 3C DONE (712857c): PaneContainmentCoordinator (reference-keyed) replaced
+   the view dict; 13 invalidation events routed; policy untouched; +8
+   lifecycle tests.
+4. 3D DONE (ac5dfa2): Model B applied — generation machinery removed
+   (InvalidateLayout had zero production callers); coalescing/final-pass kept
+   byte-for-byte; two dead-machinery stale tests replaced with a Model-B
+   contract test; ARCHITECTURE.md notes updated (+stale Wave-1 budget-sink
+   sentence corrected). NOTE vs plan: HardeningRegressionTests DID reference
+   InvalidateLayout (added by 9713eee after this plan's draft claim of "no
+   generation test exists") — handled as described.
+5. 3E/3F DONE (de69e01): SplitInteractionFix.cs -> ContainerWindow.Split.cs
+   with three concern sections; single Disarm path confirmed and dual-site
+   teardown documented at both call sites (plan §9 disposition upheld);
+   no behavior change.
+6. DONE within 3D/3E commit set: async-callback safety audit documented in
+   the coordinator remarks + ARCHITECTURE.md; settle stale-callback coverage
+   confirmed existing (SplitControllerTransitionBehaviorTests +
+   IsCurrentSettle policy tests); diagnostics snapshot verified to follow the
+   controller authority via the ShepherdActiveWindow alias; stale comment
+   references to the deleted field fixed in ValidationDriver +
+   ReplaceableDispatcherTimerTests.
 
 ## C. Non-negotiables carried forward
 

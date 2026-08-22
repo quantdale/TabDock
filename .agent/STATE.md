@@ -17,7 +17,7 @@ Objective: act on `docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md` in waves
 ownership → 4 self-test migration → 5 repo hygiene), preserving every
 Shepherd/native-window invariant. Wave definitions are in the session goal.
 
-**STATUS: Waves 0–2 COMPLETE — implemented, verified, committed, pushed.**
+**STATUS: Waves 0–3 COMPLETE — implemented, verified, committed, pushed.**
 Wave 0 gate (executed by a healthy shell after the OpenCode Bash harness
 failure): Debug/Release builds 0w/0e; tests 214/214 both configs (+29 new
 regression tests); openspec 20/20; git diff --check clean.
@@ -127,6 +127,55 @@ five commits (33c3ded tip), all pushed.
   PASS; openspec 20/20; git diff --check clean. Push of 33c3ded initially hit
   transient github.com connection failure, succeeded on retry (cc2bb00..33c3ded).
 
+**Wave 3 (presentation-state ownership consolidation) — COMPLETE:** six
+sub-waves, six commits (de69e01 tip), design record in
+`.agent/plans/wave3-presentation-ownership.md` (semantics inventory A.1–A.14,
+non-negotiables preserved).
+
+- **3A canonical split commits:** `SplitPresentationController` commits ONLY
+  through private `CommitDesired(desired, resolvedLeft, resolvedRight,
+  resolvedForeground)` fed by pure policy output (DefinePair/Reconfigure/
+  SelectNonMember/SelectMember/RemoveMember/ExplicitExit/FocusMember); mixed
+  generation math (`= desired.Generation` ×3 vs `_generation++` ×2) and the
+  discarded ExplicitExit result are gone. String identities resolve back to
+  live references ONLY from the transition's own arguments — never a global
+  HWND lookup.
+- **3B single active-guest authority:** controller gained `SelectGuest`
+  (standalone/dormant switches; presented pairs fail-closed untouched) and
+  `Clear()` (teardown epoch bump, no ghost dormant non-member). The view's
+  `_shepherdActiveWindow` FIELD IS DELETED; readers use derived alias
+  `ShepherdActiveWindow => _splitController.Foreground`. Ordering preserved:
+  guarded native work → controller commit → VM SetActiveTab projection →
+  layout request; RecoveryPending commits nothing.
+- **3C pane-refusal owner:** NEW `Services/PaneContainmentCoordinator`
+  replaces `_refusedPaneByHwnd`; keyed by CapturedWindow REFERENCE (recycled
+  HWND values can never inherit refusals), 13 invalidation boundaries routed
+  through `InvalidateAll()`, log format byte-identical. Hidden-guest invariant
+  intact: storage holds rects only, visibility sampled at decision time.
+  Constraint min-cache stays in the view deliberately (WndProc-fed).
+- **3D Model B layout simplification:** removed `InvalidateLayout`,
+  `_layoutGeneration`/`_pendingLayoutGeneration`, pending-frame token, and the
+  stale-frame discard branch (zero production callers of the mutator —
+  generation pinned at 0, branch unreachable). Coalescing + ensureFinalPass
+  latch retained byte-for-byte (Q9/Q1/Q2 tests unmodified). Safety argument:
+  queued frames re-read current authority at callback time, settle has its own
+  live generation guard, teardown disarms settle and zeroes the container HWND
+  first. Two stale-suppression tests that exercised only the dead machinery
+  replaced by a Model-B contract test. Also fixed a pre-existing xUnit2013
+  warning in Wave3PresentationOwnershipContractTests so Debug is truly 0w.
+- **3E/3F:** `ContainerWindow.SplitInteractionFix.cs` renamed to concern-based
+  `ContainerWindow.Split.cs` with three documented concern sections; settle
+  disarm confirmed single-path (both OnClosed and ContainerWindow_Closed call
+  the one idempotent helper — dual-site-by-design now documented at both
+  sites). Stale `_shepherdActiveWindow` comment references updated in
+  ValidationDriver + ReplaceableDispatcherTimerTests. No behavior change.
+- Diagnostics snapshot already follows the new authority
+  (`CreateDiagnosticSnapshot` reads `ShepherdActiveWindow`/controller fields).
+- Tests: 265 → 303 (+38 across 3A–3C: ToState cross-checks, SelectGuest/Clear,
+  coordinator lifecycle; then −1 net in 3D). Gate after 3D+3E/3F: Debug/
+  Release builds 0w/0e; tests 302/302 both configs; release tooling 150/150;
+  validate.ps1 -Ci PASS; git diff --check clean.
+
 Audit revalidation complete (read-only, against 8ac6db8): all top findings
 confirmed live — budget sink never assigned anywhere; coordinator used for
 `RequestRelayout` only (its refusal API, generation guard,
@@ -145,14 +194,14 @@ hotkey-failure UX gap + hardcoded launcher hint confirmed.
 
 NEXT ACTIONS:
 
-1. WAVE 3 — presentation-state ownership consolidation (ContainerWindow /
-   _shepherdActiveWindow hand-sync sites, SplitPresentationController policy-
-   output reconciliation, refusal-storage migration out of
-   _refusedPaneByHwnd into a single owner, PresentationLayoutCoordinator role
-   decision). Standard wave gate after; per-wave commit + push. Do NOT begin
-   before reading docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md §3.2/§3.4 and
-   re-validating against current source (Wave 2 changed several cited lines).
-2. Waves 4–5 per the campaign goal ordering.
+1. WAVE 4 — self-test migration out of the product binary (audit §3.3 /
+   Top-Finding #3: ~5,900 lines of `Services/*SelfTest*.cs` + ~792 inline
+   self-test lines in DiagnosticCommandLine.cs; keep the narrow native-ABI
+   probe, move hermetic suites to tests/UnitTests via InternalsVisibleTo).
+   Read docs/audits/2026-08-22/IMPROVEMENT_REVIEW.md §3.3 first and
+   re-validate against current source.
+2. Wave 5 (repo hygiene) per the campaign goal ordering; then final
+   campaign wrap-up.
 
 UI/UX bug-hunt pass (2026-08-21, same day as R22, uncommitted at time of
 writing): a spec-grounded, reject-by-default multi-agent review of the
