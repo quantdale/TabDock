@@ -137,6 +137,24 @@ public sealed class InteractionSourceContractTests
         Assert.Equal(4, Regex.Matches(code, @"PaneContainmentPolicy\s*\.\s*MatchesWithinEpsilon\s*").Count);
     }
 
+    [Fact]
+    public void ContainerWindow_HasNoHandwrittenReplaceableTimerIdioms()
+    {
+        string code = Read("Views/ContainerWindow.xaml.cs");
+
+        // Wave 2E consolidation: all five replaceable/coalesced container timers
+        // arm through ReplaceableDispatcherTimer, which makes the AUDIT25-05/Q5/
+        // Q8 stale-callback guard unavoidable. A handwritten DispatcherTimer with
+        // a ReferenceEquals ownership guard must not return to this view.
+        Assert.DoesNotContain("new System.Windows.Threading.DispatcherTimer", code);
+        Assert.DoesNotContain("new DispatcherTimer", code);
+        Assert.DoesNotMatch(
+            new Regex(@"ReferenceEquals\s*\(\s*_\w*Timer\s*,"),
+            code);
+        // The helper slots are the only timers wired here.
+        Assert.Equal(5, Regex.Matches(code, @"private readonly ReplaceableDispatcherTimer\s+").Count);
+    }
+
     private static string Read(string relativePath)
         => File.ReadAllText(Path.Combine(RepoRoot, relativePath));
 

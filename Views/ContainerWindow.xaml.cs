@@ -81,17 +81,18 @@ public partial class ContainerWindow : Window
 
     // Debounced refresh of the guest minima while a guest is visible, so a
     // dynamic native minimum (browser UI state, sidebar, toolbar) is respected
-    // without probing on every frame.
-    private System.Windows.Threading.DispatcherTimer? _constraintRefreshTimer;
+    // without probing on every frame. Periodic while armed; replaced on re-Load.
+    private readonly ReplaceableDispatcherTimer _constraintRefreshTimer = new();
 
-    // Coalesced timers for WM_ACTIVATE's guest re-assert, StateChanged's
-    // settled-snapshot diagnostic, and the self-minimize restore check. Each
-    // holds at most one pending instance — stopped and replaced, never left to
-    // accumulate (AUDIT25-05) — and all three are stopped in
+    // Coalesced replaceable one-shot timers: WM_ACTIVATE's guest re-assert,
+    // StateChanged's settled-snapshot diagnostic, and the self-minimize restore
+    // check. Each slot holds at most one pending instance — stopped and
+    // replaced, never left to accumulate (AUDIT25-05) — and all are cancelled in
     // ContainerWindow_Closed so nothing fires against a released guest.
-    private System.Windows.Threading.DispatcherTimer? _activateReassertTimer;
-    private System.Windows.Threading.DispatcherTimer? _stateSettledTimer;
-    private System.Windows.Threading.DispatcherTimer? _restoreMinimizedTimer;
+    // ReplaceableDispatcherTimer makes the stale-callback guard unavoidable.
+    private readonly ReplaceableDispatcherTimer _activateReassertTimer = new();
+    private readonly ReplaceableDispatcherTimer _stateSettledTimer = new();
+    private readonly ReplaceableDispatcherTimer _restoreMinimizedTimer = new();
 
     // A captured guest's native title-bar move/size loop is authoritative until
     // EVENT_SYSTEM_MOVESIZEEND. Do not let an intermediate relayout classify
@@ -157,7 +158,7 @@ public partial class ContainerWindow : Window
     // EmptiedByPopOut and re-enter Close() on a window already inside Closing.
     private bool _closePromptOpen;
     private bool _closePending;
-    private DispatcherTimer? _closePromptRaiseTimer;
+    private readonly ReplaceableDispatcherTimer _closePromptRaiseTimer = new();
 
     /// <summary>
     /// Set by App before any exit/crash path calls Application.Shutdown so every
@@ -433,18 +434,8 @@ public partial class ContainerWindow : Window
                 // visibility right before acting, so an in-flight self-hide
                 // has settled either way by the time this decides.
                 CapturedWindow activeWindow = _shepherdActiveWindow;
-                _activateReassertTimer?.Stop();
-                var activateTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
-                activateTimer.Tick += (_, _) =>
+                _activateReassertTimer.Schedule(TimeSpan.FromMilliseconds(120), () =>
                 {
-                    if (!ReferenceEquals(_activateReassertTimer, activateTimer))
-                    {
-                        activateTimer.Stop();
-                        return;
-                    }
-
-                    activateTimer.Stop();
-                    _activateReassertTimer = null;
                     if (_shepherdActiveWindow == activeWindow
                         && !NativeMethods.IsIconic(activeWindow.Hwnd)
                         && NativeMethods.IsWindowVisible(activeWindow.Hwnd)
@@ -471,9 +462,7 @@ public partial class ContainerWindow : Window
                                 _log.Log("LAYOUT[skip] active-guest reassert: content marker bounds were unavailable.");
                         }
                     }
-                };
-                _activateReassertTimer = activateTimer;
-                activateTimer.Start();
+                });
             }
         }
         else if ((uint)msg == NativeMethods.WM_ENTERSIZEMOVE)
@@ -656,15 +645,10 @@ public partial class ContainerWindow : Window
         // a dynamic minimum (browser sidebar, toolbar, UI-state change) is picked
         // up without probing on every frame or a resize war. Bounded: one probe
         // batch every few seconds, and only re-measures when a guest is visible.
-        _constraintRefreshTimer?.Stop();
-        var refreshTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-        refreshTimer.Tick += (_, _) =>
+        // Periodic slot: fires on every interval until cancelled/replaced; a
+        // re-Loaded container replaces the previous instance safely.
+        _constraintRefreshTimer.Schedule(TimeSpan.FromSeconds(5), () =>
         {
-            if (!ReferenceEquals(_constraintRefreshTimer, refreshTimer))
-            {
-                refreshTimer.Stop();
-                return;
-            }
             bool hasVisible = IsSplitPresented
                 || (_shepherdActiveWindow != null && NativeMethods.IsWindowVisible(_shepherdActiveWindow.Hwnd));
             if (hasVisible)
@@ -677,9 +661,7 @@ public partial class ContainerWindow : Window
                 // per-frame resize war.
                 _refusedPaneByHwnd.Clear();
             }
-        };
-        _constraintRefreshTimer = refreshTimer;
-        refreshTimer.Start();
+        }, repeatEveryInterval: true);
     }
 
     /// <summary>
@@ -829,8 +811,7 @@ public partial class ContainerWindow : Window
         finally
         {
             _closePromptOpen = false;
-            _closePromptRaiseTimer?.Stop();
-            _closePromptRaiseTimer = null;
+            _closePromptRaiseTimer.Cancel();
             // MessageBox is an owned popup, but the guests are independent
             // top-level windows and can already sit above the owner. Reconcile
             // after the modal closes so Cancel leaves the guest stack healthy;
@@ -933,27 +914,15 @@ public partial class ContainerWindow : Window
     /// </summary>
     private void ArmClosePromptRaise()
     {
-        _closePromptRaiseTimer?.Stop();
-        var promptTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
-        promptTimer.Tick += (_, _) =>
+        _closePromptRaiseTimer.Schedule(TimeSpan.FromMilliseconds(50), () =>
         {
-            if (!ReferenceEquals(_closePromptRaiseTimer, promptTimer))
-            {
-                promptTimer.Stop();
-                return;
-            }
-
-            promptTimer.Stop();
-            _closePromptRaiseTimer = null;
             if (!_closePromptOpen)
                 return;
 
             IntPtr dialogHwnd = FindOwnedClosePrompt();
             if (dialogHwnd != IntPtr.Zero)
                 _shepherd.RaiseContainerForChrome(dialogHwnd, useTopmostBand: true);
-        };
-        _closePromptRaiseTimer = promptTimer;
-        promptTimer.Start();
+        });
     }
 
     /// <summary>
@@ -998,11 +967,9 @@ public partial class ContainerWindow : Window
         // split members after close, and stop the activate reassert timer
         // before clearing the active guest it would reassert (Q5/Q8).
         DisarmSplitPresentationSettle();
-        _activateReassertTimer?.Stop();
-        _activateReassertTimer = null;
+        _activateReassertTimer.Cancel();
         CloseCapturePanel();
-        _constraintRefreshTimer?.Stop();
-        _constraintRefreshTimer = null;
+        _constraintRefreshTimer.Cancel();
         _refusedPaneByHwnd.Clear();
         _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
         _viewModel.EmptiedByPopOut -= ViewModel_EmptiedByPopOut;
@@ -1027,16 +994,13 @@ public partial class ContainerWindow : Window
             _splitController.HandleMemberRemoved(_splitController.Left!);
         _guestMoveSizeActive = false;
         _guestMoveSizeGeneration++;
-        _stateSettledTimer?.Stop();
-        _stateSettledTimer = null;
-        _restoreMinimizedTimer?.Stop();
-        _restoreMinimizedTimer = null;
+        _stateSettledTimer.Cancel();
+        _restoreMinimizedTimer.Cancel();
         // _closePromptRaiseTimer is armed via ArmClosePromptRaise (50ms tick)
-        // and may still be pending when the container closes. Stop it and null
-        // the field so a pending tick cannot fire post-close against nulled
-        // state, and so the timer does not keep the closed window rooted.
-        _closePromptRaiseTimer?.Stop();
-        _closePromptRaiseTimer = null;
+        // and may still be pending when the container closes. Cancel it so a
+        // pending tick cannot fire post-close against nulled state, and so the
+        // timer does not keep the closed window rooted.
+        _closePromptRaiseTimer.Cancel();
         // WndProc was added in OnSourceInitialized; remove explicitly so a
         // hidden/reused HwndSource does not keep dispatching to a dead host.
         try
@@ -1126,22 +1090,8 @@ public partial class ContainerWindow : Window
 
         // Lightweight state snapshot after the transition settles. Retained (low
         // volume: once per maximize/restore) as a field-diagnosis aid.
-        _stateSettledTimer?.Stop();
-        var settledTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(750) };
-        settledTimer.Tick += (_, _) =>
-        {
-            if (!ReferenceEquals(_stateSettledTimer, settledTimer))
-            {
-                settledTimer.Stop();
-                return;
-            }
-
-            settledTimer.Stop();
-            _stateSettledTimer = null;
-            LogStateSnapshot("settled");
-        };
-        _stateSettledTimer = settledTimer;
-        settledTimer.Start();
+        _stateSettledTimer.Schedule(TimeSpan.FromMilliseconds(750), () =>
+            LogStateSnapshot("settled"));
     }
 
 
@@ -1251,9 +1201,9 @@ public partial class ContainerWindow : Window
             _splitController.HandleMemberRemoved(_splitController.Left!);
         _guestMoveSizeActive = false;
         _guestMoveSizeGeneration++;
-        _activateReassertTimer?.Stop();
-        _stateSettledTimer?.Stop();
-        _restoreMinimizedTimer?.Stop();
+        _activateReassertTimer.Cancel();
+        _stateSettledTimer.Cancel();
+        _restoreMinimizedTimer.Cancel();
         CloseCapturePanel();
         _viewModel.ClearReleasedTabsAfterSessionEnding();
     }
@@ -3060,19 +3010,10 @@ public partial class ContainerWindow : Window
         // observe "iconic AND still visible" in that narrow gap and wrongly
         // decide to restore. Defer briefly so an immediately-following Hide()
         // has a chance to land first; re-check both flags at that point.
-        _restoreMinimizedTimer?.Stop();
-        var restoreTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
-        restoreTimer.Tick += (_, _) =>
+        // Defer briefly so an immediately-following Hide()
+        // has a chance to land first; re-check both flags at that point.
+        _restoreMinimizedTimer.Schedule(TimeSpan.FromMilliseconds(200), () =>
         {
-            if (!ReferenceEquals(_restoreMinimizedTimer, restoreTimer))
-            {
-                restoreTimer.Stop();
-                return;
-            }
-
-            restoreTimer.Stop();
-            _restoreMinimizedTimer = null;
-
             // The tab can also be released inside this same 200ms window — popped
             // out, tray-closed, or torn down along with the whole container. By
             // then Release has already restored the guest to its capture-time
@@ -3102,9 +3043,7 @@ public partial class ContainerWindow : Window
                 LayoutSplitPanes();
             else
                 LayoutShepherdActiveWindow();
-        };
-        _restoreMinimizedTimer = restoreTimer;
-        restoreTimer.Start();
+        });
     }
 
     /// <summary>
