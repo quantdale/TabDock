@@ -325,32 +325,4 @@ public class SplitInteractionPolicyTests
         var viaFull = SplitInteractionPolicy.Classify(pair, pair.PairPresented, false, false, false, SplitNativeTransitionOutcome.Succeeded, false);
         Assert.Equal(viaFull, viaConvenience);
     }
-
-    // --------------------------------------------------------------------
-    // Successful pair->guest transaction description
-    // --------------------------------------------------------------------
-
-    [Fact]
-    public void DescribeTransaction_SuccessfulPairToGuest_HasExpectedShape()
-    {
-        var auth = Pair("A");
-        var desired = SplitPresentationPolicy.SelectNonMember(auth, "C");
-        var desc = SplitInteractionPolicy.DescribeTransaction(auth, desired, SplitNativeTransitionOutcome.Succeeded);
-        Assert.NotNull(desc);
-        Assert.Contains("pair(A,B)", desc);
-        Assert.Contains("guest(C)", desc);
-        Assert.Contains($"@{desired.Generation}", desc);
-        Assert.Contains(desired.Mode.ToString(), desc);
-    }
-
-    [Theory]
-    [InlineData(SplitNativeTransitionOutcome.RecoveryPending)]
-    [InlineData(SplitNativeTransitionOutcome.IdentityMismatch)]
-    [InlineData(SplitNativeTransitionOutcome.ShowFailed)]
-    public void DescribeTransaction_NonSucceeded_ReturnsNull(SplitNativeTransitionOutcome outcome)
-    {
-        var auth = Pair("A");
-        var desired = SplitPresentationPolicy.SelectNonMember(auth, "C");
-        Assert.Null(SplitInteractionPolicy.DescribeTransaction(auth, desired, outcome));
-    }
 }

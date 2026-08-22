@@ -4,31 +4,32 @@ using System.Collections.Generic;
 namespace TabDock.Services;
 
 /// <summary>
-/// Owns coalesced relayout scheduling, layout generations, deferred batch creation,
-/// redundant-layout suppression and generation-token stale callback suppression.
-/// Centralizes native mutation batching so one frame cannot issue several
-/// identical batches. No WPF types — caller supplies scheduling via delegate.
+/// Owns coalesced relayout scheduling with generation-token stale callback
+/// suppression. Centralizes native mutation batching so one frame cannot issue
+/// several identical batches. No WPF types — caller supplies scheduling via delegate.
 /// </summary>
+/// <remarks>
+/// Ownership decisions (Wave-1 cleanup):
+/// - Relayout coalescing/stale suppression is LIVE production machinery used by
+///   <c>ContainerWindow</c>; <see cref="InvalidateLayout"/> is its real
+///   invalidation transition (Wave 3C decides whether more production paths
+///   begin invalidating or the model is simplified further).
+/// - Refusal tracking was removed here: <c>ContainerWindow._refusedPaneByHwnd</c>
+///   is the single existing owner (Wave 3B re-examines ownership placement).
+/// - The former test-only shims (<c>CoalesceAndExecute</c>,
+///   <c>NeedsPanePositionForTest</c>), unread layout counters, and budget-sink
+///   plumbing were deleted as proven dead.
+/// </remarks>
 public sealed class PresentationLayoutCoordinator
 {
-    private readonly IPresentationOperations? _ops;
-    private readonly IPresentationBudgetSink? _budget;
     private long _layoutGeneration;
     private long _pendingLayoutGeneration;
     private bool _relayoutPending;
     private bool _relayoutAfterPending;
-    private int _layoutSplitCount;
-    private int _layoutSingleCount;
-    private readonly Dictionary<long, NativeMethods.RECT> _refusedPaneByHwnd = new();
 
-    public PresentationLayoutCoordinator(IPresentationOperations? ops = null, IPresentationBudgetSink? budget = null)
+    public PresentationLayoutCoordinator()
     {
-        _ops = ops;
-        _budget = budget;
     }
-
-    public long LayoutGeneration => _layoutGeneration;
-    public bool RelayoutPending => _relayoutPending;
 
     public void InvalidateLayout() => _layoutGeneration++;
 
@@ -89,39 +90,5 @@ public sealed class PresentationLayoutCoordinator
             }
             _ = gen;
         });
-    }
-
-    /// <summary>Synchronous coalesced execute used by deterministic budget tests.</summary>
-    public void CoalesceAndExecute(Action execute, int coalescedRequests)
-    {
-        // Simulate N RequestRelayout calls coalesced into one execute.
-        if (coalescedRequests <= 0) return;
-        _relayoutPending = true;
-        // Only one execute regardless of N.
-        _relayoutPending = false;
-        execute();
-    }
-
-    public bool IsCurrentLayout(long queuedGeneration)
-        => queuedGeneration == _layoutGeneration;
-
-    public void RecordLayoutSplit() { _layoutSplitCount++; _budget?.RecordLayoutSplit(); }
-    public void RecordLayoutSingle() { _layoutSingleCount++; _budget?.RecordLayoutSingle(); }
-    public void RecordDeferBatch() => _budget?.RecordDeferBatch();
-
-    public bool IsRefusingPane(long hwndKey, NativeMethods.RECT rect)
-        => _refusedPaneByHwnd.TryGetValue(hwndKey, out NativeMethods.RECT r) && r.Equals(rect);
-
-    public void MarkRefusingPane(long hwndKey, NativeMethods.RECT rect) => _refusedPaneByHwnd[hwndKey] = rect;
-    public void ClearRefusingPane(long hwndKey) => _refusedPaneByHwnd.Remove(hwndKey);
-    public void ClearAllRefusals() => _refusedPaneByHwnd.Clear();
-
-    public static bool NeedsPanePositionForTest(IntPtr hwnd, NativeMethods.RECT rect, Func<IntPtr, NativeMethods.RECT> getRect, Func<IntPtr, bool> isVisible)
-    {
-        if (!isVisible(hwnd)) return true;
-        NativeMethods.RECT cur = getRect(hwnd);
-        const int eps = 1;
-        return Math.Abs(cur.left - rect.left) > eps || Math.Abs(cur.top - rect.top) > eps
-            || Math.Abs(cur.right - rect.right) > eps || Math.Abs(cur.bottom - rect.bottom) > eps;
     }
 }

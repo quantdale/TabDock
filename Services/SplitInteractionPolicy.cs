@@ -105,12 +105,10 @@ public static class SplitInteractionPolicy
                 return SplitInteractionAction.ResumeMember;
 
             // Presented pair: member focus (A<->B) is a no-suspend path.
-            // Even if the view flag and state disagree, treat any presented
-            // signal as "do not suspend".
-            if (isSplitPresented || current.PairPresented)
-                return SplitInteractionAction.IgnoreMember;
-
-            return SplitInteractionAction.ResumeMember;
+            // Reaching this line means at least one presented signal is true
+            // (the all-dormant case above already returned), so any remaining
+            // member hit is focus within a presented pair: never suspend.
+            return SplitInteractionAction.IgnoreMember;
         }
 
         // 6. Non-member hit with a presented pair → suspend for guest.
@@ -163,18 +161,4 @@ public static class SplitInteractionPolicy
             isStaleIdentity,
             SplitNativeTransitionOutcome.Succeeded,
             isRightClickOrHover);
-
-    /// <summary>
-    /// Describes a successful pair→guest transaction for diagnostics / logging.
-    /// Returns null when the transition did not succeed.
-    /// </summary>
-    public static string? DescribeTransaction(
-        SplitPresentationState authoritative,
-        SplitPresentationState desired,
-        SplitNativeTransitionOutcome outcome)
-    {
-        if (outcome != SplitNativeTransitionOutcome.Succeeded)
-            return null;
-        return $"pair({authoritative.Left},{authoritative.Right})@{authoritative.Generation} -> guest({desired.ActiveGuest})@{desired.Generation} mode={desired.Mode}";
-    }
 }

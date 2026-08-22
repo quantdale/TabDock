@@ -39,16 +39,13 @@ public sealed class SplitPresentationController
     private bool _settlePending;
     private long _settleGeneration;
     private readonly IPresentationOperations? _ops;
-    private readonly IPresentationBudgetSink? _budget;
     private readonly Func<CapturedWindow, bool>? _isCurrent;
 
     public SplitPresentationController(
         IPresentationOperations? ops = null,
-        IPresentationBudgetSink? budget = null,
         Func<CapturedWindow, bool>? isCurrent = null)
     {
         _ops = ops;
-        _budget = budget;
         _isCurrent = isCurrent;
     }
 
@@ -241,10 +238,4 @@ public sealed class SplitPresentationController
     }
 
     private static string Id(CapturedWindow window) => window.Hwnd.ToString("X");
-
-    // Test seam: seed state without side effects.
-    public void SeedState(CapturedWindow? left, CapturedWindow? right, bool presented, CapturedWindow? foreground, long generation)
-    {
-        _left = left; _right = right; _presented = presented; _foreground = foreground; _generation = generation;
-    }
 }

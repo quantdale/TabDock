@@ -39,7 +39,6 @@ public partial class ContainerWindow : Window
     private readonly LoggingService _log;
     private readonly IconService _icons;
     private CapturePickerViewModel? _capturePicker;
-    internal IPresentationBudgetSink? PresentationBudget { get; set; }
     internal SplitPresentationController SplitController => _splitController;
 
     // The shepherded active-tab guest. Never bound through a WPF dependency
@@ -2345,7 +2344,6 @@ public partial class ContainerWindow : Window
         // not how big it is), so only force a synchronous layout pass when one is
         // actually pending — an unconditional UpdateLayout made each of those
         // ticks re-enter WPF's layout manager for nothing.
-        PresentationBudget?.RecordLayoutSingle();
         if (!IsMeasureValid || !IsArrangeValid)
             UpdateLayout();
         NativeMethods.RECT rect = GetContentAreaScreenRect();
@@ -2649,7 +2647,6 @@ public partial class ContainerWindow : Window
         NativeMethods.RECT topRect = ReferenceEquals(top, _splitController.Left) ? leftRect : rightRect;
         NativeMethods.RECT bottomRect = ReferenceEquals(bottom, _splitController.Left) ? leftRect : rightRect;
 
-        PresentationBudget?.RecordLayoutSplit();
         if (!NeedsPanePosition(top, topRect) && !NeedsPanePosition(bottom, bottomRect))
         {
             // Both guests already cover their panes exactly. Do NOT re-position

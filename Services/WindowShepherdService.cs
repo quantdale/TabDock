@@ -188,7 +188,6 @@ public sealed class WindowShepherdService
     private readonly IWindowCaptureNativeApi _captureApi;
     private readonly IMonitorDpiProbe _monitorDpiProbe;
     private readonly Action<string>? _testSequencingHook;
-    internal IPresentationBudgetSink? BudgetSink { get; set; }
 
     /// <summary>
     /// Receives an expected-hide registration for every native SW_HIDE this
@@ -1065,10 +1064,6 @@ public sealed class WindowShepherdService
         {
             LogPositioningFailureOnce(window.Hwnd, "SetWindowPos(guest)");
         }
-        else
-        {
-            BudgetSink?.RecordPositionAndShow(window.Hwnd);
-        }
 
         if (!IsCurrentCapturedWindow(window, "position-before-z-order", verifyExecutable: false, verifyProcessInstance: false))
             return;
@@ -1319,9 +1314,6 @@ public sealed class WindowShepherdService
             return;
         }
 
-        BudgetSink?.RecordDeferBatch();
-        BudgetSink?.RecordPositionAndShow(top.Hwnd);
-        BudgetSink?.RecordPositionAndShow(bottom.Hwnd);
         _log.Log($"SHEPHERD[position] guest=0x{top.Hwnd.ToInt64():X} rect={topRect.left},{topRect.top},{topRect.Width}x{topRect.Height}");
         _log.Log($"SHEPHERD[position] guest=0x{bottom.Hwnd.ToInt64():X} rect={bottomRect.left},{bottomRect.top},{bottomRect.Width}x{bottomRect.Height}");
     }
@@ -1437,8 +1429,7 @@ public sealed class WindowShepherdService
                 ["observedBeforePairing"] = "container-not-below-guest",
                 ["observedAfterPairing"] = IsContainerBelowGuest(containerHwnd, guestHwnd).ToString(),
             });
-        if (ok) BudgetSink?.RecordPairZOrder();
-        else LogPositioningFailureOnce(containerHwnd, "SetWindowPos(container)");
+        if (!ok) LogPositioningFailureOnce(containerHwnd, "SetWindowPos(container)");
     }
 
     /// <summary>
@@ -1577,7 +1568,6 @@ public sealed class WindowShepherdService
         }
         DiagnosticRuntime.Record("repair.visibility", guest: window.Hwnd, action: "ShowWindow(SW_HIDE)",
             result: "success");
-        BudgetSink?.RecordHide(window.Hwnd);
         _log.Log($"SHEPHERD[hide] guest=0x{window.Hwnd.ToInt64():X}");
         return WindowHideOutcome.Hidden;
     }
@@ -1657,7 +1647,6 @@ public sealed class WindowShepherdService
         DiagnosticRuntime.Record("repair.foreground", guest: window.Hwnd,
             foreground: NativeMethods.GetForegroundWindow(), action: "SetForegroundWindow",
             result: fg && NativeMethods.GetForegroundWindow() == window.Hwnd ? "success" : "refused-or-changed");
-        if (fg) BudgetSink?.RecordSetForeground(window.Hwnd);
         _log.Log($"SHEPHERD[split-foreground] guest=0x{window.Hwnd.ToInt64():X} fg={fg}");
     }
 
