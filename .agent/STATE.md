@@ -42,7 +42,48 @@ Design (verified against baseline `9965702` source before any edit):
   orphan-sidecar retention; same-generation replay and legacy replay tests must
   be re-anchored on marker-and-source-coexist states.
 
-STATUS: plan + OpenSpec change written; implementation not yet started.
+STATUS: DURABLE STATE & RECOVERY CAMPAIGN COMPLETE (2026-08-23) — C-1 `0715a15`:
+CommitJson stages a fresh backup candidate (`state.json.bak.tmp`, durable
+flush) and installs it with one atomic Move-over BEFORE touching the primary,
+so no failure/power-loss window can destroy the previous known-good backup;
+missing primary skips the stage (existing `.bak` preserved); fault seams
+(readAllBytes/writeDurableBytes/writeDurableText/atomicMove) drive
+deterministic regression coverage for every boundary in
+`PersistenceBackupDurabilityTests` (8 tests: staging-read/flush/install
+failures, primary temp/install failures after backup success, missing-primary
+preservation, marker non-advancement + unchanged-save correctness,
+latest-wins across failed saves, stale-tmp never authoritative).
+C-2 `f762b68`: `CompactUnreachableResolutions` bounds Resolutions by source-
+generation liveness wherever a sidecar ledger is rewritten (keeps live
+file+instance+SHA records plus empty-keyed markers for null-id sources; never
+touches transactions); RetireEntry deletes `<source>.recovered` immediately
+after deleting the fully-resolved source; new MUTATING-only
+`SweepOrphanedResolutionSidecars` in RunInteractive converges crash-window
+orphans (unreadable or non-retired-transaction-holding orphans retained
+fail-closed; read-only Discover untouched).
+Regression matrix in `PendingRecoverySidecarLifecycleTests` (7 tests) covers
+liveness bounding (70 dead-generation records dropped, interrupted transaction
++ live siblings survive), full-retirement sidecar removal only at the end,
+crash-after-source-deletion convergence, unreadable-orphan retention,
+live-transaction orphan retention, historical-orphan sweep, and legacy
+empty-keyed-marker preservation with foreign-generation drops.
+Re-anchored on the new lifecycle: `ResolvedEntryRetirement_CanBeRetriedToCompletion`,
+`UnreadablePendingSibling_DoesNotBlockOtherDiskOnlyCleanup`,
+`SameGenerationReplay_ResolvesAsDuplicateWithoutRepeatWork`
+(marker-and-source coexist dedup), `LegacyPendingWithoutInstanceId_StillConsumesViaFingerprintFallback`,
+both `OldRewrittenLedger_*Converges*` tests (converged ledger now observed
+mid-flight via during-retirement fault + plain retry), and the abandon-path
+test (sidecar consumed with the source).
+Also `e670576`: pre-existing CS8602 in the SG-1 journal-lock fixture silenced
+(was breaking the 0-warning Debug gate).
+Gate (2026-08-23): Debug+Release builds 0w/0e (--no-incremental); Debug+Release
+xUnit 549/549 each (+15 net); release tooling 150/150; `validate.ps1 -Ci
+-Publish` PASS (native ABI PASS, supervised-recovery redirected-process smoke
+PASS, OpenSpec totals green, publish smoke bound to this tree);
+openspec 25/25 after archiving `durable-state-recovery-hardening` (deltas
+synced: persistence-resilience staged-backup requirement;
+hidden-window-journal resolution-bounding + sidecar-retirement requirement);
+git diff --check clean.
 
 ## ARCHITECTURE-HARDENING CAMPAIGN (started 2026-08-22, IN PROGRESS)
 
@@ -291,39 +332,29 @@ hotkey-failure UX gap + hardcoded launcher hint confirmed.
 
 NEXT ACTIONS:
 
-1. STRANDED-GUEST TAILS CAMPAIGN COMPLETE (2026-08-23, plan
-   `.agent/plans/post-hardening-stranded-guest-tails-2026-08-23.md`).
-   Fresh multi-domain audit verified two HIGH defects, both fixed with
-   regression tests-first:
-   - SG-1 `db59837`: ReleaseIntentionalHide finalization boundaries evaluate
-     through the pre-token identity core once THIS transaction removed its own
-     capture token (a JournalClear failure could previously be misread as
-     TargetGoneOrRecycled → hidden guest detached with cleared/stale evidence).
-     Genuine recycles still mismatch (guard test pins it). Also evicts
-     diagnostic suppression slots on Release/Hide mismatch paths (SG-3).
-   - SG-2 `cb9f90b`: SplitPresentationController SuspendForGuest treats a
-     member-hide TargetGoneOrRecycled as fail-closed like RecoveryPending;
-     ResumeMember gates liveness of the resuming member AND both pair members
-     before commit; ResumeSplitPair pre-gates strong identity on focused+
-     partner before hiding the single guest and re-presents the retained
-     single guest if ResumeMember still refuses. DefinePair deliberately
-     unchanged (departing dead member is never retained by that commit).
-   Gate: Debug+Release builds 0w/0e; Debug+Release xUnit 534/534 each (+6 new
-   regression tests); release tooling 150/150; validate.ps1 -Ci -Publish PASS
-   (native ABI PASS Win11 26200); openspec 25/25; git diff --check clean.
-   No OpenSpec delta needed — fixes bring behavior into compliance with
-   existing requirements (native-window-identity release-finalization;
-   ui-ux-hardening presented-pair visibility).
-2. QUEUED FOLLOW-UPS (verified during this audit, each self-contained):
+1. DURABLE STATE & RECOVERY CAMPAIGN COMPLETE (2026-08-23, plan
+   `.agent/plans/post-hardening-durable-state-recovery-2026-08-23.md`,
+   OpenSpec change archived as `2026-08-23-durable-state-recovery-hardening`).
+   Closed the two verified persistence/recovery follow-ups:
+   - C-1 `0715a15`: staged durable backup transaction in PersistenceService.
+   - C-2 `f762b68`: liveness-bounded resolution ledger + orphan `.recovered`
+     sidecar retirement and supervised crash-convergence sweep.
+   Gate: Debug+Release builds 0w/0e; Debug+Release xUnit 549/549 each;
+   release tooling 150/150; validate.ps1 -Ci -Publish PASS; openspec 25/25;
+   git diff --check clean.
+2. NEXT RECOMMENDED CAMPAIGN (verified queue, reassessed after this campaign):
+   `GroupViewModel` ReorderTabs/CommitReorder/ReleaseTab VM-path regression
+   coverage FIRST — documented ArgumentOutOfRangeException crash history with
+   zero direct VM-path tests today; the drag-reorder mechanics that feed it
+   (`TabsListBox_PreviewMouseLeftButtonDown/MouseMove/PreviewMouseLeftButtonUp`,
+   `EndDrag`, `SnapshotDragMidpoints`) are view-coupled and harder to test, so
+   pinning the VM contracts first gives the highest-value safety net. Then:
    dormant-split drag-reorder disablement (SnapshotDragMidpoints indexes
-   DisplayTabs containers with Tabs-space indices; fail-safe but silent feature
-   loss); atomic/durable .bak staging in PersistenceService.CommitJson;
-   PendingRecoveryService Resolutions ledger bound + orphaned .recovered
-   sidecars after source retirement; duplicate _isCapturedWindow probes in
-   WinEventMonitor Raise/dispatch; replace tautology test
-   UnchangedLayoutUpdated_ProducesNoRelayout with real dirty-check coverage;
-   GroupViewModel.ReorderTabs/CommitReorder/ReleaseTab VM-path tests
-   (documented ArgumentOutOfRangeException crash history, zero current tests).
+   DisplayTabs containers with Tabs-space indices; fail-safe but silent
+   feature loss); WinEvent duplicate `_isCapturedWindow` probes (only if
+   measured); replace tautology test UnchangedLayoutUpdated_ProducesNoRelayout
+   with real dirty-check coverage. Do not assume this order if current source
+   has changed; re-verify each item before implementing.
 3. Standing external gates unchanged: supervised live-desktop acceptance,
    production signing credentials, human final smoke, physical mixed-DPI
    qualification, Windows 10 x64 compatibility.

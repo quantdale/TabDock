@@ -177,3 +177,39 @@ SHALL be discarded without native mutation.
 #### Scenario: A recycled HWND is ignored
 - **WHEN** a journal entry's HWND now belongs to another PID, executable, class, or known process start
 - **THEN** rescue performs no ShowWindow, placement, or DWM mutation on that HWND
+
+### Requirement: A fully retired pending source SHALL take its sidecar with it
+When supervised disk-only retirement proves every sibling entry resolved and no
+non-retired transaction lacks its own durable resolution marker, deleting the
+pending source SHALL also remove the now-historical `<source>.recovered`
+sidecar; its remaining content is provably completed bookkeeping because new
+generations always receive a fresh SourceInstanceId and can never inherit it.
+A crash between source deletion and sidecar deletion SHALL converge on a later
+supervised invocation: an orphaned readable sidecar whose source no longer
+exists and which holds no non-retired transaction MAY be deleted, while an
+unreadable orphan or one holding a non-retired transaction SHALL be retained
+and reported. The read-only discovery contract SHALL perform no such cleanup.
+
+#### Scenario: Full retirement removes the sidecar when safe
+- **WHEN** the last unresolved sibling of a pending file is recovered and retirement deletes the source
+- **THEN** `<source>.recovered` is removed as well
+
+#### Scenario: Crash after source deletion converges on the next supervised invocation
+- **WHEN** a previous invocation was interrupted after deleting the source but before deleting the sidecar, and a later supervised run executes
+- **THEN** the readable, all-retired orphan sidecar is deleted and the run reports the cleanup
+
+#### Scenario: Unreadable orphan ledgers are retained fail-closed
+- **WHEN** an orphaned `.recovered` sidecar cannot be parsed during the mutating supervised sweep
+- **THEN** it is retained, reported, and never silently destroyed
+
+#### Scenario: An orphan holding an interrupted transaction is retained
+- **WHEN** an orphaned sidecar contains a non-retired transaction record
+- **THEN** the sidecar is retained and reported so possible interrupted-recovery traces remain reviewable
+
+#### Scenario: Read-only discovery performs no destructive cleanup
+- **WHEN** `--pending-recovery` discovery runs against a directory containing orphaned sidecars
+- **THEN** discovery output is produced as before and no ledger or evidence file is modified
+
+#### Scenario: Partially resolved sources keep their sidecars
+- **WHEN** at least one sibling entry of a pending file remains unresolved
+- **THEN** the source file, its sidecar, and all resolution markers stay in place
