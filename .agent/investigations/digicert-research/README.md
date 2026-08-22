@@ -1,5 +1,12 @@
 # DigiCert cloud signing research (2026-08-15)
 
+> **Status: superseded as an implementation path by `scripts/sign-release.ps1`**
+> (the DigiCert STM provider branch there is the production implementation of
+> the findings below; `prepare-release-candidate.yml` installs `smctl` via the
+> pinned official action). This directory is retained verbatim as research
+> provenance for that decision — do not treat the prototype files here as live
+> automation.
+
 Verification of the CURRENT official DigiCert cloud/HSM signing tooling for
 the production signer abstraction (Campaign E). Files in this directory are
 verbatim copies of the official action's README/source at the time of

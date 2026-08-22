@@ -51,4 +51,6 @@ For architecture, ownership, callers, dependencies, history, implementations, an
 
 Codex uses `.codex/config.toml` and `.codex/hooks.json`; Claude Code uses the small root `CLAUDE.md` adapter; Cline uses `.clinerules/agent-layer.md`. Kimi Code, OpenCode, and other AGENTS-aware harnesses consume this file directly. Shared MCP registration is in `.mcp.json`; harness-specific settings remain outside this canonical file.
 
+WARNING: the per-harness skill/instruction files under `.claude/`, `.codex/`, `.clinerules/`, and their siblings are generated/synchronized copies (see `scripts/sync-agent-configs.ps1`). Do not hand-edit them — the sync silently overwrites non-canonical copies. Change this canonical `AGENTS.md` (or the generator) instead.
+
 When a detailed procedure is needed, load the relevant `.agent/workflows/` file and then the project reference it names. Use the smallest capable model/worker for reconnaissance and routine verification; reserve deeper reasoning for architecture, risky changes, ambiguous requirements, and final decisions.
