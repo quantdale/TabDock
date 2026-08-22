@@ -285,7 +285,7 @@ public class ReleaseTransactionTests
                 WindowReleaseOutcome result = fixture.Service.Release(fixture.Captured, show: false);
 
                 // Release the exclusive hold before reading the journal back.
-                journalLock.Dispose();
+                journalLock!.Dispose();
                 journalLock = null;
 
                 Assert.Equal(WindowReleaseOutcome.RecoveryPending, result);
