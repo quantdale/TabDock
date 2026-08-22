@@ -74,12 +74,15 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         GroupManager manager,
         IconService icons,
         LoggingService log,
-        Func<IEnumerable<WindowInfo>>? testCandidateSource)
+        Func<IEnumerable<WindowInfo>>? testCandidateSource,
+        Dispatcher? testDispatcher = null)
     {
         _manager = manager;
         _icons = icons;
         _log = log;
-        _dispatcher = Application.Current?.Dispatcher;
+        // Production resolves the WPF application dispatcher; headless tests
+        // inject their own so row-icon marshalling stays observable.
+        _dispatcher = testDispatcher ?? Application.Current?.Dispatcher;
         _testCandidateSource = testCandidateSource;
 
         RefreshCommand = new RelayCommand(_ => Refresh());
