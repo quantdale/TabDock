@@ -184,10 +184,14 @@ dragging look glitchy. Jitter hardening: `RequestRelayout` latches
 `ensureFinalPass` even when a Render is already pending (so the
 `WM_EXITSIZEMOVE` final z-order pass survives a queued frame), the Render
 callback clears `pending` BEFORE `execute` so a mid-callback re-queue lands on
-the next frame, stale settle/layout callbacks are generation-gated, a dormant
-pair never receives a split relayout, and `_refusedPaneByHwnd` is only cleared
+the next frame, stale settle callbacks are generation-gated by the split
+controller's own settle generation, a dormant
+pair never receives a split relayout, and pane-refusal state is only cleared
 on a constraint change — not per frame — so a refused pane is not retried until
-the constraint actually changed.
+the constraint actually changed. Queued relayout frames are never discarded:
+there is no invalidation transition, so each queued callback executes exactly
+once against the presentation state current at callback time (Wave 3D Model B;
+the former unreachable layout-generation discard machinery was removed).
 
 ### Vertical split screen (two guests)
 
@@ -199,17 +203,17 @@ transitions are governed by `SplitPresentationPolicy` through
 delegates every decision (pair identity, presented/dormant, foreground,
 generation, settle) to the pure policy, and presentation state commits only
 after the corresponding native transition succeeds.
-`PresentationLayoutCoordinator` owns coalesced relayout, generations, and
-redundant suppression; `ContainerWindow` still owns WPF wiring (WndProc, chrome,
+`PresentationLayoutCoordinator` owns coalesced relayout scheduling and
+redundant-frame suppression; `ContainerWindow` still owns WPF wiring (WndProc, chrome,
 timers, hit-testing) but delegates policy/layout decisions to these controllers
 for testability, clear ownership, and jitter hardening.
 `SplitInteractionPolicy` is a pure hit-test → `SplitInteractionAction`
 classifier that makes non-member activation deterministic in hosted CI (a
 handled preview event still suspends the pair; button, right-click/hover, and
-stale-identity hits are correctly filtered). Render budgets are CI-gated without
-real windows via `PresentationOperationBudget` / `IPresentationBudgetSink`
-(counting hide/show/Defer/Foreground/Layout) so per-frame budgets are asserted
-in unit tests:
+stale-identity hits are correctly filtered). Native transition outcomes are
+asserted through the controller's recording presentation-operations seam
+(`IPresentationOperations`) in unit tests; the former CI-only budget-counter
+scaffolding was removed as dead (Wave 1).
 
 The container caption's Group menu switches to an already-open group or creates
 one in the existing shell. The launcher is hidden while a container is open and

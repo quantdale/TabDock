@@ -1,29 +1,34 @@
 using System;
-using System.Collections.Generic;
 
 namespace TabDock.Services;
 
 /// <summary>
-/// Owns coalesced relayout scheduling with generation-token stale callback
-/// suppression. Centralizes native mutation batching so one frame cannot issue
-/// several identical batches. No WPF types — caller supplies scheduling via delegate.
+/// Owns coalesced relayout scheduling. Centralizes native mutation batching so
+/// one frame cannot issue several identical batches. No WPF types — caller
+/// supplies scheduling via delegate.
 /// </summary>
 /// <remarks>
-/// Ownership decisions (Wave-1 cleanup):
-/// - Relayout coalescing/stale suppression is LIVE production machinery used by
-///   <c>ContainerWindow</c>; <see cref="InvalidateLayout"/> is its real
-///   invalidation transition (Wave 3C decides whether more production paths
-///   begin invalidating or the model is simplified further).
-/// - Refusal tracking was removed here: <c>ContainerWindow._refusedPaneByHwnd</c>
-///   is the single existing owner (Wave 3B re-examines ownership placement).
-/// - The former test-only shims (<c>CoalesceAndExecute</c>,
-///   <c>NeedsPanePositionForTest</c>), unread layout counters, and budget-sink
-///   plumbing were deleted as proven dead.
+/// Ownership decisions:
+/// - Coalescing (<c>_relayoutPending</c>) and the ensureFinalPass latch
+///   (<c>_relayoutAfterPending</c>, Q9) are LIVE production machinery used by
+///   <c>ContainerWindow</c>.
+/// - Wave 3D (Model B): the former layout-generation stale-callback machinery
+///   (<c>InvalidateLayout</c>, pending-frame token, discard branch) was REMOVED.
+///   Its sole mutator had zero production callers, so the generation stayed
+///   pinned at 0 and the discard branch was unreachable. Executing a queued
+///   frame is always safe instead: the execute closure re-reads CURRENT
+///   presentation authority at callback time (idempotent under redundant-glue
+///   guards), the split settle carries its own live generation guard in
+///   <see cref="SplitPresentationController"/>, and container teardown disarms
+///   settle callbacks and zeroes the container HWND before dropping state. If a
+///   future world-transition ever needs frame cancellation, reintroduce
+///   invalidation AT that semantic boundary — deliberately not speculative.
+/// - Refusal tracking lives in <see cref="PaneContainmentCoordinator"/> (Wave 3C);
+///   the former test-only shims, unread counters, and budget-sink plumbing were
+///   deleted as proven dead in Wave 1.
 /// </remarks>
 public sealed class PresentationLayoutCoordinator
 {
-    private long _layoutGeneration;
-    private long _pendingLayoutGeneration;
     private bool _relayoutPending;
     private bool _relayoutAfterPending;
 
@@ -31,12 +36,12 @@ public sealed class PresentationLayoutCoordinator
     {
     }
 
-    public void InvalidateLayout() => _layoutGeneration++;
-
     /// <summary>
     /// Schedules one <paramref name="execute"/> per frame. If already pending,
     /// coalesces (only one callback). <paramref name="scheduleRender"/> is the
     /// WPF-specific BeginInvoke(Render, ...) seam; tests pass a synchronous delegate.
+    /// Queued frames are never discarded: they always execute exactly once,
+    /// against whatever the presentation state is at callback time.
     /// </summary>
     public void RequestRelayout(Action<Action> scheduleRender, Action execute, bool ensureFinalPass = false)
     {
@@ -54,41 +59,17 @@ public sealed class PresentationLayoutCoordinator
             return;
         }
         _relayoutPending = true;
-        // Coalescing token: each queued frame gets a monotonic id so a stale
-        // Render callback that was queued before InvalidateLayout/exit can be
-        // discarded. Previously gen was allocated but discarded (_ = gen), so
-        // stale frames still executed against a changed layout world. Now capture
-        // the layout generation at schedule time and gate at callback time.
-        long gen = ++_pendingLayoutGeneration;
-        long scheduledLayoutGen = _layoutGeneration;
         scheduleRender(() =>
         {
             // Clear BEFORE execute so a re-entrant RequestRelayout inside
             // execute (Q1/Q2) correctly re-queues for the next frame.
             _relayoutPending = false;
-            if (scheduledLayoutGen != _layoutGeneration)
-            {
-                // Stale frame: layout was invalidated between schedule and
-                // callback (member removed, mode changed, container closed).
-                // Discard this execute, but still honor a requested final pass:
-                // a pending frame's follow-up (_relayoutAfterPending) OR an idle
-                // ensureFinalPass whose frame went stale before executing must
-                // re-schedule a fresh pass so a WM_EXITSIZEMOVE final z-order
-                // reconciliation is not lost.
-                if (_relayoutAfterPending || ensureFinalPass)
-                {
-                    _relayoutAfterPending = false;
-                    RequestRelayout(scheduleRender, execute, ensureFinalPass);
-                }
-                return;
-            }
             execute();
             if (_relayoutAfterPending)
             {
                 _relayoutAfterPending = false;
                 RequestRelayout(scheduleRender, execute);
             }
-            _ = gen;
         });
     }
 }

@@ -22,7 +22,7 @@ public sealed class Wave3PresentationOwnershipContractTests
         // Exactly one assignment site for _generation (CommitDesired), fed by
         // the policy's desired.Generation. A second "= desired.Generation" or
         // any "++" would reintroduce the mixed commit styles Wave 3A removed.
-        Assert.Equal(1, Regex.Matches(code, @"_generation\s*=(?!=)").Count);
+        Assert.Single(Regex.Matches(code, @"_generation\s*=(?!=)"));
         Assert.DoesNotMatch(new Regex(@"_generation\s*\+\+"), code);
     }
 

@@ -6,21 +6,23 @@ using TabDock.Services;
 namespace TabDock.UnitTests;
 
 /// <summary>
-/// Regression guards for hardening-audit fixes: stale generation tokens,
+/// Regression guards for hardening-audit fixes: relayout scheduling,
 /// split suspension isolation, and policy/membership invariants.
 /// All tests are headless (no HWND / WPF / input).
 /// </summary>
 public class HardeningRegressionTests
 {
     // --------------------------------------------------------------------
-    // PresentationLayoutCoordinator: stale Render callbacks must not execute
-    // after InvalidateLayout; ensureFinalPass still fires the final z-order.
+    // PresentationLayoutCoordinator (Wave 3D Model B): queued frames are never
+    // discarded — there is no invalidation transition. A callback invoked
+    // arbitrarily late still runs exactly once against CURRENT presentation
+    // state; the execute closure must stay self-refreshing/idempotent.
     // RequestRelayout's schedule delegate is Action&lt;Action&gt; — the framework
     // calls it as schedule(() => { execute... }).
     // --------------------------------------------------------------------
 
     [Fact]
-    public void Coordinator_StaleRenderCallback_IsSuppressedAfterInvalidate()
+    public void Coordinator_DeferredQueuedFrame_AlwaysExecutesOnce()
     {
         var c = new PresentationLayoutCoordinator();
         int executes = 0;
@@ -28,29 +30,14 @@ public class HardeningRegressionTests
         void Schedule(Action act) => captured = act;
         c.RequestRelayout(Schedule, () => executes++);
         Assert.NotNull(captured);
-        c.InvalidateLayout();
         captured!.Invoke();
-        Assert.Equal(0, executes);
-    }
-
-    [Fact]
-    public void Coordinator_StaleRenderCallback_EnsureFinalPass_StillRuns()
-    {
-        var c = new PresentationLayoutCoordinator();
-        int executes = 0;
-        Action? pendingOutside = null;
-        void Schedule(Action a) => pendingOutside = a;
-
-        c.RequestRelayout(Schedule, () => executes++, ensureFinalPass: true);
-        Assert.NotNull(pendingOutside);
-        c.InvalidateLayout();
-        Action? first = pendingOutside;
-        pendingOutside = null;
-        first!.Invoke();
-        Assert.Equal(0, executes);
-        Assert.NotNull(pendingOutside);
-        pendingOutside!.Invoke();
         Assert.Equal(1, executes);
+        // After the frame consumed itself, a new request schedules fresh work.
+        captured = null;
+        c.RequestRelayout(Schedule, () => executes++);
+        Assert.NotNull(captured);
+        captured!.Invoke();
+        Assert.Equal(2, executes);
     }
 
     [Fact]
