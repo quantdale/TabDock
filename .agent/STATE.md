@@ -28,9 +28,82 @@ slots; count-invalidation compares DisplayTabs.Count only. Phase A needs NO
 new seam (real manager + shepherd over existing fakes + temp persistence).
 OpenSpec: `dormant-split-tab-drag` (specs currently silent on dormant-strip
 interaction; ARCHITECTURE.md:255 documents the intent).
-STATUS: plan written; implementation not yet started.
+STATUS: TAB MUTATION & DORMANT-SPLIT DRAG CAMPAIGN COMPLETE (2026-08-23).
+Baseline `3201d5d`; commits `5ecbf1b` (plan), `ee099ce`
+(test: GroupViewModelMutationTests — 19 facts over the REAL stack: real
+GroupManager + real WindowShepherdService on the shared fake identity/release
+APIs + temp PersistenceService; NO new production seam needed), `5b341bc`
+(fix), `aafba4a` (projection matrix + dormant integration), `ab633ce`
+(stability).
 
-## DURABLE STATE & RECOVERY CAMPAIGN (started 2026-08-23, IN PROGRESS)
+Verified gap before work: zero references to ReorderTabs/CommitReorder/
+GroupViewModel.ReleaseTab anywhere in tests. Verified defect:
+SnapshotDragMidpoints iterated Tabs.Count containers against the
+DisplayTabs-bound ListBox (one shorter while ANY pair exists) so every missing
+container invalidated the whole snapshot and reorder was silently dead during
+dormancy; display-space boundaries were also fed straight into Tabs-space
+ReorderTabs.
+
+Pinned contracts (all held; no new production bug found in the mutation paths):
+ReorderTabs invalid oldIndex/negative destination/same index strict no-ops with
+no accidental durable save; destination-past-end clamp [A,B,C]+Reorder(0,999)
+=> [B,C,A] in BOTH collections, same instance moved, model ActiveIndex agrees
+(the historical crash pin); backward/forward parity matrix; CommitReorder
+persists the FINAL order to state.json (intermediate positions do not),
+harmless without a move, idempotent; ReleaseTab keeps inactive actives by
+REFERENCE with ActiveIndex re-synced, active-release neighbour rule
+(Tabs[min(idx,Count-1)]), first/last-slot cases, final-tab EmptiedByPopOut
+exactly once, unknown TabViewModel strict no-op, RecoveryPending retains
+EVERYTHING fail-closed, TargetGoneOrRecycled deliberately removes (distinct
+from pending).
+
+Fix architecture (`Services/TabStripDragProjection.cs` + view rewrite): drag
+start snapshots one slot PER VISIBLE DisplayTabs item as (midpoint, item
+reference); drop boundary resolves through the FIRST slot whose midpoint
+exceeds the pointer to that item's LIVE authoritative anchor (tab -> its
+index, composite -> Left's index; unresolved => fail-closed null); past-end =>
+Tabs.Count. With no composite this reduces EXACTLY to the old midpoint formula
+(no-split behavior byte-preserved). Composite explicitly never a drag unit in
+either state (press ignored) but remains a valid boundary region; presented-
+pair click-swallow untouched. H2 proof: resnapshot triggers ONLY when
+DisplayTabs.Count changes; ReorderTabs uses collection Move which preserves
+both counts (pure test pins this), so reorders can never reach the
+resnapshot path; stored references re-resolve live after intermediate
+in-drag reorders WITHOUT resnapshotting.
+
+OpenSpec: change `dormant-split-tab-drag` created (specs were silent about
+dormant-strip interaction; ARCHITECTURE.md documented the intent), validated
+26/26, archived as `2026-08-23-dormant-split-tab-drag`; ADDED requirement in
+ui-ux-hardening (dormant drag preserved, composite non-drag unit + boundary,
+presented behavior unchanged, no-resnapshot rule). Post-archive validate 25/25.
+
+Gate (2026-08-23): Debug+Release builds 0w/0e (--no-incremental); Debug+Release
+xUnit 578/578 each (+29 net); release tooling 150/150; validate.ps1 -Ci -Publish
+PASS (native ABI PASS, OpenSpec totals green inside the run); openspec 25/25;
+git diff --check clean. Suite-stability repair en route (ab633ce): the
+pre-existing picker icon-generation test's 2s start-gate flaked under the grown
+suite (~578 parallel-heavy tests); raised to 15s — it proves ordering, not
+speed; my fixtures now inject the deterministic icon extractor instead of real
+ExtractIconEx.
+
+BLOCKED_SUPERVISED (not run, not counted as failure): real-input dormant-pair
+drag acceptance — with A|B defined+dormant and C/D ordinary tabs, drag C past D
+and verify reorder lands, then drag C out of the container and verify pop-out
+with pair retained. Command: dotnet run --project
+tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj
+-c Release -- --yes --configuration Release dragreorder (plus a supervised
+dormant-pair variant once scripted). Deterministic headless equivalents are in
+place; only container-generation geometry (TranslatePoint) is view-side.
+
+NEXT RECOMMENDED CAMPAIGN (queue reassessed): (1) replace the tautological
+UnchangedLayoutUpdated_ProducesNoRelayout with real dirty-check behavioral
+coverage; (2) WinEvent duplicate _isCapturedWindow probes ONLY if measured;
+(3) any fresh defect from supervised runs. Do not assume order without
+re-verifying source.
+
+## DURABLE STATE & RECOVERY CAMPAIGN (2026-08-23, COMPLETE — see its STATUS
+block below for gates; OpenSpec change archived as
+`2026-08-23-durable-state-recovery-hardening`)
 
 Objective: close the two verified persistence/recovery follow-ups queued by
 the stranded-guest tails campaign — C-1 (`PersistenceService.CommitJson`
