@@ -452,31 +452,39 @@ hotkey-failure UX gap + hardcoded launcher hint confirmed.
 
 NEXT ACTIONS:
 
-1. POST-HARDENING FOLLOW-UP QUEUE EMPTY (2026-08-23). All six items queued by
-   the stranded-guest tails handoff were completed across four same-day
-   campaigns (several by parallel sessions in this tree):
-   - C-1/C-2 durable state & recovery: `0715a15` (staged durable backup),
-     `f762b68` (liveness-bounded resolution ledger + orphan `.recovered`
-     retirement; plan `post-hardening-durable-state-recovery-2026-08-23.md`,
-     OpenSpec change archived).
-   - H-A1 VM mutation-path tests: `ee099ce`.
-   - B2 dormant-split drag projection: `5b341bc` (+ `aafba4a` projection and
-     anti-oscillation invariants, `ab633ce` scheduler-jitter tolerance;
-     plan `post-hardening-tab-mutation-drag-reliability-2026-08-23.md`).
-   - H-B2 real dirty-check coverage replacing the tautology test: `780a19b`
-     (added PaneContainmentPolicy content-rect boundary seam + tests).
-   - G-1 WinEvent membership probes: `78a171a` — the monitor now resolves the
-     captured index ONCE per callback and once per dispatch (null resolve is
-     the complete fail-closed proof); the redundant `IsCapturedWindow`
-     pre-filter (second probe of the same dictionary per system-wide event)
-     was removed together with its ctor parameter; desktop-reorder branch
-     unchanged. Debug+Release 0w/0e; xUnit 601/601 both configs.
-2. NEXT SESSION: no verified open queue. Run a fresh evidence-driven
-   assessment if more hardening is wanted; otherwise pick a forward product
-   milestone. Remaining known limits are NOT code defects: R22 supervised
-   shards and external release gates below. Re-verify any stale claim against
-   current source before acting — several audit findings from earlier today
-   were already fixed by parallel sessions while being triaged.
+1. PRODUCT BASICS CAMPAIGN COMPLETE (2026-08-23, plan
+   `.agent/plans/product-basics-2026-08-23.md`). Closed four UX gaps plus one
+   integration-audit hygiene gap:
+   - PB-1 `db0ccdc`: shared CaptureFailureReport builder — picker path and
+     inline Add-App panel now both present ONE aggregate owner-modal;
+     user-facing lines are HWND-free (log keeps raw HWND); inline multi-fail
+     no longer shows a modal per target.
+   - PB-2 `db0ccdc`: CreateGroup uniquifies names ("Group", "Group 2", ...
+     ordinal-ignore-case, suffix walk skips taken names).
+   - PB-3 `ffae6d3`: launcher rows are live — double-click/Enter raises
+     OpenGroupRequested → registry-first OpenContainer (activates existing).
+   - PB-4 `ffae6d3`: empty dock shows non-hit-testable guidance text.
+   - HYG-1 `db0ccdc` (rider in the App.xaml.cs commit): age-gated (24h)
+     startup sweep entry for `state.json.bak.tmp`, mirroring
+     PendingRecoveryService's orphan-fragment policy.
+   Gate: Debug+Release builds 0w/0e; Debug+Release xUnit 612/612 each (+11 new
+   tests); release tooling 150/150; validate.ps1 -Ci -Publish PASS; openspec
+   25/25; git diff --check clean. NOTE: exactly one un-reproduced first-run
+   test failure occurred on the freshly-built binaries right after Wave B;
+   three consecutive full green runs followed — treat as cold-start jitter
+   (precedent ab633ce) and watch for recurrence.
+2. QUEUED PRODUCT MILESTONES from the same-day UX assessment (need product
+   decisions, evidence recorded in the session log). NOTE: the PREVIOUS
+   follow-up queue is fully complete — C-1 `0715a15`, C-2 `f762b68`, H-A1
+   `ee099ce`, B2 `5b341bc`+`aafba4a`, H-B2 `780a19b`, G-1 `78a171a` — do not
+   re-report or re-fix those:
+   - M3 pending-recovery visibility banner in the launcher (read-only count +
+     exact supervised commands; recovery stays typed-YES deliberate).
+   - M4 focus-independent tab navigation hotkeys — CAREFUL: Ctrl+Alt+arrows
+     collide with common display-driver globals; pick combos deliberately.
+   - M5 always-visible split affordance (pairs with M4's seam).
+   - Blocked-capture admission state surfaced on buttons (SetCaptureAllowed
+     reason is currently log-only).
 3. Standing external gates unchanged: supervised live-desktop acceptance,
    production signing credentials, human final smoke, physical mixed-DPI
    qualification, Windows 10 x64 compatibility.
