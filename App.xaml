@@ -13,7 +13,9 @@
 
         <!-- Shared product palette. Keeping these resources centralized prevents
              the launcher, picker, and container from drifting into three separate
-             visual systems again. -->
+             visual systems again. Accent text and action fill are intentionally
+             separate: the brighter accent is legible on dark surfaces while the
+             darker primary fill keeps white 13px button text above 4.5:1. -->
         <SolidColorBrush x:Key="TdWindowBackgroundBrush" Color="#0B0F15" />
         <SolidColorBrush x:Key="TdSurfaceBrush" Color="#121821" />
         <SolidColorBrush x:Key="TdSurfaceRaisedBrush" Color="#18212D" />
@@ -24,6 +26,8 @@
         <SolidColorBrush x:Key="TdTextMutedBrush" Color="#9AA8BA" />
         <SolidColorBrush x:Key="TdTextSubtleBrush" Color="#738196" />
         <SolidColorBrush x:Key="TdAccentBrush" Color="#5B8CFF" />
+        <SolidColorBrush x:Key="TdAccentTextBrush" Color="#9AB8FF" />
+        <SolidColorBrush x:Key="TdPrimaryFillBrush" Color="#3F6FD9" />
         <SolidColorBrush x:Key="TdAccentSoftBrush" Color="#1E315F" />
         <SolidColorBrush x:Key="TdWarningBrush" Color="#F4C35A" />
         <SolidColorBrush x:Key="TdWarningSurfaceBrush" Color="#2B2416" />
@@ -79,8 +83,8 @@
         </Style>
 
         <Style x:Key="TdPrimaryButton" TargetType="{x:Type Button}" BasedOn="{StaticResource TdButton}">
-            <Setter Property="Background" Value="{StaticResource TdAccentBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
+            <Setter Property="Background" Value="{StaticResource TdPrimaryFillBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource TdPrimaryFillBrush}" />
             <Setter Property="Foreground" Value="White" />
         </Style>
 
