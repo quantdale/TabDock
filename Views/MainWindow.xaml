@@ -5,28 +5,73 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="TabDock"
-        Height="420"
-        Width="520"
-        MinWidth="360"
-        MinHeight="280"
+        Height="610"
+        Width="820"
+        MinWidth="620"
+        MinHeight="460"
         WindowStartupLocation="CenterScreen"
-        Background="White">
+        Background="{StaticResource TdWindowBackgroundBrush}"
+        Foreground="{StaticResource TdTextBrush}"
+        FontFamily="Segoe UI Variable Text, Segoe UI"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True">
 
-    <Grid Margin="16">
+    <Grid Margin="28,24,28,22">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" Text="TabDock" FontSize="24" FontWeight="Light" Margin="0,0,0,4" />
-        <TextBlock Grid.Row="1" Text="Select a group or start a new one." Foreground="Gray" Margin="0,0,0,12" />
+        <!-- Product header: primary actions stay visible instead of being buried
+             below a potentially long group list. -->
+        <Grid Grid.Row="0" Margin="0,0,0,20">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
 
-        <Border Grid.Row="2" Margin="0,0,0,10" Padding="10"
-                Background="#FFFFF4CE" BorderBrush="#FFE1B93A" BorderThickness="1"
-                CornerRadius="4"
+            <StackPanel Grid.Column="0">
+                <StackPanel Orientation="Horizontal">
+                    <Border Width="34" Height="34" CornerRadius="9"
+                            Background="{StaticResource TdAccentSoftBrush}"
+                            BorderBrush="{StaticResource TdAccentBrush}"
+                            BorderThickness="1" Margin="0,0,12,0">
+                        <TextBlock Text="T" Foreground="{StaticResource TdAccentBrush}"
+                                   FontWeight="Bold" FontSize="17"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="TabDock" FontSize="24" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TdTextBrush}" />
+                        <TextBlock Text="Your desktop apps, organized into focused workspaces."
+                                   Foreground="{StaticResource TdTextMutedBrush}" FontSize="12" />
+                    </StackPanel>
+                </StackPanel>
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button Style="{StaticResource TdSecondaryButton}"
+                        Content="New group" MinWidth="104" Margin="0,0,10,0"
+                        Command="{Binding NewGroupCommand}"
+                        AutomationProperties.Name="Create a new group" />
+                <Button Style="{StaticResource TdPrimaryButton}"
+                        Content="{Binding CaptureButtonText}" MinWidth="214"
+                        Command="{Binding CaptureCommand}"
+                        IsEnabled="{Binding CaptureAllowed}"
+                        AutomationProperties.AutomationId="LauncherCaptureButton"
+                        AutomationProperties.Name="{Binding CaptureButtonText}"
+                        AutomationProperties.HelpText="{Binding CaptureButtonToolTip}"
+                        ToolTip="{Binding CaptureButtonToolTip}" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Pending recovery is operationally important, so it reads as a clear
+             warning card instead of a legacy yellow strip. -->
+        <Border Grid.Row="1" Margin="0,0,0,16" Padding="14,12"
+                Background="{StaticResource TdWarningSurfaceBrush}"
+                BorderBrush="#6D5727" BorderThickness="1" CornerRadius="9"
                 AutomationProperties.AutomationId="PendingRecoveryBanner"
                 AutomationProperties.Name="{Binding PendingRecoveryBannerText}">
             <Border.Style>
@@ -39,102 +84,179 @@
                     </Style.Triggers>
                 </Style>
             </Border.Style>
-            <StackPanel>
-                <TextBlock Text="{Binding PendingRecoveryBannerText}" FontWeight="SemiBold"
-                           AutomationProperties.AutomationId="PendingRecoverySummary" />
-                <TextBlock Text="Review read-only evidence: TabDock.exe --pending-recovery"
-                           Margin="0,4,0,0" FontFamily="Consolas"
-                           AutomationProperties.AutomationId="PendingRecoveryInspectCommand" />
-                <TextBlock Text="Run supervised recovery: TabDock.exe --recover-pending"
-                           FontFamily="Consolas"
-                           AutomationProperties.AutomationId="PendingRecoveryRecoverCommand" />
-            </StackPanel>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Width="30" Height="30" CornerRadius="15"
+                        Background="#3A301C" Margin="0,0,12,0">
+                    <TextBlock Text="!" Foreground="{StaticResource TdWarningBrush}"
+                               FontWeight="Bold" FontSize="16"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="{Binding PendingRecoveryBannerText}"
+                               Foreground="{StaticResource TdWarningBrush}"
+                               FontWeight="SemiBold"
+                               AutomationProperties.AutomationId="PendingRecoverySummary" />
+                    <TextBlock Text="Review: TabDock.exe --pending-recovery"
+                               Margin="0,5,0,0" Foreground="{StaticResource TdTextMutedBrush}"
+                               FontFamily="Cascadia Mono, Consolas" FontSize="11"
+                               AutomationProperties.AutomationId="PendingRecoveryInspectCommand" />
+                    <TextBlock Text="Recover: TabDock.exe --recover-pending"
+                               Foreground="{StaticResource TdTextMutedBrush}"
+                               FontFamily="Cascadia Mono, Consolas" FontSize="11"
+                               AutomationProperties.AutomationId="PendingRecoveryRecoverCommand" />
+                </StackPanel>
+            </Grid>
         </Border>
 
-        <Border Grid.Row="3" BorderBrush="#FFE0E0E0" BorderThickness="1" CornerRadius="4" Background="#FFF9F9F9">
+        <!-- Workspace card -->
+        <Border Grid.Row="2" Background="{StaticResource TdSurfaceBrush}"
+                BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="1"
+                CornerRadius="12" Padding="18">
             <Grid>
-                <ListView x:Name="GroupsListView"
-                          ItemsSource="{Binding Groups}"
-                          SelectedItem="{Binding SelectedGroup}"
-                          BorderThickness="0"
-                          Background="Transparent"
-                          Margin="8"
-                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                    <ListView.ItemContainerStyle>
-                        <Style TargetType="ListViewItem">
-                            <Setter Property="Padding" Value="8" />
-                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                        </Style>
-                    </ListView.ItemContainerStyle>
-                    <ListView.ItemTemplate>
-                        <DataTemplate>
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <Ellipse Grid.Column="0" Width="12" Height="12" Fill="{Binding AccentColor, Converter={StaticResource ColorToBrushConverter}}" Margin="0,0,10,0" />
-                                <TextBlock Grid.Column="1" Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center" />
-                                <TextBlock Grid.Column="2" Text="{Binding Members.Count, StringFormat='{}{0} tabs'}" Foreground="Gray" VerticalAlignment="Center" />
-                            </Grid>
-                        </DataTemplate>
-                    </ListView.ItemTemplate>
-                </ListView>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
 
-                <!-- Visibility is driven entirely by the style Setter + the
-                     Groups.Count DataTrigger below. Do NOT set Visibility as a
-                     local attribute here: a local value outranks style/trigger
-                     setters, so the trigger could never show this hint. It
-                     previously carried a local Visibility bound through
-                     BoolToVisibilityConverter with Groups.Count (an int, never
-                     `true`) as its source, which collapsed the hint permanently —
-                     the empty-launcher state had no text at all. -->
-                <TextBlock Text="No groups yet. Click 'New group' to create one."
-                           HorizontalAlignment="Center" VerticalAlignment="Center"
-                           Foreground="Gray">
+                <Grid Grid.Row="0" Margin="0,0,0,14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="Workspaces" FontSize="16" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TdTextBrush}" />
+                        <TextBlock Text="Double-click a workspace or select it and press Enter to open."
+                                   Foreground="{StaticResource TdTextMutedBrush}" FontSize="11"
+                                   Margin="0,3,0,0" />
+                    </StackPanel>
+                    <Border Grid.Column="1" VerticalAlignment="Center"
+                            Background="#0D131C" BorderBrush="{StaticResource TdBorderBrush}"
+                            BorderThickness="1" CornerRadius="12" Padding="10,4">
+                        <TextBlock Foreground="{StaticResource TdTextMutedBrush}" FontSize="11">
+                            <Run Text="{Binding Groups.Count}" /><Run Text=" groups" />
+                        </TextBlock>
+                    </Border>
+                </Grid>
+
+                <Grid Grid.Row="1">
+                    <ListView x:Name="GroupsListView"
+                              ItemsSource="{Binding Groups}"
+                              SelectedItem="{Binding SelectedGroup}"
+                              BorderThickness="0"
+                              Background="Transparent"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                              ScrollViewer.VerticalScrollBarVisibility="Auto"
+                              VirtualizingPanel.IsVirtualizing="True"
+                              VirtualizingPanel.VirtualizationMode="Recycling">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem" BasedOn="{StaticResource TdListItem}">
+                                <Setter Property="Padding" Value="14,12" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <Border Grid.Column="0" Width="4" Height="42" CornerRadius="2"
+                                            Background="{Binding AccentColor, Converter={StaticResource ColorToBrushConverter}}"
+                                            Margin="0,0,13,0" />
+
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource TdTextBrush}"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Margin="0,4,0,0" FontSize="11"
+                                                   Foreground="{StaticResource TdTextMutedBrush}">
+                                            <Run Text="{Binding Members.Count}" /><Run Text=" captured windows" />
+                                        </TextBlock>
+                                    </StackPanel>
+
+                                    <Border Grid.Column="2" VerticalAlignment="Center" Margin="16,0"
+                                            Background="#0E141D" BorderBrush="{StaticResource TdBorderBrush}"
+                                            BorderThickness="1" CornerRadius="10" Padding="9,4">
+                                        <TextBlock Text="{Binding Members.Count, StringFormat='{}{0} tabs'}"
+                                                   Foreground="{StaticResource TdTextMutedBrush}" FontSize="10" />
+                                    </Border>
+
+                                    <Button Grid.Column="3" Style="{StaticResource TdGhostButton}"
+                                            Content="Open" MinWidth="64" Padding="10,5"
+                                            Command="{Binding DataContext.OpenSelectedGroupCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}"
+                                            AutomationProperties.Name="Open workspace" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                IsHitTestVisible="False" MaxWidth="360">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Groups.Count}" Value="0">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <Border Width="48" Height="48" CornerRadius="14"
+                                Background="{StaticResource TdAccentSoftBrush}"
+                                HorizontalAlignment="Center" Margin="0,0,0,12">
+                            <TextBlock Text="+" Foreground="{StaticResource TdAccentBrush}"
+                                       FontSize="26" FontWeight="Light"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <TextBlock Text="Create your first workspace" FontSize="15" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TdTextBrush}" HorizontalAlignment="Center" />
+                        <TextBlock Text="Start a group, then capture the windows you want to keep together."
+                                   Foreground="{StaticResource TdTextMutedBrush}" FontSize="11"
+                                   TextWrapping="Wrap" TextAlignment="Center" Margin="0,5,0,0" />
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="3" Margin="2,14,2,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0">
+                <TextBlock Text="{Binding CaptureAdmissionReason}"
+                           Foreground="{StaticResource TdWarningBrush}" TextWrapping="Wrap"
+                           AutomationProperties.AutomationId="CaptureAdmissionStatus">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
                             <Setter Property="Visibility" Value="Collapsed" />
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding Groups.Count}" Value="0">
+                                <DataTrigger Binding="{Binding CaptureAdmissionBlocked}" Value="True">
                                     <Setter Property="Visibility" Value="Visible" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
                     </TextBlock.Style>
                 </TextBlock>
-            </Grid>
-        </Border>
-
-        <StackPanel Grid.Row="4" Margin="0,12,0,0">
-            <TextBlock Text="{Binding CaptureAdmissionReason}"
-                       Foreground="#FF9A4D00" TextWrapping="Wrap"
-                       AutomationProperties.AutomationId="CaptureAdmissionStatus">
-                <TextBlock.Style>
-                    <Style TargetType="TextBlock">
-                        <Setter Property="Visibility" Value="Collapsed" />
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding CaptureAdmissionBlocked}" Value="True">
-                                <Setter Property="Visibility" Value="Visible" />
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </TextBlock.Style>
-            </TextBlock>
-            <TextBlock Text="{Binding TabNavigationAvailabilityText}" Foreground="Gray"
-                       Margin="0,4,0,8" AutomationProperties.AutomationId="TabNavigationAvailability" />
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="New group" Width="100" Height="32" Margin="0,0,8,0" Command="{Binding NewGroupCommand}" />
-                <Button Content="{Binding CaptureButtonText}" Width="200" Height="32" Margin="0,0,8,0"
-                        Command="{Binding CaptureCommand}"
-                        IsEnabled="{Binding CaptureAllowed}"
-                        AutomationProperties.AutomationId="LauncherCaptureButton"
-                        AutomationProperties.Name="{Binding CaptureButtonText}"
-                        AutomationProperties.HelpText="{Binding CaptureButtonToolTip}"
-                        ToolTip="{Binding CaptureButtonToolTip}" />
-                <Button Content="Exit" Width="80" Height="32" Command="{Binding ExitCommand}" />
+                <TextBlock Text="{Binding TabNavigationAvailabilityText}"
+                           Foreground="{StaticResource TdTextSubtleBrush}" FontSize="11"
+                           Margin="0,3,0,0"
+                           AutomationProperties.AutomationId="TabNavigationAvailability" />
             </StackPanel>
-        </StackPanel>
+            <Button Grid.Column="1" Style="{StaticResource TdGhostButton}"
+                    Content="Exit TabDock" Padding="10,5" MinHeight="30"
+                    Command="{Binding ExitCommand}"
+                    AutomationProperties.Name="Exit TabDock" />
+        </Grid>
     </Grid>
 </Window>
