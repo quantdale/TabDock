@@ -1926,6 +1926,30 @@ internal static partial class Scenarios
     }
 
     /// <summary>
+    /// Orders guests by their live tab-strip X positions (the strip renders tabs
+    /// left-to-right in model order). Capture admission follows candidate
+    /// enumeration order rather than checkbox order, so scenarios that assert
+    /// next/previous navigation MUST derive expectations from the strip instead
+    /// of assuming capture order. Throws when any title is not uniquely present
+    /// with a live bounding rect, so callers never navigate on stale data.
+    /// </summary>
+    private static GuestInfo[] TabStripOrder(IntPtr container, params GuestInfo[] pigs)
+    {
+        var positioned = new List<(double X, GuestInfo Pig)>(pigs.Length);
+        foreach (GuestInfo pig in pigs)
+        {
+            AutomationElement? tab = FindTabText(container, pig.Title, out int count);
+            if (tab == null || count != 1)
+                throw new InvalidOperationException($"Tab '{pig.Title}' was not uniquely present while deriving strip order (count={count}).");
+            System.Windows.Rect rect = tab.Current.BoundingRectangle;
+            if (rect.IsEmpty || rect.Width <= 0 || rect.Height <= 0)
+                throw new InvalidOperationException($"Tab '{pig.Title}' reported no live bounding rect while deriving strip order.");
+            positioned.Add((rect.X, pig));
+        }
+        return positioned.OrderBy(p => p.X).Select(p => p.Pig).ToArray();
+    }
+
+    /// <summary>
     /// Re-queries the live tab strip until a unique title is exposed. WPF can
     /// rebuild the virtualized ListBoxItem tree after a split presentation
     /// transition; a single UIA snapshot in that interval is not evidence that
@@ -2318,15 +2342,11 @@ internal static partial class Scenarios
     }
 
     /// <summary>
-    /// Real-clicks the container's "+" (add window to group) caption button.
-    /// Tries a UIA Name match first ("Add window to group" is the button's
-    /// ToolTip in Views/ContainerWindow.xaml); WPF's ButtonBaseAutomationPeer
-    /// does not promote ToolTipService.ToolTip into the automation Name (only
-    /// HelpText), so in practice this UIA lookup is expected to miss and fall
-    /// through to the same DPI-scaled pixel-offset technique ClickMaximizeButton
-    /// already uses for the rest of this button row (4th button from the right,
-    /// after Minimize/Maximize/Close) — kept as the first attempt anyway since
-    /// a future template change could add an explicit AutomationProperties.Name.
+    /// Real-clicks the container's "+" (add window to workspace) caption
+    /// button. Prefers the stable AutomationId "AddWindowButton" (pinned by
+    /// the release-candidate UI contract), then the accessible name "Add
+    /// window to workspace", then the same DPI-scaled pixel-offset technique
+    /// ClickMaximizeButton uses for this button row.
     /// </summary>
     private static void ClickAddWindowButton(IntPtr container)
     {
@@ -2340,7 +2360,15 @@ internal static partial class Scenarios
             int count = 0;
             AutomationElement? addBtn = containerEl == null
                 ? null
-                : Uia.FindDescendantByName(containerEl, ControlType.Button, "Add window to group", null, out count);
+                : Uia.FindDescendantByAutomationId(containerEl, "AddWindowButton", out count);
+            string resolvedBy = "AutomationId AddWindowButton";
+            if (addBtn == null || count != 1)
+            {
+                addBtn = containerEl == null
+                    ? null
+                    : Uia.FindDescendantByName(containerEl, ControlType.Button, "Add window to workspace", null, out count);
+                resolvedBy = "Name 'Add window to workspace'";
+            }
             int x, y;
             List<(int X, int Y)> candidatePoints;
             if (addBtn != null && count == 1)
@@ -2353,11 +2381,12 @@ internal static partial class Scenarios
                     ((int)(addRect.X + Math.Max(5, addRect.Width * 0.10)), (int)(addRect.Y + addRect.Height / 2)),
                     ((int)(addRect.X + Math.Max(5, addRect.Width * 0.90)), (int)(addRect.Y + addRect.Height / 2)),
                 };
+                GuardedProc.Log($"  ClickAddWindowButton: resolved via {resolvedBy} at ({x},{y}).");
             }
             else
             {
                 (x, y) = CaptionButtonCenterFromRight(container, 3);
-                GuardedProc.Log($"  ClickAddWindowButton: UIA Name lookup found {count} match(es) for 'Add window to group'; falling back to the pixel-offset caption-button position ({x},{y}).");
+                GuardedProc.Log($"  ClickAddWindowButton: UIA lookups found {count} match(es); falling back to the pixel-offset caption-button position ({x},{y}).");
                 candidatePoints = new List<(int X, int Y)> { (x, y) };
             }
 
@@ -2378,6 +2407,28 @@ internal static partial class Scenarios
 
             throw new InvalidOperationException("Could not bring the container to the foreground and its 'Add window' button is obscured — refusing to click blind.");
         }
+    }
+
+    /// <summary>
+    /// Resolves the inline capture row's toggle CheckBox for one guest: first by
+    /// the stable accessible name "Select <title>" from the redesigned row
+    /// template (checkbox is a SIBLING of the title text), then by the legacy
+    /// ancestor-of-title-text structure. Throws when neither resolves uniquely,
+    /// so callers never click or read toggle state from the wrong element.
+    /// </summary>
+    private static AutomationElement ResolveInlineRowCheckBox(AutomationElement root, GuestInfo g)
+    {
+        AutomationElement? box = Uia.FindDescendantByName(root, ControlType.CheckBox, "Select " + g.Title, null, out int byName);
+        if (box != null && byName == 1)
+            return box;
+        AutomationElement? textEl = Uia.FindDescendantByName(root, ControlType.Text, null, g.Title, out _);
+        if (textEl != null)
+        {
+            box = Uia.NearestAncestorOfType(textEl, ControlType.CheckBox);
+            if (box != null)
+                return box;
+        }
+        throw new InvalidOperationException($"Inline panel checkbox for '{g.Title}' was not uniquely resolvable (byName={byName}).");
     }
 
     /// <summary>
@@ -2407,7 +2458,10 @@ internal static partial class Scenarios
         foreach (GuestInfo g in guests)
         {
             // Row-find with a bounded wait: the picker enumerates windows
-            // asynchronously after the panel opens.
+            // asynchronously after the panel opens. The title Text element is
+            // only the enumeration signal; the toggle lives in a SIBLING
+            // checkbox (accessible name "Select <title>") in the redesigned
+            // row template, so resolve the checkbox explicitly.
             AutomationElement? textEl = null;
             var rowSw = Stopwatch.StartNew();
             while (textEl == null && rowSw.ElapsedMilliseconds < 12000)
@@ -2421,22 +2475,14 @@ internal static partial class Scenarios
             }
             if (textEl == null)
                 throw new InvalidOperationException($"Inline panel row for '{g.Title}' not found within 12s.");
-            AutomationElement? row = Uia.NearestAncestorOfType(textEl, ControlType.CheckBox) ?? textEl;
 
             bool toggledOn = false;
             for (int attempt = 0; attempt < 3 && !toggledOn; attempt++)
             {
                 root = Uia.FromHwnd(existingContainer)
                     ?? throw new InvalidOperationException("Inline capture root disappeared before a retry.");
-                textEl = Uia.FindDescendantByName(root, ControlType.Text, null, g.Title, out int retryTextCount);
-                if (textEl == null || retryTextCount != 1)
-                    throw new InvalidOperationException($"Inline panel row for '{g.Title}' was not uniquely rediscovered before retry (count={retryTextCount}).");
-                row = Uia.NearestAncestorOfType(textEl, ControlType.CheckBox) ?? textEl;
-                (int cx, int cy) = attempt switch
-                {
-                    0 => Uia.Center(textEl),
-                    _ => Uia.Center(row),
-                };
+                AutomationElement row = ResolveInlineRowCheckBox(root, g);
+                (int cx, int cy) = Uia.Center(row);
                 if (!EnsureClickable(existingContainer, cx, cy))
                 {
                     if (attempt < 2 && RepositionVerifiedWindow(existingContainer, "TabDock container"))
@@ -2447,14 +2493,14 @@ internal static partial class Scenarios
                         Thread.Sleep(150);
                         continue;
                     }
-                    throw new InvalidOperationException($"Inline panel row for '{g.Title}' was obscured or failed identity proof; refusing to click blind.");
+                    throw new InvalidOperationException($"Inline panel checkbox for '{g.Title}' was obscured or failed identity proof; refusing to click blind.");
                 }
                 Input.ClickAt(cx, cy);
                 Thread.Sleep(350);
                 toggledOn = Uia.GetToggleState(row) == System.Windows.Automation.ToggleState.On;
             }
             if (!toggledOn)
-                throw new InvalidOperationException($"Inline panel row for '{g.Title}' did not toggle on after real clicks.");
+                throw new InvalidOperationException($"Inline panel checkbox for '{g.Title}' did not toggle on after real clicks.");
             Thread.Sleep(200);
         }
 

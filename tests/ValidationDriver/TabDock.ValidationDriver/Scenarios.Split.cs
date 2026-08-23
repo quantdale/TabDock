@@ -115,7 +115,29 @@ internal static partial class Scenarios
                 continue;
             }
 
-            // Hover the parent to expand the submenu (WPF submenus open on mouse-over).
+            // A menu item found in a popup that is mid-open or not yet laid out
+            // reports an empty bounding rect; Center() would then hover garbage
+            // coordinates and the submenu would never expand. Wait for a genuine
+            // rect first (same discipline as ClickTabMenuItem).
+            System.Windows.Rect parentRect = Uia.GetElementRect(parent);
+            var rectWait = Stopwatch.StartNew();
+            while ((parentRect.IsEmpty || parentRect.Width <= 0 || parentRect.Height <= 0) && rectWait.ElapsedMilliseconds < 2000)
+            {
+                Thread.Sleep(100);
+                parent = Uia.FindMenuItemOnDesktop(ctx.TabDockPid, parentName, 3000);
+                if (parent == null)
+                    break;
+                parentRect = Uia.GetElementRect(parent);
+            }
+            if (parent == null || parentRect.IsEmpty || parentRect.Width <= 0 || parentRect.Height <= 0)
+            {
+                if (attempt >= 2)
+                    throw new InvalidOperationException($"Context menu item '{parentName}' never displayed a real bounding rect ({attempt + 1} attempts).");
+                continue;
+            }
+
+            // Hover the parent to expand the submenu (WPF submenus open on
+            // mouse-over after a short dwell).
             (int px, int py) = Uia.Center(parent);
             Input.MoveTo(px, py);
             Thread.Sleep(600);
