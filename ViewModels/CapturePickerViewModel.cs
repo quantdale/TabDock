@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
@@ -26,13 +28,19 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
     private readonly LoggingService _log;
     private readonly Dispatcher? _dispatcher;
     private readonly Func<IEnumerable<WindowInfo>>? _testCandidateSource;
-    private readonly ObservableCollection<WindowInfo> _filteredWindows = new();
+    private readonly BatchingObservableCollection<WindowInfo> _filteredWindows = new();
+    private readonly HashSet<WindowInfo> _currentWindowSet = new();
     private GroupOption? _selectedGroupOption;
     private CancellationTokenSource? _iconLoadCancellation;
     private int _refreshGeneration;
     private bool _disposed;
     private Task _iconResolutionCompletion = Task.CompletedTask;
     private string _searchText = string.Empty;
+    private int _selectionNotificationBatchDepth;
+    private bool _selectionNotificationPending;
+    private readonly Action<int>? _testIconBatchObserver;
+
+    private const int IconDispatchBatchSize = 32;
 
     public ObservableCollection<WindowInfo> Windows { get; } = new();
     public ReadOnlyObservableCollection<WindowInfo> FilteredWindows { get; }
@@ -111,7 +119,8 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         IconService icons,
         LoggingService log,
         Func<IEnumerable<WindowInfo>>? testCandidateSource,
-        Dispatcher? testDispatcher = null)
+        Dispatcher? testDispatcher = null,
+        Action<int>? testIconBatchObserver = null)
     {
         _manager = manager;
         _icons = icons;
@@ -120,6 +129,7 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         // inject their own so row-icon marshalling stays observable.
         _dispatcher = testDispatcher ?? Application.Current?.Dispatcher;
         _testCandidateSource = testCandidateSource;
+        _testIconBatchObserver = testIconBatchObserver;
         FilteredWindows = new ReadOnlyObservableCollection<WindowInfo>(_filteredWindows);
 
         RefreshCommand = new RelayCommand(_ => Refresh());
@@ -145,8 +155,9 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
             return;
 
         // Refresh used to clear every checkbox even when the same native window
-        // was still present. Preserve only a strong-enough immediate UI identity:
-        // HWND + PID + executable path. A recycled handle alone is never enough.
+        // was still present. Preserve only a strong UI identity: HWND + PID +
+        // GUI thread + process-start token + stable class + executable path.
+        // A recycled handle or reused PID alone is never enough.
         HashSet<WindowSelectionKey> previouslySelected = Windows
             .Where(w => w.IsSelected)
             .Select(WindowSelectionKey.From)
@@ -158,8 +169,11 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         int windowsSeen = 0;
         int candidates = 0;
         var uncachedIcons = new List<IconWorkItem>();
+        var processImagePathCache = new Dictionary<uint, string?>();
+        var processStartCache = new Dictionary<uint, long>();
         Guid? previouslySelectedGroupId = SelectedGroupOption?.Id;
         Windows.Clear();
+        _currentWindowSet.Clear();
         Groups.Clear();
 
         Groups.Add(new GroupOption(Guid.Empty, "<New group>"));
@@ -185,6 +199,12 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         {
             foreach (WindowInfo info in _testCandidateSource())
             {
+                // The deterministic source is a seam after the native
+                // visibility/title/process probes, but it must retain the
+                // same duplicate-capture admission filter as production so
+                // tests can exercise a target becoming captured elsewhere.
+                if (_manager.IsCapturedWindow(info.Hwnd))
+                    continue;
                 AddCandidate(info, previouslySelected, uncachedIcons, ref candidates);
             }
         }
@@ -235,12 +255,31 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
                     if (hr == 0 && cloaked)
                         return true;
 
-                    NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
-                    string? exe = _icons.GetProcessImagePath(pid);
+                    uint threadId = NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
+                    if (pid == 0 || threadId == 0)
+                        return true;
+
+                    if (!processImagePathCache.TryGetValue(pid, out string? exe))
+                    {
+                        exe = _icons.GetProcessImagePath(pid);
+                        processImagePathCache[pid] = exe;
+                    }
                     if (string.IsNullOrWhiteSpace(exe))
                         return true;
 
-                    var info = new WindowInfo(hwnd, pid, className, title, exe);
+                    // Shepherd requires a process-instance identity before it
+                    // can durably admit a guest. Do not offer a row that can
+                    // never pass that authoritative gate, and never treat an
+                    // inaccessible process as a wildcard identity.
+                    if (!processStartCache.TryGetValue(pid, out long processStart))
+                    {
+                        processStart = NativeMethods.GetProcessStartTimeUtcTicks(pid);
+                        processStartCache[pid] = processStart;
+                    }
+                    if (processStart == 0)
+                        return true;
+
+                    var info = new WindowInfo(hwnd, pid, className, title, exe, threadId, processStart);
                     AddCandidate(info, previouslySelected, uncachedIcons, ref candidates);
                     return true;
                 }
@@ -292,23 +331,17 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
             NotifySelectionState();
         };
         Windows.Add(info);
+        _currentWindowSet.Add(info);
         candidates++;
     }
 
     private void ApplyFilter()
     {
         string query = SearchText.Trim();
-        _filteredWindows.Clear();
-        foreach (WindowInfo row in Windows)
-        {
-            if (query.Length == 0
-                || row.Title.Contains(query, StringComparison.OrdinalIgnoreCase)
-                || row.ExePath.Contains(query, StringComparison.OrdinalIgnoreCase)
-                || row.ClassName.Contains(query, StringComparison.OrdinalIgnoreCase))
-            {
-                _filteredWindows.Add(row);
-            }
-        }
+        _filteredWindows.ReplaceRange(Windows.Where(row => query.Length == 0
+            || row.Title.Contains(query, StringComparison.OrdinalIgnoreCase)
+            || row.ExePath.Contains(query, StringComparison.OrdinalIgnoreCase)
+            || row.ClassName.Contains(query, StringComparison.OrdinalIgnoreCase)));
 
         OnPropertyChanged(nameof(HasFilteredWindows));
         OnPropertyChanged(nameof(EmptyFilterText));
@@ -317,19 +350,44 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
 
     private void SelectAllVisible()
     {
-        foreach (WindowInfo row in _filteredWindows)
-            row.IsSelected = true;
-        NotifySelectionState();
+        BeginSelectionNotificationBatch();
+        try
+        {
+            foreach (WindowInfo row in _filteredWindows)
+                row.IsSelected = true;
+        }
+        finally
+        {
+            EndSelectionNotificationBatch();
+        }
     }
 
     private void ClearSelection()
     {
-        foreach (WindowInfo row in Windows)
-            row.IsSelected = false;
-        NotifySelectionState();
+        BeginSelectionNotificationBatch();
+        try
+        {
+            foreach (WindowInfo row in Windows)
+                row.IsSelected = false;
+        }
+        finally
+        {
+            EndSelectionNotificationBatch();
+        }
     }
 
     private void NotifySelectionState()
+    {
+        if (_selectionNotificationBatchDepth > 0)
+        {
+            _selectionNotificationPending = true;
+            return;
+        }
+
+        NotifySelectionStateCore();
+    }
+
+    private void NotifySelectionStateCore()
     {
         OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(SelectedCount));
@@ -337,6 +395,21 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         ((RelayCommand)GroupSelectedCommand).RaiseCanExecuteChanged();
         ((RelayCommand)SelectAllVisibleCommand).RaiseCanExecuteChanged();
         ((RelayCommand)ClearSelectionCommand).RaiseCanExecuteChanged();
+    }
+
+    private void BeginSelectionNotificationBatch() => _selectionNotificationBatchDepth++;
+
+    private void EndSelectionNotificationBatch()
+    {
+        if (_selectionNotificationBatchDepth == 0)
+            return;
+
+        _selectionNotificationBatchDepth--;
+        if (_selectionNotificationBatchDepth == 0 && _selectionNotificationPending)
+        {
+            _selectionNotificationPending = false;
+            NotifySelectionStateCore();
+        }
     }
 
     private void QueueIconResolution(int refreshGeneration, IReadOnlyList<IconWorkItem> requests)
@@ -367,6 +440,7 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
     {
         try
         {
+            var pendingResults = new List<IconResult>(IconDispatchBatchSize);
             foreach (IconWorkItem request in requests)
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -388,8 +462,17 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
 
                 if (cancellationToken.IsCancellationRequested)
                     return;
-                PostIconResult(refreshGeneration, request.Row, icon);
+
+                pendingResults.Add(new IconResult(request.Row, icon));
+                if (pendingResults.Count >= IconDispatchBatchSize)
+                {
+                    PostIconResults(refreshGeneration, pendingResults);
+                    pendingResults.Clear();
+                }
             }
+
+            if (pendingResults.Count > 0)
+                PostIconResults(refreshGeneration, pendingResults);
             completion.TrySetResult(true);
         }
         catch (Exception ex)
@@ -416,18 +499,27 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private void PostIconResult(int refreshGeneration, WindowInfo row, ImageSource? icon)
+    private void PostIconResults(
+        int refreshGeneration,
+        IReadOnlyList<IconResult> results)
     {
         if (_dispatcher == null || _dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished)
             return;
 
+        IconResult[] batch = results.ToArray();
+        _testIconBatchObserver?.Invoke(batch.Length);
         try
         {
             _dispatcher.BeginInvoke(DispatcherPriority.DataBind, new Action(() =>
             {
-                if (_disposed || refreshGeneration != _refreshGeneration || !Windows.Contains(row))
+                if (_disposed || refreshGeneration != _refreshGeneration)
                     return;
-                row.Icon = icon;
+
+                foreach (IconResult result in batch)
+                {
+                    if (_currentWindowSet.Contains(result.Row))
+                        result.Row.Icon = result.Icon;
+                }
             }));
         }
         catch (InvalidOperationException)
@@ -470,10 +562,44 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
 
     private sealed record IconWorkItem(WindowInfo Row, string ExePath);
 
-    private readonly record struct WindowSelectionKey(IntPtr Hwnd, uint ProcessId, string ExePath)
+    private sealed record IconResult(WindowInfo Row, ImageSource? Icon);
+
+    private readonly record struct WindowSelectionKey(
+        IntPtr Hwnd,
+        uint ProcessId,
+        uint WindowThreadId,
+        long ProcessStartTimeUtcTicks,
+        string ClassName,
+        string ExePath)
     {
         public static WindowSelectionKey From(WindowInfo row)
-            => new(row.Hwnd, row.ProcessId, row.ExePath);
+            => new(
+                row.Hwnd,
+                row.ProcessId,
+                row.WindowThreadId,
+                row.ProcessStartTimeUtcTicks,
+                row.ClassName,
+                row.ExePath);
+
+        public bool Equals(WindowSelectionKey other)
+            => Hwnd == other.Hwnd
+                && ProcessId == other.ProcessId
+                && WindowThreadId == other.WindowThreadId
+                && ProcessStartTimeUtcTicks == other.ProcessStartTimeUtcTicks
+                && string.Equals(ClassName, other.ClassName, StringComparison.Ordinal)
+                // QueryFullProcessImageName returns a Windows path. The
+                // identity comparer must not make a casing-only refresh look
+                // like a new executable, while display text remains original.
+                && string.Equals(ExePath, other.ExePath, StringComparison.OrdinalIgnoreCase);
+
+        public override int GetHashCode()
+            => HashCode.Combine(
+                Hwnd,
+                ProcessId,
+                WindowThreadId,
+                ProcessStartTimeUtcTicks,
+                StringComparer.Ordinal.GetHashCode(ClassName),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(ExePath));
     }
 
     internal static GroupOption? SelectGroupAfterRefresh(
@@ -482,6 +608,28 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         => options.FirstOrDefault(option => option.Id == previouslySelectedGroupId)
             ?? options.FirstOrDefault();
 
+    /// <summary>
+    /// Replaces the filtered projection with one Reset notification. Search
+    /// changes and Refresh can otherwise emit one collection event per row,
+    /// causing WPF virtualization and command requery to process O(rows)
+    /// dispatcher work for every candidate. The authoritative Windows
+    /// collection remains unchanged.
+    /// </summary>
+    private sealed class BatchingObservableCollection<T> : ObservableCollection<T>
+    {
+        public void ReplaceRange(IEnumerable<T> values)
+        {
+            CheckReentrancy();
+            Items.Clear();
+            foreach (T value in values)
+                Items.Add(value);
+
+            OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
+            OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+            OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+        }
+    }
+
     public sealed class WindowInfo : ViewModelBase
     {
         private bool _isSelected;
@@ -489,6 +637,8 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
 
         public IntPtr Hwnd { get; }
         public uint ProcessId { get; }
+        public uint WindowThreadId { get; }
+        public long ProcessStartTimeUtcTicks { get; }
         public string ClassName { get; }
         public string Title { get; }
         public string ExePath { get; }
@@ -505,17 +655,30 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
             set => SetProperty(ref _icon, value);
         }
 
-        public WindowInfo(IntPtr hwnd, uint processId, string className, string title, string? exePath)
+        public WindowInfo(
+            IntPtr hwnd,
+            uint processId,
+            string className,
+            string title,
+            string? exePath,
+            uint windowThreadId = 0,
+            long processStartTimeUtcTicks = 0)
         {
             Hwnd = hwnd;
             ProcessId = processId;
+            WindowThreadId = windowThreadId;
+            ProcessStartTimeUtcTicks = processStartTimeUtcTicks;
             ClassName = className;
             Title = title;
             ExePath = exePath ?? string.Empty;
         }
 
         public WindowCaptureTarget ToCaptureTarget()
-            => new WindowCaptureTarget(Hwnd, ProcessId, ClassName, Title, ExePath);
+            => new WindowCaptureTarget(Hwnd, ProcessId, ClassName, Title, ExePath)
+            {
+                WindowThreadId = WindowThreadId,
+                ProcessStartTimeUtcTicks = ProcessStartTimeUtcTicks,
+            };
     }
 
     public sealed class GroupOption
