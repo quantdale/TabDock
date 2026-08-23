@@ -22,6 +22,8 @@ internal static class Input
     public const ushort VK_L = 0x4C;
     public const ushort VK_RETURN = 0x0D;
     public const ushort VK_ESCAPE = 0x1B;
+    public const ushort VK_PRIOR = 0x21;
+    public const ushort VK_NEXT = 0x22;
 
     private const uint MOUSEEVENTF_WHEEL = 0x0800;
     private const int WHEEL_DELTA = 120;
@@ -667,6 +669,37 @@ internal static class Input
                 SendVk(VK_CONTROL, up: true, allowUnverifiedCleanup: true);
         }
         Thread.Sleep(50);
+    }
+
+    /// <summary>
+    /// Sends one of TabDock's global Ctrl+Alt+PageUp/PageDown shortcuts after
+    /// proving the requested top-level guest/container is foreground. This is
+    /// real OS input; it never posts a synthetic WM_HOTKEY or bypasses the
+    /// driver's identity scope.
+    /// </summary>
+    public static bool SendHotkeyCtrlAltPageTo(IntPtr target, bool previous)
+    {
+        if (!ForceForegroundRoot(target) || !VerifyForegroundTarget())
+            return false;
+
+        ushort page = previous ? VK_PRIOR : VK_NEXT;
+        var inputs = new[]
+        {
+            KeyboardInput(VK_CONTROL, up: false),
+            KeyboardInput(VK_MENU, up: false),
+            KeyboardInput(page, up: false),
+            KeyboardInput(page, up: true),
+            KeyboardInput(VK_MENU, up: true),
+            KeyboardInput(VK_CONTROL, up: true),
+        };
+        uint sent = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeMethods.INPUT>());
+        if (sent != inputs.Length)
+        {
+            GuardedProc.Log($"WARNING: Ctrl+Alt+Page input batch failed: sent={sent}/{inputs.Length}; {NativeMethods.FormatLastError()}");
+            return false;
+        }
+        Thread.Sleep(80);
+        return true;
     }
 
     /// <summary>Ctrl+Alt+Shift+D: request TabDock's diagnostic support bundle.</summary>

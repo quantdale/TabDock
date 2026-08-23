@@ -76,6 +76,16 @@ public sealed class GroupViewModel : ViewModelBase
         set => SetProperty(ref _isRenaming, value);
     }
 
+    /// <summary>Projects the manager's canonical capture-admission state.</summary>
+    public bool CaptureAllowed => _manager.CaptureAllowed;
+
+    /// <summary>Current reason shown when capture is blocked.</summary>
+    public string CaptureAdmissionReason => _manager.CaptureAdmissionReason;
+
+    public string AddWindowToolTip => CaptureAllowed
+        ? "Add window to group"
+        : $"Capture unavailable: {CaptureAdmissionReason}";
+
     public ObservableCollection<TabViewModel> Tabs { get; } = new();
 
     // Tab-strip projection: mirrors Tabs when no split is active; while a split
@@ -85,6 +95,16 @@ public sealed class GroupViewModel : ViewModelBase
     // this is a presentation-layer concept only (SplitCompositeViewModel).
     public ObservableCollection<object> DisplayTabs { get; } = new();
     private SplitCompositeViewModel? _splitComposite;
+
+    /// <summary>
+    /// The split affordance stays visible in chrome but cannot create/resume a
+    /// pair until at least two live tabs exist.
+    /// </summary>
+    public bool CanUseSplitAffordance => Tabs.Count >= 2;
+
+    public string SplitAffordanceToolTip => CanUseSplitAffordance
+        ? "Open split actions"
+        : "Split requires another captured tab";
 
     public TabViewModel? ActiveTab
     {
@@ -134,6 +154,7 @@ public sealed class GroupViewModel : ViewModelBase
         _log = log;
 
         _group.PropertyChanged += OnGroupPropertyChanged;
+        _manager.CaptureAdmissionChanged += Manager_CaptureAdmissionChanged;
 
         // The strip projection mirrors every Tabs mutation; subscribe before
         // populating so DisplayTabs is filled by the same Add events.
@@ -206,6 +227,8 @@ public sealed class GroupViewModel : ViewModelBase
 
     private void Tabs_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        OnPropertyChanged(nameof(CanUseSplitAffordance));
+        OnPropertyChanged(nameof(SplitAffordanceToolTip));
         if (_splitComposite != null)
         {
             // A mutation while a pair exists changes the projection wholesale.
@@ -477,6 +500,13 @@ public sealed class GroupViewModel : ViewModelBase
         }
     }
 
+    private void Manager_CaptureAdmissionChanged(object? sender, CaptureAdmissionChangedEventArgs e)
+    {
+        OnPropertyChanged(nameof(CaptureAllowed));
+        OnPropertyChanged(nameof(CaptureAdmissionReason));
+        OnPropertyChanged(nameof(AddWindowToolTip));
+    }
+
     /// <summary>
     /// Unsubscribes from the (long-lived, possibly-outlives-this-view-model)
     /// Group. Without this, a GroupViewModel whose container closed while the
@@ -489,6 +519,7 @@ public sealed class GroupViewModel : ViewModelBase
     public void Detach()
     {
         _group.PropertyChanged -= OnGroupPropertyChanged;
+        _manager.CaptureAdmissionChanged -= Manager_CaptureAdmissionChanged;
         // Tabs is a VM-owned ObservableCollection — its CollectionChanged keeps
         // this VM (and its ContainerWindow) rooted if a view keeps a reference
         // to Tabs/DisplayTabs after the container closes (capture-picker

@@ -17,15 +17,20 @@ public sealed class HotkeyService : IDisposable
 {
     private const int HotkeyId = 0x7AAD;
     private const int DiagnosticHotkeyId = 0x7AAE;
+    private const int PreviousTabHotkeyId = 0x7AAF;
+    private const int NextTabHotkeyId = 0x7AB0;
 
     private readonly LoggingService _log;
     private HwndSource? _source;
     private HwndSourceHook? _hook;
     private bool _registered;
     private bool _diagnosticRegistered;
+    private bool _previousTabNavigationRegistered;
+    private bool _nextTabNavigationRegistered;
 
     public event EventHandler? HotkeyPressed;
     public event EventHandler? DiagnosticHotkeyPressed;
+    public event EventHandler<HotkeyNavigationEventArgs>? TabNavigationHotkeyPressed;
 
     /// <summary>
     /// True when the global Ctrl+Alt+G registration succeeded. When false,
@@ -33,6 +38,16 @@ public sealed class HotkeyService : IDisposable
     /// shortcut as available (the Capture button remains the fallback path).
     /// </summary>
     public bool GlobalHotkeyRegistered => _registered;
+
+    /// <summary>
+    /// True only when both focus-independent previous/next combinations are
+    /// registered. A partial pair is treated as unavailable so the UI never
+    /// advertises asymmetric global navigation.
+    /// </summary>
+    public bool TabNavigationHotkeysRegistered
+        => HotkeyRegistrationPolicy.IsTabNavigationPairAvailable(
+            _previousTabNavigationRegistered,
+            _nextTabNavigationRegistered);
 
     public HotkeyService(LoggingService log)
     {
@@ -45,7 +60,7 @@ public sealed class HotkeyService : IDisposable
     /// </summary>
     public void Register()
     {
-        if (_registered)
+        if (_source != null)
             return;
 
         var parameters = new HwndSourceParameters("TabDockHotkeySink")
@@ -69,19 +84,41 @@ public sealed class HotkeyService : IDisposable
         // at the keyboard repeat rate. Every repeat is one more capture-picker
         // request, and they queue up behind the picker's own modal loop instead of
         // being coalesced.
-        if (NativeMethods.RegisterHotKey(_source.Handle, HotkeyId,
+        _registered = NativeMethods.RegisterHotKey(_source.Handle, HotkeyId,
             NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT,
-            NativeMethods.VK_G))
+            NativeMethods.VK_G);
+        if (_registered)
         {
-            _registered = true;
             _log.Log("Global hotkey Ctrl+Alt+G registered.");
         }
         else
         {
             _log.Log($"RegisterHotKey failed: {NativeMethods.FormatLastError()}");
-            _source.Dispose();
-            _source = null;
-            return;
+        }
+
+        _previousTabNavigationRegistered = NativeMethods.RegisterHotKey(
+            _source.Handle,
+            PreviousTabHotkeyId,
+            NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT,
+            NativeMethods.VK_PRIOR);
+        _nextTabNavigationRegistered = NativeMethods.RegisterHotKey(
+            _source.Handle,
+            NextTabHotkeyId,
+            NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT,
+            NativeMethods.VK_NEXT);
+        if (TabNavigationHotkeysRegistered)
+        {
+            _log.Log("Global tab navigation hotkeys Ctrl+Alt+PageUp/PageDown registered.");
+        }
+        else
+        {
+            if (_previousTabNavigationRegistered)
+                NativeMethods.UnregisterHotKey(_source.Handle, PreviousTabHotkeyId);
+            if (_nextTabNavigationRegistered)
+                NativeMethods.UnregisterHotKey(_source.Handle, NextTabHotkeyId);
+            _previousTabNavigationRegistered = false;
+            _nextTabNavigationRegistered = false;
+            _log.Log($"Global tab navigation hotkey registration unavailable: {NativeMethods.FormatLastError()}");
         }
 
         _diagnosticRegistered = NativeMethods.RegisterHotKey(_source.Handle, DiagnosticHotkeyId,
@@ -117,6 +154,18 @@ public sealed class HotkeyService : IDisposable
             _log.Log("Diagnostic hotkey unregistered.");
         }
 
+        if (_previousTabNavigationRegistered && _source != null)
+        {
+            NativeMethods.UnregisterHotKey(_source.Handle, PreviousTabHotkeyId);
+            _previousTabNavigationRegistered = false;
+        }
+
+        if (_nextTabNavigationRegistered && _source != null)
+        {
+            NativeMethods.UnregisterHotKey(_source.Handle, NextTabHotkeyId);
+            _nextTabNavigationRegistered = false;
+        }
+
         _source?.Dispose();
         _source = null;
     }
@@ -135,6 +184,18 @@ public sealed class HotkeyService : IDisposable
             _log.Log("Diagnostic hotkey Ctrl+Alt+Shift+D pressed.");
             DiagnosticHotkeyPressed?.Invoke(this, EventArgs.Empty);
         }
+        else if (msg == NativeMethods.WM_HOTKEY && wParam.ToInt32() == PreviousTabHotkeyId)
+        {
+            handled = true;
+            _log.Log("Global tab navigation Ctrl+Alt+PageUp pressed.");
+            TabNavigationHotkeyPressed?.Invoke(this, new HotkeyNavigationEventArgs(backward: true));
+        }
+        else if (msg == NativeMethods.WM_HOTKEY && wParam.ToInt32() == NextTabHotkeyId)
+        {
+            handled = true;
+            _log.Log("Global tab navigation Ctrl+Alt+PageDown pressed.");
+            TabNavigationHotkeyPressed?.Invoke(this, new HotkeyNavigationEventArgs(backward: false));
+        }
         return IntPtr.Zero;
     }
 
@@ -142,4 +203,12 @@ public sealed class HotkeyService : IDisposable
     {
         Detach();
     }
+}
+
+/// <summary>Direction attached to a global PageUp/PageDown notification.</summary>
+public sealed class HotkeyNavigationEventArgs : EventArgs
+{
+    public HotkeyNavigationEventArgs(bool backward) => Backward = backward;
+
+    public bool Backward { get; }
 }

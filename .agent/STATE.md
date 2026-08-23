@@ -10,6 +10,52 @@ this text.
 
 ## CURRENT STATUS
 
+## PRODUCT TRUST & INTERACTION CAMPAIGN (started 2026-08-23, DELIVERY READY)
+
+Objective: close M3 pending-recovery visibility, canonical capture-admission
+presentation, M4 scoped focus-independent tab navigation, and M5 always-visible
+split discovery as one product trust campaign. Active plan:
+`.agent/plans/product-trust-interaction-campaign-2026-08-23.md`.
+OpenSpec change: `product-trust-interaction-campaign`, archived at
+`openspec/changes/archive/2026-08-23-product-trust-interaction-campaign/`.
+
+Baseline verified after `git fetch origin`: `main` and `origin/main` at
+`9488bf1`, clean. Existing hardened authorities are present: pending recovery
+discovery/execution with supervised mutation, `GroupManager.SetCaptureAllowed`,
+`TabNavigationPolicy`, and `SplitPresentationController`/policy paths.
+
+Completed this phase: M3 pending-recovery attention, canonical capture-admission
+projection, scoped Ctrl+Alt+PageUp/PageDown navigation, persistent Split
+affordance, deterministic regression/accessibility/source-contract coverage,
+ValidationDriver scenario wiring, OpenSpec artifacts, architecture/testing/
+README updates, and the integration audit are implemented. The launcher
+projection is read-only; GroupManager remains the admission authority;
+TabNavigationPolicy remains the navigation authority; SplitPresentationController
+and existing mutation/presentation paths remain the split authority.
+
+Final deterministic validation is green: Debug and Release builds are
+0-warning/0-error; Debug and Release suites are 649/649; release-tooling is
+150/150; `validate.ps1 -Ci -Publish` completed successfully with 649/649,
+native ABI, redirected lifecycle/privacy, OpenSpec 29/29, and Release publish
+smokes green; and `git diff --check` is clean. Stability included a recurring
+full-suite abandoned-mutex test ordering failure; it was root-caused to the
+test's owner-exit synchronization and repaired with an explicit exit barrier
+plus handle lifetime guard, without changing production behavior. See the two
+`.agent/investigations/product-trust-stability-*.md` records.
+
+Supervised real-input scenarios are recorded as
+`BLOCKED_SUPERVISED`/`BLOCKED_ENVIRONMENT` because this desktop is not certified
+exclusively available and provenance-safe. Exact rerun commands are in
+`docs/TESTING.md` and the archived OpenSpec task record at
+`openspec/changes/archive/2026-08-23-product-trust-interaction-campaign/`.
+
+Next action: commit the intended campaign work, push `main`, and verify
+`main == origin/main` with a clean worktree. Supervised Windows qualification,
+production signing, mixed-DPI/negative-coordinate topology, and final human
+smoke remain external gates.
+
+## HISTORICAL CAMPAIGN RECORDS
+
 ## TAB MUTATION & DORMANT-SPLIT DRAG CAMPAIGN (started 2026-08-23, IN PROGRESS)
 
 Objective: (1) direct deterministic regression coverage for GroupViewModel

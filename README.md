@@ -141,6 +141,8 @@ WPF relies on COM activation, reflection emit, and other runtime features that a
    Once a group is open, use its Group ▾ menu to switch between open groups or
    create another group without returning to the launcher.
 4. The container window shows a tab for each captured window. Click tabs to switch, drag tabs to reorder, or drag a tab out of the strip to release it back to a standalone window.
+   Use the always-visible **Split ▾** control to pair the active tab with an eligible partner. With a presented pair it exposes LEFT/RIGHT focus and **End split**; with a dormant pair it exposes **Resume/show split** actions. The control is disabled until two captured tabs are available.
+   `Ctrl+Alt+PageUp` and `Ctrl+Alt+PageDown` navigate the current TabDock group even when a captured guest has focus. They are scoped to the foreground guest/container; unrelated desktop applications are never switched. Local `Ctrl+Tab` / `Ctrl+Shift+Tab` remains available in the container.
 5. Double-click the group name in the title bar — or use the Group ▾ menu's
    **Rename group** — to rename it (Enter commits, Escape cancels, blank names
    are rejected).
@@ -153,6 +155,11 @@ WPF relies on COM activation, reflection emit, and other runtime features that a
 Empty group shells are session-only: a group with no captured tabs is not saved
 or reopened on the next launch. Groups restored with saved tab metadata remain
 available as layout placeholders until you repopulate or delete them.
+
+If the launcher shows a recovery-attention banner, inspect the evidence with
+`TabDock.exe --pending-recovery`. Any native recovery must be supervised with
+`TabDock.exe --recover-pending`; the launcher never performs recovery itself.
+The banner is hidden when no unresolved evidence remains.
 
 ## Architecture overview
 

@@ -64,9 +64,32 @@
             </ListBox>
         </Border>
 
-        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-            <Button Content="Group these" Width="100" Height="32" Margin="0,0,8,0" IsDefault="True" Command="{Binding GroupSelectedCommand}" />
-            <Button Content="Cancel" Width="80" Height="32" IsCancel="True" Command="{Binding CancelCommand}" />
+        <StackPanel Grid.Row="4" Margin="0,12,0,0">
+            <TextBlock Text="{Binding CaptureAdmissionReason}" Foreground="#FF9A4D00"
+                       TextWrapping="Wrap" Margin="0,0,0,8"
+                       AutomationProperties.AutomationId="CaptureAdmissionStatus">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding CaptureAdmissionBlocked}" Value="True">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="Group these" Width="100" Height="32" Margin="0,0,8,0" IsDefault="True"
+                        Command="{Binding GroupSelectedCommand}"
+                        IsEnabled="{Binding CaptureAllowed}"
+                        AutomationProperties.AutomationId="CaptureGroupThese"
+                        AutomationProperties.Name="Group selected windows"
+                        AutomationProperties.HelpText="{Binding CaptureAdmissionReason}" />
+                <Button Content="Cancel" Width="80" Height="32" IsCancel="True"
+                        Command="{Binding CancelCommand}"
+                        AutomationProperties.AutomationId="CaptureCancel" />
+            </StackPanel>
         </StackPanel>
     </Grid>
 </Window>

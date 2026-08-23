@@ -16,6 +16,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -23,7 +24,34 @@
         <TextBlock Grid.Row="0" Text="TabDock" FontSize="24" FontWeight="Light" Margin="0,0,0,4" />
         <TextBlock Grid.Row="1" Text="Select a group or start a new one." Foreground="Gray" Margin="0,0,0,12" />
 
-        <Border Grid.Row="2" BorderBrush="#FFE0E0E0" BorderThickness="1" CornerRadius="4" Background="#FFF9F9F9">
+        <Border Grid.Row="2" Margin="0,0,0,10" Padding="10"
+                Background="#FFFFF4CE" BorderBrush="#FFE1B93A" BorderThickness="1"
+                CornerRadius="4"
+                AutomationProperties.AutomationId="PendingRecoveryBanner"
+                AutomationProperties.Name="{Binding PendingRecoveryBannerText}">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding HasPendingRecoveryAttention}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <StackPanel>
+                <TextBlock Text="{Binding PendingRecoveryBannerText}" FontWeight="SemiBold"
+                           AutomationProperties.AutomationId="PendingRecoverySummary" />
+                <TextBlock Text="Review read-only evidence: TabDock.exe --pending-recovery"
+                           Margin="0,4,0,0" FontFamily="Consolas"
+                           AutomationProperties.AutomationId="PendingRecoveryInspectCommand" />
+                <TextBlock Text="Run supervised recovery: TabDock.exe --recover-pending"
+                           FontFamily="Consolas"
+                           AutomationProperties.AutomationId="PendingRecoveryRecoverCommand" />
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="3" BorderBrush="#FFE0E0E0" BorderThickness="1" CornerRadius="4" Background="#FFF9F9F9">
             <Grid>
                 <ListView x:Name="GroupsListView"
                           ItemsSource="{Binding Groups}"
@@ -79,10 +107,34 @@
             </Grid>
         </Border>
 
-        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-            <Button Content="New group" Width="100" Height="32" Margin="0,0,8,0" Command="{Binding NewGroupCommand}" />
-            <Button Content="{Binding CaptureButtonText}" Width="200" Height="32" Margin="0,0,8,0" Command="{Binding CaptureCommand}" />
-            <Button Content="Exit" Width="80" Height="32" Command="{Binding ExitCommand}" />
+        <StackPanel Grid.Row="4" Margin="0,12,0,0">
+            <TextBlock Text="{Binding CaptureAdmissionReason}"
+                       Foreground="#FF9A4D00" TextWrapping="Wrap"
+                       AutomationProperties.AutomationId="CaptureAdmissionStatus">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding CaptureAdmissionBlocked}" Value="True">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+            <TextBlock Text="{Binding TabNavigationAvailabilityText}" Foreground="Gray"
+                       Margin="0,4,0,8" AutomationProperties.AutomationId="TabNavigationAvailability" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="New group" Width="100" Height="32" Margin="0,0,8,0" Command="{Binding NewGroupCommand}" />
+                <Button Content="{Binding CaptureButtonText}" Width="200" Height="32" Margin="0,0,8,0"
+                        Command="{Binding CaptureCommand}"
+                        IsEnabled="{Binding CaptureAllowed}"
+                        AutomationProperties.AutomationId="LauncherCaptureButton"
+                        AutomationProperties.Name="{Binding CaptureButtonText}"
+                        AutomationProperties.HelpText="{Binding CaptureButtonToolTip}"
+                        ToolTip="{Binding CaptureButtonToolTip}" />
+                <Button Content="Exit" Width="80" Height="32" Command="{Binding ExitCommand}" />
+            </StackPanel>
         </StackPanel>
     </Grid>
 </Window>

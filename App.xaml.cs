@@ -145,6 +145,11 @@ _shepherd.HideProvenance = hideProvenance;
             _log.Log($"ENV[startup] {EnvironmentFingerprint.Platform} | {EnvironmentFingerprint.DescribeMonitors()}");
 
             _mainViewModel = new MainViewModel(_groups);
+            // Launcher visibility is a read-only projection. It deliberately
+            // skips PendingRecoveryService's temporary-fragment sweep and
+            // never acquires the supervised recovery lease or performs native
+            // recovery work.
+            RefreshLauncherRecoveryAttention();
             _mainViewModel.NewGroupRequested += OnNewGroupRequested;
             _mainViewModel.CaptureRequested += OnCaptureRequested;
             _mainViewModel.ExitRequested += OnExitRequested;
@@ -159,13 +164,16 @@ _shepherd.HideProvenance = hideProvenance;
                 _log.Log("MainWindow closed.");
                 _mainWindow = null;
             };
+            _mainWindow.Activated += (_, _) => RefreshLauncherRecoveryAttention();
             _hotkey.Register();
             // Do not advertise the shortcut when another process owns it: the
             // launcher's Capture button drops the "(Ctrl+Alt+G)" hint while
             // remaining the always-available fallback path.
             _mainViewModel.GlobalHotkeyAvailable = _hotkey.GlobalHotkeyRegistered;
+            _mainViewModel.GlobalTabNavigationHotkeysAvailable = _hotkey.TabNavigationHotkeysRegistered;
             _hotkey.HotkeyPressed += (_, _) => OnCaptureRequested(this, EventArgs.Empty);
             _hotkey.DiagnosticHotkeyPressed += (_, _) => ExportDiagnosticsFromHotkey();
+            _hotkey.TabNavigationHotkeyPressed += OnTabNavigationHotkeyPressed;
             _mainWindow.Show();
 
             ShowStorageCapabilityWarningIfNeeded();
@@ -765,11 +773,89 @@ _shepherd.HideProvenance = hideProvenance;
 
     private void OnCaptureRequested(object? sender, EventArgs e)
     {
+        if (!_groups.CaptureAllowed)
+        {
+            _log.Log($"Capture request ignored because admission is blocked: {_groups.CaptureAdmissionReason}");
+            return;
+        }
         ShowCapturePicker(preselectedGroup: null);
+    }
+
+    /// <summary>
+    /// Refreshes the launcher-only recovery projection whenever the launcher is
+    /// about to become visible. Discovery is deliberately read-only and skips
+    /// temporary-fragment cleanup, so this cannot claim or mutate recovery work.
+    /// </summary>
+    private void RefreshLauncherRecoveryAttention()
+    {
+        _mainViewModel?.SetPendingRecoveryAttention(PendingRecoveryService.GetLauncherAttention());
+    }
+
+    /// <summary>
+    /// Handles the focus-independent tab shortcuts after proving that the
+    /// foreground window is a current TabDock guest or one of its containers.
+    /// The hotkey sink is intentionally not a desktop-wide application switcher:
+    /// an unrelated foreground application produces a strict no-op.
+    /// </summary>
+    private void OnTabNavigationHotkeyPressed(object? sender, HotkeyNavigationEventArgs e)
+    {
+        IntPtr foreground = NativeMethods.GetForegroundWindow();
+        if (!GlobalTabNavigationPolicy.TryResolve(
+                foreground,
+                _groups.GetCapturedWindow,
+                ResolveCapturedGuestGroup,
+                ResolveContainerGroup,
+                _groups.IsCurrentCapturedWindow,
+                out GlobalTabNavigationTarget target))
+        {
+            _log.Log($"Global tab navigation ignored: foreground 0x{foreground.ToInt64():X} is not a current TabDock context.");
+            return;
+        }
+
+        if (!_containers.TryGetValue(target.GroupId, out ContainerWindow? container)
+            || !container.CanReceiveGlobalTabNavigation)
+        {
+            _log.Log($"Global tab navigation ignored: group {target.GroupId} has no eligible live container.");
+            return;
+        }
+
+        if (!container.NavigateTabs(e.Backward))
+            _log.Log($"Global tab navigation ignored: group {target.GroupId} is not navigable.");
+    }
+
+    private Guid? ResolveCapturedGuestGroup(CapturedWindow member)
+    {
+        if (!_groups.TryGetCapturedMember(member.Hwnd, out Group? group, out CapturedWindow? current)
+            || group == null
+            || current == null
+            || !ReferenceEquals(member, current)
+            || !_groups.IsCurrentCapturedWindow(current))
+        {
+            return null;
+        }
+
+        return group.Id;
+    }
+
+    private Guid? ResolveContainerGroup(IntPtr foreground)
+    {
+        foreach ((Guid groupId, ContainerWindow container) in _containers)
+        {
+            if (container.IsCurrentForegroundContext(foreground))
+                return groupId;
+        }
+
+        return null;
     }
 
     private void ShowCapturePicker(Group? preselectedGroup)
     {
+        if (!_groups.CaptureAllowed)
+        {
+            _log.Log($"Capture picker request ignored because admission is blocked: {_groups.CaptureAdmissionReason}");
+            return;
+        }
+
         // Holding Ctrl+Alt+G repeats WM_HOTKEY, and the nested modal loops run by
         // ShowCapturePickerCore (the picker's own ShowDialog, plus the
         // capture-failed MessageBox) keep dispatching those repeats — which
@@ -1092,7 +1178,10 @@ _shepherd.HideProvenance = hideProvenance;
         }
 
         if (_containers.Count == 0 && _mainWindow != null)
+        {
+            RefreshLauncherRecoveryAttention();
             _mainWindow.Show();
+        }
     }
 
     /// <summary>

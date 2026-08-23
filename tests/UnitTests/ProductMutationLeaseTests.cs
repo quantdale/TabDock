@@ -106,6 +106,7 @@ public class ProductMutationLeaseTests
         Assert.NotNull(ownerSecurity);
 
         using var ownerReady = new ManualResetEventSlim(false);
+        using var ownerMayExit = new ManualResetEventSlim(false);
         Thread abandonedOwner = new(() =>
         {
             Mutex mutex = MutexAcl.Create(
@@ -118,9 +119,17 @@ public class ProductMutationLeaseTests
             // Deliberately do not release or dispose: Windows abandons the
             // mutex when this owner thread exits, and the next waiter must
             // recover ownership through AbandonedMutexException.
+            // Keep the managed handle alive until the delegate returns. Under
+            // full-suite GC pressure, allowing the local to become dead after
+            // ownerReady.Set() can finalize the handle before thread exit and
+            // turn the intended abandoned-owner ordering into an ordinary
+            // still-owned/recreated-object race.
+            ownerMayExit.Wait();
+            GC.KeepAlive(mutex);
         });
         abandonedOwner.Start();
         Assert.True(ownerReady.Wait(TimeSpan.FromSeconds(2)), "abandoned-owner setup timed out");
+        ownerMayExit.Set();
         abandonedOwner.Join();
 
         Assert.True(ProductMutationLease.TryAcquire(out ProductMutationLease? recovered, name));

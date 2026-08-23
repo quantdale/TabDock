@@ -112,6 +112,43 @@ state via `_shepherd.FlushJournal()` (`WindowShepherdService.cs`). Both run on e
 `ContainerWindow.IsAppShuttingDown` is set before every shutdown so `Closing` skips its
 Yes/No prompt (`App.xaml`, `ContainerWindow.xaml`).
 
+### Product trust and interaction projections
+
+The launcher has three read/diagnostic projections around existing authorities:
+
+- `PendingRecoveryService.GetLauncherAttention` reuses the canonical pending-file
+  parser and unresolved-evidence calculation. It skips temporary-fragment cleanup,
+  takes no recovery lease, and performs no native recovery mutation. The launcher
+  banner counts unresolved evidence files, treats unreadable/corrupt evidence as
+  attention, and disappears only when discovery is clear. It presents the exact
+  supported commands `TabDock.exe --pending-recovery` and
+  `TabDock.exe --recover-pending`; typed confirmation and supervised recovery stay
+  in the existing command path.
+- `GroupManager.CaptureAdmission` is the only capture-admission authority. Its
+  allowed/reason record and `CaptureAdmissionChanged` event project to the launcher,
+  container Add window surface, and capture picker. Admission failure is distinct
+  from a missing global shortcut: capture controls are blocked with the canonical
+  reason, while local/button fallbacks remain available when only a shortcut is
+  unavailable. WinEvent retry transitions update these surfaces without restart.
+- `HotkeyService` registers `Ctrl+Alt+PageUp` and `Ctrl+Alt+PageDown` with
+  `MOD_NOREPEAT`. `App.OnTabNavigationHotkeyPressed` proves the foreground HWND is
+  a current captured guest or the owning container/chrome, resolves its live group,
+  and invokes `ContainerWindow.NavigateTabs`. Unrelated foreground applications,
+  stale/recycled HWNDs, closed containers, and active modal/chrome interactions are
+  strict no-ops. Local Ctrl+Tab uses the same container operation and
+  `TabNavigationPolicy`; `Ctrl+Alt+Left/Right` is deliberately not registered
+  because common graphics/display-driver shortcuts collide with those combinations.
+
+The container's persistent `Split ▾` button is an always-visible UI affordance,
+not a second split state machine. `SplitAffordancePolicy` projects eligible partner,
+presented focus, dormant resume/show, and end actions from current
+`CapturedWindow` references. Every action is revalidated against the live
+`SplitPresentationController` state before routing to the existing
+`StartSplitFrom`, `FocusSplitMember`, `ResumeSplitPair`, or `ExitSplit` paths.
+This preserves LEFT/RIGHT identity, dormant relationships, composite `DisplayTabs`
+presentation, member-removal semantics, and Shepherd's independent top-level guest
+windows.
+
 ---
 
 ## 2. Capture lifecycle
@@ -220,12 +257,13 @@ one in the existing shell. The launcher is hidden while a container is open and
 remains only as the no-group/global-hotkey fallback. Routine Add App capture is
 an in-window panel; the standalone picker remains for the fallback path.
 
-- **State** — `_splitLeft`/`_splitRight` hold `CapturedWindow` references
-  (identity, not index, so the pair survives tab reordering); `_splitForeground`
-  tracks which member is z-order-top; `_splitPairPresented` separately records
-  whether the relationship currently occupies the two panes. Split is
-  runtime-only (not persisted), and a dormant relationship may coexist with a
-  non-member full-width active guest.
+- **State** — `SplitPresentationController.Left` / `.Right` hold
+  `CapturedWindow` references (identity, not index, so the pair survives tab
+  reordering); `.Foreground` tracks which member is z-order-top and
+  `.IsPresented` separately records whether the relationship currently occupies
+  the two panes. Split is runtime-only (not persisted), and a dormant
+  relationship may coexist with a non-member full-width active guest. The
+  controller is the sole runtime split authority.
 - **Composite tab (presentation only)** — the strip renders the relationship as
   ONE visual item `[ A | B ]` (a subtle central separator) instead of two
   unrelated tabs: `GroupViewModel.DisplayTabs` is the strip projection
@@ -238,9 +276,12 @@ an in-window panel; the standalone picker remains for the fallback path.
   exactly when no split relationship is defined (Add/Remove/Move mirrored so ListBox
   containers survive reorders).
 - **Enter/exit** — `EnterSplit(left, right)` / `ExitSplit(keepActive)` route
-  through the context menu (`ConfigureSplitMenuItems`: disabled below two tabs,
-  direct action at exactly two, submenu at three+, and `Exit split screen` when
-  the relationship exists). Clicking a composite HALF keeps the pair and
+  through both the existing tab context menu and the persistent `Split ▾`
+  affordance (`SplitAffordancePolicy`: disabled below two tabs, eligible
+  partner actions, presented focus/end actions, and dormant resume/show/end
+  actions). The context menu still offers a direct action at exactly two tabs,
+  a partner submenu at three+, and `Exit split screen` when the relationship
+  exists. Clicking a composite HALF keeps the pair and
   focuses that member without hiding the partner. An ordinary left-click on a
   NON-paired tab journal-safely suspends the presented pair, keeps the
   relationship/composite, and presents the selected guest full-width; clicking

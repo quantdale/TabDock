@@ -64,7 +64,8 @@ internal static class PendingRecoveryService
 
     internal static PendingRecoveryCatalog Discover(
         string? directory = null,
-        IPendingRecoveryNativeApi? api = null)
+        IPendingRecoveryNativeApi? api = null,
+        bool cleanupTemporaryFiles = true)
     {
         string root = directory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -80,7 +81,8 @@ internal static class PendingRecoveryService
             }
             if (!Directory.Exists(root))
                 return catalog;
-            SweepOrphanedTemporaryFiles(root);
+            if (cleanupTemporaryFiles)
+                SweepOrphanedTemporaryFiles(root);
             paths = GetPendingPaths(root).ToArray();
         }
         catch (UnauthorizedAccessException ex)
@@ -110,8 +112,29 @@ internal static class PendingRecoveryService
 
     internal static int CountActivePendingFiles(string directory)
     {
-        PendingRecoveryCatalog catalog = Discover(directory);
+        PendingRecoveryCatalog catalog = Discover(directory, cleanupTemporaryFiles: false);
         return catalog.Files.Count(file => file.HasUnresolvedEvidence);
+    }
+
+    /// <summary>
+    /// Projects pending-recovery evidence for the normal launcher. This is a
+    /// read-only view: unlike the command's historical discovery path it does
+    /// not sweep temporary fragments, and it never writes source, ledger, or
+    /// transaction evidence. A corrupt/unreadable pending file remains an
+    /// attention item because presenting it as absent would violate the
+    /// fail-closed recovery contract.
+    /// </summary>
+    internal static PendingRecoveryAttention GetLauncherAttention(string? directory = null)
+    {
+        PendingRecoveryCatalog catalog = Discover(
+            directory,
+            api: null,
+            cleanupTemporaryFiles: false);
+        int pendingFileCount = catalog.Files.Count(file => file.HasUnresolvedEvidence);
+        return new PendingRecoveryAttention(
+            pendingFileCount,
+            InspectionFailed: catalog.Error != null,
+            catalog.Error);
     }
 
     internal static string FormatDiscovery(string? directory = null)
@@ -2086,6 +2109,21 @@ internal sealed class PendingRecoveryCatalog
     public List<PendingRecoveryFile> Files { get; } = new();
     public string? Error { get; set; }
     public string? ErrorDetail { get; set; }
+}
+
+internal readonly record struct PendingRecoveryAttention(
+    int PendingFileCount,
+    bool InspectionFailed,
+    string? InspectionError)
+{
+    public bool HasAttention => PendingFileCount > 0 || InspectionFailed;
+
+    public string SummaryText => PendingFileCount switch
+    {
+        1 => "Recovery attention required — 1 pending recovery item was found.",
+        > 1 => $"Recovery attention required — {PendingFileCount} pending recovery items were found.",
+        _ => "Recovery attention required — pending recovery evidence could not be fully inspected.",
+    };
 }
 
 internal sealed class PendingRecoveryFile

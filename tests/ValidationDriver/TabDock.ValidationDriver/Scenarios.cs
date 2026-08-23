@@ -388,6 +388,7 @@ internal static partial class Scenarios
         "split-comparison-observe",
         "startup-group-not-hidden-behind-existing-window",
         "startup-does-not-steal-foreground-after-external-activation",
+        "global-tab-navigation", "split-affordance", "capture-admission-blocked",
     };
 
     /// <summary>
@@ -449,6 +450,12 @@ internal static partial class Scenarios
             return "real-app";
         if (name == "browser-multi" || Array.IndexOf(BrowserOnlyScenarios, name) >= 0)
             return "browser";
+        if (name == "global-tab-navigation")
+            return "keyboard-input";
+        if (name == "split-affordance")
+            return "split-focus";
+        if (name == "capture-admission-blocked")
+            return "diagnostics";
         // R22 qualification torture harness (Scenarios.Torture.cs). Shard
         // mapping follows each soak's dominant cost driver: tab-switch soaks
         // are click/input churn (keyboard-input), member-destroy drives the
@@ -617,6 +624,9 @@ internal static partial class Scenarios
             "restored-group-survives-member-reclose" => RestoredGroupSurvivesMemberReclose,
             "selfminimize-timer-vs-teardown" => SelfMinimizeTimerVsTeardown,
             "launcher-empty-state-hint" => LauncherEmptyStateHint,
+            "global-tab-navigation" => GlobalTabNavigation,
+            "split-affordance" => SplitAffordance,
+            "capture-admission-blocked" => CaptureAdmissionBlocked,
             "split-single-disabled" => SplitSingleDisabled,
             "split-two-auto" => SplitTwoAuto,
             "split-select-partner" => SplitSelectPartner,

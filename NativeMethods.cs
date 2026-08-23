@@ -615,6 +615,8 @@ public static partial class NativeMethods
 
     public const uint VK_G = 0x47;
     public const uint VK_D = 0x44;
+    public const uint VK_PRIOR = 0x21;
+    public const uint VK_NEXT = 0x22;
     public const uint VK_MENU = 0x12;
     public const int ASFW_ANY = -1;
     public const uint ATTACH_PARENT_PROCESS = 0xFFFFFFFF;

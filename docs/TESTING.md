@@ -117,6 +117,38 @@ double-capture-refused, persist-active-tab-index, restored-group-survives-member
 selfminimize-timer-vs-teardown, launcher-empty-state-hint
 ```
 
+Product Trust & Interaction deterministic coverage lives in the unit suite:
+`PendingRecoveryAttentionTests`, `CaptureAdmissionStateTests`,
+`GlobalTabNavigationPolicyTests`, `HotkeyRegistrationPolicyTests`, and
+`SplitAffordancePolicyTests`, with cross-feature projections in
+`ProductTrustInteractionIntegrationTests`. These cover read-only banner projection and
+fail-closed evidence, admission transitions/reason updates, PageUp/PageDown
+registration and foreground scope, stale/recycled HWND rejection, split
+presented/dormant action projection, reference identity, stale menu actions,
+member removal, and no duplicate split authority. Source-contract tests also
+lock AutomationIds, the shared navigation operation, `MOD_NOREPEAT`, and the
+persistent Split control.
+
+The focused deterministic commands are:
+
+```powershell
+dotnet test TabDock.sln -c Debug --filter "FullyQualifiedName~GlobalTabNavigationPolicyTests|FullyQualifiedName~HotkeyRegistrationPolicyTests"
+dotnet test TabDock.sln -c Debug --filter "FullyQualifiedName~SplitAffordancePolicyTests"
+```
+
+The supervised Windows targets for this campaign are:
+
+```powershell
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes --scenario global-tab-navigation
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes --scenario split-affordance
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes --scenario capture-admission-blocked
+```
+
+These scenarios send real input and require an exclusively available,
+provenance-approved desktop. If that gate is not safe, record
+`BLOCKED_SUPERVISED` or `BLOCKED_ENVIRONMENT` with the exact command rather than
+turning environmental refusal into a product failure.
+
 Split-screen scenarios (pig-only, hermetic, join `all`):
 
 ```

@@ -113,6 +113,7 @@ public partial class ContainerWindow : Window
     // is harmless.
     private ContextMenu? _openTabContextMenu;
     private readonly HashSet<ContextMenu> _trackedTabContextMenus = new();
+    private ContextMenu? _splitAffordanceContextMenu;
     private bool _chromePopupActive;
 
     // Coalesces the several per-frame reposition triggers (native
@@ -200,6 +201,39 @@ public partial class ContainerWindow : Window
     /// capture-picker requests until the prompt returns.
     /// </summary>
     public bool IsClosePromptOpen => _closePromptOpen;
+
+    /// <summary>
+    /// Global tab navigation may use this container only while it is still a
+    /// live presentation owner and no modal/chrome interaction has priority.
+    /// The foreground proof itself is performed by App; this property is the
+    /// final close/reentrancy gate at the container boundary.
+    /// </summary>
+    internal bool CanReceiveGlobalTabNavigation
+        => !IsAppShuttingDown
+            && _containerHwnd != IntPtr.Zero
+            && IsLoaded
+            && !_closePromptOpen
+            && !IsContainerChromeInteractionActive();
+
+    /// <summary>
+    /// Proves that an HWND belongs to this container or its owned WPF chrome.
+    /// Guests are resolved separately through GroupManager so a recycled guest
+    /// HWND cannot be mistaken for a container context.
+    /// </summary>
+    internal bool IsCurrentForegroundContext(IntPtr foregroundHwnd)
+    {
+        if (foregroundHwnd == IntPtr.Zero || _containerHwnd == IntPtr.Zero)
+            return false;
+        if (foregroundHwnd == _containerHwnd || foregroundHwnd == _contentHostHwnd)
+            return true;
+
+        if (!NativeMethods.IsWindow(foregroundHwnd))
+            return false;
+
+        IntPtr root = NativeMethods.GetAncestor(foregroundHwnd, NativeMethods.GA_ROOT);
+        IntPtr rootOwner = NativeMethods.GetAncestor(foregroundHwnd, NativeMethods.GA_ROOTOWNER);
+        return root == _containerHwnd || rootOwner == _containerHwnd;
+    }
 
     /// <summary>
     /// Returns the current desired/logical presentation without invoking layout,
@@ -747,46 +781,42 @@ public partial class ContainerWindow : Window
             return;
         if (e.Key != Key.Tab)
             return;
+        e.Handled = NavigateTabs(
+            backward: (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift);
+    }
 
-        // The navigation DECISION is owned by TabNavigationPolicy: it returns
-        // the authoritative target tab (never a presentation-space index), so
-        // the split composite's Tabs/DisplayTabs divergence cannot misdirect
-        // this shortcut. Selection sync happens via the ActiveTab/IsActive/
-        // IsSelected binding chain (ContainerWindow.xaml), same as every other
-        // active-tab switch.
+    /// <summary>
+    /// The one application-level tab navigation operation. Local Ctrl+Tab and
+    /// the foreground-scoped PageUp/PageDown hotkeys both enter here, so split
+    /// composite identity, dormant relationships, wraparound, and ordinary
+    /// tab cycling remain owned by TabNavigationPolicy and the existing focus
+    /// / active-tab mutation paths.
+    /// </summary>
+    internal bool NavigateTabs(bool backward)
+    {
         var decision = TabNavigationPolicy.ResolveCtrlTab(
             _viewModel.Tabs.Select(t => t.Model).ToArray(),
             _viewModel.ActiveTab?.Model,
-            backward: (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift,
+            backward,
             splitPresented: IsSplitPresented,
             splitLeft: _splitController.Left,
             splitRight: _splitController.Right,
             splitForeground: _splitController.Foreground);
-        if (decision.Kind == TabNavigationPolicy.NavigationKind.NotNavigable)
-            return;
+        if (decision.Kind == TabNavigationPolicy.NavigationKind.NotNavigable || decision.Target == null)
+            return false;
+
+        TabViewModel? target = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, decision.Target));
+        if (target == null)
+            return false;
+        if (!_shepherd.IsCurrentCapturedWindow(target.Model))
+            return false;
 
         if (decision.Kind == TabNavigationPolicy.NavigationKind.FocusSplitMember)
-        {
-            // The split pair is the selected tab-strip unit: Ctrl+Tab cycles
-            // between the two members only (FocusSplitMember resumes a dormant
-            // pair through its own path when needed).
-            if (decision.Target != null)
-            {
-                TabViewModel? member = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, decision.Target));
-                if (member != null)
-                    FocusSplitMember(member);
-            }
-            e.Handled = true;
-            return;
-        }
+            FocusSplitMember(target);
+        else
+            _viewModel.SetActiveTab(target);
 
-        if (decision.Target != null)
-        {
-            TabViewModel? next = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, decision.Target));
-            if (next != null)
-                _viewModel.SetActiveTab(next);
-        }
-        e.Handled = true;
+        return true;
     }
 
     private void ContainerWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -1015,6 +1045,12 @@ public partial class ContainerWindow : Window
         try { TabsListBox.PreviewMouseLeftButtonDown -= TabsListBox_PreviewMouseLeftButtonDown; } catch { }
         try { LayoutUpdated -= ContainerWindow_LayoutUpdated; } catch { }
         _openTabContextMenu = null;
+        if (_splitAffordanceContextMenu != null)
+        {
+            _splitAffordanceContextMenu.Closed -= SplitAffordanceContextMenu_Closed;
+            _splitAffordanceContextMenu.IsOpen = false;
+            _splitAffordanceContextMenu = null;
+        }
         _viewModel.DeleteGroupRequested -= ViewModel_DeleteGroupRequested;
         ColorContextMenu.Closed -= ColorContextMenu_Closed;
         foreach (ContextMenu menu in _trackedTabContextMenus)
@@ -1400,6 +1436,147 @@ public partial class ContainerWindow : Window
     }
 
     /// <summary>
+    /// Opens the persistent Split control's action list. The projection is
+    /// rebuilt from current references on every open; it is never a second
+    /// split state machine. Each click is revalidated against the live tabs and
+    /// controller state because a member can disappear while the menu is open.
+    /// </summary>
+    private void SplitAffordance_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not UIElement placementTarget || _closePromptOpen)
+            return;
+
+        var tabs = _viewModel.Tabs.Select(t => t.Model).ToArray();
+        SplitAffordanceMenuState state = SplitAffordancePolicy.Build(
+            tabs,
+            _viewModel.ActiveTab?.Model,
+            _splitController.Left,
+            _splitController.Right,
+            IsSplitPresented,
+            _shepherd.IsCurrentCapturedWindow);
+
+        var menu = new ContextMenu();
+        System.Windows.Automation.AutomationProperties.SetAutomationId(menu, "SplitAffordanceMenu");
+        if (state.Actions.Count == 0)
+        {
+            var unavailable = new MenuItem
+            {
+                Header = state.ToolTip,
+                IsEnabled = false,
+            };
+            System.Windows.Automation.AutomationProperties.SetAutomationId(unavailable, "SplitAffordanceUnavailable");
+            menu.Items.Add(unavailable);
+        }
+        else
+        {
+            foreach (SplitAffordanceAction action in state.Actions)
+            {
+                var item = new MenuItem
+                {
+                    Header = DescribeSplitAffordanceAction(action),
+                    Tag = action,
+                };
+                System.Windows.Automation.AutomationProperties.SetAutomationId(item, SplitAffordanceAutomationId(action));
+                System.Windows.Automation.AutomationProperties.SetHelpText(item, state.ToolTip);
+                item.Click += SplitAffordanceMenuItem_Click;
+                menu.Items.Add(item);
+            }
+        }
+
+        menu.Closed += SplitAffordanceContextMenu_Closed;
+        _splitAffordanceContextMenu = menu;
+        e.Handled = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+        {
+            if (!IsLoaded || !ReferenceEquals(_splitAffordanceContextMenu, menu))
+                return;
+            menu.PlacementTarget = placementTarget;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            BeginChromePopup();
+            menu.IsOpen = true;
+        }));
+    }
+
+    private void SplitAffordanceMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem item || item.Tag is not SplitAffordanceAction action)
+            return;
+
+        var tabs = _viewModel.Tabs.Select(t => t.Model).ToArray();
+        if (!SplitAffordancePolicy.IsActionCurrent(
+                action,
+                tabs,
+                _splitController.Left,
+                _splitController.Right,
+                IsSplitPresented,
+                _shepherd.IsCurrentCapturedWindow))
+        {
+            _log.Log("SPLIT[affordance-stale] action rejected because its captured-window identity is no longer current.");
+            e.Handled = true;
+            return;
+        }
+
+        switch (action.Kind)
+        {
+            case SplitAffordanceActionKind.CreatePair:
+            {
+                TabViewModel? left = FindTab(action.Source);
+                TabViewModel? right = FindTab(action.Target);
+                if (left != null && right != null)
+                    StartSplitFrom(left, right);
+                break;
+            }
+            case SplitAffordanceActionKind.FocusLeft:
+            case SplitAffordanceActionKind.FocusRight:
+            case SplitAffordanceActionKind.ResumeLeft:
+            case SplitAffordanceActionKind.ResumeRight:
+            {
+                TabViewModel? member = FindTab(action.Target);
+                if (member != null)
+                    FocusSplitMember(member);
+                break;
+            }
+            case SplitAffordanceActionKind.EndRelationship:
+                ExitSplit();
+                break;
+        }
+
+        e.Handled = true;
+    }
+
+    private TabViewModel? FindTab(CapturedWindow? target)
+        => target == null
+            ? null
+            : _viewModel.Tabs.FirstOrDefault(tab => ReferenceEquals(tab.Model, target));
+
+    private string DescribeSplitAffordanceAction(SplitAffordanceAction action)
+        => action.Kind switch
+        {
+            SplitAffordanceActionKind.CreatePair
+                => $"Split with {FindTab(action.Target)?.Title ?? "another tab"}",
+            SplitAffordanceActionKind.FocusLeft => "Focus LEFT",
+            SplitAffordanceActionKind.FocusRight => "Focus RIGHT",
+            SplitAffordanceActionKind.ResumeLeft => "Resume/show split (LEFT)",
+            SplitAffordanceActionKind.ResumeRight => "Resume/show split (RIGHT)",
+            SplitAffordanceActionKind.EndRelationship => "End split",
+            _ => "Split action",
+        };
+
+    private static string SplitAffordanceAutomationId(SplitAffordanceAction action)
+        => action.Kind == SplitAffordanceActionKind.CreatePair && action.Target != null
+            ? $"SplitPartner_{action.Target.Hwnd.ToInt64():X}"
+            : $"SplitAction_{action.Kind}";
+
+    private void SplitAffordanceContextMenu_Closed(object? sender, RoutedEventArgs e)
+    {
+        if (sender is ContextMenu menu)
+            menu.Closed -= SplitAffordanceContextMenu_Closed;
+        if (ReferenceEquals(_splitAffordanceContextMenu, sender))
+            _splitAffordanceContextMenu = null;
+        EndChromePopup();
+    }
+
+    /// <summary>
     /// True when the user is interacting with the container's own chrome rather
     /// than intending to foreground the guest: an open tab context menu (Pop out /
     /// Close window), the open accent-color menu, or the group rename box being
@@ -1410,6 +1587,7 @@ public partial class ContainerWindow : Window
     private bool IsContainerChromeInteractionActive()
     {
         if (_openTabContextMenu is { IsOpen: true }) return true;
+        if (_splitAffordanceContextMenu is { IsOpen: true }) return true;
         if (ColorContextMenu.IsOpen) return true;
         if (GroupContextMenu.IsOpen) return true;
         if (IsCapturePanelOpen) return true;
@@ -1657,7 +1835,7 @@ public partial class ContainerWindow : Window
         // Toggle the inline capture surface: a second click on the same button
         // closes it, matching the behaviour of the other chrome popups. The
         // close-confirm prompt still takes precedence.
-        if (_closePromptOpen)
+        if (_closePromptOpen || !_manager.CaptureAllowed)
             return;
         if (IsCapturePanelOpen)
             CloseCapturePanel();
@@ -1747,7 +1925,7 @@ public partial class ContainerWindow : Window
     /// </summary>
     public void OpenCapturePanel()
     {
-        if (_capturePicker != null)
+        if (_capturePicker != null || !_manager.CaptureAllowed)
             return;
 
         // Raise the container above its guests while the inline capture surface
@@ -2122,6 +2300,8 @@ public partial class ContainerWindow : Window
     private void FocusSplitMember(TabViewModel member)
     {
         if (member == null || !IsSplitRelationshipDefined || !IsSplitMember(member.Model))
+            return;
+        if (!_shepherd.IsCurrentCapturedWindow(member.Model))
             return;
         if (!IsSplitPresented)
         {

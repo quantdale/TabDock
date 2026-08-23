@@ -53,6 +53,8 @@ public class CapturePickerViewModelTests
         string root = Path.Combine(Path.GetTempPath(), "TabDock-picker-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var firstExtractionStarted = new ManualResetEventSlim();
+        var currentExtractionFinished = new ManualResetEventSlim();
+        var failureExtractionFinished = new ManualResetEventSlim();
         var releaseFirstExtraction = new ManualResetEventSlim();
         int extractionCount = 0;
         int sourceGeneration = 0;
@@ -79,6 +81,7 @@ public class CapturePickerViewModelTests
                     releaseFirstExtraction.Wait(TimeSpan.FromSeconds(2));
                     return oldIcon;
                 }
+                currentExtractionFinished.Set();
                 return currentIcon;
             });
 
@@ -110,12 +113,17 @@ public class CapturePickerViewModelTests
             // extracted. Refresh N+1 has a different path and must win.
             Volatile.Write(ref sourceGeneration, 1);
             picker.Refresh();
+            // The event proves the current extraction actually completed; the
+            // 15-second bound is only a dead-worker safety guard. The assertion
+            // remains about generation ordering and dispatcher ownership, not
+            // about an arbitrary worker-start latency.
             Assert.True(
                 PumpUntil(
                     testDispatcher,
-                    () => picker.IconResolutionCompletion.IsCompleted
+                    () => currentExtractionFinished.IsSet
+                        && picker.IconResolutionCompletion.IsCompleted
                         && picker.Windows.All(row => ReferenceEquals(row.Icon, currentIcon)),
-                    2000),
+                    15000),
                 "the newest generation must own every row icon");
 
             releaseFirstExtraction.Set();
@@ -130,7 +138,11 @@ public class CapturePickerViewModelTests
                 && Volatile.Read(ref extractionCount) == callsAfterColdRefresh;
             Assert.True(cachedRowsAreImmediate, "cached rows must not re-extract on a warm refresh");
 
-            var failingIcons = new IconService(log, _ => throw new InvalidOperationException("test icon failure"));
+            var failingIcons = new IconService(log, _ =>
+            {
+                failureExtractionFinished.Set();
+                throw new InvalidOperationException("test icon failure");
+            });
             using var failingPicker = new CapturePickerViewModel(
                 manager,
                 failingIcons,
@@ -141,13 +153,18 @@ public class CapturePickerViewModelTests
                 },
                 testDispatcher);
             Assert.True(
-                PumpUntil(testDispatcher, () => failingPicker.IconResolutionCompletion.IsCompleted, 2000),
+                PumpUntil(
+                    testDispatcher,
+                    () => failureExtractionFinished.IsSet && failingPicker.IconResolutionCompletion.IsCompleted,
+                    15000),
                 "icon extraction failure must complete the refresh instead of hanging it");
         }
         finally
         {
             releaseFirstExtraction.Set();
             firstExtractionStarted.Dispose();
+            currentExtractionFinished.Dispose();
+            failureExtractionFinished.Dispose();
             releaseFirstExtraction.Dispose();
             try
             {

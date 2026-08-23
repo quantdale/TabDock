@@ -40,7 +40,7 @@ public sealed class GroupManager
     private readonly Dictionary<IntPtr, CapturedMember> _capturedIndex = new();
     private readonly Dictionary<Group, NotifyCollectionChangedEventHandler> _memberHandlers = new();
     private bool _monitoringNeeded;
-    private bool _captureAllowed = true;
+    private CaptureAdmissionState _captureAdmission = new(true, "Capture admission is healthy.");
 
     /// <summary>An indexed captured window together with the group that owns it.</summary>
     public readonly struct CapturedMember
@@ -75,7 +75,16 @@ public sealed class GroupManager
     /// permanently. Existing guests are released before this becomes the
     /// steady state, so the UI cannot silently create unsupported captures.
     /// </summary>
-    public bool CaptureAllowed => _captureAllowed;
+    public bool CaptureAllowed => _captureAdmission.Allowed;
+
+    /// <summary>The current canonical admission state, including its reason.</summary>
+    public CaptureAdmissionState CaptureAdmission => _captureAdmission;
+
+    /// <summary>Current human-readable admission reason for UI and diagnostics.</summary>
+    public string CaptureAdmissionReason => _captureAdmission.Reason;
+
+    /// <summary>Raised whenever admission or its reason changes.</summary>
+    public event EventHandler<CaptureAdmissionChangedEventArgs>? CaptureAdmissionChanged;
 
     public ObservableCollection<Group> Groups { get; } = new();
 
@@ -103,10 +112,15 @@ public sealed class GroupManager
 
     public void SetCaptureAllowed(bool allowed, string reason)
     {
-        if (_captureAllowed == allowed)
+        string normalizedReason = string.IsNullOrWhiteSpace(reason)
+            ? allowed ? "Capture admission is healthy." : "Capture is unavailable."
+            : reason.Trim();
+        CaptureAdmissionState next = new(allowed, normalizedReason);
+        if (_captureAdmission == next)
             return;
-        _captureAllowed = allowed;
+        _captureAdmission = next;
         _log.Log($"Capture admission {(allowed ? "enabled" : "disabled")}: {reason}");
+        CaptureAdmissionChanged?.Invoke(this, new CaptureAdmissionChangedEventArgs(next));
     }
 
     private DispatcherTimer? _saveDebounce;

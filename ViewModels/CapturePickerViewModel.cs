@@ -51,6 +51,10 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         }
     }
 
+    public bool CaptureAllowed => _manager.CaptureAllowed;
+    public string CaptureAdmissionReason => _manager.CaptureAdmissionReason;
+    public bool CaptureAdmissionBlocked => !CaptureAllowed;
+
     public ICommand RefreshCommand { get; }
     public ICommand GroupSelectedCommand { get; }
     public ICommand CancelCommand { get; }
@@ -86,8 +90,12 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         _testCandidateSource = testCandidateSource;
 
         RefreshCommand = new RelayCommand(_ => Refresh());
-        GroupSelectedCommand = new RelayCommand(_ => GroupingRequested?.Invoke(this, EventArgs.Empty), _ => HasSelection);
+        GroupSelectedCommand = new RelayCommand(
+            _ => GroupingRequested?.Invoke(this, EventArgs.Empty),
+            _ => HasSelection && _manager.CaptureAllowed);
         CancelCommand = new RelayCommand(_ => Canceled?.Invoke(this, EventArgs.Empty));
+
+        _manager.CaptureAdmissionChanged += Manager_CaptureAdmissionChanged;
 
         Refresh();
     }
@@ -352,8 +360,17 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         if (_disposed)
             return;
         _disposed = true;
+        _manager.CaptureAdmissionChanged -= Manager_CaptureAdmissionChanged;
         unchecked { _refreshGeneration++; }
         CancelIconResolution();
+    }
+
+    private void Manager_CaptureAdmissionChanged(object? sender, CaptureAdmissionChangedEventArgs e)
+    {
+        OnPropertyChanged(nameof(CaptureAllowed));
+        OnPropertyChanged(nameof(CaptureAdmissionReason));
+        OnPropertyChanged(nameof(CaptureAdmissionBlocked));
+        ((RelayCommand)GroupSelectedCommand).RaiseCanExecuteChanged();
     }
 
     private sealed record IconWorkItem(WindowInfo Row, string ExePath);
