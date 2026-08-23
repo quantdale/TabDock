@@ -141,13 +141,17 @@ public partial class ContainerWindow : Window
     /// <summary>Minimum pointer movement in pixels before drag gesture is recognized (avoids flaky tab activation on clicks).</summary>
     private const double DragThreshold = 4;
 
-    // Tab-strip slot midpoints snapshotted at drag start. Drop targeting must
-    // not read live container geometry mid-drag: a reorder mutates the layout
-    // under a stationary pointer, and the next MouseMove would compute the
-    // opposite index and reorder straight back (finding H2's oscillation).
-    private System.Collections.Generic.List<double>? _dragMidpoints;
-    private int _dragMidpointsCount;
-    private bool _dragMidpointsValid;
+    // Tab-strip slot snapshots taken at drag start: one entry per VISIBLE
+    // DisplayTabs slot (midpoint + item reference). Drop targeting must not
+    // read live container geometry mid-drag: a reorder mutates the layout under
+    // a stationary pointer, and the next MouseMove would compute the opposite
+    // index and reorder straight back (finding H2's oscillation). Items are
+    // stored by REFERENCE so drop boundaries resolve through live authoritative
+    // Tabs indexes even after intermediate in-drag reorders, without ever
+    // resnapshotting geometry.
+    private System.Collections.Generic.List<TabStripDragProjection.DragSlot>? _dragSlots;
+    private int _dragSlotCount;
+    private bool _dragSlotsValid;
 
     // Container and content-marker HWNDs cached at Loaded time (both are known
     // non-zero there). By Closed time WindowInteropHelper.Handle and
@@ -3219,24 +3223,14 @@ public partial class ContainerWindow : Window
         _draggedItem = FindListBoxItem(e.OriginalSource);
         if (_draggedItem == null)
             return;
-        // During split the strip holds a composite item that does not map
-        // one-to-one to Tabs indices, so disable strip dragging (reorder /
-        // drag-out) for the duration of the split to avoid index mismatches
-        // (documented in the goal: the composite is not draggable as a unit in
-        // this pass). The composite halves handle their own clicks/middle-clicks;
-        // the window-level split interaction hook owns non-member presentation
-        // switches while the pair is presented.
+        // While a pair is PRESENTED the strip holds the composite as the
+        // selected tab-strip unit: swallow presses on ordinary tab items so a
+        // NON-member click cannot select itself and trigger the revert/
+        // SelectionChanged ping-pong (the pair and the visible set stay
+        // untouched; each tab's × button keeps working). Reorder/drag-out of
+        // ordinary tabs remains available while the pair is merely DORMANT.
         if (IsSplitPresented)
         {
-            // A NON-member tab's ordinary left-click must NOT select it while
-            // the split pair is the selected tab-strip unit: selection would
-            // activate the non-member, and the revert (which re-activates the
-            // focused member) would then fight the ListBox's IsSelected<->IsActive
-            // TwoWay binding — a re-entrant SelectionChanged<->SetActiveTab
-            // ping-pong that overflows the stack. Swallow the click entirely
-            // (the pair and the visible set stay untouched). The tab's own ×
-            // button is excluded: popping the member out is a structural
-            // operation and must keep working.
             if (_draggedItem.DataContext is TabViewModel)
             {
                 for (DependencyObject? cur = e.OriginalSource as DependencyObject; cur != null; cur = VisualTreeHelper.GetParent(cur))
@@ -3250,7 +3244,16 @@ public partial class ContainerWindow : Window
             return;
         }
 
+        // The composite itself is deliberately NOT a drag unit in either split
+        // state (documented contract: the pair is reference-identified by the
+        // controller; its halves own their own click/focus/close semantics).
+        // Drop targeting may still place other tabs AROUND the composite slot.
         _draggedTab = _draggedItem.DataContext as TabViewModel;
+        if (_draggedTab == null)
+        {
+            _draggedItem = null;
+            return;
+        }
         _dragStart = e.GetPosition(TabsListBox);
         _isDragging = false;
         // Do NOT take mouse capture here. Capturing during the tunneling event
@@ -3277,7 +3280,7 @@ public partial class ContainerWindow : Window
         {
             _isDragging = true;
             Mouse.Capture(TabsListBox);
-            SnapshotDragMidpoints();
+            SnapshotDragSlots();
         }
 
         if (!_isDragging)
@@ -3321,9 +3324,9 @@ public partial class ContainerWindow : Window
         _draggedTab = null;
         _draggedItem = null;
         _isDragging = false;
-        _dragMidpoints = null;
-        _dragMidpointsCount = 0;
-        _dragMidpointsValid = false;
+        _dragSlots = null;
+        _dragSlotCount = 0;
+        _dragSlotsValid = false;
         if (committedReorder)
             _viewModel.CommitReorder();
     }
@@ -3339,64 +3342,74 @@ public partial class ContainerWindow : Window
     }
 
     /// <summary>
-    /// Caches each tab slot's horizontal midpoint at drag start. Geometry is
-    /// settled at that moment; mid-drag it is not — a reorder moves the slots
-    /// under a stationary pointer, and recomputing the drop index from live
-    /// containers made the next MouseMove reorder straight back (the H2
-    /// oscillation: hundreds of A-&gt;B / B-&gt;A flips per second).
+    /// Caches each VISIBLE strip slot's horizontal midpoint plus its item at
+    /// drag start. The ListBox is bound to DisplayTabs — with a split pair
+    /// defined (dormant included) that is shorter than Tabs and contains a
+    /// composite item, so snapshotting Tabs-space containers here used to
+    /// invalidate on every missing container and silently disable all reorder
+    /// while a pair existed. Geometry is settled at drag start; mid-drag it is
+    /// not — a reorder moves the slots under a stationary pointer, and
+    /// recomputing the drop index from live containers made the next MouseMove
+    /// reorder straight back (the H2 oscillation: hundreds of A-&gt;B / B-&gt;A
+    /// flips per second).
     /// </summary>
-    private void SnapshotDragMidpoints()
+    private void SnapshotDragSlots()
     {
-        var midpoints = new System.Collections.Generic.List<double>(_viewModel.Tabs.Count);
-        for (int i = 0; i < _viewModel.Tabs.Count; i++)
+        var slots = new System.Collections.Generic.List<TabStripDragProjection.DragSlot>(_viewModel.DisplayTabs.Count);
+        for (int i = 0; i < _viewModel.DisplayTabs.Count; i++)
         {
-            if (TabsListBox.ItemContainerGenerator.ContainerFromIndex(i) is ListBoxItem item)
+            if (TabsListBox.ItemContainerGenerator.ContainerFromIndex(i) is ListBoxItem item
+                && item.DataContext != null)
             {
                 Point itemPos = item.TranslatePoint(new Point(0, 0), TabsListBox);
-                midpoints.Add(itemPos.X + item.ActualWidth / 2);
+                slots.Add(new TabStripDragProjection.DragSlot(itemPos.X + item.ActualWidth / 2, item.DataContext));
             }
             else
             {
                 // A container is missing (virtualized/not yet generated); the
                 // cache would be misaligned. Disable reorder for this drag.
-                _dragMidpoints = null;
-                _dragMidpointsCount = 0;
-                _dragMidpointsValid = false;
+                _dragSlots = null;
+                _dragSlotCount = 0;
+                _dragSlotsValid = false;
                 return;
             }
         }
-        _dragMidpoints = midpoints;
-        _dragMidpointsCount = midpoints.Count;
-        _dragMidpointsValid = true;
+        _dragSlots = slots;
+        _dragSlotCount = slots.Count;
+        _dragSlotsValid = true;
     }
+
+    /// <summary>View-side anchor resolver for <see cref="TabStripDragProjection"/>.</summary>
+    private int? ResolveSlotAnchor(object stripItem)
+        => stripItem switch
+        {
+            TabViewModel tab => IndexOrUnresolved(_viewModel.Tabs.IndexOf(tab)),
+            SplitCompositeViewModel composite when composite.Left != null
+                => IndexOrUnresolved(_viewModel.Tabs.IndexOf(composite.Left)),
+            _ => null,
+        };
+
+    private static int? IndexOrUnresolved(int index)
+        => index >= 0 ? index : null;
 
     private int? GetDropIndex(Point mousePos)
     {
-        if (!_dragMidpointsValid)
+        if (!_dragSlotsValid || _dragSlots == null)
             return null;
 
-        // A count change mid-drag (a tab destroyed or hidden by a WinEvent
+        // A structural change mid-drag (a tab destroyed or hidden by a WinEvent
         // handler between mouse moves) invalidates the cache. Re-snapshot:
-        // reorders never change the count, so this cannot reintroduce the
-        // oscillation feedback loop.
-        if (_dragMidpoints != null && _viewModel.Tabs.Count != _dragMidpointsCount)
+        // reorders are collection Moves and never change either count, so this
+        // cannot reintroduce the oscillation feedback loop.
+        if (_viewModel.DisplayTabs.Count != _dragSlotCount)
         {
-            SnapshotDragMidpoints();
-            if (!_dragMidpointsValid)
+            SnapshotDragSlots();
+            if (!_dragSlotsValid || _dragSlots == null)
                 return null;
         }
 
-        if (_dragMidpoints != null)
-        {
-            for (int i = 0; i < _dragMidpoints.Count; i++)
-            {
-                if (mousePos.X < _dragMidpoints[i])
-                    return i;
-            }
-            return _dragMidpoints.Count > 0 ? _dragMidpoints.Count : null;
-        }
-
-        return null;
+        return TabStripDragProjection.ResolveDropTargetIndex(
+            _dragSlots, mousePos.X, ResolveSlotAnchor, _viewModel.Tabs.Count);
     }
 
     #endregion
