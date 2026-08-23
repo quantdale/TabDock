@@ -143,7 +143,7 @@
                             Background="#0D131C" BorderBrush="{StaticResource TdBorderBrush}"
                             BorderThickness="1" CornerRadius="12" Padding="10,4">
                         <TextBlock Foreground="{StaticResource TdTextMutedBrush}" FontSize="11">
-                            <Run Text="{Binding Groups.Count}" /><Run Text=" groups" />
+                            <Run Text="{Binding Groups.Count, Mode=OneWay}" /><Run Text=" groups" />
                         </TextBlock>
                     </Border>
                 </Grid>
@@ -187,7 +187,7 @@
                                                    TextTrimming="CharacterEllipsis" />
                                         <TextBlock Margin="0,4,0,0" FontSize="11"
                                                    Foreground="{StaticResource TdTextMutedBrush}">
-                                            <Run Text="{Binding Members.Count}" /><Run Text=" captured windows" />
+                                            <Run Text="{Binding Members.Count, Mode=OneWay}" /><Run Text=" captured windows" />
                                         </TextBlock>
                                     </StackPanel>
 
