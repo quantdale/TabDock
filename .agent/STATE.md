@@ -10,6 +10,26 @@ this text.
 
 ## CURRENT STATUS
 
+## TAB MUTATION & DORMANT-SPLIT DRAG CAMPAIGN (started 2026-08-23, IN PROGRESS)
+
+Objective: (1) direct deterministic regression coverage for GroupViewModel
+ReorderTabs/CommitReorder/ReleaseTab (verified: zero direct references in
+tests today); (2) root-fix the dormant-split strip-drag loss —
+SnapshotDragMidpoints iterates Tabs.Count containers against the
+DisplayTabs-bound ListBox (one shorter while any pair exists), so reorder is
+silently dead during dormancy, and display-space boundaries were fed into
+Tabs-space ReorderTabs; (3) preserve H2 anti-oscillation and presented-pair
+protection. Plan:
+`.agent/plans/post-hardening-tab-mutation-drag-reliability-2026-08-23.md`.
+Baseline `3201d5d`. Fix: pure `TabStripDragProjection` (visible slots =
+reference + midpoint; drop boundary resolves to live anchor index; past-end →
+Tabs.Count; no-composite ⇒ byte-identical to old formula); snapshot DisplayTabs
+slots; count-invalidation compares DisplayTabs.Count only. Phase A needs NO
+new seam (real manager + shepherd over existing fakes + temp persistence).
+OpenSpec: `dormant-split-tab-drag` (specs currently silent on dormant-strip
+interaction; ARCHITECTURE.md:255 documents the intent).
+STATUS: plan written; implementation not yet started.
+
 ## DURABLE STATE & RECOVERY CAMPAIGN (started 2026-08-23, IN PROGRESS)
 
 Objective: close the two verified persistence/recovery follow-ups queued by
