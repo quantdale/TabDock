@@ -38,7 +38,7 @@
                             Background="{StaticResource TdAccentSoftBrush}"
                             BorderBrush="{StaticResource TdAccentBrush}"
                             BorderThickness="1" Margin="0,0,12,0">
-                        <TextBlock Text="T" Foreground="{StaticResource TdAccentBrush}"
+                        <TextBlock Text="T" Foreground="{StaticResource TdAccentTextBrush}"
                                    FontWeight="Bold" FontSize="17"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
@@ -214,7 +214,7 @@
                         <Border Width="48" Height="48" CornerRadius="14"
                                 Background="{StaticResource TdAccentSoftBrush}"
                                 HorizontalAlignment="Center" Margin="0,0,0,12">
-                            <TextBlock Text="+" Foreground="{StaticResource TdAccentBrush}"
+                            <TextBlock Text="+" Foreground="{StaticResource TdAccentTextBrush}"
                                        FontSize="26" FontWeight="Light"
                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
