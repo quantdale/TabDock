@@ -99,7 +99,12 @@ public class CapturePickerViewModelTests
             Assert.Equal("First", picker.Windows[0].Title);
             Assert.Equal("Second", picker.Windows[1].Title);
             Assert.All(picker.Windows, row => Assert.Null(row.Icon));
-            Assert.True(firstExtractionStarted.Wait(TimeSpan.FromSeconds(2)), "first background extraction never started");
+            // Scheduler-jitter tolerance: under full-suite parallel load the
+            // background extraction start can be delayed by ordinary thread-
+            // pool queuing. The gate proves ordering (extraction started before
+            // invalidation), not speed, so wait generously; 2s was observed to
+            // flake once suite size grew past ~570 parallel-heavy tests.
+            Assert.True(firstExtractionStarted.Wait(TimeSpan.FromSeconds(15)), "first background extraction never started");
 
             // Invalidate refresh N while its old executable is still being
             // extracted. Refresh N+1 has a different path and must win.

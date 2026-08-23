@@ -73,7 +73,10 @@ public sealed class GroupViewModelMutationTests : IDisposable
         foreach (CapturedWindow member in members)
             group.Members.Add(member);
         manager.Groups.Add(group);
-        _vm = new GroupViewModel(group, manager, new IconService(_log), _log);
+        // Deterministic icon seam: no real ExtractIconEx work in tests (the
+        // background extraction machinery would only add cross-test thread
+        // churn; icons are irrelevant to mutation contracts).
+        _vm = new GroupViewModel(group, manager, new IconService(_log, _ => null), _log);
         _vm.EmptiedByPopOut += (_, _) => _popOutCount++;
     }
 
