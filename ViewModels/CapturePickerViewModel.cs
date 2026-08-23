@@ -15,8 +15,9 @@ using TabDock.Services;
 namespace TabDock.ViewModels;
 
 /// <summary>
-/// View-model for the capture-picker dialog.
-/// Lists top-level windows and lets the user choose a target group.
+/// View-model for the capture-picker dialog and inline container picker.
+/// Lists top-level windows, keeps valid selections stable across refreshes,
+/// and exposes a lightweight client-side filter so large desktops remain usable.
 /// </summary>
 public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
 {
@@ -25,19 +26,33 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
     private readonly LoggingService _log;
     private readonly Dispatcher? _dispatcher;
     private readonly Func<IEnumerable<WindowInfo>>? _testCandidateSource;
+    private readonly ObservableCollection<WindowInfo> _filteredWindows = new();
     private GroupOption? _selectedGroupOption;
     private CancellationTokenSource? _iconLoadCancellation;
     private int _refreshGeneration;
     private bool _disposed;
     private Task _iconResolutionCompletion = Task.CompletedTask;
+    private string _searchText = string.Empty;
 
     public ObservableCollection<WindowInfo> Windows { get; } = new();
+    public ReadOnlyObservableCollection<WindowInfo> FilteredWindows { get; }
     public ObservableCollection<GroupOption> Groups { get; } = new();
 
     public GroupOption? SelectedGroupOption
     {
         get => _selectedGroupOption;
         set => SetProperty(ref _selectedGroupOption, value);
+    }
+
+    public string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            if (!SetProperty(ref _searchText, value ?? string.Empty))
+                return;
+            ApplyFilter();
+        }
     }
 
     public bool HasSelection
@@ -51,6 +66,21 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         }
     }
 
+    public int SelectedCount => Windows.Count(w => w.IsSelected);
+
+    public string SelectionSummary => SelectedCount switch
+    {
+        0 => "Select one or more windows",
+        1 => "1 window selected",
+        int count => $"{count} windows selected",
+    };
+
+    public bool HasFilteredWindows => _filteredWindows.Count > 0;
+
+    public string EmptyFilterText => Windows.Count == 0
+        ? "No capturable windows are currently available."
+        : "No windows match your search.";
+
     public bool CaptureAllowed => _manager.CaptureAllowed;
     public string CaptureAdmissionReason => _manager.CaptureAdmissionReason;
     public bool CaptureAdmissionBlocked => !CaptureAllowed;
@@ -58,6 +88,8 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
     public ICommand RefreshCommand { get; }
     public ICommand GroupSelectedCommand { get; }
     public ICommand CancelCommand { get; }
+    public ICommand SelectAllVisibleCommand { get; }
+    public ICommand ClearSelectionCommand { get; }
 
     public event EventHandler? GroupingRequested;
     public event EventHandler? Canceled;
@@ -88,12 +120,19 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         // inject their own so row-icon marshalling stays observable.
         _dispatcher = testDispatcher ?? Application.Current?.Dispatcher;
         _testCandidateSource = testCandidateSource;
+        FilteredWindows = new ReadOnlyObservableCollection<WindowInfo>(_filteredWindows);
 
         RefreshCommand = new RelayCommand(_ => Refresh());
         GroupSelectedCommand = new RelayCommand(
             _ => GroupingRequested?.Invoke(this, EventArgs.Empty),
             _ => HasSelection && _manager.CaptureAllowed);
         CancelCommand = new RelayCommand(_ => Canceled?.Invoke(this, EventArgs.Empty));
+        SelectAllVisibleCommand = new RelayCommand(
+            _ => SelectAllVisible(),
+            _ => _filteredWindows.Any(w => !w.IsSelected));
+        ClearSelectionCommand = new RelayCommand(
+            _ => ClearSelection(),
+            _ => HasSelection);
 
         _manager.CaptureAdmissionChanged += Manager_CaptureAdmissionChanged;
 
@@ -104,6 +143,14 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
     {
         if (_disposed)
             return;
+
+        // Refresh used to clear every checkbox even when the same native window
+        // was still present. Preserve only a strong-enough immediate UI identity:
+        // HWND + PID + executable path. A recycled handle alone is never enough.
+        HashSet<WindowSelectionKey> previouslySelected = Windows
+            .Where(w => w.IsSelected)
+            .Select(WindowSelectionKey.From)
+            .ToHashSet();
 
         CancelIconResolution();
         int refreshGeneration = unchecked(++_refreshGeneration);
@@ -138,7 +185,7 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         {
             foreach (WindowInfo info in _testCandidateSource())
             {
-                AddCandidate(info, uncachedIcons, ref candidates);
+                AddCandidate(info, previouslySelected, uncachedIcons, ref candidates);
             }
         }
         else
@@ -148,54 +195,54 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
                 windowsSeen++;
                 try
                 {
-                if (!NativeMethods.IsWindowVisible(hwnd))
-                    return true;
+                    if (!NativeMethods.IsWindowVisible(hwnd))
+                        return true;
 
-                nint exStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
-                if (((long)exStyle & NativeMethods.WS_EX_TOOLWINDOW) != 0)
-                    return true;
+                    nint exStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
+                    if (((long)exStyle & NativeMethods.WS_EX_TOOLWINDOW) != 0)
+                        return true;
 
-                string? title = NativeMethods.GetWindowTextString(hwnd);
-                if (string.IsNullOrWhiteSpace(title))
-                    return true;
+                    string? title = NativeMethods.GetWindowTextString(hwnd);
+                    if (string.IsNullOrWhiteSpace(title))
+                        return true;
 
-                string? className = NativeMethods.GetClassNameString(hwnd);
-                if (string.IsNullOrEmpty(className))
-                    return true;
+                    string? className = NativeMethods.GetClassNameString(hwnd);
+                    if (string.IsNullOrEmpty(className))
+                        return true;
 
-                if (_manager.IsOwnWindow(hwnd))
-                    return true;
+                    if (_manager.IsOwnWindow(hwnd))
+                        return true;
 
-                // A window that is already a member of some group must not be
-                // offered again. Capturing the same HWND twice produces two
-                // CapturedWindow members for one window — two tabs (possibly in two
-                // different containers) each positioning, hiding, and releasing it
-                // independently — and the WinEvent handlers resolve an HWND to a
-                // single member, so only one duplicate would ever receive the
-                // destroy/hide bookkeeping and the other is stranded as a tab
-                // pointing at a dead window. An INACTIVE tab's guest is hidden and
-                // so already filtered out by IsWindowVisible above; this catches the
-                // ACTIVE tab of every open group, which is genuinely on screen and
-                // would otherwise be listed like any other window.
-                if (_manager.IsCapturedWindow(hwnd))
-                    return true;
+                    // A window that is already a member of some group must not be
+                    // offered again. Capturing the same HWND twice produces two
+                    // CapturedWindow members for one window — two tabs (possibly in two
+                    // different containers) each positioning, hiding, and releasing it
+                    // independently — and the WinEvent handlers resolve an HWND to a
+                    // single member, so only one duplicate would ever receive the
+                    // destroy/hide bookkeeping and the other is stranded as a tab
+                    // pointing at a dead window. An INACTIVE tab's guest is hidden and
+                    // so already filtered out by IsWindowVisible above; this catches the
+                    // ACTIVE tab of every open group, which is genuinely on screen and
+                    // would otherwise be listed like any other window.
+                    if (_manager.IsCapturedWindow(hwnd))
+                        return true;
 
-                // Cloaked windows (suspended UWP apps, hidden ApplicationFrameHost
-                // ghosts) are reported visible by IsWindowVisible but aren't actually
-                // on screen; capturing one produces a tab with nothing behind it.
-                // Last, because it is the most expensive check here.
-                int hr = NativeMethods.DwmGetWindowAttribute(hwnd, NativeMethods.DWMWA_CLOAKED, out bool cloaked, sizeof(uint));
-                if (hr == 0 && cloaked)
-                    return true;
+                    // Cloaked windows (suspended UWP apps, hidden ApplicationFrameHost
+                    // ghosts) are reported visible by IsWindowVisible but aren't actually
+                    // on screen; capturing one produces a tab with nothing behind it.
+                    // Last, because it is the most expensive check here.
+                    int hr = NativeMethods.DwmGetWindowAttribute(hwnd, NativeMethods.DWMWA_CLOAKED, out bool cloaked, sizeof(uint));
+                    if (hr == 0 && cloaked)
+                        return true;
 
-                NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
-                string? exe = _icons.GetProcessImagePath(pid);
-                if (string.IsNullOrWhiteSpace(exe))
-                    return true;
+                    NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
+                    string? exe = _icons.GetProcessImagePath(pid);
+                    if (string.IsNullOrWhiteSpace(exe))
+                        return true;
 
-                var info = new WindowInfo(hwnd, pid, className, title, exe);
-                AddCandidate(info, uncachedIcons, ref candidates);
-                return true;
+                    var info = new WindowInfo(hwnd, pid, className, title, exe);
+                    AddCandidate(info, previouslySelected, uncachedIcons, ref candidates);
+                    return true;
                 }
                 catch (Exception ex)
                 {
@@ -208,6 +255,8 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
             }, IntPtr.Zero);
         }
 
+        ApplyFilter();
+        NotifySelectionState();
         QueueIconResolution(refreshGeneration, uncachedIcons);
 
         stopwatch.Stop();
@@ -216,6 +265,7 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
 
     private void AddCandidate(
         WindowInfo info,
+        IReadOnlySet<WindowSelectionKey> previouslySelected,
         List<IconWorkItem> uncachedIcons,
         ref int candidates)
     {
@@ -230,6 +280,8 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
             uncachedIcons.Add(new IconWorkItem(info, info.ExePath));
         }
 
+        info.IsSelected = previouslySelected.Contains(WindowSelectionKey.From(info));
+
         // Only selection changes affect command state. Raising the global
         // requery for every icon assignment turned each refresh into an
         // O(rows^2) CommandManager storm.
@@ -237,11 +289,54 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         {
             if (!string.Equals(e.PropertyName, nameof(WindowInfo.IsSelected), StringComparison.Ordinal))
                 return;
-            OnPropertyChanged(nameof(HasSelection));
-            ((RelayCommand)GroupSelectedCommand).RaiseCanExecuteChanged();
+            NotifySelectionState();
         };
         Windows.Add(info);
         candidates++;
+    }
+
+    private void ApplyFilter()
+    {
+        string query = SearchText.Trim();
+        _filteredWindows.Clear();
+        foreach (WindowInfo row in Windows)
+        {
+            if (query.Length == 0
+                || row.Title.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || row.ExePath.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || row.ClassName.Contains(query, StringComparison.OrdinalIgnoreCase))
+            {
+                _filteredWindows.Add(row);
+            }
+        }
+
+        OnPropertyChanged(nameof(HasFilteredWindows));
+        OnPropertyChanged(nameof(EmptyFilterText));
+        ((RelayCommand)SelectAllVisibleCommand).RaiseCanExecuteChanged();
+    }
+
+    private void SelectAllVisible()
+    {
+        foreach (WindowInfo row in _filteredWindows)
+            row.IsSelected = true;
+        NotifySelectionState();
+    }
+
+    private void ClearSelection()
+    {
+        foreach (WindowInfo row in Windows)
+            row.IsSelected = false;
+        NotifySelectionState();
+    }
+
+    private void NotifySelectionState()
+    {
+        OnPropertyChanged(nameof(HasSelection));
+        OnPropertyChanged(nameof(SelectedCount));
+        OnPropertyChanged(nameof(SelectionSummary));
+        ((RelayCommand)GroupSelectedCommand).RaiseCanExecuteChanged();
+        ((RelayCommand)SelectAllVisibleCommand).RaiseCanExecuteChanged();
+        ((RelayCommand)ClearSelectionCommand).RaiseCanExecuteChanged();
     }
 
     private void QueueIconResolution(int refreshGeneration, IReadOnlyList<IconWorkItem> requests)
@@ -374,6 +469,12 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
     }
 
     private sealed record IconWorkItem(WindowInfo Row, string ExePath);
+
+    private readonly record struct WindowSelectionKey(IntPtr Hwnd, uint ProcessId, string ExePath)
+    {
+        public static WindowSelectionKey From(WindowInfo row)
+            => new(row.Hwnd, row.ProcessId, row.ExePath);
+    }
 
     internal static GroupOption? SelectGroupAfterRefresh(
         IEnumerable<GroupOption> options,
