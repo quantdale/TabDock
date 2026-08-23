@@ -452,29 +452,31 @@ hotkey-failure UX gap + hardcoded launcher hint confirmed.
 
 NEXT ACTIONS:
 
-1. DURABLE STATE & RECOVERY CAMPAIGN COMPLETE (2026-08-23, plan
-   `.agent/plans/post-hardening-durable-state-recovery-2026-08-23.md`,
-   OpenSpec change archived as `2026-08-23-durable-state-recovery-hardening`).
-   Closed the two verified persistence/recovery follow-ups:
-   - C-1 `0715a15`: staged durable backup transaction in PersistenceService.
-   - C-2 `f762b68`: liveness-bounded resolution ledger + orphan `.recovered`
-     sidecar retirement and supervised crash-convergence sweep.
-   Gate: Debug+Release builds 0w/0e; Debug+Release xUnit 549/549 each;
-   release tooling 150/150; validate.ps1 -Ci -Publish PASS; openspec 25/25;
-   git diff --check clean.
-2. NEXT RECOMMENDED CAMPAIGN (verified queue, reassessed after this campaign):
-   `GroupViewModel` ReorderTabs/CommitReorder/ReleaseTab VM-path regression
-   coverage FIRST — documented ArgumentOutOfRangeException crash history with
-   zero direct VM-path tests today; the drag-reorder mechanics that feed it
-   (`TabsListBox_PreviewMouseLeftButtonDown/MouseMove/PreviewMouseLeftButtonUp`,
-   `EndDrag`, `SnapshotDragMidpoints`) are view-coupled and harder to test, so
-   pinning the VM contracts first gives the highest-value safety net. Then:
-   dormant-split drag-reorder disablement (SnapshotDragMidpoints indexes
-   DisplayTabs containers with Tabs-space indices; fail-safe but silent
-   feature loss); WinEvent duplicate `_isCapturedWindow` probes (only if
-   measured); replace tautology test UnchangedLayoutUpdated_ProducesNoRelayout
-   with real dirty-check coverage. Do not assume this order if current source
-   has changed; re-verify each item before implementing.
+1. POST-HARDENING FOLLOW-UP QUEUE EMPTY (2026-08-23). All six items queued by
+   the stranded-guest tails handoff were completed across four same-day
+   campaigns (several by parallel sessions in this tree):
+   - C-1/C-2 durable state & recovery: `0715a15` (staged durable backup),
+     `f762b68` (liveness-bounded resolution ledger + orphan `.recovered`
+     retirement; plan `post-hardening-durable-state-recovery-2026-08-23.md`,
+     OpenSpec change archived).
+   - H-A1 VM mutation-path tests: `ee099ce`.
+   - B2 dormant-split drag projection: `5b341bc` (+ `aafba4a` projection and
+     anti-oscillation invariants, `ab633ce` scheduler-jitter tolerance;
+     plan `post-hardening-tab-mutation-drag-reliability-2026-08-23.md`).
+   - H-B2 real dirty-check coverage replacing the tautology test: `780a19b`
+     (added PaneContainmentPolicy content-rect boundary seam + tests).
+   - G-1 WinEvent membership probes: `78a171a` — the monitor now resolves the
+     captured index ONCE per callback and once per dispatch (null resolve is
+     the complete fail-closed proof); the redundant `IsCapturedWindow`
+     pre-filter (second probe of the same dictionary per system-wide event)
+     was removed together with its ctor parameter; desktop-reorder branch
+     unchanged. Debug+Release 0w/0e; xUnit 601/601 both configs.
+2. NEXT SESSION: no verified open queue. Run a fresh evidence-driven
+   assessment if more hardening is wanted; otherwise pick a forward product
+   milestone. Remaining known limits are NOT code defects: R22 supervised
+   shards and external release gates below. Re-verify any stale claim against
+   current source before acting — several audit findings from earlier today
+   were already fixed by parallel sessions while being triaged.
 3. Standing external gates unchanged: supervised live-desktop acceptance,
    production signing credentials, human final smoke, physical mixed-DPI
    qualification, Windows 10 x64 compatibility.
