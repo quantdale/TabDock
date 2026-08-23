@@ -159,11 +159,23 @@ provenance-approved desktop. If that gate is not safe, record
 `BLOCKED_SUPERVISED` or `BLOCKED_ENVIRONMENT` with the exact command rather than
 turning environmental refusal into a product failure.
 
-Campaign qualification record (2026-08-23): the deterministic `--selftest all`
-run is `PASS` (38/38). Physical SendInput scenarios are
-`BLOCKED_SUPERVISED` because this desktop is not certified exclusively
-available for input injection. The exact reruns are the three commands above;
-the broader hermetic command is:
+Campaign qualification record (2026-08-23/24, release-candidate session): the
+three RC-targeted supervised scenarios were physically executed on the Release
+candidate. `global-tab-navigation` PASS (24/24 checks) and `split-affordance`
+PASS; `capture-admission-blocked` is BLOCKED_ENVIRONMENT by design on this
+desktop (durable journal failure not safely inducible). The broad hermetic
+suite (`--configuration Release --yes all`, all 11 shards) was executed twice;
+best-of-N results with per-run artifacts are recorded in
+`docs/audits/2026-08-23/RC_QUALIFICATION_EVIDENCE.md`. Two product defects and
+several harness contracts were found and fixed by these runs (launcher
+cold-start TwoWay Run.Text crash; missing foreground grant on ordinary tab
+switches; stale UIA names/AutomationIds; Notepad broker adoption; Chrome-absent
+SKIP). Persistent scenario failures correlate with an unregistered foreign
+window holding or covering the foreground mid-run — the fail-closed identity
+guard refused input correctly (see identity-failure-*.json artifacts under
+`%TEMP%\TabDock-Validation\runs\`). A final clean pass of the remaining
+non-green scenarios requires an exclusively available desktop; reruns are the
+same commands as below.
 
 ```powershell
 dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes all

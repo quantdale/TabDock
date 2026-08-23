@@ -2351,6 +2351,20 @@ public partial class ContainerWindow : Window
         if (newWindow != null && NativeMethods.IsWindow(newWindow.Hwnd))
         {
             LayoutShepherdActiveWindow();
+            // Mirror the WM_ACTIVATE reassert and the split-member switch path:
+            // an ordinary switch performed while this container already holds
+            // the OS foreground (tab click / Ctrl+Tab on active chrome) fires
+            // no WM_ACTIVATE, so without this grant the foreground silently
+            // stays on the chrome and typed input misses the visible guest
+            // (physically reproduced by torture-tabswitch-rapid/random during
+            // release qualification: zero SHEPHERD[bring-to-front] lines and
+            // every foreground assertion failing). Guarded so background or
+            // programmatic switches never steal focus from other apps.
+            if (!IsContainerChromeInteractionActive()
+                && NativeMethods.GetForegroundWindow() == _containerHwnd)
+            {
+                _shepherd.SetForeground(newWindow);
+            }
         }
 
         if (oldWindow != null && !oldWindowHidden && _viewModel.Tabs.Any(t => t.Model == oldWindow))

@@ -10,6 +10,70 @@ this text.
 
 ## CURRENT STATUS
 
+## RELEASE QUALIFICATION CAMPAIGN (2026-08-23/24, COMPLETE FOR THIS ENVIRONMENT)
+
+Objective: take PR #12 from CI-qualified RC to highest achievable release
+readiness: supervised/native qualification, real-app interop, identity stress,
+DPI/topology, crash/recovery, signing, Stage-B; fix only reproduced defects.
+Starting point: clean tree at handoff head `db6d3e6`; origin/main `ba3115a`;
+PR #12 open/draft with that head (verified via GitHub REST after a transient
+network outage).
+
+Executed and fixed (each: repro → root cause → minimal fix → regression):
+- PRODUCT Critical: launcher cold-start FATAL crash on empty state (TwoWay
+  Run.Text binding to ObservableCollection.Count). Fixed d60bf7b with
+  LauncherStartupBindingTests (4 facts incl. source contract).
+- PRODUCT High: ordinary tab switches left foreground on container chrome
+  (zero SHEPHERD[bring-to-front] during rapid switches; split path already
+  granted it). Fix on final commit: SetForeground in SyncShepherdActiveWindow
+  when container is active and no chrome interaction is open.
+- HARNESS: seven stale contracts vs redesigned UI (capture-order assumption →
+  live TabStripOrder helper; two-tab EnterSplitTwo misuse → partner submenu;
+  'Add window to group'→AddWindowButton AutomationId; ancestor-checkbox →
+  sibling 'Select <title>' checkbox; 'Exit'→'Exit TabDock' + fresh-rect click;
+  'No groups yet'→'Create your first workspace'; ClickTabSubmenuItem parent-
+  rect wait). Commit 60d01f3 plus final-commit harness fixes.
+- HARNESS provenance gaps: Windows 11 Notepad single-instance broker adoption
+  (TryAdoptExternalWindow: identity-pinned input target, process never
+  tracked/killed); Chrome-requiring standalone scenarios now SKIP
+  (SKIP_BROWSER_NOT_INSTALLED) instead of Win32Exception.
+- SPEC: release-engineering exact-binary requirement now uses SHALL; strict
+  OpenSpec validate --all --strict is 30/30.
+
+Deterministic gates all green on the final committed tree: Debug/Release
+builds 0w/0e; Debug+Release suites 675/675 each; release-tooling 150/150
+(requires pwsh; PS5.1 run fails its own syntax — record for future sessions);
+driver self-tests 38/38; canonical `validate.ps1 -Configuration Release -Ci
+-Publish` PASS incl. native ABI (Win11 26200), doctor/pending-recovery/
+redirected-lifecycle/support-bundle privacy smokes, OpenSpec 30/30, publish
++version smoke; `git diff --check` clean. Hosted CI `build` green on prior
+head db6d3e6 (run 32639177096); final push re-triggers it.
+
+Supervised physical qualification (Release artifacts, guarded SendInput):
+global-tab-navigation PASS 24/24; split-affordance PASS; capture-admission-
+blocked BLOCKED_ENVIRONMENT (by design). Broad suite (`--yes all`, 11 shards)
+executed twice; best-of-N: dpi-multi-monitor PASS, split-core PASS 11/11,
+crash-recovery 7/8, capture-group 13/15, split-focus 5/9, split-render 12/18,
+drag-z-order 5/9, keyboard-input 4/15, startup 1/3, diagnostics 5/8 (+6 Chrome
+SKIPs). Persistent non-passes correlate with an unregistered foreign window
+(operator's maximized Windows Terminal) holding/covering foreground;
+identity-failure-*.json artifacts under %TEMP%\TabDock-Validation\runs\ prove
+the fail-closed refusals. Identical binaries passed several of those scenarios
+in other runs. Remaining repeats need an exclusive-desktop rerun of the FINAL
+SHA before classification as pass or defect; commands unchanged in
+docs/TESTING.md. Full ledger: docs/audits/2026-08-23/RC_QUALIFICATION_EVIDENCE.md.
+
+External gates unchanged: mixed-DPI/multi-monitor topology absent (single
+1920x1080 @96dpi) = BLOCKED_ENVIRONMENT; production signing BLOCKED_SIGNING
+(no DigiCert STM credentials; NOT_CONFIGURED manifest recorded);
+BLOCKED_STAGE_B (no second machine). RC bundle previously produced at
+intermediate SHA 56cc217 under artifacts/rc-candidate (QUALIFICATION_ONLY,
+sha256 66d243bd...); regenerate via scripts/release-qualify.ps1 on final SHA.
+
+Decision: PR #12 REMAINS DRAFT. Classification: RC_BLOCKED_EXTERNAL.
+Next actions: exclusive-desktop rerun of remaining supervised set on final
+SHA; obtain signing credentials; Stage-B machine; mixed-DPI hardware.
+
 ## RELEASE-CANDIDATE HARDENING CAMPAIGN (started 2026-08-23, IN PROGRESS)
 
 Objective: continue draft PR #12 from the existing ship-readiness branch and

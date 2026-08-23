@@ -30,6 +30,16 @@ internal static class TestRunProvenance
     {
         public required WindowIdentity Identity { get; init; }
         public required string Role { get; init; }
+
+        /// <summary>
+        /// True for a pre-existing external window (e.g. Windows 11 Notepad's
+        /// single-instance broker opening the spawned temp file as a tab in an
+        /// already-running instance) that this run explicitly adopted after its
+        /// full stable identity was pinned. Adopted windows are valid INPUT
+        /// TARGETS while their identity matches, but their process is never
+        /// tracked or killed by cleanup.
+        /// </summary>
+        public bool AdoptedExternal { get; init; }
     }
 
     internal readonly record struct ProcessIdentity(
@@ -234,6 +244,38 @@ internal static class TestRunProvenance
     }
 
     /// <summary>
+    /// Explicitly adopts a pre-existing external window as a bounded input
+    /// target: the window's complete stable identity (HWND, pid, process start,
+    /// executable, class, title) is pinned NOW and re-verified before every
+    /// input, so any recycle/retitle refuses fail-closed. The owning process is
+    /// deliberately NOT registered — cleanup must never kill a user process.
+    /// This exists for documented broker flows such as Windows 11 Notepad
+    /// opening a spawned file as a tab inside an already-running instance.
+    /// </summary>
+    public static bool TryAdoptExternalWindow(WindowIdentity identity, string role, out string reason)
+    {
+        reason = string.Empty;
+        lock (Sync)
+        {
+            if (Windows.TryGetValue(identity.Hwnd, out WindowRecord? previous))
+            {
+                if (!SameStableIdentity(previous.Identity, identity))
+                    reason = "adopt-hwnd-identity-changed";
+                else
+                    return true;
+                return false;
+            }
+            Windows[identity.Hwnd] = new WindowRecord
+            {
+                Identity = identity,
+                Role = string.IsNullOrWhiteSpace(role) ? "ExternalWindow" : role,
+                AdoptedExternal = true,
+            };
+        }
+        return true;
+    }
+
+    /// <summary>
     /// Validates a window immediately before input. A registered HWND requires
     /// its run marker and every stable identity field. An unregistered dynamic
     /// surface is admitted only after its owning process has already been
@@ -261,7 +303,22 @@ internal static class TestRunProvenance
         }
 
         if (!TryValidateProcess(current.ProcessId, current.ExePath, current.ProcessStartTimeUtcTicks, out reason))
+        {
+            // Adopted external windows are the ONE exception: their owning
+            // process is intentionally untracked (never spawned by this run),
+            // so acceptance rests entirely on the pinned stable identity.
+            lock (Sync)
+            {
+                if (Windows.TryGetValue(current.Hwnd, out WindowRecord? adopted)
+                    && adopted.AdoptedExternal)
+                {
+                    if (SameStableIdentity(adopted.Identity, current))
+                        return true;
+                    reason = "adopted-external-window-identity-mismatch";
+                }
+            }
             return false;
+        }
 
         WindowRecord? registered;
         lock (Sync)

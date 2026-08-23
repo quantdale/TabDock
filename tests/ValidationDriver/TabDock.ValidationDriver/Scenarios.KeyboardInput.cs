@@ -45,8 +45,23 @@ internal static partial class Scenarios
     // -------------------------------------------------------------------------
     // 18. chromeinput (Test B): Chromium input recovery after activation fix.
     // -------------------------------------------------------------------------
+    /// <summary>
+    /// Skips with the documented SKIP_BROWSER_NOT_INSTALLED status when the
+    /// given browser executable is absent, so standalone browser scenarios
+    /// degrade honestly instead of dying on Process.Start Win32Exception.
+    /// </summary>
+    private static bool RequireBrowserFile(Ctx ctx, string exe, string label)
+    {
+        if (!string.IsNullOrEmpty(exe) && File.Exists(exe))
+            return true;
+        ctx.Skip($"SKIP_BROWSER_NOT_INSTALLED: {label} is not installed; rerun on a machine where it is available.");
+        return false;
+    }
+
     private static void ChromeInput(Ctx ctx, Options opt)
     {
+        if (!RequireBrowserFile(ctx, ChromeExe, "Google Chrome"))
+            return;
         string htmlPath = CreateChromeInputTestPage();
         GuestInfo chrome = SpawnClassGuest(ctx, ChromeExe,
             $"--user-data-dir=\"{FreshProfileDir("TabDockChromeProfile")}\" --disable-gpu --app=\"{htmlPath}\"",
@@ -172,6 +187,8 @@ document.getElementById('btn').addEventListener('click', function() {
     // -------------------------------------------------------------------------
     private static void KeyboardInputChrome(Ctx ctx, Options opt)
     {
+        if (!RequireBrowserFile(ctx, ChromeExe, "Google Chrome"))
+            return;
         string htmlPath = CreateChromeKeyboardTestPage();
         GuestInfo chrome = SpawnClassGuest(ctx, ChromeExe,
             $"--user-data-dir=\"{FreshProfileDir("TabDockChromeProfile")}\" --disable-gpu --app=\"{htmlPath}\"",
@@ -238,6 +255,8 @@ document.getElementById('btn').addEventListener('click', function() {
     // -------------------------------------------------------------------------
     private static void KeyboardInputChromeOmniboxAltSwitch(Ctx ctx, Options opt)
     {
+        if (!RequireBrowserFile(ctx, ChromeExe, "Google Chrome"))
+            return;
         string pageA = CreateNamedTestPage("TDVAL-OMNI-A");
         string pageB = CreateNamedTestPage("TDVAL-OMNI-B");
         string uriA = new Uri(pageA).AbsoluteUri;
@@ -295,6 +314,8 @@ document.getElementById('btn').addEventListener('click', function() {
 
     private static void KeyboardInputBrowserAltSwitch(Ctx ctx, string exe, string className, string label)
     {
+        if (!RequireBrowserFile(ctx, exe, label))
+            return;
         string htmlPath = CreateChromeKeyboardTestPage();
         GuestInfo browser = SpawnClassGuest(ctx, exe,
             $"--user-data-dir=\"{FreshProfileDir("TabDockAltSwitchProfile")}\" --disable-gpu --no-first-run --no-default-browser-check --disable-session-crashed-bubble --app=\"{htmlPath}\"",
@@ -580,6 +601,8 @@ input.addEventListener('input', function() {
     // -------------------------------------------------------------------------
     private static void RealWorkflowAltSwitch(Ctx ctx, Options opt)
     {
+        if (!RequireBrowserFile(ctx, ChromeExe, "Google Chrome"))
+            return;
         string htmlPath = CreateChromeKeyboardTestPage();
         GuestInfo browser = SpawnClassGuest(ctx, ChromeExe,
             $"--user-data-dir=\"{FreshProfileDir("TabDockRealWorkflowProfile")}\" --disable-gpu --no-first-run --no-default-browser-check --disable-session-crashed-bubble --app=\"{htmlPath}\"",

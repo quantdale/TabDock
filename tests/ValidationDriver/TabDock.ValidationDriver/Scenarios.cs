@@ -1534,7 +1534,7 @@ internal static partial class Scenarios
             VerifyToken = fileName,
             VerifyFilePath = tempFile,
         };
-        RememberGuestWindow(g);
+        RememberGuestWindow(g, adoptExternalWhenUntracked: !isOurProcess);
         ctx.Guests.Add(g);
         GuardedProc.Log($"  Notepad guest '{g.Title}' PID {g.Pid} HWND 0x{g.Hwnd.ToInt64():X} file='{fileName}' isOurProcess={isOurProcess}.");
         return g;
@@ -1817,7 +1817,16 @@ internal static partial class Scenarios
             && string.Equals(identity.Title, "TabDock", StringComparison.Ordinal);
     }
 
-    private static void RememberGuestWindow(GuestInfo guest)
+    /// <summary>
+    /// Pins a guest window's identity into the run's input scope. When
+    /// <paramref name="adoptExternalWhenUntracked"/> is set and the owning
+    /// process was never spawned by this run (documented broker flow:
+    /// Windows 11 Notepad opens the spawned temp file as a tab inside an
+    /// already-running instance), the window is ADOPTED instead: its full
+    /// stable identity is pinned and re-verified before every input, while its
+    /// process stays untracked so cleanup never kills a user process.
+    /// </summary>
+    private static void RememberGuestWindow(GuestInfo guest, bool adoptExternalWhenUntracked = false)
     {
         if (!Discover.TryCaptureIdentity(guest.Hwnd, out WindowIdentity identity)
             || identity.ProcessId != guest.Pid
@@ -1826,6 +1835,12 @@ internal static partial class Scenarios
             throw new InvalidOperationException($"Guest HWND 0x{guest.Hwnd.ToInt64():X} failed process/class/title identity verification.");
         }
         guest.Identity = identity;
+        if (adoptExternalWhenUntracked && !TestRunProvenance.IsProcessInScope(identity.ProcessId))
+        {
+            if (!TestRunProvenance.TryAdoptExternalWindow(identity, "External." + guest.Role, out string adoptReason))
+                throw new InvalidOperationException($"Refusing to adopt external guest HWND 0x{guest.Hwnd.ToInt64():X}: {adoptReason}.");
+            return;
+        }
         Input.RegisterIdentity(identity, guest.Role);
     }
 
