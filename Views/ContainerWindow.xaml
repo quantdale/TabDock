@@ -335,7 +335,30 @@
              window positioned/shown/hidden to match (see
              ContainerWindow.xaml.cs's Shepherd active-tab sync). -->
         <Border Grid.Row="3" Background="#FF1E1E1E" x:Name="ContentBorder">
-            <infra:NativeHwndHost x:Name="ContentHost" />
+            <Grid>
+                <infra:NativeHwndHost x:Name="ContentHost" />
+                <!-- Empty-dock guidance: shown only while the group has zero
+                     tabs (no captured guest exists to occlude it).
+                     Non-hit-testable so it can never intercept clicks meant
+                     for the container. -->
+                <TextBlock Text="No apps docked yet. Use + above to add one."
+                           Foreground="#FF9E9E9E"
+                           FontSize="14"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           IsHitTestVisible="False">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Tabs.Count}" Value="0">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </Grid>
         </Border>
     </Grid>
 </Window>

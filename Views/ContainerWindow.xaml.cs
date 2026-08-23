@@ -1770,16 +1770,26 @@ public partial class ContainerWindow : Window
         if (_capturePicker == null)
             return;
 
+        // Same transaction UX as the picker path (R21-014): attempt every
+        // selected target, keep the successes, then ONE owner-modal summary —
+        // per-failure modals would disable the container once per failing
+        // target while an admitted guest sits visible above it.
+        var failures = new List<CaptureFailureReport.Failure>();
         foreach (var candidate in _capturePicker.Windows.Where(w => w.IsSelected).ToList())
         {
             string? error = CaptureWindow(candidate.ToCaptureTarget());
             if (error != null)
             {
-                _log.Log($"Inline capture failed for 0x{candidate.Hwnd.ToInt64():X}: {error}");
-                MessageBox.Show(this, error, "Could not capture window", MessageBoxButton.OK, MessageBoxImage.Warning);
+                var failure = new CaptureFailureReport.Failure(candidate.Title, candidate.Hwnd, error);
+                _log.Log($"Inline capture failed for {CaptureFailureReport.LogLine(failure)}");
+                failures.Add(failure);
             }
         }
         CloseCapturePanel();
+        if (failures.Count > 0)
+        {
+            MessageBox.Show(this, CaptureFailureReport.Build(failures), "Capture results", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void InlineCapture_Canceled(object? sender, EventArgs e) => CloseCapturePanel();

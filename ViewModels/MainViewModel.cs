@@ -27,6 +27,7 @@ public sealed class MainViewModel : ViewModelBase
     public ICommand NewGroupCommand { get; }
     public ICommand CaptureCommand { get; }
     public ICommand ExitCommand { get; }
+    public ICommand OpenSelectedGroupCommand { get; }
 
     /// <summary>
     /// Whether the global Ctrl+Alt+G hotkey registered successfully at
@@ -43,6 +44,7 @@ public sealed class MainViewModel : ViewModelBase
     public event EventHandler? NewGroupRequested;
     public event EventHandler? CaptureRequested;
     public event EventHandler? ExitRequested;
+    public event EventHandler<Group>? OpenGroupRequested;
 
     public MainViewModel(GroupManager manager)
     {
@@ -51,6 +53,13 @@ public sealed class MainViewModel : ViewModelBase
         NewGroupCommand = new RelayCommand(_ => NewGroupRequested?.Invoke(this, EventArgs.Empty));
         CaptureCommand = new RelayCommand(_ => CaptureRequested?.Invoke(this, EventArgs.Empty));
         ExitCommand = new RelayCommand(_ => ExitRequested?.Invoke(this, EventArgs.Empty));
+        OpenSelectedGroupCommand = new RelayCommand(parameter =>
+        {
+            if (parameter is Group group)
+                OpenGroupRequested?.Invoke(this, group);
+            else if (SelectedGroup != null)
+                OpenGroupRequested?.Invoke(this, SelectedGroup);
+        });
 
 
     }
