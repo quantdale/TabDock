@@ -74,6 +74,142 @@ public class PaneContainmentPolicyTests
         Assert.False(PaneContainmentPolicy.MatchesWithinEpsilon(refused, Rect(2, 0, 302, 202)));
     }
 
+    // ---- LayoutUpdated content-rect dirty-check boundary --------------------
+    // Replaces the former tautological UnchangedLayoutUpdated_ProducesNoRelayout
+    // fact (which never touched the decision it claimed): these exercise the
+    // actual per-notification rule ContainerWindow_LayoutUpdated runs.
+
+    /// <summary>
+    /// Mirrors the production handler flow: the policy decides; only an
+    /// actionable observation overwrites the cached rect. Used by the sequence
+    /// tests to prove a degenerate candidate cannot poison later comparisons.
+    /// </summary>
+    private static bool Observe(ref bool hasObserved, ref NativeMethods.RECT cached, NativeMethods.RECT candidate)
+    {
+        if (!PaneContainmentPolicy.ShouldRequestRelayoutForContentRect(hasObserved, cached, candidate))
+            return false;
+        cached = candidate;
+        hasObserved = true;
+        return true;
+    }
+
+    [Fact]
+    public void ContentRect_FirstObservation_RequestsRelayout()
+    {
+        bool has = false;
+        var cached = Rect(0, 0, 0, 0);
+
+        Assert.True(Observe(ref has, ref cached, Rect(100, 100, 500, 400)));
+        Assert.True(has);
+        Assert.Equal(Rect(100, 100, 500, 400), cached);
+    }
+
+    [Fact]
+    public void ContentRect_IdenticalRepeat_DoesNotRequestRelayout()
+    {
+        bool has = false;
+        var cached = Rect(0, 0, 0, 0);
+        Observe(ref has, ref cached, Rect(100, 100, 500, 400));
+
+        // The exact scenario the tautology claimed to cover: an unchanged
+        // LayoutUpdated notification (tab-strip reorder during a drag).
+        Assert.False(Observe(ref has, ref cached, Rect(100, 100, 500, 400)));
+        Assert.False(Observe(ref has, ref cached, Rect(100, 100, 500, 400)));
+        Assert.Equal(Rect(100, 100, 500, 400), cached);
+    }
+
+    private static NativeMethods.RECT Offset(NativeMethods.RECT baseRect, int dl, int dt, int dr, int db)
+        => Rect(baseRect.left + dl, baseRect.top + dt, baseRect.right + dr, baseRect.bottom + db);
+
+    [Theory]
+    [InlineData(1, 0, 0, 0)]   // left +1
+    [InlineData(-1, 0, 0, 0)]  // left -1
+    [InlineData(0, 1, 0, 0)]   // top +1
+    [InlineData(0, -1, 0, 0)]  // top -1
+    [InlineData(0, 0, 1, 0)]   // right +1
+    [InlineData(0, 0, -1, 0)]  // right -1
+    [InlineData(0, 0, 0, 1)]   // bottom +1
+    [InlineData(0, 0, 0, -1)]  // bottom -1
+    public void ContentRect_OnePixelPerEdge_IsStillUnchanged(int dl, int dt, int dr, int db)
+    {
+        bool has = false;
+        var cached = Rect(0, 0, 0, 0);
+        var observed = Rect(100, 100, 500, 400);
+        Observe(ref has, ref cached, observed);
+
+        Assert.False(Observe(ref has, ref cached, Offset(observed, dl, dt, dr, db)));
+    }
+
+    [Theory]
+    [InlineData(2, 0, 0, 0)]   // left +2
+    [InlineData(-2, 0, 0, 0)]  // left -2
+    [InlineData(0, 2, 0, 0)]   // top +2
+    [InlineData(0, -2, 0, 0)]  // top -2
+    [InlineData(0, 0, 2, 0)]   // right +2
+    [InlineData(0, 0, -2, 0)]  // right -2
+    [InlineData(0, 0, 0, 2)]   // bottom +2
+    [InlineData(0, 0, 0, -2)]  // bottom -2
+    public void ContentRect_TwoPixelsOnAnyEdge_IsAChange(int dl, int dt, int dr, int db)
+    {
+        bool has = false;
+        var cached = Rect(0, 0, 0, 0);
+        var observed = Rect(100, 100, 500, 400);
+        Observe(ref has, ref cached, observed);
+
+        Assert.True(Observe(ref has, ref cached, Offset(observed, dl, dt, dr, db)));
+    }
+
+    [Theory]
+    [InlineData(300, 100, 300, 400)] // zero width (right == left)
+    [InlineData(100, 250, 500, 250)] // zero height (bottom == top)
+    [InlineData(600, 100, 200, 400)] // negative width (right < left)
+    [InlineData(100, 550, 500, 250)] // negative height (bottom < top)
+    public void ContentRect_DegenerateCandidate_IsIgnoredAndDoesNotPoisonTheCache(
+        int l, int t, int r, int b)
+    {
+        bool has = false;
+        var cached = Rect(0, 0, 0, 0);
+        Observe(ref has, ref cached, Rect(100, 100, 500, 400));
+
+        Assert.False(Observe(ref has, ref cached, Rect(l, t, r, b)));
+
+        // The cache still holds the last VALID rect: a subsequent notification
+        // identical to it is unchanged — proof the degenerate candidate never
+        // overwrote the observed state.
+        Assert.False(Observe(ref has, ref cached, Rect(100, 100, 500, 400)));
+        Assert.Equal(Rect(100, 100, 500, 400), cached);
+    }
+
+    [Fact]
+    public void ContentRect_NegativeMultiMonitorCoordinates_FollowTheSameRule()
+    {
+        bool has = false;
+        var cached = Rect(0, 0, 0, 0);
+
+        Assert.True(Observe(ref has, ref cached, Rect(-1920, -1080, -1600, -800)));
+        Assert.False(Observe(ref has, ref cached, Rect(-1920, -1080, -1600, -800)));
+        Assert.False(Observe(ref has, ref cached, Rect(-1919, -1079, -1599, -799))); // within epsilon
+        Assert.True(Observe(ref has, ref cached, Rect(-1918, -1078, -1598, -798)));  // real change
+    }
+
+    [Fact]
+    public void ContentRect_LifecycleSequence_MatchesHandlerExpectations()
+    {
+        bool has = false;
+        var cached = Rect(0, 0, 0, 0);
+
+        // Startup: first valid layout relayouts once...
+        Assert.True(Observe(ref has, ref cached, Rect(0, 0, 800, 600)));
+        // ...every per-frame notification of the same geometry stays silent...
+        for (int i = 0; i < 10; i++)
+            Assert.False(Observe(ref has, ref cached, Rect(0, 0, 800, 600)));
+        // ...a resize relayouts exactly at the boundary crossing...
+        Assert.True(Observe(ref has, ref cached, Rect(0, 0, 803, 600)));
+        // ...and sub-pixel jitter around the new rect stays silent again.
+        Assert.False(Observe(ref has, ref cached, Rect(1, 0, 802, 600)));
+        Assert.Equal(Rect(0, 0, 803, 600), cached);
+    }
+
     // ---- Wave 2D: the epsilon authority's full edge contract ----------------
     // Every ContainerWindow ±1px comparison routes through MatchesWithinEpsilon,
     // so its per-edge behavior is now load-bearing for layout equivalence too.

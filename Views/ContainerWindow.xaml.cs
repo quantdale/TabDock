@@ -698,14 +698,8 @@ public partial class ContainerWindow : Window
             return;
 
         NativeMethods.RECT rect = GetContentAreaScreenRect();
-        if (rect.Width <= 0 || rect.Height <= 0)
+        if (!PaneContainmentPolicy.ShouldRequestRelayoutForContentRect(_hasObservedContentRect, _lastObservedContentRect, rect))
             return;
-
-        if (_hasObservedContentRect
-            && PaneContainmentPolicy.MatchesWithinEpsilon(_lastObservedContentRect, rect))
-        {
-            return;
-        }
 
         _lastObservedContentRect = rect;
         _hasObservedContentRect = true;

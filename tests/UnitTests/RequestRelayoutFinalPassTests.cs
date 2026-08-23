@@ -68,14 +68,11 @@ public class RequestRelayoutFinalPassTests
         Assert.Equal(1, executes);
     }
 
-    [Fact]
-    public void UnchangedLayoutUpdated_ProducesNoRelayout()
-    {
-        // Mirrors ContainerWindow_LayoutUpdated: when the physical ContentHost
-        // rect is unchanged the relayout must not be scheduled at all.
-        var coordinator = CreateCoordinator();
-        int executes = 0;
-        coordinator.RequestRelayout(cb => cb(), () => executes++);
-        Assert.Equal(1, executes);
-    }
+    // The former UnchangedLayoutUpdated_ProducesNoRelayout fact here was a
+    // tautology: byte-identical to Idle_EnsureFinalPass_True above and never
+    // touching the dirty-check it claimed to cover. The real LayoutUpdated
+    // content-rect decision now lives behind
+    // PaneContainmentPolicy.ShouldRequestRelayoutForContentRect and is covered
+    // exhaustively in PaneContainmentPolicyTests (first observation, unchanged,
+    // epsilon edges, degenerate rects, cache-poisoning resistance).
 }

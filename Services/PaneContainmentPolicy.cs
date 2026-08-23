@@ -57,4 +57,23 @@ public static class PaneContainmentPolicy
         NativeMethods.RECT refusedRect,
         NativeMethods.RECT requestedRect)
         => guestCurrentlyVisible && MatchesWithinEpsilon(refusedRect, requestedRect);
+
+    /// <summary>
+    /// The ContainerWindow_LayoutUpdated content-rect dirty-check decision:
+    /// request a native re-glue only when the observed physical content rect is
+    /// actionable — non-degenerate AND either the first observation or moved
+    /// beyond the glue epsilon relative to the cached rect. Unchanged
+    /// notifications (e.g. tab-strip reorders during a drag) and degenerate
+    /// rects therefore never queue a relayout, eliminating the per-layout
+    /// amplification source. Callers own the caching: only an actionable
+    /// observation may overwrite the cached rect, so a degenerate candidate can
+    /// never poison subsequent comparisons.
+    /// </summary>
+    public static bool ShouldRequestRelayoutForContentRect(
+        bool hasObservedContentRect,
+        NativeMethods.RECT lastObservedContentRect,
+        NativeMethods.RECT candidateRect)
+        => candidateRect.Width > 0
+            && candidateRect.Height > 0
+            && (!hasObservedContentRect || !MatchesWithinEpsilon(lastObservedContentRect, candidateRect));
 }

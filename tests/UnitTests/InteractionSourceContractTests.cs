@@ -147,8 +147,13 @@ public sealed class InteractionSourceContractTests
             new Regex(@"Math\s*\.\s*Abs\s*\(\s*\w+\s*\.\s*(left|top|right|bottom)\s*-"),
             code);
         Assert.DoesNotContain("const int epsilon = 1;", code);
-        // The authority is genuinely used by the four consolidated call sites.
-        Assert.Equal(4, Regex.Matches(code, @"PaneContainmentPolicy\s*\.\s*MatchesWithinEpsilon\s*").Count);
+        // The authority is genuinely used by the consolidated call sites: three
+        // direct MatchesWithinEpsilon pane/content comparisons plus the
+        // LayoutUpdated content-rect dirty-check decision, which Wave-DT moved
+        // behind PaneContainmentPolicy.ShouldRequestRelayoutForContentRect so
+        // the whole per-notification boundary stays headless-testable.
+        Assert.Equal(3, Regex.Matches(code, @"PaneContainmentPolicy\s*\.\s*MatchesWithinEpsilon\s*").Count);
+        Assert.Single(Regex.Matches(code, @"PaneContainmentPolicy\s*\.\s*ShouldRequestRelayoutForContentRect\s*"));
     }
 
     [Fact]
