@@ -101,6 +101,33 @@ coverage; (2) WinEvent duplicate _isCapturedWindow probes ONLY if measured;
 (3) any fresh defect from supervised runs. Do not assume order without
 re-verifying source.
 
+## LAYOUT DIRTY-CHECK TEST REPAIR (2026-08-23, item 1 above — COMPLETE)
+
+`780a19b`: the former UnchangedLayoutUpdated_ProducesNoRelayout fact was a
+tautology (byte-identical to Idle_EnsureFinalPass_True; never touched the
+dirty-check it claimed to cover). Replaced by real coverage of the actual
+per-notification boundary: the decision moved behind
+`PaneContainmentPolicy.ShouldRequestRelayoutForContentRect`
+(non-degenerate AND (first observation OR beyond ±1px epsilon)), and
+ContainerWindow_LayoutUpdated now routes through it — behavior identical,
+including cache discipline: only an actionable observation overwrites the
+cached rect, so a degenerate candidate can never poison later comparisons
+(pinned by a dedicated test).
+New matrix in PaneContainmentPolicyTests: first-observation relayout,
+identical-repeat silence, ±1px-per-edge tolerance ×8, ±2px change ×8,
+degenerate rects ignored + cache-poisoning resistance ×4, negative multi-
+monitor coordinates, and a startup/resize/jitter lifecycle sequence.
+Wave-2D source contract updated honestly: 3 direct MatchesWithinEpsilon call
+sites + exactly 1 ShouldRequestRelayoutForContentRect (authority usage still
+4 total; no handwritten epsilon compare may return). Removed tautology noted
+in RequestRelayoutFinalPassTests with a pointer to the new home.
+Gate: Debug+Release builds 0w/0e (--no-incremental); Debug+Release xUnit
+601/601 each (−1 tautology, +24 real facts); release tooling 150/150;
+validate.ps1 -Ci -Publish PASS; openspec 25/25; git diff --check clean.
+No OpenSpec delta: behavior unchanged, test-debt repair only.
+NEXT REMAINING QUEUE: WinEvent duplicate _isCapturedWindow probes ONLY if
+measured shows value; then fresh defects from supervised runs.
+
 ## DURABLE STATE & RECOVERY CAMPAIGN (2026-08-23, COMPLETE — see its STATUS
 block below for gates; OpenSpec change archived as
 `2026-08-23-durable-state-recovery-hardening`)
