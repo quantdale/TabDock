@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using TabDock.Models;
 using TabDock.Services;
 using TabDock.ViewModels;
@@ -88,6 +90,90 @@ public class GroupViewModelDisplayTabsTests
             // path back to index alignment.
             vm.ClearSplitComposite();
             Assert.Equal(vm.Tabs.IndexOf(d), vm.DisplayTabs.IndexOf(d));
+        }
+        finally
+        {
+            TryCleanup(dir);
+        }
+    }
+
+    [Fact]
+    public void DormantPair_NonMemberReorderThroughVisibleProjection_PreservesPairIdentity()
+    {
+        var (dir, vm) = MakeViewModel();
+        try
+        {
+            var a = new TabViewModel(MakeWindow(0));
+            var b = new TabViewModel(MakeWindow(1));
+            var c = new TabViewModel(MakeWindow(2));
+            var d = new TabViewModel(MakeWindow(3));
+            // Mirror the production population contract: authoritative members
+            // and their view models are added together.
+            vm.Model.Members.Add(a.Model);
+            vm.Model.Members.Add(b.Model);
+            vm.Model.Members.Add(c.Model);
+            vm.Model.Members.Add(d.Model);
+            vm.Tabs.Add(a);
+            vm.Tabs.Add(b);
+            vm.Tabs.Add(c);
+            vm.Tabs.Add(d);
+            vm.SetActiveTab(c);
+            vm.SetSplitComposite(a, b); // pair defined but DORMANT
+
+            // Exactly what the drag path snapshots once at drag start: one slot
+            // per VISIBLE DisplayTabs item, identity stored by reference.
+            SplitCompositeViewModel composite = Assert.IsType<SplitCompositeViewModel>(vm.DisplayTabs[0]);
+            var slots = new List<TabStripDragProjection.DragSlot>
+            {
+                new(50, composite),
+                new(150, c),
+                new(250, d),
+            };
+
+            int? AnchorOf(object item) => item switch
+            {
+                TabViewModel t => vm.Tabs.IndexOf(t) >= 0 ? vm.Tabs.IndexOf(t) : null,
+                SplitCompositeViewModel comp => comp.Left != null && vm.Tabs.IndexOf(comp.Left) >= 0
+                    ? vm.Tabs.IndexOf(comp.Left)
+                    : null,
+                _ => null,
+            };
+
+            // Drag C rightward past D's midpoint: boundary resolves past the
+            // last slot -> Tabs.Count -> ReorderTabs clamps to the end.
+            int? targetPastEnd = TabStripDragProjection.ResolveDropTargetIndex(slots, 400, AnchorOf, vm.Tabs.Count);
+            Assert.Equal(vm.Tabs.Count, targetPastEnd);
+            int currentIndex = vm.Tabs.IndexOf(c);
+            vm.ReorderTabs(currentIndex, targetPastEnd!.Value);
+
+            // No exception; C/D reordered; authoritative and VM agree.
+            Assert.Equal(new[] { "guest0.exe", "guest1.exe", "guest3.exe", "guest2.exe" },
+                vm.Model.Members.Select(m => m.ExePath).ToList());
+            Assert.Same(c, vm.ActiveTab);
+
+            // The pair survived untouched: same composite instance, same member
+            // references, still one-shorter projection.
+            SplitCompositeViewModel after = Assert.IsType<SplitCompositeViewModel>(vm.DisplayTabs[0]);
+            Assert.Same(composite, after);
+            Assert.Same(a, after.Left);
+            Assert.Same(b, after.Right);
+            Assert.Equal(4, vm.Tabs.Count);
+            Assert.Equal(3, vm.DisplayTabs.Count);
+            Assert.Equal(new object[] { composite, vm.Tabs[2], vm.Tabs[3] }, vm.DisplayTabs.ToList());
+
+            // A structural count change (the other half of the H2 rule) would
+            // invalidate the snapshot; a reorder changed none of them.
+            Assert.Equal(slots.Count, vm.DisplayTabs.Count);
+
+            // Clearing the pair restores ordinary alignment; the member
+            // instances are unchanged, so a later split resume still targets
+            // the same A/B identities.
+            vm.ClearSplitComposite();
+            Assert.Equal(vm.Tabs.Count, vm.DisplayTabs.Count);
+            Assert.Same(a, vm.Tabs[0]);
+            Assert.Same(b, vm.Tabs[1]);
+            Assert.Contains(c, vm.Tabs);
+            Assert.Contains(d, vm.Tabs);
         }
         finally
         {
