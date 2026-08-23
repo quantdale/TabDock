@@ -341,13 +341,35 @@ public sealed class GroupManager
 
     public Group CreateGroup(string name = "Group", string accentColor = "#2196F3")
     {
-        var group = new Group { Name = name, AccentColor = accentColor };
+        string uniqueName = EnsureUniqueGroupName(name);
+        var group = new Group { Name = uniqueName, AccentColor = accentColor };
         Groups.Add(group);
-        _log.Log($"Created group {group.Id} '{name}'");
+        _log.Log($"Created group {group.Id} '{uniqueName}'");
         DiagnosticRuntime.Record("group.create", group: group.Id.ToString("N"), action: "create", result: "success");
         RequestDurableSave("group-created");
         return group;
     }
+
+    /// <summary>
+    /// Every visible group surface builds by Name (container menus, launcher
+    /// rows), so two groups must never be created with the same name. Suffixes
+    /// resolve against CURRENT names only; a later manual rename may still
+    /// collide by user choice and is left alone.
+    /// </summary>
+    private string EnsureUniqueGroupName(string desired)
+    {
+        if (!NameExists(desired))
+            return desired;
+        for (int suffix = 2; ; suffix++)
+        {
+            string candidate = $"{desired} {suffix}";
+            if (!NameExists(candidate))
+                return candidate;
+        }
+    }
+
+    private bool NameExists(string name)
+        => Groups.Any(g => string.Equals(g.Name, name, StringComparison.OrdinalIgnoreCase));
 
     public void SwitchActiveTab(Group group, int index)
     {

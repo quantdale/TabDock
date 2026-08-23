@@ -148,6 +148,7 @@ _shepherd.HideProvenance = hideProvenance;
             _mainViewModel.NewGroupRequested += OnNewGroupRequested;
             _mainViewModel.CaptureRequested += OnCaptureRequested;
             _mainViewModel.ExitRequested += OnExitRequested;
+            _mainViewModel.OpenGroupRequested += OnLauncherOpenGroupRequested;
 
             _mainWindow = new MainWindow(_mainViewModel);
             // Null the reference on close: the app can outlive the launcher
@@ -899,7 +900,7 @@ _shepherd.HideProvenance = hideProvenance;
         // owner-modal dialog here would disable the container while an
         // already-captured guest sits visible above it (Shepherd guests are
         // independent top-level windows), once per failing target.
-        var failures = new List<string>();
+        var failures = new List<CaptureFailureReport.Failure>();
         try
         {
             foreach (WindowCaptureTarget target in picker.Result.SelectedTargets)
@@ -907,24 +908,20 @@ _shepherd.HideProvenance = hideProvenance;
                 string? error = container.CaptureWindow(target);
                 if (error != null)
                 {
-                    _log.Log($"Capture failed for 0x{target.Hwnd.ToInt64():X}: {error}");
-                    failures.Add($"{target.Title} (0x{target.Hwnd.ToInt64():X}): {error}");
+                    var failure = new CaptureFailureReport.Failure(target.Title, target.Hwnd, error);
+                    _log.Log($"Capture failed for {CaptureFailureReport.LogLine(failure)}");
+                    failures.Add(failure);
                 }
             }
 
             if (failures.Count > 0)
             {
-                string summary = failures.Count == 1
-                    ? failures[0]
-                    : string.Join(Environment.NewLine, failures);
                 // Explicit owner: an owner-less MessageBox falls back to WPF's
                 // own default modal-parent resolution, which can disable more
                 // than just this container if it resolves unexpectedly.
                 MessageBox.Show(
                     container,
-                    failures.Count == 1
-                        ? $"Could not capture the selected window.{Environment.NewLine}{summary}"
-                        : $"Could not capture {failures.Count} of the selected windows; the others were captured.{Environment.NewLine}{summary}",
+                    CaptureFailureReport.Build(failures),
                     "Capture results",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
@@ -978,6 +975,28 @@ _shepherd.HideProvenance = hideProvenance;
         // prompt instead of showing one modal per populated group (finding M6).
         ContainerWindow.IsAppShuttingDown = true;
         Shutdown();
+    }
+
+    /// <summary>
+    /// Launcher row activation: opens (or activates — the registry-first
+    /// OpenContainer path focuses an existing container) the group's dock.
+    /// </summary>
+    private void OnLauncherOpenGroupRequested(object? sender, Group group)
+    {
+        try
+        {
+            OpenContainer(group);
+        }
+        catch (Exception ex)
+        {
+            _log.LogException($"Launcher failed to open group {group.Id}", ex);
+            MessageBox.Show(
+                _mainWindow,
+                $"Could not open '{group.Name}'. See the log for details.",
+                "TabDock",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
     }
 
     private ContainerWindow OpenContainer(Group group)
@@ -1125,6 +1144,26 @@ _shepherd.HideProvenance = hideProvenance;
                 {
                     _log.LogException($"STARTUP[cleanup] failed to remove {path}", ex);
                 }
+            }
+
+            // A staged backup candidate (state.json.bak.tmp) is different: it is
+            // a fully-written copy of the prior primary left by a crash between
+            // staging and its atomic move, so it can be genuine recovery
+            // material while the primary/.bak pair is damaged. Sweep only after
+            // 24h, mirroring PendingRecoveryService's orphan-fragment policy.
+            string backupCandidate = Path.Combine(dir, "state.json.bak.tmp");
+            try
+            {
+                if (File.Exists(backupCandidate)
+                    && File.GetLastWriteTimeUtc(backupCandidate) < DateTime.UtcNow.AddHours(-24))
+                {
+                    File.Delete(backupCandidate);
+                    _log.Log($"STARTUP[cleanup] removed stale staged backup: {backupCandidate}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogException($"STARTUP[cleanup] failed to remove {backupCandidate}", ex);
             }
         }
         catch (Exception ex)
