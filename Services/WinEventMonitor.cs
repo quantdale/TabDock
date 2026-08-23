@@ -16,7 +16,6 @@ public sealed class WinEventMonitor : IDisposable
     private const int MaxInstallAttempts = 3;
     private readonly LoggingService _log;
     private readonly IWinEventHookApi _api;
-    private readonly Func<IntPtr, bool> _isCapturedWindow;
     private readonly Func<IntPtr, CapturedWindow?> _resolveCapturedWindow;
     private readonly Func<IntPtr> _getDesktopWindow;
     private readonly Func<IntPtr> _getForegroundWindow;
@@ -66,22 +65,19 @@ public sealed class WinEventMonitor : IDisposable
     public bool IsRunning => _running && HasAllHooks;
 
     public WinEventMonitor(
-        Func<IntPtr, bool> isCapturedWindow,
         Func<IntPtr, CapturedWindow?> resolveCapturedWindow,
         LoggingService log)
-        : this(isCapturedWindow, resolveCapturedWindow, log, api: null)
+        : this(resolveCapturedWindow, log, api: null)
     {
     }
 
     internal WinEventMonitor(
-        Func<IntPtr, bool> isCapturedWindow,
         Func<IntPtr, CapturedWindow?> resolveCapturedWindow,
         LoggingService log,
         IWinEventHookApi? api,
         Func<IntPtr>? getDesktopWindow = null,
         Func<IntPtr>? getForegroundWindow = null)
     {
-        _isCapturedWindow = isCapturedWindow;
         _resolveCapturedWindow = resolveCapturedWindow;
         _log = log;
         _api = api ?? NativeWinEventHookApi.Instance;
@@ -280,7 +276,11 @@ public sealed class WinEventMonitor : IDisposable
         // and a window that just fired EVENT_OBJECT_DESTROY has no ancestors to
         // walk at all regardless.
         CapturedWindow? capturedMember = _resolveCapturedWindow(hwnd);
-        if (!_isCapturedWindow(hwnd) || capturedMember == null)
+        // A null resolve IS the complete fail-closed membership proof for the
+        // production GroupManager index (PERF25-02: one dictionary probe per
+        // callback; a separate ContainsKey pre-filter probed the same index a
+        // second time for every system-wide event).
+        if (capturedMember == null)
             return;
 
         if (traceEvent)
@@ -352,7 +352,12 @@ public sealed class WinEventMonitor : IDisposable
                 || !ReferenceEquals(_resolveCapturedWindow(args.RelatedHwnd), args.CapturedMember))
                 return;
         }
-        else if (!_isCapturedWindow(args.Hwnd)
+        // args.CapturedMember is non-null on both Post paths (the desktop
+        // branch resolves it before posting; the direct path drops nulls), so
+        // one resolve + reference equality re-proves current ownership of the
+        // HWND at dispatch time — a recycled handle never receives the old
+        // member's queued event.
+        else if (args.CapturedMember == null
             || !ReferenceEquals(_resolveCapturedWindow(args.Hwnd), args.CapturedMember))
         {
             return;

@@ -536,12 +536,13 @@ Hooks installed in `WinEventMonitor.Start` (`WinEventMonitor`): `EVENT_OBJECT_DE
 unwinds and reports failure (`WinEventMonitor`).
 
 The native callback filters `idObject/idChild != 0` and zero HWNDs, then the **direct-HWND-match**
-`IsCapturedWindow` filter — never `GetAncestor`, useless under Shepherd (guests are their own
+captured-index resolve (`GetCapturedWindow` — one dictionary probe; a null result is the complete
+membership proof) — never `GetAncestor`, useless under Shepherd (guests are their own
 root) and invalid for already-destroyed windows (`WinEventMonitor`). Survivors are
 dispatched via **`SynchronizationContext.Post` — never `Send`** (handlers must observe the UI
 state *after* the causing operation; `WinEventMonitor`). `Raise` re-verifies
-`_running && IsCapturedWindow` against HWND recycling, then switches on event type
-(`WinEventMonitor`).
+`_running` and re-resolves the HWND against the index by reference so a recycled handle never
+receives a stale member's queued event, then switches on event type (`WinEventMonitor`).
 The desktop `EVENT_OBJECT_REORDER` path is the one deliberate exception to
 direct guest-HWND filtering: Windows reports the desktop client object
 (`GetDesktopWindow`, `OBJID_CLIENT`, `CHILDID_SELF`) for top-level z-order

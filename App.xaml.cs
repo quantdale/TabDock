@@ -116,7 +116,7 @@ public partial class App : Application
             _shepherd = new WindowShepherdService(_log);
             _persistence = new PersistenceService(_log);
             _groups = new GroupManager(_shepherd, _persistence, _log);
-            _events = new WinEventMonitor(_groups.IsCapturedWindow, _groups.GetCapturedWindow, _log);
+            _events = new WinEventMonitor(_groups.GetCapturedWindow, _log);
             _hotkey = new HotkeyService(_log);
             DiagnosticRuntime.LogicalSnapshotProvider = CaptureLogicalSnapshots;
 

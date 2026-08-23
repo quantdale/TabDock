@@ -26,7 +26,7 @@ public class WinEventMonitorTests
             SynchronizationContext.SetSynchronizationContext(new SynchronizationContext());
             var api = new FakeApi(failOnHookInAttempt: 4);
             using var log = new LoggingService(root);
-            using var monitor = new WinEventMonitor(_ => false, _ => null, log, api);
+            using var monitor = new WinEventMonitor(_ => null, log, api);
 
             bool started = monitor.Start();
 
@@ -60,7 +60,6 @@ public class WinEventMonitorTests
 
             using var log = new LoggingService(root);
             using var monitor = new WinEventMonitor(
-                hwnd => members.TryGetValue(hwnd, out CapturedWindow? member) && member != null,
                 hwnd => members.TryGetValue(hwnd, out CapturedWindow? member) ? member : null,
                 log,
                 api,
