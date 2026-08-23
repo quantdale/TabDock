@@ -46,7 +46,8 @@
                         <TextBlock Text="TabDock" FontSize="24" FontWeight="SemiBold"
                                    Foreground="{StaticResource TdTextBrush}" />
                         <TextBlock Text="Your desktop apps, organized into focused workspaces."
-                                   Foreground="{StaticResource TdTextMutedBrush}" FontSize="12" />
+                                   Foreground="{StaticResource TdTextMutedBrush}" FontSize="12"
+                                   TextWrapping="Wrap" MaxWidth="260" />
                     </StackPanel>
                 </StackPanel>
             </StackPanel>
@@ -57,13 +58,16 @@
                         Command="{Binding NewGroupCommand}"
                         AutomationProperties.Name="Create a new group" />
                 <Button Style="{StaticResource TdPrimaryButton}"
-                        Content="{Binding CaptureButtonText}" MinWidth="214"
+                        MinWidth="214"
                         Command="{Binding CaptureCommand}"
                         IsEnabled="{Binding CaptureAllowed}"
                         AutomationProperties.AutomationId="LauncherCaptureButton"
                         AutomationProperties.Name="{Binding CaptureButtonText}"
                         AutomationProperties.HelpText="{Binding CaptureButtonToolTip}"
-                        ToolTip="{Binding CaptureButtonToolTip}" />
+                        ToolTip="{Binding CaptureButtonToolTip}">
+                    <TextBlock Text="{Binding CaptureButtonText}" TextWrapping="Wrap"
+                               TextAlignment="Center" MaxWidth="200" />
+                </Button>
             </StackPanel>
         </Grid>
 
@@ -73,7 +77,8 @@
                 Background="{StaticResource TdWarningSurfaceBrush}"
                 BorderBrush="#6D5727" BorderThickness="1" CornerRadius="9"
                 AutomationProperties.AutomationId="PendingRecoveryBanner"
-                AutomationProperties.Name="{Binding PendingRecoveryBannerText}">
+                AutomationProperties.Name="{Binding PendingRecoveryBannerText}"
+                AutomationProperties.HelpText="Inspect pending recovery from a terminal; native recovery is supervised and never automatic.">
             <Border.Style>
                 <Style TargetType="Border">
                     <Setter Property="Visibility" Value="Collapsed" />
@@ -147,6 +152,8 @@
                     <ListView x:Name="GroupsListView"
                               ItemsSource="{Binding Groups}"
                               SelectedItem="{Binding SelectedGroup}"
+                              AutomationProperties.Name="Workspaces"
+                              AutomationProperties.HelpText="Select a workspace, then press Enter or double-click to open it."
                               BorderThickness="0"
                               Background="Transparent"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -156,6 +163,8 @@
                         <ListView.ItemContainerStyle>
                             <Style TargetType="ListViewItem" BasedOn="{StaticResource TdListItem}">
                                 <Setter Property="Padding" Value="14,12" />
+                                <Setter Property="AutomationProperties.Name" Value="{Binding Name, StringFormat='Workspace {0}'}" />
+                                <Setter Property="AutomationProperties.HelpText" Value="Press Enter or double-click to open this workspace." />
                             </Style>
                         </ListView.ItemContainerStyle>
                         <ListView.ItemTemplate>
@@ -193,7 +202,8 @@
                                             Content="Open" MinWidth="64" Padding="10,5"
                                             Command="{Binding DataContext.OpenSelectedGroupCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                             CommandParameter="{Binding}"
-                                            AutomationProperties.Name="Open workspace" />
+                                            AutomationProperties.Name="{Binding Name, StringFormat='Open {0} workspace'}"
+                                            ToolTip="Open this workspace" />
                                 </Grid>
                             </DataTemplate>
                         </ListView.ItemTemplate>

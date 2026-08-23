@@ -15,6 +15,9 @@ public sealed class TabViewModel : ViewModelBase
 
     public string Title => Model.DisplayLabel;
 
+    /// <summary>Target-specific accessible name for the tab-strip item.</summary>
+    public string AutomationName => $"Tab {Title}";
+
     /// <summary>
     /// Stable UI Automation identifier for an ordinary tab-strip item. The
     /// container style binds this value to the generated ListBoxItem so the
@@ -50,5 +53,6 @@ public sealed class TabViewModel : ViewModelBase
     public void RefreshTitle()
     {
         OnPropertyChanged(nameof(Title));
+        OnPropertyChanged(nameof(AutomationName));
     }
 }

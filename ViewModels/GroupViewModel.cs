@@ -190,6 +190,7 @@ public sealed class GroupViewModel : ViewModelBase
     {
         if (left == null || right == null || ReferenceEquals(left, right))
             return;
+        _splitComposite?.Detach();
         _splitComposite = new SplitCompositeViewModel(left, right);
         _splitComposite.RefreshActiveState();
         RebuildDisplayTabs();
@@ -200,6 +201,7 @@ public sealed class GroupViewModel : ViewModelBase
     /// </summary>
     public void ClearSplitComposite()
     {
+        _splitComposite?.Detach();
         _splitComposite = null;
         RebuildDisplayTabs();
     }
@@ -518,6 +520,7 @@ public sealed class GroupViewModel : ViewModelBase
     /// </summary>
     public void Detach()
     {
+        _splitComposite?.Detach();
         _group.PropertyChanged -= OnGroupPropertyChanged;
         _manager.CaptureAdmissionChanged -= Manager_CaptureAdmissionChanged;
         // Tabs is a VM-owned ObservableCollection — its CollectionChanged keeps

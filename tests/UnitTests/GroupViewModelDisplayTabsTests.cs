@@ -180,4 +180,30 @@ public class GroupViewModelDisplayTabsTests
             TryCleanup(dir);
         }
     }
+
+    [Fact]
+    public void SplitComposite_AccessibleNameTracksMemberTitleChanges()
+    {
+        var (dir, vm) = MakeViewModel();
+        try
+        {
+            var left = new TabViewModel(MakeWindow(0));
+            var right = new TabViewModel(MakeWindow(1));
+            vm.Tabs.Add(left);
+            vm.Tabs.Add(right);
+            vm.SetSplitComposite(left, right);
+
+            var composite = Assert.IsType<SplitCompositeViewModel>(vm.DisplayTabs[0]);
+            Assert.Contains("Guest 0", composite.AutomationName, StringComparison.Ordinal);
+
+            left.Model.OriginalTitle = "Renamed guest";
+            left.RefreshTitle();
+
+            Assert.Contains("Renamed guest", composite.AutomationName, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryCleanup(dir);
+        }
+    }
 }

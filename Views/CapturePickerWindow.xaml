@@ -57,6 +57,7 @@
                 <TextBox Style="{StaticResource TdTextBox}"
                          Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                          AutomationProperties.Name="Search capturable windows"
+                         AutomationProperties.HelpText="Filter by window title, executable path, or window class"
                          ToolTip="Filter by window title, executable path, or window class" />
             </StackPanel>
             <StackPanel Grid.Column="2">
@@ -64,7 +65,14 @@
                 <ComboBox Style="{StaticResource TdComboBox}"
                           ItemsSource="{Binding Groups}"
                           SelectedItem="{Binding SelectedGroupOption}"
-                          AutomationProperties.Name="Destination group" />
+                          AutomationProperties.Name="Destination group"
+                          AutomationProperties.HelpText="Choose an existing workspace or create a new group.">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
             </StackPanel>
         </Grid>
 
@@ -109,12 +117,25 @@
                             <Setter Property="Background" Value="Transparent" />
                             <Setter Property="BorderThickness" Value="0" />
                             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                            <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
                         </Style>
                     </ListBox.ItemContainerStyle>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <Border Padding="10,9" CornerRadius="7" Background="#0F151E"
-                                    BorderBrush="#1E2A38" BorderThickness="1">
+                            <Border Padding="10,9" CornerRadius="7">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Background" Value="#0F151E" />
+                                        <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
+                                        <Setter Property="BorderThickness" Value="1" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                <Setter Property="BorderBrush" Value="#B9CCFF" />
+                                                <Setter Property="BorderThickness" Value="2" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
@@ -124,7 +145,8 @@
                                     <CheckBox Grid.Column="0"
                                               IsChecked="{Binding IsSelected, Mode=TwoWay}"
                                               VerticalAlignment="Center" Margin="1,0,11,0"
-                                              AutomationProperties.Name="Select window" />
+                                              AutomationProperties.Name="{Binding Title, StringFormat='Select {0}'}"
+                                              AutomationProperties.HelpText="Select this window for capture" />
                                     <Border Grid.Column="1" Width="34" Height="34" CornerRadius="7"
                                             Background="#17202C" Margin="0,0,10,0">
                                         <Image Source="{Binding Icon}" Width="20" Height="20"
@@ -170,7 +192,9 @@
             <TextBlock Grid.Row="0" Text="{Binding CaptureAdmissionReason}"
                        Foreground="{StaticResource TdWarningBrush}"
                        TextWrapping="Wrap" Margin="0,0,0,9"
-                       AutomationProperties.AutomationId="CaptureAdmissionStatus">
+                       AutomationProperties.AutomationId="CaptureAdmissionStatus"
+                       AutomationProperties.Name="Capture admission status"
+                       AutomationProperties.HelpText="Capture is disabled until the native guest-lifecycle monitor is healthy.">
                 <TextBlock.Style>
                     <Style TargetType="TextBlock">
                         <Setter Property="Visibility" Value="Collapsed" />

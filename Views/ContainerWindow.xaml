@@ -34,7 +34,10 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="CaptionBorder" Background="{TemplateBinding Background}">
+                        <Border x:Name="CaptionBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <ControlTemplate.Triggers>
@@ -100,8 +103,8 @@
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
@@ -109,7 +112,8 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <Button Grid.Column="0" Width="18" Height="18" MinHeight="18" Margin="12,0,9,0"
+                <Button Grid.Column="0" Style="{StaticResource CaptionButtonStyle}"
+                        Width="18" Height="18" MinHeight="18" Margin="12,0,9,0"
                         Padding="0" Background="{Binding AccentBrush}"
                         BorderBrush="#DDE8FF" BorderThickness="1"
                         WindowChrome.IsHitTestVisibleInChrome="True"
@@ -149,8 +153,11 @@
 
                 <TextBox Grid.Column="1" Text="{Binding Name, UpdateSourceTrigger=LostFocus}"
                          VerticalAlignment="Center" MinHeight="26" Height="28" Padding="7,3"
+                         MaxWidth="220" HorizontalAlignment="Stretch"
                          WindowChrome.IsHitTestVisibleInChrome="True"
                          x:Name="RenameBox"
+                         AutomationProperties.Name="Rename workspace"
+                         AutomationProperties.HelpText="Type a workspace name, then press Enter to save or Escape to cancel."
                          LostFocus="RenameBox_LostFocus"
                          KeyDown="RenameBox_KeyDown">
                     <TextBox.Style>
@@ -167,10 +174,11 @@
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Left"
                             VerticalAlignment="Center" Margin="10,0,0,0">
-                    <Button Style="{StaticResource ChromePillButtonStyle}"
-                            Content="Workspace ▾" Margin="0,0,2,0"
-                            AutomationProperties.AutomationId="GroupSelector"
-                            Click="GroupButton_Click" ToolTip="Switch workspace or create a new one">
+                            <Button Style="{StaticResource ChromePillButtonStyle}"
+                                    Content="Workspace ▾" Margin="0,0,2,0"
+                                    AutomationProperties.AutomationId="GroupSelector"
+                                    AutomationProperties.Name="Switch workspace"
+                                    Click="GroupButton_Click" ToolTip="Switch workspace, create a new one, rename, or delete this workspace">
                         <Button.ContextMenu>
                             <ContextMenu x:Name="GroupContextMenu" Closed="GroupContextMenu_Closed" />
                         </Button.ContextMenu>
@@ -214,11 +222,17 @@
                      ItemsSource="{Binding DisplayTabs}"
                      SelectedItem="{Binding ActiveTab, Mode=OneWay}"
                      SelectionChanged="TabsListBox_SelectionChanged"
+                     PreviewKeyDown="TabsListBox_PreviewKeyDown"
                      PreviewMouseLeftButtonDown="TabsListBox_PreviewMouseLeftButtonDown_SplitInteraction"
                      PreviewMouseRightButtonDown="TabsListBox_PreviewMouseRightButtonDown"
                      Background="Transparent"
                      BorderThickness="0"
-                     Focusable="False"
+                     Focusable="True"
+                     IsTabStop="True"
+                     KeyboardNavigation.TabNavigation="Continue"
+                     AutomationProperties.AutomationId="WorkspaceTabs"
+                     AutomationProperties.Name="Workspace tabs"
+                     AutomationProperties.HelpText="Use Left and Right arrows to move between tabs. Use Enter or Space on a close button to pop out a tab."
                      Padding="6,3"
                      ScrollViewer.HorizontalScrollBarVisibility="Auto"
                      ScrollViewer.VerticalScrollBarVisibility="Disabled">
@@ -228,7 +242,7 @@
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.ItemContainerStyle>
-                    <Style TargetType="ListBoxItem">
+                <Style TargetType="ListBoxItem">
                         <Setter Property="Padding" Value="0" />
                         <Setter Property="Margin" Value="0,0,5,0" />
                         <Setter Property="Background" Value="Transparent" />
@@ -236,19 +250,25 @@
                         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
                         <Setter Property="IsSelected" Value="{Binding IsActive, Mode=TwoWay}" />
                         <Setter Property="AutomationProperties.AutomationId" Value="{Binding AutomationId}" />
+                        <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
                     </Style>
                 </ListBox.ItemContainerStyle>
                 <ListBox.Resources>
                     <DataTemplate DataType="{x:Type vm:TabViewModel}">
-                        <Border Padding="10,5" CornerRadius="7" BorderThickness="1">
+                        <Border Padding="10,5" CornerRadius="7">
                             <Border.Style>
                                 <Style TargetType="Border">
                                     <Setter Property="Background" Value="#10161F" />
                                     <Setter Property="BorderBrush" Value="Transparent" />
+                                    <Setter Property="BorderThickness" Value="1" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
                                             <Setter Property="Background" Value="{StaticResource TdAccentSoftBrush}" />
                                             <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                            <Setter Property="BorderBrush" Value="#B9CCFF" />
+                                            <Setter Property="BorderThickness" Value="2" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
@@ -258,9 +278,11 @@
                                 <TextBlock Text="{Binding Title}" Foreground="{StaticResource TdTextBrush}"
                                            VerticalAlignment="Center" MaxWidth="180"
                                            TextTrimming="CharacterEllipsis" FontSize="11" />
-                                <Button Style="{StaticResource TabCloseButtonStyle}"
+                                        <Button Style="{StaticResource TabCloseButtonStyle}"
                                         Content="×"
+                                        Click="TabClose_Click"
                                         AutomationProperties.AutomationId="TabClose"
+                                        AutomationProperties.Name="Pop out tab"
                                         PreviewMouseLeftButtonDown="TabClose_PreviewMouseLeftButtonDown" />
                             </StackPanel>
                             <Border.ContextMenu>
@@ -275,7 +297,9 @@
                     <DataTemplate DataType="{x:Type vm:SplitCompositeViewModel}">
                         <Border Padding="5" CornerRadius="7" Background="{StaticResource TdAccentSoftBrush}"
                                 BorderBrush="{StaticResource TdAccentBrush}" BorderThickness="1"
-                                AutomationProperties.AutomationId="SplitCompositeItem">
+                                AutomationProperties.AutomationId="SplitCompositeItem"
+                                AutomationProperties.Name="{Binding AutomationName}"
+                                AutomationProperties.HelpText="Use Tab to reach LEFT or RIGHT, then press Enter or Space to focus that member.">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -285,15 +309,25 @@
 
                                 <Border Grid.Column="0" Tag="LEFT" Padding="6,1" Margin="0,0,3,0" CornerRadius="5"
                                         AutomationProperties.AutomationId="SplitHalfLeft"
+                                        AutomationProperties.Name="{Binding Left.AutomationName}"
+                                        AutomationProperties.HelpText="Focus the LEFT split member"
+                                        Focusable="True" KeyboardNavigation.IsTabStop="True"
+                                        KeyDown="SplitHalf_KeyDown"
                                         PreviewMouseLeftButtonDown="SplitHalf_PreviewMouseLeftButtonDown"
                                         PreviewMouseDown="SplitHalf_PreviewMouseDown">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Background" Value="Transparent" />
+                                            <Setter Property="BorderBrush" Value="Transparent" />
+                                            <Setter Property="BorderThickness" Value="1" />
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Left.IsActive}" Value="True">
                                                     <Setter Property="Background" Value="#345089" />
                                                 </DataTrigger>
+                                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                                    <Setter Property="BorderBrush" Value="#B9CCFF" />
+                                                    <Setter Property="BorderThickness" Value="2" />
+                                                </Trigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Border.Style>
@@ -302,8 +336,10 @@
                                         <TextBlock Text="{Binding Left.Title}" Foreground="White" VerticalAlignment="Center"
                                                    MaxWidth="125" TextTrimming="CharacterEllipsis" FontSize="11" />
                                         <Button Style="{StaticResource TabCloseButtonStyle}" Content="×" Tag="LEFT"
+                                                Click="SplitHalfClose_Click"
                                                 ToolTip="Pop out left window"
                                                 AutomationProperties.AutomationId="SplitCloseLeft"
+                                                AutomationProperties.Name="Pop out LEFT window"
                                                 PreviewMouseLeftButtonDown="SplitHalfClose_PreviewMouseLeftButtonDown" />
                                     </StackPanel>
                                 </Border>
@@ -312,15 +348,25 @@
 
                                 <Border Grid.Column="2" Tag="RIGHT" Padding="6,1" Margin="3,0,0,0" CornerRadius="5"
                                         AutomationProperties.AutomationId="SplitHalfRight"
+                                        AutomationProperties.Name="{Binding Right.AutomationName}"
+                                        AutomationProperties.HelpText="Focus the RIGHT split member"
+                                        Focusable="True" KeyboardNavigation.IsTabStop="True"
+                                        KeyDown="SplitHalf_KeyDown"
                                         PreviewMouseLeftButtonDown="SplitHalf_PreviewMouseLeftButtonDown"
                                         PreviewMouseDown="SplitHalf_PreviewMouseDown">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Background" Value="Transparent" />
+                                            <Setter Property="BorderBrush" Value="Transparent" />
+                                            <Setter Property="BorderThickness" Value="1" />
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Right.IsActive}" Value="True">
                                                     <Setter Property="Background" Value="#345089" />
                                                 </DataTrigger>
+                                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                                    <Setter Property="BorderBrush" Value="#B9CCFF" />
+                                                    <Setter Property="BorderThickness" Value="2" />
+                                                </Trigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Border.Style>
@@ -329,8 +375,10 @@
                                         <TextBlock Text="{Binding Right.Title}" Foreground="White" VerticalAlignment="Center"
                                                    MaxWidth="125" TextTrimming="CharacterEllipsis" FontSize="11" />
                                         <Button Style="{StaticResource TabCloseButtonStyle}" Content="×" Tag="RIGHT"
+                                                Click="SplitHalfClose_Click"
                                                 ToolTip="Pop out right window"
                                                 AutomationProperties.AutomationId="SplitCloseRight"
+                                                AutomationProperties.Name="Pop out RIGHT window"
                                                 PreviewMouseLeftButtonDown="SplitHalfClose_PreviewMouseLeftButtonDown" />
                                     </StackPanel>
                                 </Border>
@@ -405,11 +453,25 @@
                                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                                     <Setter Property="Background" Value="Transparent" />
                                     <Setter Property="BorderThickness" Value="0" />
+                                    <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
                                 </Style>
                             </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Padding="8,6" CornerRadius="6" Background="#111923">
+                                    <Border Padding="8,6" CornerRadius="6">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="#111923" />
+                                                <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
+                                                <Setter Property="BorderThickness" Value="1" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                        <Setter Property="BorderBrush" Value="#B9CCFF" />
+                                                        <Setter Property="BorderThickness" Value="2" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />
@@ -417,7 +479,9 @@
                                                 <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
                                             <CheckBox Grid.Column="0" IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                                      VerticalAlignment="Center" Margin="0,0,9,0" />
+                                                      VerticalAlignment="Center" Margin="0,0,9,0"
+                                                      AutomationProperties.Name="{Binding Title, StringFormat='Select {0}'}"
+                                                      AutomationProperties.HelpText="Select this window for capture" />
                                             <Image Grid.Column="1" Source="{Binding Icon}" Width="18" Height="18"
                                                    Margin="0,0,9,0" VerticalAlignment="Center" />
                                             <StackPanel Grid.Column="2">
@@ -490,7 +554,8 @@
         <!-- The marker remains the single native content-area authority. -->
         <Border Grid.Row="3" Background="#080B10" x:Name="ContentBorder">
             <Grid>
-                <infra:NativeHwndHost x:Name="ContentHost" />
+                <infra:NativeHwndHost x:Name="ContentHost"
+                                      AutomationProperties.AutomationId="ContentHost" />
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
                             IsHitTestVisible="False" MaxWidth="360">
                     <StackPanel.Style>

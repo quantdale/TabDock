@@ -115,6 +115,7 @@
             <Style.Triggers>
                 <Trigger Property="IsKeyboardFocused" Value="True">
                     <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
+                    <Setter Property="BorderThickness" Value="2" />
                 </Trigger>
                 <Trigger Property="IsEnabled" Value="False">
                     <Setter Property="Opacity" Value="0.55" />
@@ -123,13 +124,43 @@
         </Style>
 
         <Style x:Key="TdComboBox" TargetType="{x:Type ComboBox}">
-            <Setter Property="Foreground" Value="#111722" />
-            <Setter Property="Background" Value="White" />
+            <Setter Property="Foreground" Value="{StaticResource TdTextBrush}" />
+            <Setter Property="Background" Value="{StaticResource TdSurfaceRaisedBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource TdBorderStrongBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="8,5" />
             <Setter Property="MinHeight" Value="36" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="{x:Type ComboBoxItem}">
+                        <Setter Property="Foreground" Value="{StaticResource TdTextBrush}" />
+                        <Setter Property="Background" Value="{StaticResource TdSurfaceRaisedBrush}" />
+                        <Setter Property="Padding" Value="9,7" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                        <Style.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter Property="Background" Value="{StaticResource TdSurfaceHoverBrush}" />
+                                <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter Property="BorderBrush" Value="#B9CCFF" />
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
+                    <Setter Property="BorderThickness" Value="2" />
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.55" />
+                </Trigger>
+            </Style.Triggers>
         </Style>
 
         <Style x:Key="TdListItem" TargetType="{x:Type ListViewItem}">
