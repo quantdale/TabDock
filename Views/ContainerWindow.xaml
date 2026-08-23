@@ -148,7 +148,6 @@
                 </TextBlock>
 
                 <TextBox Grid.Column="1" Text="{Binding Name, UpdateSourceTrigger=LostFocus}"
-                         Style="{StaticResource TdTextBox}"
                          VerticalAlignment="Center" MinHeight="26" Height="28" Padding="7,3"
                          WindowChrome.IsHitTestVisibleInChrome="True"
                          x:Name="RenameBox"
