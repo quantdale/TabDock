@@ -164,7 +164,7 @@ internal static partial class Scenarios
             : Uia.FindDescendantByAutomationId(main, "CaptureAdmissionStatus", out _);
         if (status == null || status.Current.IsOffscreen || status.Current.BoundingRectangle.IsEmpty)
         {
-            ctx.Block("BLOCKED_ENVIRONMENT: durable journal failure was not safely inducible on this desktop; rerun after launching with a supervised unavailable AppData journal and use --scenario capture-admission-blocked.");
+            ctx.Block("BLOCKED_ENVIRONMENT: durable journal failure was not safely inducible on this desktop; rerun after launching with a supervised unavailable AppData journal and use the positional capture-admission-blocked scenario command documented in docs/TESTING.md.");
             return;
         }
 

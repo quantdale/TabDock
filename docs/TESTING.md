@@ -79,7 +79,7 @@ self-contained publish smoke. It never sends desktop input.
    root, located by walking up from the driver assembly until `TabDock.sln` is
    found.
 2. Spawns a fresh TabDock instance plus guinea-pig windows.
-3. Drives them exclusively with real `SendInput` mouse/keyboard events at UIA-read coordinates.
+3. Drives them exclusively with real `SendInput` mouse/keyboard events at UIA-read coordinates. Current UIA contracts use stable IDs such as `GroupSelector`, `WorkspaceTabs`, `CaptureGroupThese`, `SplitHalfLeft`, and `SplitHalfRight`; scenario lookup should prefer those IDs over visible copy.
 4. Asserts on window state, screen pixels, the TabDock log, and the pigs' window-message logs.
 5. Kills every process it spawned when the scenario finishes (or fails).
 
@@ -129,6 +129,13 @@ member removal, and no duplicate split authority. Source-contract tests also
 lock AutomationIds, the shared navigation operation, `MOD_NOREPEAT`, and the
 persistent Split control.
 
+Release-candidate source contracts live in
+`ReleaseCandidateUiContractTests`: they protect the native `ContentHost`
+marker, `DisplayTabs`/`ActiveTab` binding direction, keyboard-focus handlers,
+LEFT/RIGHT accessible names, picker identity fields, stable AutomationIds, and
+the allowed repeated IDs used by repeated capture/tab rows. They deliberately
+parse semantic XAML/source markers rather than whitespace or cosmetic snapshots.
+
 The focused deterministic commands are:
 
 ```powershell
@@ -139,15 +146,34 @@ dotnet test TabDock.sln -c Debug --filter "FullyQualifiedName~SplitAffordancePol
 The supervised Windows targets for this campaign are:
 
 ```powershell
-dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes --scenario global-tab-navigation
-dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes --scenario split-affordance
-dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes --scenario capture-admission-blocked
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes global-tab-navigation
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes split-affordance
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes capture-admission-blocked
 ```
 
+The redesigned picker title is `Capture windows — TabDock`; the driver matches
+that title by the stable `Capture windows` prefix. The standalone submit action
+is `CaptureGroupThese` and the container workspace menu is `GroupSelector`.
 These scenarios send real input and require an exclusively available,
 provenance-approved desktop. If that gate is not safe, record
 `BLOCKED_SUPERVISED` or `BLOCKED_ENVIRONMENT` with the exact command rather than
 turning environmental refusal into a product failure.
+
+Campaign qualification record (2026-08-23): the deterministic `--selftest all`
+run is `PASS` (38/38). Physical SendInput scenarios are
+`BLOCKED_SUPERVISED` because this desktop is not certified exclusively
+available for input injection. The exact reruns are the three commands above;
+the broader hermetic command is:
+
+```powershell
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes all
+```
+
+The blocked scope covers launcher creation/open/switch, standalone and inline
+capture, filtered multi-select/refresh/add-selected, tab navigation/reorder/
+pop-out, presented and dormant split plus LEFT/RIGHT focus, maximize/restore,
+external Alt+Tab/direct guest click, crash-kill rescue/relaunch recovery,
+blocked/elevated capture, long-title/high-DPI layout, and keyboard-only input.
 
 Split-screen scenarios (pig-only, hermetic, join `all`):
 

@@ -236,6 +236,15 @@ internal static partial class Scenarios
             .Any(dir => File.Exists(Path.Combine(dir, executable)));
     }
 
+    /// <summary>
+    /// The standalone picker title includes the product name. Keep driver
+    /// discovery stable across that presentation copy instead of coupling
+    /// native-window lookup to one exact localized-looking title string.
+    /// </summary>
+    private static bool IsCapturePickerTitle(string? title)
+        => !string.IsNullOrWhiteSpace(title)
+            && title.StartsWith("Capture windows", StringComparison.Ordinal);
+
     private static readonly Random Rng = new Random();
 
     // Keep each real-input process comfortably below the fixed 10-minute
@@ -1533,7 +1542,8 @@ internal static partial class Scenarios
 
     /// <summary>
     /// Opens the capture picker with the real Ctrl+Alt+G hotkey, real-clicks the row for each
-    /// guest (aborting if a row is missing or ambiguous), real-clicks "Group these", and waits
+    /// guest (aborting if a row is missing or ambiguous), real-clicks the stable
+    /// "CaptureGroupThese" submit control, and waits
     /// for the newly created container (EnumWindows diff so pre-existing/restored containers
     /// are never confused with the new one).
     /// </summary>
@@ -1563,7 +1573,7 @@ internal static partial class Scenarios
         // snapshot can be stale for freshly created windows (observed: the picker was
         // visible per EnumWindows but absent from RootElement children), so bridge
         // into UIA from the HWND instead of searching the desktop tree.
-        IntPtr pickerHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 10000);
+        IntPtr pickerHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, IsCapturePickerTitle, 10000);
         if (pickerHwnd == IntPtr.Zero)
             throw new InvalidOperationException("'Capture windows' picker did not appear within 10s.");
         Input.RegisterDiscoveredWindow(pickerHwnd, "TabDockCapturePicker");
@@ -1629,7 +1639,7 @@ internal static partial class Scenarios
                 throw lastMiss ?? new InvalidOperationException($"Picker row for '{g.Title}' not found.");
 
             // Real-click the checkbox and verify it toggled on; the CheckBox's
-            // CanExecute gate on "Group these" depends on it. Use the row center
+            // CanExecute gate on the submit action depends on it. Use the row center
             // (the whole WPF CheckBox content is clickable) rather than the glyph
             // edge, which can miss on high-DPI or differently-templated rows.
             GuardedProc.Log($"  CaptureIntoGroup: toggling row for '{g.Title}' (controlType={row.Current.ControlType.ProgrammaticName}, rect={Uia.GetElementRect(row)}).");
@@ -1682,9 +1692,9 @@ internal static partial class Scenarios
             Thread.Sleep(200);
         }
 
-        AutomationElement? groupBtn = Uia.FindDescendantByName(picker, ControlType.Button, "Group these", null, out int btnCount);
+        AutomationElement? groupBtn = Uia.FindDescendantByAutomationId(picker, "CaptureGroupThese", out int btnCount);
         if (groupBtn == null || btnCount != 1)
-            throw new InvalidOperationException($"'Group these' button not found uniquely (count={btnCount}).");
+            throw new InvalidOperationException($"'CaptureGroupThese' button not found uniquely (count={btnCount}).");
         bool pickerClosed = false;
         for (int attempt = 0; attempt < 3 && !pickerClosed; attempt++)
         {
@@ -1697,7 +1707,7 @@ internal static partial class Scenarios
                 picker = Uia.FromHwnd(pickerHwnd);
                 if (picker == null)
                     break;
-                groupBtn = Uia.FindDescendantByName(picker, ControlType.Button, "Group these", null, out btnCount);
+                groupBtn = Uia.FindDescendantByAutomationId(picker, "CaptureGroupThese", out btnCount);
                 if (groupBtn == null || btnCount != 1)
                     break;
             }
@@ -1711,11 +1721,11 @@ internal static partial class Scenarios
                 catch { return false; }
             }, 2000);
             if (!groupBtnEnabled)
-                throw new InvalidOperationException("'Group these' button is still disabled 2s after the selected rows were verified On.");
+                throw new InvalidOperationException("'CaptureGroupThese' button is still disabled 2s after the selected rows were verified On.");
             (int bx, int by) = Uia.Center(groupBtn);
             IntPtr wfp = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = bx, y = by });
             IntPtr wfpRoot = NativeMethods.GetAncestor(wfp, NativeMethods.GA_ROOT);
-            GuardedProc.Log($"  Clicking 'Group these' attempt {attempt + 1} at ({bx},{by}); windowFromPoint root=0x{wfpRoot.ToInt64():X} picker=0x{pickerHwnd.ToInt64():X} fg=0x{NativeMethods.GetForegroundWindow().ToInt64():X}.");
+            GuardedProc.Log($"  Clicking 'CaptureGroupThese' attempt {attempt + 1} at ({bx},{by}); windowFromPoint root=0x{wfpRoot.ToInt64():X} picker=0x{pickerHwnd.ToInt64():X} fg=0x{NativeMethods.GetForegroundWindow().ToInt64():X}.");
             if (!EnsureClickable(pickerHwnd, bx, by))
             {
                 if (attempt < 2 && RepositionVerifiedWindow(pickerHwnd, "picker"))
@@ -1723,7 +1733,7 @@ internal static partial class Scenarios
                     GuardedProc.Log("  CaptureIntoGroup: moved the verified picker to a virtual-screen corner before retrying; the next button point remains guard-gated.");
                     continue;
                 }
-                throw new InvalidOperationException("'Group these' point was obscured or failed identity proof; refusing to click blind.");
+                throw new InvalidOperationException("'CaptureGroupThese' point was obscured or failed identity proof; refusing to click blind.");
             }
             Input.ClickAt(bx, by);
             pickerClosed = Util.WaitUntil(() => !NativeMethods.IsWindow(pickerHwnd), 3000, 50);
@@ -1742,10 +1752,10 @@ internal static partial class Scenarios
                 }
             }
             if (!pickerClosed)
-                GuardedProc.Log($"  WARNING: picker still open after 'Group these' attempt {attempt + 1}; rediscovering before retry.");
+                GuardedProc.Log($"  WARNING: picker still open after 'CaptureGroupThese' attempt {attempt + 1}; rediscovering before retry.");
         }
         if (!pickerClosed)
-            throw new InvalidOperationException("'Group these' did not close the verified capture picker after three guarded attempts.");
+            throw new InvalidOperationException("'CaptureGroupThese' did not close the verified capture picker after three guarded attempts.");
 
         IntPtr container = IntPtr.Zero;
         Util.WaitUntil(() =>

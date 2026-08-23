@@ -1924,8 +1924,8 @@ internal static partial class Scenarios
         ClickAddWindowButton(container);
         Thread.Sleep(400);
         ctx.Check(Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true)
-            .All(hwnd => NativeMethods.GetWindowTextString(hwnd) != "Capture windows"),
-            "Add App opens capture inline without a CapturePickerWindow");
+            .All(hwnd => !IsCapturePickerTitle(NativeMethods.GetWindowTextString(hwnd))),
+            "Add window opens capture inline without a CapturePickerWindow");
 
         AutomationElement? root = Uia.FromHwnd(container);
         if (root == null)
@@ -1978,7 +1978,7 @@ internal static partial class Scenarios
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
         AutomationElement? root = Uia.FromHwnd(container)
             ?? throw new InvalidOperationException("Container UIA root unavailable for group menu.");
-        AutomationElement? groupButton = Uia.FindDescendantByName(root, ControlType.Button, "Group ▾", null, out int buttonCount);
+        AutomationElement? groupButton = Uia.FindDescendantByAutomationId(root, "GroupSelector", out int buttonCount);
         if (groupButton == null || buttonCount != 1)
             throw new InvalidOperationException($"Group selector button not found uniquely (count={buttonCount}).");
 
@@ -2048,7 +2048,7 @@ internal static partial class Scenarios
 
         AutomationElement? root = Uia.FromHwnd(container)
             ?? throw new InvalidOperationException("Container UIA root unavailable for group menu.");
-        AutomationElement? groupButton = Uia.FindDescendantByName(root, ControlType.Button, "Group ▾", null, out int buttonCount);
+        AutomationElement? groupButton = Uia.FindDescendantByAutomationId(root, "GroupSelector", out int buttonCount);
         if (groupButton == null || buttonCount != 1)
             throw new InvalidOperationException($"Group selector button not found uniquely (count={buttonCount}).");
         (int x, int y) = Uia.Center(groupButton);
@@ -2173,7 +2173,7 @@ internal static partial class Scenarios
         AutomationElement? root = Uia.FromHwnd(container)
             ?? throw new InvalidOperationException("Container UIA root unavailable.");
 
-        AutomationElement? groupButton = Uia.FindDescendantByName(root, ControlType.Button, "Group ▾", null, out int buttonCount);
+        AutomationElement? groupButton = Uia.FindDescendantByAutomationId(root, "GroupSelector", out int buttonCount);
         if (groupButton == null || buttonCount != 1)
             throw new InvalidOperationException($"Group selector button not found uniquely (count={buttonCount}).");
         (int gx, int gy) = Uia.Center(groupButton);
@@ -2277,7 +2277,7 @@ internal static partial class Scenarios
 
         AutomationElement? root = Uia.FromHwnd(container)
             ?? throw new InvalidOperationException("Container UIA root unavailable.");
-        AutomationElement? groupButton = Uia.FindDescendantByName(root, ControlType.Button, "Group ▾", null, out int buttonCount);
+        AutomationElement? groupButton = Uia.FindDescendantByAutomationId(root, "GroupSelector", out int buttonCount);
         if (groupButton == null || buttonCount != 1)
             throw new InvalidOperationException($"Group selector button not found uniquely (count={buttonCount}).");
         (int gx, int gy) = Uia.Center(groupButton);

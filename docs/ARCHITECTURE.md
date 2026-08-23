@@ -155,12 +155,22 @@ windows.
 
 ### Capture
 
-Trigger: the `Ctrl+Alt+G` hotkey (`HotkeyService`) or a container's "+" button →
+Trigger: the `Ctrl+Alt+G` hotkey (`HotkeyService`) or a container's "Add window" button →
 `ShowCapturePicker` (`App.xaml`; re-entrancy-guarded via `_pickerOpen` and the
 close-prompt check, `App.xaml`). The picker enumerates top-level windows with
 cheapest-first filters: visible → not tool-window → titled → not own window
 (`GroupManager.IsOwnWindow`, `GroupManager`) → not already captured
 (`GroupManager`) → not DWM-cloaked (`CapturePickerViewModel`).
+
+The picker row's continuity key is a UI-only projection, not a second native
+authority: HWND, PID, GUI thread, process-start ticks, class name, and the
+case-insensitive Windows executable path must all match before a checked row is
+restored after Refresh. Rows whose process identity cannot be read are omitted
+from production enumeration. The final handoff reuses
+`WindowIdentityGate.EvaluateBeforeCaptureToken`, and Shepherd performs its
+authoritative admission transaction again immediately before installing the
+capture token. Titles remain mutable display metadata and are intentionally not
+part of the identity key.
 
 On OK, `App` resolves/creates the target group + container, then calls
 `container.CaptureWindow(hwnd)` (`ContainerWindow.xaml`), which re-checks the
@@ -252,9 +262,9 @@ asserted through the controller's recording presentation-operations seam
 (`IPresentationOperations`) in unit tests; the former CI-only budget-counter
 scaffolding was removed as dead (Wave 1).
 
-The container caption's Group menu switches to an already-open group or creates
+The container caption's Workspace menu switches to an already-open group or creates
 one in the existing shell. The launcher is hidden while a container is open and
-remains only as the no-group/global-hotkey fallback. Routine Add App capture is
+remains only as the no-group/global-hotkey fallback. Routine Add window capture is
 an in-window panel; the standalone picker remains for the fallback path.
 
 - **State** — `SplitPresentationController.Left` / `.Right` hold

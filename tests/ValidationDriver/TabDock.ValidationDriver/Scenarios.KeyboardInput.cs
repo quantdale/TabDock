@@ -755,11 +755,9 @@ input.addEventListener('input', function() {
     // 38. keyboard-only-tab-navigation: ContainerWindow_PreviewKeyDown
     //     implements Ctrl+Tab / Ctrl+Shift+Tab as an explicit keyboard shortcut
     //     that cycles ActiveTab — the real "keyboard-only tab switch" mechanism
-    //     (TabsListBox itself has Focusable="False" in Views/ContainerWindow.xaml,
-    //     confirmed by reading the XAML rather than by running the app, so
-    //     plain Tab/Shift+Tab focus traversal can never reach it or drive
-    //     arrow-key selection on it). Plain Tab/Shift+Tab is exercised too, but
-    //     only as a "must not crash/hang" check, per that same finding.
+    //     (the redesigned tab strip is explicitly focusable and exposes
+    //     keyboard focus states). Plain Tab/Shift+Tab traversal and arrow-key
+    //     selection are exercised as real-input acceptance checks.
     // -------------------------------------------------------------------------
     private static void KeyboardOnlyTabNavigation(Ctx ctx, Options opt)
     {
@@ -779,6 +777,35 @@ input.addEventListener('input', function() {
                 if (IsDocked(g.Hwnd, host))
                     return g.Hwnd;
             return IntPtr.Zero;
+        }
+
+        AutomationElement containerRoot = Uia.FromHwnd(container)
+            ?? throw new InvalidOperationException("Container UIA root unavailable.");
+        AutomationElement? tabStrip = Uia.FindDescendantByAutomationId(containerRoot, "WorkspaceTabs", out int tabStripCount);
+        ctx.Check(tabStrip != null && tabStripCount == 1,
+            $"workspace tab strip exposes one stable keyboard target (count={tabStripCount})");
+        if (tabStrip != null && tabStripCount == 1)
+        {
+            ctx.Check(tabStrip.Current.IsKeyboardFocusable,
+                "workspace tab strip is keyboard focusable");
+            for (int attempt = 0; attempt < 16 && !tabStrip.Current.HasKeyboardFocus; attempt++)
+            {
+                Input.SendKey(Input.VK_TAB);
+                Thread.Sleep(75);
+            }
+
+            ctx.Check(tabStrip.Current.HasKeyboardFocus,
+                "Tab traversal reaches the workspace tab strip");
+            if (tabStrip.Current.HasKeyboardFocus)
+            {
+                IntPtr beforeArrow = FindDocked();
+                Input.SendKey(Input.VK_RIGHT);
+                ctx.Check(Util.WaitUntil(() => FindDocked() != IntPtr.Zero && FindDocked() != beforeArrow, 3000),
+                    "Right arrow activates the next workspace tab without a mouse click");
+                Input.SendKey(Input.VK_LEFT);
+                ctx.Check(Util.WaitUntil(() => FindDocked() == beforeArrow, 3000),
+                    "Left arrow returns to the previously active workspace tab");
+            }
         }
 
         IntPtr initiallyDocked = FindDocked();

@@ -540,7 +540,7 @@ internal static partial class Scenarios
                 Input.ClickAt(activateX, activateY);
             }
             Input.SendHotkeyCtrlAltG();
-            IntPtr picker = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 6000);
+            IntPtr picker = Discover.WaitForTopLevelWindow(ctx.TabDockPid, IsCapturePickerTitle, 6000);
             bool hotkeySeen = TabDockLog.ContainsNewLine(off, "hotkey Ctrl+Alt+G pressed");
             ctx.Check(picker != IntPtr.Zero,
                 $"cycle {i}: picker appeared after hotkey with launcher closed (hotkey log line seen={hotkeySeen})");
@@ -992,7 +992,7 @@ internal static partial class Scenarios
             throw new InvalidOperationException("Could not bring the launcher to the foreground — refusing to click blind.");
         Thread.Sleep(300);
         Input.SendHotkeyCtrlAltG();
-        IntPtr pickerHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 10000);
+        IntPtr pickerHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, IsCapturePickerTitle, 10000);
         if (pickerHwnd == IntPtr.Zero)
             throw new InvalidOperationException("'Capture windows' picker did not appear within 10s.");
         AutomationElement? picker = Uia.FromHwnd(pickerHwnd);

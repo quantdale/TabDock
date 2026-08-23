@@ -75,7 +75,7 @@ internal static partial class Scenarios
         // not turn this test into an unsafe coordinate guess.
         AutomationElement containerEl = Uia.FromHwnd(container)
             ?? throw new InvalidOperationException("Container UIA element unavailable.");
-        AutomationElement? groupButton = Uia.FindDescendantByName(containerEl, ControlType.Button, "Group ▾", null, out int groupButtonCount);
+        AutomationElement? groupButton = Uia.FindDescendantByAutomationId(containerEl, "GroupSelector", out int groupButtonCount);
         ctx.Check(groupButton != null && groupButtonCount == 1,
             $"Group header button found uniquely after reattach (count={groupButtonCount})");
         if (groupButton == null || groupButtonCount != 1)

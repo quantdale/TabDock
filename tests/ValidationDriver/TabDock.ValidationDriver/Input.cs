@@ -15,6 +15,8 @@ internal static class Input
     public const ushort VK_SHIFT = 0x10;
     public const ushort VK_MENU = 0x12;
     public const ushort VK_TAB = 0x09;
+    public const ushort VK_LEFT = 0x25;
+    public const ushort VK_RIGHT = 0x27;
     public const ushort VK_DELETE = 0x2E;
     public const ushort VK_A = 0x41;
     public const ushort VK_D = 0x44;

@@ -10,6 +10,42 @@ this text.
 
 ## CURRENT STATUS
 
+## RELEASE-CANDIDATE HARDENING CAMPAIGN (started 2026-08-23, IN PROGRESS)
+
+Objective: continue draft PR #12 from the existing ship-readiness branch and
+implement a second independent hardening pass across capture identity and
+refresh continuity, picker scale, keyboard/accessibility behavior, responsive
+WPF layout, launcher/container projections, source contracts, ValidationDriver,
+documentation, and release qualification. Active plan:
+`.agent/plans/release-candidate-hardening-2026-08-23.md`.
+
+Git was fetched and resolved dynamically before work. The checkout started
+clean on `main` at the stated base, and now tracks the existing branch
+`codex/ship-readiness-overhaul-20260823` at the handoff head. PR #12 is open
+and draft with that branch as head and `main` as base; `origin/main` matches the
+stated base at session start. No main integration was needed.
+
+Current phase: implementation complete for picker identity/scale, accessibility
+and keyboard contracts, responsive layout/style polish, launcher/container
+projection hardening, ValidationDriver selector updates, and documentation;
+release qualification is in progress. The deterministic baseline was 652/652
+Debug unit tests; the current Debug corpus is 671/671, including 11/11 targeted
+split/source-contract checks. A full-suite persistence hammer exposed a real
+settlement-barrier race: concurrent SaveAsync callers could overwrite the
+highest-generation task reference with an older one. PersistenceService now
+tracks the highest generation under a bookkeeping lock; its native/durable
+transaction architecture is unchanged. Isolated persistence tests pass 5/5 and
+the post-fix full Debug suite passes 671/671.
+
+Verified campaign fixes include strong picker continuity (HWND/PID/thread/
+process-start/class/Windows-path identity), fail-closed final handoff through
+WindowIdentityGate, coalesced filter/selection/icon work for 100/500/1000-row
+sets, dynamic accessible names/help text and visible keyboard focus, stable
+launcher/container/picker AutomationIds, live launcher selection repair,
+responsive long-text layout, and current ValidationDriver selectors.
+Supervised real-input qualification remains blocked unless an exclusively
+available, provenance-safe Windows desktop is provided.
+
 ## PRODUCT TRUST & INTERACTION CAMPAIGN (started 2026-08-23, DELIVERY READY)
 
 Objective: close M3 pending-recovery visibility, canonical capture-admission
@@ -49,10 +85,11 @@ exclusively available and provenance-safe. Exact rerun commands are in
 `docs/TESTING.md` and the archived OpenSpec task record at
 `openspec/changes/archive/2026-08-23-product-trust-interaction-campaign/`.
 
-Next action: commit the intended campaign work, push `main`, and verify
-`main == origin/main` with a clean worktree. Supervised Windows qualification,
-production signing, mixed-DPI/negative-coordinate topology, and final human
-smoke remain external gates.
+Historical next action from that completed campaign: commit the intended work
+and push `main`. The current PR-branch release-candidate campaign above
+supersedes it; do not use that historical line as authority for this session.
+Supervised Windows qualification, production signing, mixed-DPI/negative-
+coordinate topology, and final human smoke remain external gates.
 
 ## HISTORICAL CAMPAIGN RECORDS
 
