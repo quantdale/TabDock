@@ -25,10 +25,10 @@ clean on `main` at the stated base, and now tracks the existing branch
 and draft with that branch as head and `main` as base; `origin/main` matches the
 stated base at session start. No main integration was needed.
 
-Current phase: implementation complete for picker identity/scale, accessibility
+Current phase: implementation and deterministic qualification complete for picker identity/scale, accessibility
 and keyboard contracts, responsive layout/style polish, launcher/container
 projection hardening, ValidationDriver selector updates, and documentation;
-release qualification is in progress. The deterministic baseline was 652/652
+deterministic release qualification is green. The deterministic baseline was 652/652
 Debug unit tests; the current Debug corpus is 671/671, including 11/11 targeted
 split/source-contract checks. A full-suite persistence hammer exposed a real
 settlement-barrier race: concurrent SaveAsync callers could overwrite the
@@ -43,8 +43,17 @@ WindowIdentityGate, coalesced filter/selection/icon work for 100/500/1000-row
 sets, dynamic accessible names/help text and visible keyboard focus, stable
 launcher/container/picker AutomationIds, live launcher selection repair,
 responsive long-text layout, and current ValidationDriver selectors.
+Final deterministic evidence: Debug and Release solution builds/tests are
+0-warning/0-error and 671/671; `validate.ps1 -Configuration Release -Ci -Publish`
+passes audited restore with no vulnerable packages, Release driver/GuineaPig/
+performance builds, native ABI, version/doctor/recovery/privacy smokes, OpenSpec
+30/30, and self-contained publish/version; release-tooling is 150/150; strict
+OpenSpec change validation is valid; ValidationDriver deterministic self-tests
+are 38/38. Repeated stability is green for three CapturePicker runs (14/14)
+and two full Debug runs (671/671) after the persistence barrier fix.
 Supervised real-input qualification remains blocked unless an exclusively
-available, provenance-safe Windows desktop is provided.
+available, provenance-safe Windows desktop is provided; exact reruns and the
+blocked scope are in `docs/TESTING.md`.
 
 ## PRODUCT TRUST & INTERACTION CAMPAIGN (started 2026-08-23, DELIVERY READY)
 

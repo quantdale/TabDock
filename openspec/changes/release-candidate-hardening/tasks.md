@@ -37,11 +37,11 @@
 
 - [x] 6.1 Audit visible capture, admission, elevation, target-disappearance, split, rename, storage, recovery, and release failures for precise actionable wording.
 - [x] 6.2 Update README, architecture/testing guidance, ship-readiness audit, OpenSpec task evidence, and known-issue/current-blocker language to match the final UI.
-- [ ] 6.3 Verify release build/publish, version/provenance, vulnerability/release-tooling, native ABI, support-bundle privacy, Stage A/B boundaries, and candidate evidence requirements.
+- [x] 6.3 Verify release build/publish, version/provenance, vulnerability/release-tooling, native ABI, support-bundle privacy, Stage A/B boundaries, and candidate evidence requirements.
 
 ## 7. Final qualification and handoff
 
-- [ ] 7.1 Run Debug and Release builds/tests, release-tooling, canonical validate/publish, OpenSpec validation, source-contract/accessibility tests, and diff check.
-- [ ] 7.2 Repeat stability checks for picker icon/selection and any touched dispatch/concurrency path; root-fix flakes rather than widening timeouts.
-- [ ] 7.3 Run feasible supervised ValidationDriver scenarios only on a safe exclusive desktop; otherwise record exact blocked scenarios and commands.
-- [ ] 7.4 Commit coherent waves, push the existing PR branch, verify final SHA/remote/worktree/PR state, and update STATE with the complete evidence ledger.
+- [x] 7.1 Run Debug and Release builds/tests, release-tooling, canonical validate/publish, OpenSpec validation, source-contract/accessibility tests, and diff check.
+- [x] 7.2 Repeat stability checks for picker icon/selection and any touched dispatch/concurrency path; root-fix flakes rather than widening timeouts.
+- [x] 7.3 Run feasible supervised ValidationDriver scenarios only on a safe exclusive desktop; otherwise record exact blocked scenarios and commands.
+- [x] 7.4 Commit coherent waves, push the existing PR branch, verify final SHA/remote/worktree/PR state, and update STATE with the complete evidence ledger.

@@ -1,6 +1,6 @@
 # Plan: Release-Candidate Completion & Product Hardening
 
-**Status:** in progress
+**Status:** complete
 **Owner/session:** Codex
 **Updated:** 2026-08-23
 **Starting branch:** `codex/ship-readiness-overhaul-20260823`
@@ -47,9 +47,9 @@ the Shepherd/no-reparent/native safety architecture.
   discoverability gaps in launcher/container/picker.
 - [x] Wave 5 — launcher/container/split projection regression coverage and
   ValidationDriver scenario updates for the redesigned product.
-- [ ] Wave 6 — user-facing failures, documentation/OpenSpec reconciliation,
+- [x] Wave 6 — user-facing failures, documentation/OpenSpec reconciliation,
   release candidate evidence, and final gate execution.
-- [ ] Perform repeated stability checks for touched async/concurrency paths,
+- [x] Perform repeated stability checks for touched async/concurrency paths,
   record supervised/environment blockers honestly, update state, and push the
   branch without merging PR #12.
 
@@ -84,6 +84,12 @@ separate from deterministic pass/fail results.
   671/671 tests, native ABI, version/doctor/recovery/privacy smokes, OpenSpec
   30/30, and self-contained publish/version smoke. The final SHA will rerun
   this gate because embedded build provenance is commit-derived.
+- Final deterministic evidence is green: Debug and Release solution
+  builds/tests, audited Release validation/publish, native ABI, release
+  tooling, strict OpenSpec, 38/38 ValidationDriver self-tests, three repeated
+  14/14 CapturePicker runs, and two repeated 671/671 full Debug runs. The
+  evidence-only handoff update is followed by one final provenance-qualified
+  validation before push.
 
 ## Handoff criteria
 
