@@ -20,3 +20,7 @@ result artifact linked from the run manifest.
 #### Scenario: A scenario cannot prove its harness boundary
 - **WHEN** a selector, cleanup, ownership, or evidence invariant is not proven
 - **THEN** the scenario is recorded as `FAIL_HARNESS` with bounded evidence and the shard does not relabel it as a product failure
+
+#### Scenario: Reruns remain first-attempt authoritative
+- **WHEN** a scenario is run with investigation reruns
+- **THEN** the first attempt remains authoritative and a later pass after a valid failure is recorded as `FLAKE_UNCLASSIFIED`, never as PASS

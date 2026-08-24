@@ -433,13 +433,15 @@ anywhere.
 
 ### Release chain
 
-Production workflows are pinned to immutable SHAs. The repository is
-**main-only**: `main` is the sole development/integration branch and is
-qualified directly on push by `build.yml` (exact-SHA hosted-CI gates).
-There is no `agent/staging` branch and no `promote-staging` workflow;
-future agents must develop, commit, and push against `main`. The two-stage
-release chain (`prepare-release-candidate.yml` → `publish-release.yml`) remains
-exact-SHA and immutable as described in `README.md` and
+Production workflows are pinned to immutable SHAs. `main` is the sole
+integration and release authority and is qualified by `build.yml` on every
+exact-SHA push or main-targeting pull request. Short-lived development or
+draft-review branches may carry work while it is being implemented or
+reviewed, but they are not additional integration authorities and must not
+become a permanent staging hierarchy. There is no `agent/staging` branch and
+no `promote-staging` workflow. The two-stage release chain
+(`prepare-release-candidate.yml` → `publish-release.yml`) remains exact-SHA
+and immutable as described in `README.md` and
 `docs/release/publication-gates.md`.
 
 ### Release (tab) removes the member from `Group.Members`

@@ -34,6 +34,18 @@ have the next session verify them independently. Do not create another commit
 merely to record the preceding push or its CI run when repository content does
 not otherwise need modification.
 
+## Mainline policy
+
+`main` is the sole integration and release authority. Short-lived topic,
+development, and draft-review branches may be used when a campaign needs an
+isolated workspace or a main-targeting review surface, but they are temporary
+provenance containers, not parallel staging authorities. Do not create a
+permanent staging hierarchy or an indefinitely stacked chain whose latest
+implementation is invisible to a review surface targeting `main`. Use a
+main-targeting PR when review is required; an explicitly authorized direct
+push to `main` remains a supported repository workflow and is qualified by the
+exact-SHA hosted gate.
+
 ## Repository exploration
 
 For architecture, ownership, callers, dependencies, history, implementations, and broad discovery, use the project-local Repowise MCP/index first when available. Its lean profile exposes six core tools: `search_codebase`, `get_answer`, `get_risk`, `get_context`, `get_symbol`, and `get_why`. Treat retrieval as a map, then read and verify the actual source before editing. Fall back to `rg`, Git, and focused file reads when the index is unavailable, stale, incomplete, or the question requires exact current text. Avoid repeated repository-wide crawls and giant command output; expand focused output only when needed.

@@ -412,9 +412,10 @@ attestation -> schema-3 external evidence -> publish THE SAME retained bytes
   execution (identity validated from trusted records; no candidate path in
   any execution position), checkout credential hardening
   (`persist-credentials: false` everywhere), pinned production actions
-  (immutable SHAs; `main` is the sole integration branch and is qualified
-  directly on push by `build.yml` with exact-SHA hosted-CI gates, plus
-  `main-only-build-qualifies-main` coverage), and static workflow
+  (immutable SHAs; `main` is the sole integration/release authority and is
+  qualified by `build.yml` on exact-SHA pushes and main-targeting pull
+  requests; temporary review branches are finite and never staging
+  authorities, plus `main-only-build-qualifies-main` coverage), and static workflow
   guarantees; no real certificates, no publishing, no provider contact).
   The suite is an exact-SHA hosted-CI gate in `build.yml`.
   Split presentation and render budgets are now deterministically gated in

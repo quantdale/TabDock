@@ -22,27 +22,34 @@ record, and the Authenticode signature before publishing (see
 `docs/release/publication-gates.md`; `qualify-candidate.yml` is RC-qualification-only
 and has no publication path).
 
-## Branch model — main only
+## Branch model — main authority with finite review branches
 
-The repository is **main-only**. `main` is the sole development and integration
-branch. There is no `agent/staging` branch and no `promote-staging` workflow.
+`main` is the sole development-integration and release authority. A
+short-lived topic, development, or draft-review branch may be used when it
+provides a safer isolated implementation or a main-targeting review surface,
+but it is not a parallel staging authority and must not become a permanent
+promotion tier. There is no `agent/staging` branch and no `promote-staging`
+workflow.
 
-- All development, commits, and pushes happen against `main`.
+- Every branch intended for integration ultimately targets `main` through a
+  main-targeting pull request or an explicitly authorized direct push.
 - `main` is qualified directly on push by `build.yml` (exact-SHA hosted-CI
   gates: Release build, native/geometry/diagnostics/persistence self-tests,
   doctor/version/bundle privacy checks, OpenSpec validation, and the
   release-tooling regression suite).
 - Pull requests targeting `main` are also qualified by `build.yml`.
-- Future autonomous agents MUST NOT recreate `agent/staging` or any staging
-  branch, and MUST NOT add a `promote-staging` (or similarly named) promotion
-  workflow. `main` is authoritative; qualification occurs on the exact `main`
-  SHA.
+- Future autonomous agents MUST NOT recreate `agent/staging` or any permanent
+  staging hierarchy, and MUST NOT add a `promote-staging` (or similarly named)
+  promotion workflow. `main` remains authoritative; qualification occurs on
+  the exact SHA under review or pushed to `main`.
 
 ### Autonomous agents push directly to `main`
 
-This repository intentionally uses autonomous agents that push validated
-changes directly to `main`. A direct `git push origin HEAD:main` is the
-expected, supported path:
+This repository permits autonomous agents to push validated changes directly
+to `main` when the task and repository policy explicitly authorize that path.
+A main-targeting draft or ready pull request is the normal review surface when
+independent review is required. When direct integration is authorized, a
+direct `git push origin HEAD:main` remains supported:
 
 - The canonical `build` workflow qualifies every pushed SHA on `main`.
 - Direct pushes are visible in the audit log (`git log --first-parent`,

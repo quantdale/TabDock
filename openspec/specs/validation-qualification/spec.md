@@ -1,30 +1,73 @@
 # validation-qualification Specification
 
 ## Purpose
-TBD - created by archiving change deep-audit-remediation-2026-08-13. Update Purpose after archive.
+
+Defines the hermetic and supervised qualification boundary: deterministic
+catalog, manifest, topology, and bundle checks run in CI, while real-input and
+hardware behavior remains explicitly capability- and lease-gated.
+
 ## Requirements
+
 ### Requirement: CI SHALL run hermetic behavioral qualification
+
 CI SHALL run Release builds for all committed projects, geometry and diagnostic
 self-tests, persistence/native/privacy fixtures, OpenSpec validation, version
-and doctor smoke, support-bundle inspection, publish smoke, and the explicit
-dependency-audit policy. Unsafe real-input and hardware tests SHALL remain
-supervised and separate.
+and doctor smoke, support-bundle inspection, publish smoke, the explicit
+dependency-audit policy, deterministic catalog and virtual-topology laboratory
+suites, and offline qualification-bundle verification. Unsafe real-input and
+hardware tests SHALL remain supervised and separate. CI SHALL retain the
+machine-readable qualification artifacts with the exact candidate identity and
+schema generation.
 
 #### Scenario: A hermetic regression fails CI
-- **WHEN** a self-test, fixture, bundle privacy check, OpenSpec validation, or Release/publish check fails
-- **THEN** the CI job exits nonzero and does not convert the failure into a warning-only result
+
+- **WHEN** a self-test, catalog contract, topology assertion, bundle/privacy
+  check, OpenSpec validation, or Release/publish check fails
+- **THEN** the CI job exits nonzero and does not convert the failure into a
+  warning-only result
+
+#### Scenario: Synthetic topology is covered in CI
+
+- **WHEN** the topology laboratory passes its deterministic matrix
+- **THEN** CI records the result as synthetic coverage and does not mark
+  physical mixed-DPI qualification as complete
 
 ### Requirement: ValidationDriver SHALL support bounded configurable shards
+
 The driver SHALL discover or accept explicit TabDock and GuineaPig paths for
-Debug/Release and RID variants. Named shards SHALL contain known scenarios, and
-`all` SHALL orchestrate bounded shard processes without removing per-process
-spawn/time safety caps.
+Debug/Release and RID variants. Named shards SHALL be declared by the canonical
+scenario catalog, SHALL contain only their catalog members, and SHALL have
+explicit count/runtime budgets. Every scenario SHALL declare capability
+requirements, use the canonical qualification outcome vocabulary, and emit a
+result artifact linked from the run manifest. A direct scenario or shard run
+SHALL write a versioned child manifest in an isolated artifact directory.
+`all` SHALL create a parent run identity, import and verify every declared child
+manifest, preserve per-process spawn/time safety caps, and fail closed on
+missing, malformed, contradictory, stale, or tampered child evidence.
 
 #### Scenario: Release artifacts run without source edits
-- **WHEN** the driver is invoked with `--configuration Release` against Release artifacts
-- **THEN** it locates both executables and runs the selected shard
+
+- **WHEN** the driver is invoked with `--configuration Release` against Release
+  artifacts
+- **THEN** it locates both executables, validates their candidate identities,
+  resolves declared capabilities before destructive setup, and runs the selected
+  catalog scenario or shard
 
 #### Scenario: All runs as bounded shards
-- **WHEN** the driver is invoked with `--yes all`
-- **THEN** it runs the named shards sequentially, each with independent safety budgets, and reports the first failing shard without a monolithic impossible budget
 
+- **WHEN** the driver is invoked with `--yes all`
+- **THEN** it runs the catalog-declared shards sequentially in isolated child
+  directories, verifies each child manifest and exit outcome, and reports the
+  first disagreement or non-pass shard without a monolithic impossible budget
+
+#### Scenario: A scenario cannot prove its harness boundary
+
+- **WHEN** a selector, cleanup, ownership, or evidence invariant is not proven
+- **THEN** the scenario is recorded as `FAIL_HARNESS` with bounded evidence and
+  the shard does not relabel it as a product failure
+
+#### Scenario: Reruns remain first-attempt authoritative
+
+- **WHEN** a scenario is run with investigation reruns
+- **THEN** the first attempt remains authoritative and a later pass after a
+  valid failure is recorded as `FLAKE_UNCLASSIFIED`, never as PASS
