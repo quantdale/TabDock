@@ -10,7 +10,7 @@ this text.
 
 ## CURRENT STATUS
 
-## NATIVE INTERACTION DETERMINISM CAMPAIGN (2026-08-24, ACTIVE)
+## NATIVE INTERACTION DETERMINISM CAMPAIGN (2026-08-24, COMPLETE FOR THIS ENVIRONMENT)
 
 Objective: classify physical ValidationDriver outcomes without mislabeling
 foreign-desktop interference, preserve bounded privacy-safe evidence, turn
@@ -55,8 +55,17 @@ finalization, diagnostic-suppression cleanup, split member liveness, dormant
 split drag projection, direct `GroupViewModel` mutation coverage, and layout
 dirty-check behavior are ALREADY FIXED. Existing physical repeat findings are
 NEEDS REPRODUCTION under the new lease; no speculative Shepherd change was
-made. Next action: resolve final Git/PR state, attempt to push this stacked
-draft branch if remote authority is available, and leave PR #12 draft/unmerged.
+made. Next action: an authenticated maintainer may create the stacked draft
+PR; do not merge or alter PR #12 automatically.
+
+Handoff state: the campaign branch is pushed and tracks its origin branch; PR
+#12 remains draft with its original head/base. GitHub CLI could not create the
+requested draft stacked PR because this session has no GitHub authentication
+(`gh auth login`/`GH_TOKEN` is required). No merge, readiness change, or PR #12
+mutation was attempted. The last substantive evidence checkpoint is
+`8f87586`; resolve the branch's current HEAD dynamically because this state
+file never records a self-referential SHA. Physical qualification remains
+`BLOCKED_SUPERVISED`/`BLOCKED_ENVIRONMENT` without an exclusive safe desktop.
 
 ## RELEASE QUALIFICATION CAMPAIGN (2026-08-23/24, COMPLETE FOR THIS ENVIRONMENT)
 

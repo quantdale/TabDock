@@ -1,6 +1,6 @@
 # Native Interaction Determinism, Replay & Reliability Campaign (2026-08-24)
 
-**Status:** implementation complete; final deterministic gate in progress
+**Status:** complete for this environment; stacked PR creation needs GitHub auth
 **Owner/session:** Codex
 **Branch:** `codex/native-interaction-determinism-20260824`
 **Base:** PR #12 head `eca8670759f9bc42aee58ec5f59b33fd0adab3f0`
@@ -77,8 +77,13 @@ their source/tests and do not redo them.
   meaningful redundant work and behavioral equivalence is pinned.
 - [x] Add deterministic stress/model suites with fixed seeds.
 - [x] Update docs/OpenSpec and commit coherent implementation waves.
-- [ ] Run all final deterministic gates, push the stacked branch, and leave PR
+- [x] Run all final deterministic gates, push the stacked branch, and leave PR
   #12 draft/unmerged.
+
+The final branch push succeeded. Creating a draft PR stacked on PR #12 was
+attempted but GitHub CLI has no authenticated session in this environment;
+that external action remains for an authenticated maintainer. PR #12 was not
+modified or merged.
 
 ## Checkpoint commits
 

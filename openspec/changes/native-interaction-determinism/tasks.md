@@ -36,4 +36,4 @@
 - [x] 6.1 Update architecture/testing/evidence documentation with outcome taxonomy, lease, ownership, replay, timeline, reruns, and physical limits.
 - [x] 6.2 Validate the OpenSpec change strictly and reconcile canonical specs without hand-editing generated mirrors.
 - [ ] 6.3 Run focused and full Debug/Release gates, release tooling, canonical validation/publish, native ABI, privacy checks, and diff check after each wave.
-- [ ] 6.4 Update `.agent/STATE.md`, the campaign evidence ledger, final artifacts, commits, branch/PR status, and push the stacked draft branch without merging PR #12.
+- [x] 6.4 Update `.agent/STATE.md`, the campaign evidence ledger, final artifacts, commits, branch/PR status, and push the stacked draft branch without merging PR #12.

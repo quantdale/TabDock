@@ -118,3 +118,11 @@ by replay fixtures and deterministic assertions.
 - Per-run root manifest/timelines: `%TEMP%\TabDock-Validation\runs\<run-id>\`
 - Historical ledger: `docs/audits/2026-08-23/RC_QUALIFICATION_EVIDENCE.md`
 - This audit: `docs/audits/2026-08-24/NATIVE_INTERACTION_DETERMINISM_AUDIT.md`
+
+## Repository handoff
+
+The campaign branch was pushed to
+`origin/codex/native-interaction-determinism-20260824`. PR #12 remains the
+unchanged draft on `codex/ship-readiness-overhaul-20260823` into `main`.
+Creating a new draft PR with PR #12 as its base was attempted and blocked only
+by missing GitHub CLI authentication; no PR was merged or marked ready.
