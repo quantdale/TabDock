@@ -166,3 +166,25 @@ probes, 20 dispatch revalidations, 20 posts/lifecycle callbacks, at least 10
 irrelevant rejections, and zero stale dispatches. The dispatch revalidation was
 retained because it is the HWND-generation safety proof; no speculative cache
 optimization was accepted.
+
+## Final independent convergence delta — 2026-08-24
+
+The integrated release-closure lineage received one harness-only fix after the
+earlier candidate evidence: `Input.ForceForeground` previously required the
+requested target to be foreground before attempting the switch. It now proves
+an allowed, identity-current source foreground first and re-proves the exact
+requested target after the bounded foreground operation. This does not weaken
+foreign-window or HWND/PID/process-instance provenance checks.
+
+Deterministic evidence after the fix: ValidationDriver `--selftest all`
+127/127; Debug and Release unit suites 686/686; release-tooling 177/177;
+strict OpenSpec 34/34; canonical Release validation/publish PASS. A fresh
+exact-SHA candidate and qualification bundle must be regenerated after the
+fix commit; the prior candidate remains historical diagnostic evidence only.
+
+The three physical repeats remain safe-session blocked rather than product
+PASS: `dragreorder` H2 flip-back count, `split-drag-release` zero-delta
+polyline, and `capture-inline-ui` second-tab assertion. Their current run
+classification is `BLOCKED_SUPERVISED`/`BLOCKED_ENVIRONMENT`; the
+product-versus-harness scenario verdict still requires an authoritative exact
+candidate run under an exclusive supervised desktop.

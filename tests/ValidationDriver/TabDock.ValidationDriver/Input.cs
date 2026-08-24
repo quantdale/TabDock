@@ -126,10 +126,19 @@ internal static class Input
             IdentityDiagnostics.RecordPointFailure(_hasLastPoint ? _lastX : 0, _hasLastPoint ? _lastY : 0, root, reason);
             return false;
         }
+        // Foreground arrangement is a two-phase operation. The window we want
+        // to activate is not expected to be foreground yet; requiring that
+        // here rejects safe transitions from one already-registered test
+        // window to another. First prove that the current foreground belongs
+        // to an allowed, identity-current run target. The exact target is
+        // checked again after SetForegroundWindow, immediately before the
+        // caller sends any real interaction.
         if (_desktopLease != null
-            && !_desktopLease.Checkpoint("foreground-target-admission", target).IsValid)
+            && !_desktopLease.Checkpoint(
+                "foreground-source-before-switch",
+                requireForeground: true).IsValid)
         {
-            GuardedProc.Log($"WARNING: refusing foreground operation because the desktop lease rejected HWND 0x{target.Hwnd.ToInt64():X}.");
+            GuardedProc.Log($"WARNING: refusing foreground operation for HWND 0x{target.Hwnd.ToInt64():X} because the current foreground is not an allowed run target.");
             return false;
         }
         if (identityAttempt > 1)
@@ -167,7 +176,17 @@ internal static class Input
                 target.Hwnd,
                 new Dictionary<string, string> { ["matched"] = foregroundMatch.ToString() });
             if (foregroundMatch)
-                return true;
+            {
+                if (_desktopLease == null
+                    || _desktopLease.Checkpoint(
+                        "foreground-target-after-switch",
+                        target,
+                        requireForeground: true).IsValid)
+                    return true;
+
+                GuardedProc.Log($"WARNING: refusing foreground operation because HWND 0x{target.Hwnd.ToInt64():X} lost its exact post-switch lease proof.");
+                return false;
+            }
 
             // Fallback: pulse TOPMOST to rise above the covering window, then drop
             // back to the normal band and try again.
@@ -190,6 +209,11 @@ internal static class Input
         }
         bool ok = NativeMethods.GetForegroundWindow() == target.Hwnd
             && MatchesStableIdentity(target.Hwnd, target);
+        if (ok && _desktopLease != null)
+            ok = _desktopLease.Checkpoint(
+                "foreground-target-after-switch",
+                target,
+                requireForeground: true).IsValid;
         if (!ok)
             GuardedProc.Log($"WARNING: could not bring 0x{target.Hwnd.ToInt64():X} to the foreground.");
         return ok;

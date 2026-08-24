@@ -1005,6 +1005,28 @@ internal static class DeterministicSelfTests
             DesktopLeaseCheckpoint checkpoint = lease.Checkpoint("click", x: 10, y: 10);
             return !lease.IsValid && checkpoint.Kind == DesktopLeaseCheckpointKind.IdentityChanged;
         });
+        yield return ("LSE06-owned-foreground-source-is-admitted", () =>
+        {
+            var probe = new FakeDesktopProbe(Snapshot());
+            var lease = new DesktopQualificationLease(probe, new NativeInteractionTimeline());
+            lease.Start();
+            DesktopLeaseCheckpoint checkpoint = lease.Checkpoint(
+                "foreground-source-before-switch",
+                requireForeground: true);
+            return lease.IsValid && checkpoint.IsValid;
+        });
+        yield return ("LSE07-foreign-foreground-source-invalidates", () =>
+        {
+            var probe = new FakeDesktopProbe(Snapshot());
+            probe.Foregrounds.Clear();
+            probe.Foregrounds.Enqueue(Window(new IntPtr(0x400), RunOwnershipKind.Foreign, "ForeignOverlay", "foreign"));
+            var lease = new DesktopQualificationLease(probe, new NativeInteractionTimeline());
+            lease.Start();
+            DesktopLeaseCheckpoint checkpoint = lease.Checkpoint(
+                "foreground-source-before-switch",
+                requireForeground: true);
+            return !lease.IsValid && checkpoint.Kind == DesktopLeaseCheckpointKind.ForeignForeground;
+        });
     }
 
     private static IEnumerable<(string Id, Func<bool> Test)> TimelineTests()

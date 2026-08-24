@@ -1,6 +1,6 @@
 # Plan: Mainline Release-Candidate Closure
 
-**Status:** complete — internal closure achieved; external gates remain
+**Status:** active — final harness hardening and exact-SHA requalification
 **Owner/session:** Codex
 **Updated:** 2026-08-24
 **Integration branch:** `codex/mainline-release-closure-20260824`
@@ -98,21 +98,28 @@ invent product work outside this closure campaign.
 ## Final handoff state
 
 The normal merge checkpoint was `7ed8769`, followed by the reconciliation and
-final handoff-state commit. The final exact source SHA must be resolved
-dynamically from `HEAD`; it is the binding for the fresh candidate and all
-qualification evidence retained under the ignored
+handoff-state commit at the prior checkpoint. Independent convergence then
+found one harness defect in foreground transition admission: the lease checked
+the requested target before `SetForegroundWindow`, so safe transitions between
+registered run windows could be rejected. The fix is scoped to
+`ValidationDriver/Input.cs`, with two deterministic lease regressions. The
+prior candidate is diagnostic only; the final exact source SHA must be resolved
+dynamically from `HEAD` after this fix commit and must bind the fresh candidate
+and all qualification evidence retained under the ignored
 `.artifacts/mainline-release-closure-<final-head>/` directory.
 
-The complete deterministic matrix, strict OpenSpec validation, fresh
+The prior complete deterministic matrix, strict OpenSpec validation, fresh
 qualification-only candidate, offline bundle verification, portable package
 verification, deterministic returned-machine round trip, and data-only report
-import are green. The branch is pushed and local/remote heads match. A new
-main-targeting draft PR and exact-head hosted pull-request CI are blocked only
-by missing GitHub authentication in this environment; PR #12 remains open,
-draft, and unchanged.
+import were green. The final matrix must be rerun after the harness fix; the
+ValidationDriver self-test total is now 127/127. The integration branch is
+pushed and local/remote heads match. PR #12 remains open, draft, and unchanged
+at the time of this checkpoint; the final history-preserving push must be
+verified against the live PR surface.
 
-No internally reproducible Critical/High regression is known. Remaining work
-is external qualification only: supervised physical repetitions, mixed-DPI
-hardware, Windows 10/independent Windows 11 evidence, production signing, and
-human smoke. Do not merge to `main`, publish, or start another development
-campaign from this checkpoint.
+No internally reproducible Critical/High product regression is known. Remaining
+internal work is the final committed-tree qualification and delivery of the
+harness fix. After that, the remaining blockers are external qualification:
+supervised physical repetitions, mixed-DPI hardware, Windows 10/independent
+Windows 11 evidence, production signing, and human smoke. Do not merge to
+`main`, publish, or start another development campaign from this checkpoint.

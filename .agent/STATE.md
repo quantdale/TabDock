@@ -17,12 +17,14 @@ gates.
 
 **Plan:** `.agent/plans/mainline-release-closure-2026-08-24.md`
 
-**Status:** integration, repository reconciliation, deterministic validation,
-fresh exact-candidate qualification, and portable-package round trip are
-complete. The final candidate/evidence lineage is retained outside Git under
-`.artifacts/mainline-release-closure-<final-head>/`; resolve the final source
-SHA and hashes from the handoff report and artifacts. The historical candidate
-for `159d094...` is diagnostic only and was not reused.
+**Status:** integration, repository reconciliation, and the prior deterministic
+qualification closure are complete. A final harness hardening defect was found
+during independent convergence: foreground arrangement required the new target
+to be foreground before attempting the switch. The fix and two deterministic
+lease regressions are now in the working tree; commit them, rerun exact-SHA
+qualification, and refresh the ignored candidate/evidence lineage under
+`.artifacts/mainline-release-closure-<final-head>/`. The historical candidates
+for `159d094...` and `1cc529f...` are diagnostic only and must not be reused.
 
 ### Authoritative topology
 
@@ -54,16 +56,16 @@ for `159d094...` is diagnostic only and was not reused.
   changes.
 - Strict OpenSpec validation is green at 34/34 canonical specs after archive.
 
-### Final integration and evidence checkpoint
+### Prior integration and evidence checkpoint
 
 - The integration branch was pushed without rewriting any historical campaign
   branch. Its remote head matches the local final head; resolve both
   dynamically with Git.
-- The fresh qualification-only candidate is bound to the final committed
-  source SHA, semantic version 1.0.0, release manifest, ValidationDriver,
-  primary run manifest, qualification bundle schema 1, and portable package
-  schema 1. Exact SHA-256 values and paths are recorded in the final session
-  handoff; generated artifacts remain ignored under `.artifacts/`.
+- The prior fresh qualification-only candidate was bound to the then-final
+  committed source SHA, semantic version 1.0.0, release manifest,
+  ValidationDriver, primary run manifest, qualification bundle schema 1, and
+  portable package schema 1. It is invalidated as final evidence by the new
+  harness fix and must be regenerated after the next substantive commit.
 - Candidate bundle verification, portable-package verification, deterministic
   returned bundle verification, and data-only returned-report import all
   passed with zero failures. The returned evidence is synthetic-deterministic
@@ -75,7 +77,8 @@ for `159d094...` is diagnostic only and was not reused.
 
 - Debug/Release solution builds: 0 warnings / 0 errors.
 - Debug/Release unit suites: 686 / 686.
-- ValidationDriver Debug/Release deterministic self-tests: 125 / 125.
+- ValidationDriver Debug/Release deterministic self-tests: 127 / 127 after
+  the foreground-transition lease regressions.
 - Release-tooling regression suite: 177 / 177.
 - Canonical `scripts/validate.ps1 -Configuration Release -Ci -Publish`: PASS,
   including audited restore, native ABI, diagnostics/recovery/privacy,
@@ -89,8 +92,10 @@ for `159d094...` is diagnostic only and was not reused.
   `BLOCKED_ENVIRONMENT`: this host has no proven exclusive supervised desktop
   lease. The three known repeats (`dragreorder` H2 flip-back,
   `split-drag-release` zero-delta polyline, and `capture-inline-ui` second-tab
-  assertion) remain unclassified and require authoritative exact-candidate
-  runs; synthetic replay does not close them.
+  assertion) have an explicit safe-session classification of
+  `BLOCKED_SUPERVISED`/`BLOCKED_ENVIRONMENT`; their scenario-specific
+  product-versus-harness verdicts remain pending authoritative exact-candidate
+  runs. Synthetic replay does not close them.
 - Mixed-DPI hardware, real Windows 10 x64 evidence, independent Windows 11
   evidence, approved production signing credentials, and final human smoke
   remain blocked external gates. Synthetic topology remains synthetic-only.
@@ -102,10 +107,11 @@ for `159d094...` is diagnostic only and was not reused.
 
 ### Handoff action
 
-Stop internal development. If authenticated GitHub access becomes available,
-create the draft PR from `codex/mainline-release-closure-20260824` to `main`
-and monitor its pull-request workflow at the exact final head. Otherwise the
-remaining work is external qualification: supervised physical repetitions,
-mixed-DPI hardware, Windows 10 and independent Windows 11 evidence, approved
-production signing, and human smoke. Do not convert those missing prerequisites
-to PASS and do not merge or publish from this checkpoint.
+Complete the harness-fix commit, rerun the canonical gates and exact-candidate
+bundle/package verification against that committed tree, then push the
+history-preserving lineage to the authorized PR surface. If authenticated
+GitHub access remains unavailable, record that infrastructure blocker. The
+remaining release work after exact-SHA requalification is external:
+supervised physical repetitions, mixed-DPI hardware, Windows 10 and independent
+Windows 11 evidence, approved production signing, and human smoke. Do not
+convert those missing prerequisites to PASS and do not merge or publish.

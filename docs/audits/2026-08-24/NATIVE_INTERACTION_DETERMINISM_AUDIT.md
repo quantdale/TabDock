@@ -76,6 +76,9 @@ ordering, recovery fail-closed behavior, or native identity gates.
 - `WinEventRoutingPolicy` and `NativeInteractionReplay` isolate native-free
   policy/state behavior. Fixtures cover lifecycle/stale events, H2 drag causes,
   split drag identity phases, and authoritative inline-capture handoff.
+- Foreground arrangement uses a two-phase lease gate: an allowed current run
+  target is required before switching, and the exact requested target is
+  re-proven after the bounded foreground request before input proceeds.
 - `ScenarioWait` replaces shared generic polling with monotonic bounded waits
   that retain last observed state; UIA window/menu waits and `Util.WaitUntil`
   use the shared seam. Continuous drag/input and product debounce intervals
@@ -84,11 +87,12 @@ ordering, recovery fail-closed behavior, or native identity gates.
   provenance, replay, split transitions, identity matrices, and stress seeds
   `0x5EED2026`, `0x51172026`, and `20260824`.
 
-The final deterministic corpus is 96/96 green. Debug and Release unit suites
-are 686/686, the focused native WinEvent/routing/replay tests are 13/13,
-release-tooling is 150/150, strict OpenSpec is 31/31, and canonical Release
-validation/publish is green with the native ABI, version, privacy, recovery,
-and publish smokes included.
+The prior native-free corpus was green. After the independent foreground-gate
+fix, the full ValidationDriver `--selftest all` corpus is 127/127, Debug and
+Release unit suites are 686/686, the focused native WinEvent/routing/replay
+tests are 13/13, release-tooling is 177/177, strict OpenSpec is 34/34, and the
+canonical Release validation/publish gate remains green with native ABI,
+version, privacy, recovery, and publish smokes included.
 
 ## WinEvent measurement decision
 
@@ -103,17 +107,19 @@ handle behavior. The measurement is retained as a behavioral regression.
 
 ## Physical qualification status
 
-The three remaining unclassified physical repeats were not run. Their current
-status for this session is `BLOCKED_SUPERVISED`/`BLOCKED_ENVIRONMENT` pending an
-exclusive desktop, never `FAIL_PRODUCT`: `dragreorder` H2 flip-back count,
-split-drag-release zero-delta polylines, and inline-capture second-tab
-assertions. Their non-physical causes and identity/order handoffs are covered
-by replay fixtures and deterministic assertions.
+The three physical repeats were not run because this host cannot prove an
+exclusive supervised desktop. Their safe-session classification is explicitly
+`BLOCKED_SUPERVISED`/`BLOCKED_ENVIRONMENT`, never `FAIL_PRODUCT`:
+`dragreorder` H2 flip-back count, split-drag-release zero-delta polylines, and
+inline-capture second-tab assertions. Their scenario-specific
+product-versus-harness verdicts remain pending an authoritative exact-candidate
+run; non-physical causes and identity/order handoffs are covered by replay
+fixtures and deterministic assertions.
 
 ## Artifacts
 
 - Campaign plan: `.agent/plans/native-interaction-determinism-reliability-2026-08-24.md`
-- OpenSpec change: `openspec/changes/native-interaction-determinism/`
+- Archived OpenSpec change: `openspec/changes/archive/2026-08-24-native-interaction-determinism/`
 - Replay fixtures: `tests/ValidationDriver/fixtures/native-replay/`
 - Per-run root manifest/timelines: `%TEMP%\TabDock-Validation\runs\<run-id>\`
 - Historical ledger: `docs/audits/2026-08-23/RC_QUALIFICATION_EVIDENCE.md`
@@ -121,8 +127,23 @@ by replay fixtures and deterministic assertions.
 
 ## Repository handoff
 
-The campaign branch was pushed to
-`origin/codex/native-interaction-determinism-20260824`. PR #12 remains the
-unchanged draft on `codex/ship-readiness-overhaul-20260823` into `main`.
-Creating a new draft PR with PR #12 as its base was attempted and blocked only
-by missing GitHub CLI authentication; no PR was merged or marked ready.
+The campaign branch and the later integration branch were pushed without
+rewriting history. PR #12 remains the draft review surface on
+`codex/ship-readiness-overhaul-20260823` into `main`; the final convergence
+push must fast-forward that branch only if the live Git credentials authorize
+it. No PR is to be merged or marked ready solely because deterministic gates
+are green.
+
+## Independent convergence finding — foreground transition admission
+
+Symptom: a guarded physical scenario could try to move from one already
+registered test-owned foreground window to another, but `Input.ForceForeground`
+asked the desktop lease to prove the *new* target was already foreground before
+calling `SetForegroundWindow`. That was a harness false block, not a product
+or foreign-desktop failure.
+
+Fix: the gate now proves the current foreground is an allowed, identity-current
+run target before the switch and proves the requested target's complete pinned
+identity after the switch. Foreign foreground/coverage remains permanently
+fail-closed. Deterministic regressions `LSE06` and `LSE07` cover the accepted
+owned-source and rejected foreign-source cases.

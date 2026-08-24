@@ -138,6 +138,13 @@ authoritative physical assertions. A foreign covering/foreground window,
 identity change, or unverifiable observation invalidates the lease permanently;
 the driver refuses input and records `BLOCKED_ENVIRONMENT` evidence.
 
+Foreground arrangement is also two-phase and fail-closed: before requesting a
+switch, the driver proves that the current foreground is an allowed,
+identity-current run target; after the bounded `SetForegroundWindow` attempt it
+proves the intended target's full pinned identity again. A transition from one
+registered run window to another is therefore admissible, while an unrelated
+foreign foreground still blocks before input is sent.
+
 Each scenario writes a bounded privacy-safe timeline and the run writes one
 `run-manifest.json` linking candidate SHA, executable hashes, capability matrix,
 attempt outcomes, aggregate counts, JSON/JUnit files, timeline files, and
