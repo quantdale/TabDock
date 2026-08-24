@@ -10,7 +10,7 @@ this text.
 
 ## CURRENT STATUS
 
-## QUALIFICATION CONTROL PLANE CAMPAIGN (2026-08-24, IN PROGRESS)
+## QUALIFICATION CONTROL PLANE CAMPAIGN (2026-08-24, COMPLETE LOCALLY)
 
 Objective: connect the ValidationDriver catalog, hierarchical manifests,
 candidate-bound bundles, independent-machine reports, virtual topology
@@ -25,9 +25,9 @@ still open/draft at its original head `eca8670...` and base `main`. The active
 branch is `codex/qualification-control-plane-20260824`; resolve its current
 HEAD dynamically because this file must not self-reference its containing
 commit. Completed implementation waves are the catalog (`81caac9`),
-hierarchical manifests (`608a360`), and bundle/verifier/topology lab
-(`aab112a`). Remaining work is the evidence/package/workflow/docs final wave,
-full deterministic qualification, push, and authenticated stacked-PR handoff.
+hierarchical manifests (`608a360`), bundle/verifier/topology lab (`aab112a`),
+candidate evidence and machine handoffs (`9003f3c`), and workflow/operator
+integration (`159d094`).
 
 Current contracts: catalog generation
 `scenario-catalog-2026-08-24-v1` with 127 dispatchable scenarios and 13 typed
@@ -36,23 +36,39 @@ machine-report schema 1; external release evidence schema 3. The topology lab
 uses generation `virtual-topology-lab-2026-08-24-v1`, fixed seed `20260824`,
 and bounded transition coverage; every lab result is explicitly synthetic.
 
-Current focused validation: Release build has 0 warnings/0 errors;
-ValidationDriver Release deterministic self-tests are 125/125; the expanded
-release-tooling corpus is 177/177; all PowerShell scripts parse; package
-handoff smoke and offline bundle/report verification passed. The exact-candidate
-driver identity path was tightened so parent/child hashes remain equal even
-when a copied ValidationDriver executable is used. Physical qualification was
-not run: this host is Windows 11 build 26200 x64 with one 1920x1080 monitor at
-96 DPI and no exclusive desktop lease. The known physical repetitions
-(`dragreorder` H2 flip-back, split-drag-release zero-delta polyline, and
-capture-inline-ui second-tab assertion) remain unclassified and are not fixed
-by simulation.
+Final deterministic validation: Debug/Release builds are 0 warnings/0 errors;
+Debug/Release unit suites are 686/686; Debug/Release ValidationDriver
+deterministic self-tests are 125/125; release-tooling is 177/177; strict
+OpenSpec is 32/32; modified workflows parse as YAML; the canonical
+`validate.ps1 -Configuration Release -Ci -Publish` log ends with all requested
+steps successful, including native ABI, version, recovery, diagnostic, privacy,
+single-file publish, and OpenSpec checks; and `git diff --check` is clean.
+The exact-candidate bridge produced an unsigned qualification-only candidate
+for source `159d094...`: final artifact SHA-256
+`24852ba5fc5666070b39c7fcf459c44739fd74a0ffba7a41f04e54ea98bbc0b8`, candidate
+bundle schema 1 SHA-256
+`109417d6d9187f1c0f84389c3cb06485e479e91a3e9c8887683ee38755c94f75`, package
+schema 1 SHA-256
+`0d3aa8910d6638e4f80c23fe541f77bbe56202265151ab9494f5f72d72d4fb67`, and
+deterministic independent-machine bundle schema 1 SHA-256
+`6f9e6d2a56e6e73d171e4aea6509b0fa0e8a8de9968c32189daa3cf7c53b215b`.
+The offline verifier and untrusted report import both passed against that
+candidate. The exact bridge corrected copied-driver parent/child identity so
+all manifest hashes remain bound to the driver actually run.
 
-Next action: finish OpenSpec/docs/workflow reconciliation, run Debug/Release
-builds and suites plus canonical validation/publish, inspect the complete diff,
-commit coherent final waves, push the active branch, independently recheck PR
-#12, and report any GitHub-authentication limitation without mutating PR #12
-or `main`.
+Physical qualification was not run: this host is Windows 11 build 26200 x64
+with one 1920x1080 monitor at 96 DPI and no exclusive desktop lease. No
+guarded SendInput was issued. Real mixed-DPI, Windows 10 independent-machine,
+production signing, and final human smoke remain external blockers. The known
+physical repetitions (`dragreorder` H2 flip-back, split-drag-release zero-delta
+polyline, and capture-inline-ui second-tab assertion) remain unclassified and
+are not fixed by simulation. The virtual lab remains synthetic-only: generation
+`virtual-topology-lab-2026-08-24-v1`, seed `20260824`, fixed monitor/DPI
+boundary matrix, and 256 bounded topology transitions.
+
+Next action: push the clean active branch, independently recheck PR #12, and
+create a draft stacked PR against the campaign branch only if authenticated
+GitHub access is available. Do not mutate PR #12 or `main`.
 
 ## NATIVE INTERACTION DETERMINISM CAMPAIGN (2026-08-24, COMPLETE FOR THIS ENVIRONMENT)
 
