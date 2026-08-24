@@ -131,6 +131,21 @@ internal static class ScenarioOutcomeContract
 
     public static string AggregateCode(IEnumerable<ScenarioOutcome> outcomes)
         => Aggregate(outcomes).Code;
+
+    public static bool TryParse(string value, out ScenarioOutcomeKind kind)
+    {
+        foreach (ScenarioOutcomeKind candidate in Enum.GetValues<ScenarioOutcomeKind>())
+        {
+            if (string.Equals(Code(candidate), value, StringComparison.Ordinal))
+            {
+                kind = candidate;
+                return true;
+            }
+        }
+
+        kind = ScenarioOutcomeKind.FailHarness;
+        return false;
+    }
 }
 
 /// <summary>Records one attempt and its later investigation rerun.</summary>

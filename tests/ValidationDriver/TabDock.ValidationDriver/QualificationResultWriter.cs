@@ -90,8 +90,8 @@ internal static class QualificationResultWriter
             outcome.Code,
             outcome.Reason,
             null,
-            $"<validation-artifact>/{stem}.json",
-            $"<validation-artifact>/{stem}.junit.xml",
+            $"{stem}.json",
+            $"{stem}.junit.xml",
             string.Empty,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow));
@@ -171,9 +171,9 @@ internal static class QualificationResultWriter
             ctx.Outcome.Code,
             ctx.Outcome.Reason,
             CapabilityEvidence(ctx.Capabilities),
-            $"<validation-artifact>/{stem}.json",
-            $"<validation-artifact>/{stem}.junit.xml",
-            $"<validation-artifact>/{timelineName}",
+            $"{stem}.json",
+            $"{stem}.junit.xml",
+            timelineName,
             ctx.StartedUtc,
             ctx.FinishedUtc.Value));
         GuardedProc.Log($"RESULT_JSON scenario={ctx.Name} status={ctx.Outcome.Code} artifact=<validation-artifact>/{Path.GetFileName(jsonPath)}");
@@ -242,8 +242,13 @@ internal static class QualificationResultWriter
                 StringComparer.Ordinal);
         var manifest = new
         {
-            schemaVersion = 1,
+            schemaVersion = 2,
+            runKind = RunKind(),
             runId = TestRunProvenance.RunId,
+            parentRunId = Environment.GetEnvironmentVariable("TABDOCK_VALIDATION_PARENT_RUN_ID"),
+            shard = Environment.GetEnvironmentVariable("TABDOCK_VALIDATION_SHARD"),
+            manifestRelativePath = "run-manifest.json",
+            catalogGeneration = ScenarioCatalog.Generation,
             candidateSha = CandidateSha(),
             branch = GitBranch(),
             applicationVersion = ApplicationVersion(),
@@ -270,6 +275,11 @@ internal static class QualificationResultWriter
                 candidate = Sha256File(Scenarios.TabDockExe),
                 test = Sha256File(System.Reflection.Assembly.GetExecutingAssembly().Location),
             },
+            driverIdentity = new
+            {
+                fileName = Path.GetFileName(System.Reflection.Assembly.GetExecutingAssembly().Location),
+                sha256 = Sha256File(System.Reflection.Assembly.GetExecutingAssembly().Location),
+            },
             scenarios = entries.Select(entry => new
             {
                 scenario = entry.Scenario,
@@ -284,12 +294,50 @@ internal static class QualificationResultWriter
                 endedUtc = entry.EndedUtc,
             }).ToArray(),
             scenarioAggregates,
+            artifactIndex = ArtifactIndex(entries, root),
             ownership = TestRunProvenance.OwnershipSummary(),
         };
         string path = Path.Combine(root, "run-manifest.json");
         File.WriteAllText(path, JsonSerializer.Serialize(manifest, JsonOptions), Encoding.UTF8);
         GuardedProc.Log($"RUN_MANIFEST result={outcome.Code} artifact=<validation-artifact>/run-manifest.json");
         return outcome;
+    }
+
+    private static string RunKind()
+    {
+        string? configured = Environment.GetEnvironmentVariable("TABDOCK_VALIDATION_RUN_KIND");
+        return configured is "direct" or "shard" or "all" or "deterministic"
+            ? configured
+            : "direct";
+    }
+
+    private static object[] ArtifactIndex(ScenarioManifestEntry[] entries, string root)
+    {
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<object>();
+        foreach (ScenarioManifestEntry entry in entries)
+        {
+            Add(entry.JsonArtifact, "scenario-result");
+            Add(entry.JUnitArtifact, "junit");
+            Add(entry.TimelineArtifact, "timeline");
+        }
+
+        return result.ToArray();
+
+        void Add(string relativePath, string kind)
+        {
+            if (string.IsNullOrWhiteSpace(relativePath) || !paths.Add(relativePath))
+                return;
+            string fullPath = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            bool exists = File.Exists(fullPath);
+            result.Add(new
+            {
+                relativePath,
+                kind,
+                exists,
+                sha256 = exists ? Sha256File(fullPath) : "MISSING",
+            });
+        }
     }
 
     public static void CaptureLiveEvidence(Ctx ctx)
@@ -596,7 +644,7 @@ internal static class QualificationResultWriter
         writer.WriteEndElement();
     }
 
-    private static string CandidateSha()
+    internal static string CandidateSha()
     {
         string? fromCi = Environment.GetEnvironmentVariable("GITHUB_SHA");
         if (!string.IsNullOrWhiteSpace(fromCi))
@@ -673,7 +721,7 @@ internal static class QualificationResultWriter
         }
     }
 
-    private static string Sha256File(string? path)
+    internal static string Sha256File(string? path)
     {
         try
         {

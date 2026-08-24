@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text.Json;
 using TabDock.Models;
 using TabDock.Services;
 
@@ -34,11 +37,13 @@ internal static class DeterministicSelfTests
             tests.AddRange(LeaseTests());
             tests.AddRange(TimelineTests());
         }
+        if (normalized is "all" or "manifest" or "deterministic")
+            tests.AddRange(ManifestTests());
         if (normalized is "all" or "stress" or "deterministic")
             tests.AddRange(StressTests());
         if (tests.Count == 0)
         {
-            Console.WriteLine($"Unknown self-test suite '{suite}'. Use split, identity, or all.");
+            Console.WriteLine($"Unknown self-test suite '{suite}'. Use split, identity, manifest, or all.");
             return 2;
         }
 
@@ -455,6 +460,309 @@ internal static class DeterministicSelfTests
                 && dpi.RequiresSupervision
                 && dpi.DestructiveState == ScenarioDestructiveState.TestOwnedMutation;
         });
+    }
+
+    private static IEnumerable<(string Id, Func<bool> Test)> ManifestTests()
+    {
+        yield return ("MAN01-valid-hierarchy-aggregates-all-shards", () =>
+        {
+            using var fixture = new ManifestFixture();
+            var imports = new List<ChildManifestVerification>();
+            foreach (string shard in ScenarioCatalog.OrchestratedShardNames)
+                imports.Add(fixture.WriteAndImport(shard));
+
+            ParentManifestWriteResult parent = fixture.WriteParent(imports);
+            return parent.Outcome.Kind == ScenarioOutcomeKind.Pass
+                && parent.Errors.Count == 0
+                && QualificationManifestVerifier.VerifyParent(parent.ManifestPath, out IReadOnlyList<string> errors)
+                && errors.Count == 0;
+        });
+
+        yield return ("MAN02-missing-child-manifest-is-fail-harness", () =>
+        {
+            using var fixture = new ManifestFixture();
+            ChildManifestVerification result = fixture.ImportMissing("startup", 0);
+            return !result.Valid
+                && result.Outcome.Kind == ScenarioOutcomeKind.FailHarness
+                && result.FailureReason?.Contains("missing", StringComparison.OrdinalIgnoreCase) == true;
+        });
+
+        yield return ("MAN03-child-exit-disagreement-is-rejected", () =>
+        {
+            using var fixture = new ManifestFixture();
+            fixture.WriteChild("startup");
+            ChildManifestVerification result = fixture.ImportExisting(
+                "startup",
+                ScenarioOutcomeContract.ExitCode(ScenarioOutcomeKind.FailHarness));
+            return !result.Valid
+                && result.FailureReason?.Contains("exit code", StringComparison.OrdinalIgnoreCase) == true;
+        });
+
+        yield return ("MAN04-candidate-and-shard-mismatch-is-rejected", () =>
+        {
+            using var fixture = new ManifestFixture();
+            fixture.WriteChild("startup", manifestShard: "split-core", candidateSha: new string('C', 40));
+            ChildManifestVerification result = fixture.ImportExisting("startup", 0);
+            return !result.Valid
+                && result.FailureReason?.Contains("candidate", StringComparison.OrdinalIgnoreCase) == true
+                && result.FailureReason.Contains("shard", StringComparison.OrdinalIgnoreCase);
+        });
+
+        yield return ("MAN05-modified-artifact-is-rejected", () =>
+        {
+            using var fixture = new ManifestFixture();
+            string manifest = fixture.WriteChild("startup");
+            fixture.TamperFirstArtifact("startup");
+            ChildManifestVerification result = fixture.ImportExisting("startup", 0);
+            return !result.Valid
+                && result.ManifestPath == manifest
+                && result.FailureReason?.Contains("hash/existence mismatch", StringComparison.OrdinalIgnoreCase) == true;
+        });
+
+        yield return ("MAN06-duplicate-json-property-is-rejected", () =>
+        {
+            using var fixture = new ManifestFixture();
+            fixture.WriteChild("startup", duplicateRunKind: true);
+            ChildManifestVerification result = fixture.ImportExisting("startup", 0);
+            return !result.Valid
+                && result.FailureReason?.Contains("duplicate JSON property", StringComparison.Ordinal) == true;
+        });
+
+        yield return ("MAN07-path-traversal-artifact-is-rejected", () =>
+        {
+            using var fixture = new ManifestFixture();
+            fixture.WriteChild("startup", pathTraversal: true);
+            ChildManifestVerification result = fixture.ImportExisting("startup", 0);
+            return !result.Valid
+                && result.FailureReason?.Contains("artifact reference invalid", StringComparison.OrdinalIgnoreCase) == true;
+        });
+
+        yield return ("MAN08-parent-duplicate-scenario-ownership-is-rejected", () =>
+        {
+            using var fixture = new ManifestFixture();
+            fixture.WriteChild("startup");
+            ChildManifestVerification first = fixture.ImportExisting("startup", 0);
+            ChildManifestVerification duplicate = first with
+            {
+                ExpectedShard = "split-core",
+                ChildRelativeDirectory = "children/split-core/duplicate-run",
+            };
+            ParentManifestWriteResult parent = fixture.WriteParent(
+                new[] { first, duplicate },
+                new[] { "startup", "split-core" });
+            return parent.Outcome.Kind == ScenarioOutcomeKind.FailHarness
+                && parent.Errors.Any(error => error.Contains("appears in shards", StringComparison.Ordinal));
+        });
+
+        yield return ("MAN09-partial-all-run-is-never-pass", () =>
+        {
+            using var fixture = new ManifestFixture();
+            ChildManifestVerification missing = fixture.ImportMissing("capture-group", 1);
+            ParentManifestWriteResult parent = fixture.WriteParent(
+                new[] { missing },
+                ScenarioCatalog.OrchestratedShardNames);
+            return parent.Outcome.Kind == ScenarioOutcomeKind.FailHarness
+                && parent.Errors.Count > 0;
+        });
+
+        yield return ("MAN10-stale-schema-is-rejected", () =>
+        {
+            using var fixture = new ManifestFixture();
+            fixture.WriteChild("startup", schemaVersion: 1);
+            ChildManifestVerification result = fixture.ImportExisting("startup", 0);
+            return !result.Valid
+                && result.FailureReason?.Contains("schemaVersion", StringComparison.Ordinal) == true;
+        });
+
+        yield return ("MAN11-parent-reverification-catches-late-tamper", () =>
+        {
+            using var fixture = new ManifestFixture();
+            var imports = ScenarioCatalog.OrchestratedShardNames
+                .Select(fixture.WriteAndImport)
+                .ToList();
+            ParentManifestWriteResult parent = fixture.WriteParent(imports);
+            fixture.TamperFirstArtifact("startup");
+            return !QualificationManifestVerifier.VerifyParent(parent.ManifestPath, out IReadOnlyList<string> errors)
+                && errors.Any(error => error.Contains("re-verification", StringComparison.OrdinalIgnoreCase));
+        });
+    }
+
+    private sealed class ManifestFixture : IDisposable
+    {
+        public ManifestFixture()
+        {
+            Root = Path.Combine(
+                Path.GetTempPath(),
+                "TabDock-qualification-manifest-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Root);
+            ParentRunId = Guid.NewGuid().ToString("D");
+            ParentStartedUtc = DateTimeOffset.UtcNow.AddSeconds(-1);
+            CandidateSha = "0123456789abcdef0123456789abcdef01234567";
+            CandidateExecutableSha = new string('A', 64);
+            DriverSha = new string('B', 64);
+        }
+
+        public string Root { get; }
+        public string ParentRunId { get; }
+        public DateTimeOffset ParentStartedUtc { get; }
+        public string CandidateSha { get; }
+        public string CandidateExecutableSha { get; }
+        public string DriverSha { get; }
+
+        public string WriteChild(
+            string shard,
+            string? manifestShard = null,
+            string? candidateSha = null,
+            int schemaVersion = QualificationManifestVerifier.CurrentSchemaVersion,
+            bool duplicateRunKind = false,
+            bool pathTraversal = false)
+        {
+            string childRoot = Path.Combine(Root, "children", shard);
+            string runId = Guid.NewGuid().ToString("D");
+            string runDirectory = Path.Combine(childRoot, runId);
+            Directory.CreateDirectory(runDirectory);
+            DateTimeOffset started = ParentStartedUtc.AddMilliseconds(100);
+            DateTimeOffset ended = started.AddMilliseconds(100);
+            var scenarios = new List<object>();
+            var artifactIndex = new List<object>();
+            IReadOnlyList<string> catalogScenarios = ScenarioCatalog.GetShardScenarios(shard);
+            for (int index = 0; index < catalogScenarios.Count; index++)
+            {
+                string scenario = catalogScenarios[index];
+                string stem = scenario + (index == 0 ? string.Empty : $"-{index}");
+                string jsonArtifact = $"{stem}.json";
+                string junitArtifact = $"{stem}.junit.xml";
+                string timelineArtifact = $"{stem}.timeline.json";
+                if (pathTraversal && index == 0)
+                    jsonArtifact = "../outside.json";
+
+                WriteArtifact(runDirectory, jsonArtifact, "result-" + scenario);
+                WriteArtifact(runDirectory, junitArtifact, "junit-" + scenario);
+                WriteArtifact(runDirectory, timelineArtifact, "timeline-" + scenario);
+                scenarios.Add(new
+                {
+                    scenario,
+                    attempt = 1,
+                    result = ScenarioOutcomeContract.Code(ScenarioOutcomeKind.Pass),
+                    reason = (string?)null,
+                    jsonArtifact,
+                    junitArtifact,
+                    timelineArtifact,
+                    startedUtc = started,
+                    endedUtc = ended,
+                });
+                artifactIndex.Add(Artifact(runDirectory, jsonArtifact, "scenario-result"));
+                artifactIndex.Add(Artifact(runDirectory, junitArtifact, "junit"));
+                artifactIndex.Add(Artifact(runDirectory, timelineArtifact, "timeline"));
+            }
+
+            var manifest = new
+            {
+                schemaVersion,
+                runKind = "shard",
+                runId,
+                parentRunId = ParentRunId,
+                shard = manifestShard ?? shard,
+                manifestRelativePath = "run-manifest.json",
+                catalogGeneration = ScenarioCatalog.Generation,
+                candidateSha = candidateSha ?? CandidateSha,
+                startedUtc = started,
+                endedUtc = ended,
+                outcome = ScenarioOutcomeContract.Code(ScenarioOutcomeKind.Pass),
+                aggregateCounts = new Dictionary<string, int>
+                {
+                    [ScenarioOutcomeContract.Code(ScenarioOutcomeKind.Pass)] = catalogScenarios.Count,
+                },
+                executableSha256 = new { candidate = CandidateExecutableSha, test = DriverSha },
+                driverIdentity = new { fileName = "ValidationDriver.exe", sha256 = DriverSha },
+                scenarios,
+                artifactIndex,
+            };
+            string json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
+            if (duplicateRunKind)
+                json = json.Replace(
+                    "\"runKind\": \"shard\",",
+                    "\"runKind\": \"shard\", \"runKind\": \"shard\",",
+                    StringComparison.Ordinal);
+            string manifestPath = Path.Combine(runDirectory, "run-manifest.json");
+            File.WriteAllText(manifestPath, json);
+            return manifestPath;
+        }
+
+        public ChildManifestVerification WriteAndImport(string shard)
+        {
+            WriteChild(shard);
+            return ImportExisting(shard, ScenarioOutcomeContract.ExitCode(ScenarioOutcomeKind.Pass));
+        }
+
+        public ChildManifestVerification ImportExisting(string shard, int exitCode)
+            => QualificationManifestVerifier.ImportChild(
+                Path.Combine(Root, "children", shard),
+                Root,
+                shard,
+                ParentRunId,
+                CandidateSha,
+                CandidateExecutableSha,
+                DriverSha,
+                ParentStartedUtc,
+                exitCode);
+
+        public ChildManifestVerification ImportMissing(string shard, int exitCode)
+            => ImportExisting(shard, exitCode);
+
+        public ParentManifestWriteResult WriteParent(
+            IReadOnlyList<ChildManifestVerification> imports,
+            IReadOnlyList<string>? expectedShards = null)
+            => QualificationParentManifestWriter.Write(
+                Root,
+                ParentRunId,
+                ParentStartedUtc,
+                CandidateSha,
+                CandidateExecutableSha,
+                DriverSha,
+                expectedShards ?? ScenarioCatalog.OrchestratedShardNames,
+                imports);
+
+        public void TamperFirstArtifact(string shard)
+        {
+            string childRoot = Path.Combine(Root, "children", shard);
+            string runDirectory = Directory.GetDirectories(childRoot).Single();
+            string artifact = Directory.GetFiles(runDirectory, "*.json")
+                .First(path => !string.Equals(Path.GetFileName(path), "run-manifest.json", StringComparison.Ordinal)
+                    && !path.EndsWith(".timeline.json", StringComparison.Ordinal));
+            File.AppendAllText(artifact, "tampered");
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (Directory.Exists(Root))
+                    Directory.Delete(Root, recursive: true);
+            }
+            catch
+            {
+                // Test cleanup must not hide the assertion result.
+            }
+        }
+
+        private static void WriteArtifact(string runDirectory, string relativePath, string content)
+        {
+            string fullPath = Path.GetFullPath(Path.Combine(runDirectory, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+            if (!fullPath.StartsWith(Path.GetFullPath(runDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                return;
+            File.WriteAllText(fullPath, content);
+        }
+
+        private static object Artifact(string runDirectory, string relativePath, string kind)
+        {
+            string fullPath = Path.Combine(runDirectory, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            bool exists = File.Exists(fullPath);
+            string hash = exists
+                ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(fullPath)))
+                : "MISSING";
+            return new { relativePath, kind, sha256 = hash, exists };
+        }
     }
 
     private static IEnumerable<(string Id, Func<bool> Test)> CapabilityTests()

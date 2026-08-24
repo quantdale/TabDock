@@ -284,48 +284,104 @@ internal static class Program
             }
         }
 
-        ScenarioOutcome aggregateOutcome = ScenarioOutcome.Pass;
-        int completed = 0;
+        TestRunProvenance.BeginRun();
+        QualificationResultWriter.BeginRun();
+        DateTimeOffset parentStartedUtc = DateTimeOffset.UtcNow;
+        string parentRoot = TestRunProvenance.ArtifactDirectory;
+        string candidateSha = QualificationResultWriter.CandidateSha();
+        string candidateExecutableSha = QualificationResultWriter.Sha256File(Scenarios.TabDockExe);
+        string driverSha = QualificationResultWriter.Sha256File(Assembly.GetExecutingAssembly().Location);
+        var imports = new List<ChildManifestVerification>();
+
         try
         {
             foreach (string shard in ScenarioCatalog.OrchestratedShardNames)
             {
+                string childArtifactBase = Path.Combine(parentRoot, "children", shard);
+                Directory.CreateDirectory(childArtifactBase);
                 Console.WriteLine();
                 GuardedProc.Log($"=== SHARD {shard} ({ScenarioCatalog.GetShardScenarios(shard).Count} scenario(s)) ===");
-                using Process child = GuardedProc.SpawnDriverShard(CreateShardProcessInfo(opt, shard));
-                if (!child.WaitForExit((int)TimeSpan.FromMinutes(11).TotalMilliseconds))
+                ChildManifestVerification import;
+                Process? child = null;
+                try
                 {
-                    GuardedProc.Log($"SHARD {shard}: timed out at the bounded 11-minute parent limit; terminating child.");
-                    try { child.Kill(entireProcessTree: true); } catch { }
-                    aggregateOutcome = new ScenarioOutcome(
-                        ScenarioOutcomeKind.FailHarness,
-                        $"shard {shard} exceeded the bounded parent timeout");
-                    break;
+                    child = GuardedProc.SpawnDriverShard(
+                        CreateShardProcessInfo(opt, shard, childArtifactBase, TestRunProvenance.RunId));
+                    if (!child.WaitForExit((int)TimeSpan.FromMinutes(11).TotalMilliseconds))
+                    {
+                        GuardedProc.Log($"SHARD {shard}: timed out at the bounded parent limit; terminating child.");
+                        try { child.Kill(entireProcessTree: true); } catch { }
+                        import = ChildManifestVerification.Invalid(
+                            shard,
+                            ScenarioOutcomeContract.ExitCode(ScenarioOutcomeKind.FailHarness),
+                            $"shard {shard} exceeded the bounded parent timeout");
+                    }
+                    else
+                    {
+                        import = QualificationManifestVerifier.ImportChild(
+                            childArtifactBase,
+                            parentRoot,
+                            shard,
+                            TestRunProvenance.RunId,
+                            candidateSha,
+                            candidateExecutableSha,
+                            driverSha,
+                            parentStartedUtc,
+                            child.ExitCode);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    import = ChildManifestVerification.Invalid(
+                        shard,
+                        ScenarioOutcomeContract.ExitCode(ScenarioOutcomeKind.FailHarness),
+                        $"shard process could not be supervised: {ex.GetType().Name}");
+                }
+                finally
+                {
+                    child?.Dispose();
                 }
 
-                completed++;
-                ScenarioOutcome shardOutcome = new(
-                    ScenarioOutcomeContract.FromExitCode(child.ExitCode),
-                    child.ExitCode == 0 ? null : $"child exit code {child.ExitCode}");
-                aggregateOutcome = ScenarioOutcomeContract.Aggregate(
-                    new[] { aggregateOutcome, shardOutcome });
-                GuardedProc.Log($"SHARD {shard}: outcome={shardOutcome.Code} exit={child.ExitCode}");
-                if (!shardOutcome.IsReleasePass)
-                    break;
+                imports.Add(import);
+                GuardedProc.Log(
+                    $"SHARD {shard}: verified={import.Valid} outcome={import.Outcome.Code} exit={import.ExitCode}" +
+                    (import.FailureReason == null ? string.Empty : $" reason={import.FailureReason}"));
             }
+        }
+        catch (OperationCanceledException)
+        {
+            imports.AddRange(ScenarioCatalog.OrchestratedShardNames
+                .Where(shard => !imports.Any(item => item.ExpectedShard == shard))
+                .Select(shard => ChildManifestVerification.Invalid(
+                    shard,
+                    ScenarioOutcomeContract.ExitCode(ScenarioOutcomeKind.FailHarness),
+                    "all-run cancellation left the declared shard unlaunched")));
         }
         finally
         {
             GuardedProc.CleanupTrackedProcesses();
         }
 
-        GuardedProc.Log(aggregateOutcome.IsReleasePass
-            ? $"ALL {completed} SHARD(S) PASSED."
-            : $"RUN OUTCOME {aggregateOutcome.Code}: one or more shards were not release-pass.");
-        return ScenarioOutcomeContract.ExitCode(aggregateOutcome.Kind);
+        ParentManifestWriteResult parent = QualificationParentManifestWriter.Write(
+            parentRoot,
+            TestRunProvenance.RunId,
+            parentStartedUtc,
+            candidateSha,
+            candidateExecutableSha,
+            driverSha,
+            ScenarioCatalog.OrchestratedShardNames,
+            imports);
+        GuardedProc.Log(
+            $"RUN_MANIFEST result={parent.Outcome.Code} artifact=<validation-artifact>/run-manifest.json " +
+            $"parentRunId={TestRunProvenance.RunId} childManifests={imports.Count}");
+        return ScenarioOutcomeContract.ExitCode(parent.Outcome.Kind);
     }
 
-    private static ProcessStartInfo CreateShardProcessInfo(Options opt, string shard)
+    private static ProcessStartInfo CreateShardProcessInfo(
+        Options opt,
+        string shard,
+        string childArtifactBase,
+        string parentRunId)
     {
         // A managed DLL must never be executed directly: CreateProcess starts a
         // host that fails CLR assembly binding ("System.Runtime, Version=8.0.0.0").
@@ -370,6 +426,11 @@ internal static class Program
             psi.ArgumentList.Add("--reruns");
             psi.ArgumentList.Add(opt.Reruns.ToString());
         }
+        psi.Environment["TABDOCK_VALIDATION_ARTIFACT_ROOT"] = childArtifactBase;
+        psi.Environment.Remove("TABDOCK_VALIDATION_RESULT_ROOT");
+        psi.Environment["TABDOCK_VALIDATION_RUN_KIND"] = "shard";
+        psi.Environment["TABDOCK_VALIDATION_PARENT_RUN_ID"] = parentRunId;
+        psi.Environment["TABDOCK_VALIDATION_SHARD"] = shard;
         return psi;
     }
 

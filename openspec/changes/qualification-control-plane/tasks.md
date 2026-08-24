@@ -8,11 +8,11 @@
 
 ## 2. Versioned child and parent manifests
 
-- [ ] 2.1 Define versioned child/shard/parent manifest records and a backwards-conscious reader that preserves the existing direct scenario artifact contract.
-- [ ] 2.2 Give each direct scenario/shard run an isolated artifact root and emit child-manifest location, candidate identity, driver identity/hash, catalog generation, shard identity, timestamps, outcomes, capabilities, attempts, and relative artifact links.
-- [ ] 2.3 Update `all` orchestration to create a parent run identity, pass isolated child roots, import the actual child manifest, verify exit/manifest agreement, and record partial/cancelled/unlaunched shards as harness evidence.
-- [ ] 2.4 Implement deterministic parent aggregation for duplicate/missing/malformed/stale/tampered child manifests, wrong candidate/shard/driver, artifact absence, timeout, blocked/skipped/flake outcomes, and first-attempt-authoritative reruns.
-- [ ] 2.5 Add child/parent fixture tests and commit the hierarchical-manifest wave after focused deterministic validation.
+- [x] 2.1 Define versioned child/shard/parent manifest records and a backwards-conscious reader that preserves the existing direct scenario artifact contract.
+- [x] 2.2 Give each direct scenario/shard run an isolated artifact root and emit child-manifest location, candidate identity, driver identity/hash, catalog generation, shard identity, timestamps, outcomes, capabilities, attempts, and relative artifact links.
+- [x] 2.3 Update `all` orchestration to create a parent run identity, pass isolated child roots, import the actual child manifest, verify exit/manifest agreement, and record partial/cancelled/unlaunched shards as harness evidence.
+- [x] 2.4 Implement deterministic parent aggregation for duplicate/missing/malformed/stale/tampered child manifests, wrong candidate/shard/driver, artifact absence, timeout, blocked/skipped/flake outcomes, and first-attempt-authoritative reruns.
+- [x] 2.5 Add child/parent fixture tests and commit the hierarchical-manifest wave after focused deterministic validation.
 
 ## 3. Qualification bundle and offline verifier
 
