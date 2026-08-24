@@ -30,6 +30,13 @@ public sealed class WinEventMonitor : IDisposable
     private IntPtr _hookMoveSize;
     private bool _running;
     private bool _disposed;
+    private long _callbacksReceived;
+    private long _irrelevantRejected;
+    private long _membershipProbes;
+    private long _dispatchMembershipProbes;
+    private long _posts;
+    private long _staleDispatches;
+    private long _lifecycleCallbacks;
 
     public event EventHandler<WindowEventArgs>? WindowDestroyed;
     public event EventHandler<WindowEventArgs>? WindowForegroundChanged;
@@ -87,6 +94,21 @@ public sealed class WinEventMonitor : IDisposable
     }
 
     public string? LastStartFailure { get; private set; }
+
+    /// <summary>
+    /// Bounded counters for representative event-storm measurement. Callback
+    /// admission and dispatch revalidation are intentionally counted
+    /// separately because the latter is the HWND-generation safety proof for a
+    /// queued event, not a cacheable duplicate lookup.
+    /// </summary>
+    public WinEventMetrics Metrics => new(
+        Interlocked.Read(ref _callbacksReceived),
+        Interlocked.Read(ref _irrelevantRejected),
+        Interlocked.Read(ref _membershipProbes),
+        Interlocked.Read(ref _dispatchMembershipProbes),
+        Interlocked.Read(ref _posts),
+        Interlocked.Read(ref _staleDispatches),
+        Interlocked.Read(ref _lifecycleCallbacks));
 
     /// <summary>
     /// Installs the hooks. Idempotent, and safe to call again after
@@ -221,8 +243,12 @@ public sealed class WinEventMonitor : IDisposable
 
     private void OnWinEvent(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
     {
+        Interlocked.Increment(ref _callbacksReceived);
         if (hwnd == IntPtr.Zero)
+        {
+            Interlocked.Increment(ref _irrelevantRejected);
             return;
+        }
 
         bool traceEvent = IsDiagnosticEvent(eventType);
 
@@ -242,6 +268,7 @@ public sealed class WinEventMonitor : IDisposable
             // UI handler cannot accidentally pair a different window if a
             // later activation is queued before this event is dispatched.
             IntPtr foreground = _getForegroundWindow();
+            Interlocked.Increment(ref _membershipProbes);
             CapturedWindow? desktopCapturedMember = _resolveCapturedWindow(foreground);
             // The desktop-wide reorder hook is intentionally retained because
             // it is the earliest reliable z-order signal, but the desktop is
@@ -249,8 +276,13 @@ public sealed class WinEventMonitor : IDisposable
             // callback-time foreground before doing any diagnostic allocation
             // or dispatcher work. A null result is the complete fail-closed
             // membership proof for the production GroupManager index.
-            if (desktopCapturedMember == null)
+            WinEventRoutingDecision decision = WinEventRoutingPolicy.Decide(new WinEventRoutingInput(
+                eventType, hwnd, idObject, idChild, _getDesktopWindow(), desktopCapturedMember != null));
+            if (decision != WinEventRoutingDecision.DesktopReorderCaptured)
+            {
+                Interlocked.Increment(ref _irrelevantRejected);
                 return;
+            }
 
             if (traceEvent)
             {
@@ -265,8 +297,14 @@ public sealed class WinEventMonitor : IDisposable
             return;
         }
 
-        if (idObject != 0 || idChild != 0)
+        if (WinEventRoutingPolicy.Decide(new WinEventRoutingInput(
+                eventType, hwnd, idObject, idChild, _getDesktopWindow(), Captured: false))
+            == WinEventRoutingDecision.Ignore
+            && (idObject != 0 || idChild != 0))
+        {
+            Interlocked.Increment(ref _irrelevantRejected);
             return;
+        }
 
         // Every consumer of these events reacts only to captured member windows,
         // so filter by direct HWND match. Do NOT resolve GetAncestor(GA_ROOT) here:
@@ -275,13 +313,19 @@ public sealed class WinEventMonitor : IDisposable
         // never a TabDock container, making it useless as an ownership filter) —
         // and a window that just fired EVENT_OBJECT_DESTROY has no ancestors to
         // walk at all regardless.
+        Interlocked.Increment(ref _membershipProbes);
         CapturedWindow? capturedMember = _resolveCapturedWindow(hwnd);
         // A null resolve IS the complete fail-closed membership proof for the
         // production GroupManager index (PERF25-02: one dictionary probe per
         // callback; a separate ContainsKey pre-filter probed the same index a
         // second time for every system-wide event).
-        if (capturedMember == null)
+        WinEventRoutingDecision directDecision = WinEventRoutingPolicy.Decide(new WinEventRoutingInput(
+            eventType, hwnd, idObject, idChild, _getDesktopWindow(), capturedMember != null));
+        if (directDecision != WinEventRoutingDecision.DirectCaptured)
+        {
+            Interlocked.Increment(ref _irrelevantRejected);
             return;
+        }
 
         if (traceEvent)
         {
@@ -306,6 +350,7 @@ public sealed class WinEventMonitor : IDisposable
 
     private void Post(WindowEventArgs args)
     {
+        Interlocked.Increment(ref _posts);
         if (_uiContext != null)
         {
             // The Post hop is load-bearing beyond thread affinity: the hide
@@ -349,8 +394,11 @@ public sealed class WinEventMonitor : IDisposable
             // not receive the old reorder event.
             if (args.RelatedHwnd == IntPtr.Zero
                 || args.CapturedMember == null
-                || !ReferenceEquals(_resolveCapturedWindow(args.RelatedHwnd), args.CapturedMember))
+                || !DispatchStillCaptured(args.RelatedHwnd, args.CapturedMember))
+            {
+                Interlocked.Increment(ref _staleDispatches);
                 return;
+            }
         }
         // args.CapturedMember is non-null on both Post paths (the desktop
         // branch resolves it before posting; the direct path drops nulls), so
@@ -358,38 +406,53 @@ public sealed class WinEventMonitor : IDisposable
         // HWND at dispatch time — a recycled handle never receives the old
         // member's queued event.
         else if (args.CapturedMember == null
-            || !ReferenceEquals(_resolveCapturedWindow(args.Hwnd), args.CapturedMember))
+            || !DispatchStillCaptured(args.Hwnd, args.CapturedMember))
         {
+            Interlocked.Increment(ref _staleDispatches);
             return;
         }
 
         switch (args.EventType)
         {
             case NativeMethods.EVENT_OBJECT_DESTROY:
+                Interlocked.Increment(ref _lifecycleCallbacks);
                 WindowDestroyed?.Invoke(this, args);
                 break;
             case NativeMethods.EVENT_SYSTEM_FOREGROUND:
+                Interlocked.Increment(ref _lifecycleCallbacks);
                 WindowForegroundChanged?.Invoke(this, args);
                 break;
             case NativeMethods.EVENT_OBJECT_REORDER:
+                Interlocked.Increment(ref _lifecycleCallbacks);
                 WindowZOrderChanged?.Invoke(this, args);
                 break;
             case NativeMethods.EVENT_OBJECT_NAMECHANGE:
+                Interlocked.Increment(ref _lifecycleCallbacks);
                 WindowNameChanged?.Invoke(this, args);
                 break;
             case NativeMethods.EVENT_SYSTEM_MINIMIZESTART:
+                Interlocked.Increment(ref _lifecycleCallbacks);
                 WindowMinimized?.Invoke(this, args);
                 break;
             case NativeMethods.EVENT_OBJECT_HIDE:
+                Interlocked.Increment(ref _lifecycleCallbacks);
                 WindowHidden?.Invoke(this, args);
                 break;
             case NativeMethods.EVENT_SYSTEM_MOVESIZESTART:
+                Interlocked.Increment(ref _lifecycleCallbacks);
                 WindowMoveSizeStarted?.Invoke(this, args);
                 break;
             case NativeMethods.EVENT_SYSTEM_MOVESIZEEND:
+                Interlocked.Increment(ref _lifecycleCallbacks);
                 WindowMoveSizeEnded?.Invoke(this, args);
                 break;
         }
+    }
+
+    private bool DispatchStillCaptured(IntPtr hwnd, CapturedWindow expected)
+    {
+        Interlocked.Increment(ref _dispatchMembershipProbes);
+        return ReferenceEquals(_resolveCapturedWindow(hwnd), expected);
     }
 
     public void Dispose()
@@ -423,6 +486,15 @@ public sealed class WinEventMonitor : IDisposable
             _ => $"EVENT_0x{eventType:X}",
         };
 }
+
+public readonly record struct WinEventMetrics(
+    long CallbacksReceived,
+    long IrrelevantRejected,
+    long MembershipProbes,
+    long DispatchMembershipProbes,
+    long Posts,
+    long StaleDispatches,
+    long LifecycleCallbacks);
 
 /// <summary>Small native seam for deterministic hook-installation failure tests.</summary>
 internal interface IWinEventHookApi
