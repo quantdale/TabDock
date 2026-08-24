@@ -17,11 +17,12 @@ gates.
 
 **Plan:** `.agent/plans/mainline-release-closure-2026-08-24.md`
 
-**Status:** integration and repository reconciliation are complete at the
-current checkpoint. The next final handoff step is to qualify the final
-committed integration SHA and bind a fresh candidate/bundle/package lineage;
-the historical candidate for `159d094...` is diagnostic only and must not be
-reused.
+**Status:** integration, repository reconciliation, deterministic validation,
+fresh exact-candidate qualification, and portable-package round trip are
+complete. The final candidate/evidence lineage is retained outside Git under
+`.artifacts/mainline-release-closure-<final-head>/`; resolve the final source
+SHA and hashes from the handoff report and artifacts. The historical candidate
+for `159d094...` is diagnostic only and was not reused.
 
 ### Authoritative topology
 
@@ -53,6 +54,23 @@ reused.
   changes.
 - Strict OpenSpec validation is green at 34/34 canonical specs after archive.
 
+### Final integration and evidence checkpoint
+
+- The integration branch was pushed without rewriting any historical campaign
+  branch. Its remote head matches the local final head; resolve both
+  dynamically with Git.
+- The fresh qualification-only candidate is bound to the final committed
+  source SHA, semantic version 1.0.0, release manifest, ValidationDriver,
+  primary run manifest, qualification bundle schema 1, and portable package
+  schema 1. Exact SHA-256 values and paths are recorded in the final session
+  handoff; generated artifacts remain ignored under `.artifacts/`.
+- Candidate bundle verification, portable-package verification, deterministic
+  returned bundle verification, and data-only returned-report import all
+  passed with zero failures. The returned evidence is synthetic-deterministic
+  and does not establish physical qualification.
+- No candidate binary, returned executable, or returned script was executed by
+  the report importer; imported evidence was hash-verified as data only.
+
 ### Deterministic validation at the merge checkpoint
 
 - Debug/Release solution builds: 0 warnings / 0 errors.
@@ -76,14 +94,18 @@ reused.
 - Mixed-DPI hardware, real Windows 10 x64 evidence, independent Windows 11
   evidence, approved production signing credentials, and final human smoke
   remain blocked external gates. Synthetic topology remains synthetic-only.
-- GitHub CLI is unauthenticated in this environment. PR #12 was not changed;
-  recheck its live state after the final push and create a new main-targeting
-  draft PR only when authenticated access permits. Do not merge to `main` or
-  publish.
+- GitHub CLI is unauthenticated in this environment, so creation of the new
+  main-targeting draft PR and its pull-request CI run is blocked pending
+  `gh auth login` or `GH_TOKEN`. PR #12 remains open/draft and unchanged; its
+  last live public metadata identified head `eca8670...` targeting `main`.
+  Do not merge to `main` or publish.
 
-### Next action
+### Handoff action
 
-Commit the reconciled plan/state/docs/spec/archive changes, rerun the complete
-deterministic matrix against that final committed SHA, generate and verify a
-new exact qualification-only candidate plus portable independent-machine
-round-trip package, then push and attempt exact-head hosted CI/PR operations.
+Stop internal development. If authenticated GitHub access becomes available,
+create the draft PR from `codex/mainline-release-closure-20260824` to `main`
+and monitor its pull-request workflow at the exact final head. Otherwise the
+remaining work is external qualification: supervised physical repetitions,
+mixed-DPI hardware, Windows 10 and independent Windows 11 evidence, approved
+production signing, and human smoke. Do not convert those missing prerequisites
+to PASS and do not merge or publish from this checkpoint.

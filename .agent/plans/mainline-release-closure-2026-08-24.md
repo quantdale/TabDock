@@ -1,6 +1,6 @@
 # Plan: Mainline Release-Candidate Closure
 
-**Status:** active — deterministic finalization and external handoff
+**Status:** complete — internal closure achieved; external gates remain
 **Owner/session:** Codex
 **Updated:** 2026-08-24
 **Integration branch:** `codex/mainline-release-closure-20260824`
@@ -95,11 +95,24 @@ invent product work outside this closure campaign.
   recorded precisely. Physical/external prerequisites remain honest BLOCKED.
 - Final worktree is clean and local/remote heads match.
 
-## Current next action
+## Final handoff state
 
-The normal merge is complete as checkpoint `7ed8769`. Canonical specs,
-governance documentation, durable state, and completed OpenSpec archives are
-now reconciled in the pending documentation commit. Commit that reconciliation,
-rerun the complete deterministic matrix against the resulting exact SHA, then
-generate the fresh qualification-only candidate and independent-machine
-round-trip evidence before pushing the final review branch.
+The normal merge checkpoint was `7ed8769`, followed by the reconciliation and
+final handoff-state commit. The final exact source SHA must be resolved
+dynamically from `HEAD`; it is the binding for the fresh candidate and all
+qualification evidence retained under the ignored
+`.artifacts/mainline-release-closure-<final-head>/` directory.
+
+The complete deterministic matrix, strict OpenSpec validation, fresh
+qualification-only candidate, offline bundle verification, portable package
+verification, deterministic returned-machine round trip, and data-only report
+import are green. The branch is pushed and local/remote heads match. A new
+main-targeting draft PR and exact-head hosted pull-request CI are blocked only
+by missing GitHub authentication in this environment; PR #12 remains open,
+draft, and unchanged.
+
+No internally reproducible Critical/High regression is known. Remaining work
+is external qualification only: supervised physical repetitions, mixed-DPI
+hardware, Windows 10/independent Windows 11 evidence, production signing, and
+human smoke. Do not merge to `main`, publish, or start another development
+campaign from this checkpoint.
