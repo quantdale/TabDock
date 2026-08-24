@@ -2,6 +2,12 @@
 
 **Status: evidence-based, NOT assumed. Windows 10 x64 is NOT YET TESTED.**
 
+Publication uses external-evidence schema 3. Each imported Windows 10/11
+record must reference a privacy-safe machine report, its qualification-bundle
+hash, its primary run-manifest hash, the exact candidate hash, and a PASS
+native-ABI result. A schema-2 record remains historical/diagnostic and cannot
+pass the current publication gate.
+
 This matrix records where the 44-byte `WINDOWPLACEMENT` user32 contract (see
 `NativeMethods.cs`) has actually been proven against real user32, versus
 where it remains an external qualification item. It exists because the
@@ -60,7 +66,7 @@ Each entry must be produced against the **exact FINAL bytes from Stage A**
    substitute a different build or a local `dotnet run` result.
 
 Expected evidence is authored **exactly once** as
-`release-external-evidence.json` with `schemaVersion: 2` and bindings
+`release-external-evidence.json` with `schemaVersion: 3` and bindings
 `sourceCommitSha` / `artifactSha256` / `candidateWorkflowRunId` /
 `candidateArtifactName` equal to the verified artifact, and every
 `completedAt` an ISO-8601 timestamp not in the future (5-minute tolerance).
@@ -71,7 +77,7 @@ publication gate closed.
 
 Before v1.0.0 production publication, the external compatibility gate must
 record PASS evidence in `release-external-evidence.json`
-(`windowsCompatibility`, schemaVersion 2 — see
+(`windowsCompatibility`, schemaVersion 3 — see
 `docs/release/publication-gates.md`) for at minimum:
 
 1. a supported recent **Windows 10 x64** system (`windows10`: `status` PASS,

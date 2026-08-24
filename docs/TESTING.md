@@ -144,6 +144,50 @@ attempt outcomes, aggregate counts, JSON/JUnit files, timeline files, and
 ownership evidence. The manifest is release evidence, not a best-of-N summary:
 blocked, skipped, and rerun-flake categories remain non-pass.
 
+### Qualification control plane and headless topology lab
+
+The ValidationDriver catalog is the authoritative registry for scenario
+dispatch, shard membership, guest/application requirements, topology/session
+capabilities, runtime budgets, and release-evidence eligibility. Inspect it and
+plan a gate without launching TabDock or sending input:
+
+```powershell
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --list
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --plan release --configuration Release --rid none
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --plan physicalMixedDpi --configuration Release --rid none
+```
+
+New runs emit schema-2 direct/shard/parent manifests. An `all` run imports the
+actual isolated child manifests into a parent hierarchy; missing, malformed,
+tampered, contradictory, partial, blocked, skipped, or flaky child evidence
+is never inferred as PASS. The first attempt remains authoritative across
+investigation reruns.
+
+The release evidence root is schema-1 `qualification-bundle.json`. Verify it
+offline with `scripts\verify-qualification-bundle.ps1`; the verifier hashes
+every indexed JSON/JUnit/timeline/result file and never launches a candidate,
+driver, guest, script, or returned binary. Schema-3
+`release-external-evidence.json` must bind the bundle and structured machine
+reports; schema 2 is diagnostic-only for publication.
+
+For another Windows machine, use the bounded package flow in
+`docs/release/qualification-control-plane.md`:
+`export-qualification-package.ps1`, `run-qualification-package.ps1`,
+`import-qualification-report.ps1`, and
+`merge-qualification-evidence.ps1`. A returned package/report is untrusted
+data. Import verifies candidate/source/package/bundle/run hashes, OS/build,
+x64 architecture, native ABI, outcomes, timestamps, topology classification,
+and privacy fields without executing anything returned. The machine runner
+writes results outside the immutable package.
+
+The native-free virtual topology laboratory has generation
+`virtual-topology-lab-2026-08-24-v1`, seed `20260824`, and fixed coverage for
+96/120/144/192 DPI, negative and above-origin coordinates, asymmetric/odd/
+narrow work areas, large coordinates, dual orientations, and monitor
+removal/reordering. Every lab record says `syntheticTopology=true`; it is
+deterministic policy coverage only and cannot satisfy physical mixed-DPI
+qualification.
+
 Native-free replay fixtures live under
 `tests/ValidationDriver/fixtures/native-replay/`. They exercise the smallest
 policy/state seams for WinEvent routing, stale identity refusal, hide/show/

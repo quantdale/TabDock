@@ -307,6 +307,14 @@ Use this checklist to verify a build before considering it ready.
 
 ## Releases and release qualification
 
+The machine-verifiable qualification control plane, schema migration, exact
+candidate handoff, offline bundle verifier, independent-machine import/merge,
+and synthetic topology boundary are documented in
+[`docs/release/qualification-control-plane.md`](docs/release/qualification-control-plane.md).
+Use that procedure when moving evidence between machines; do not copy a local
+build over a retained candidate or treat a deterministic topology result as a
+physical gate.
+
 ### Version contract
 
 `TabDock.csproj`'s `<Version>` is the single authoritative version mechanism.
@@ -323,8 +331,10 @@ SOURCE SHA -> clean exact checkout -> audited restore -> publish ONCE ->
 execute and qualify THE PUBLISHED EXE -> Authenticode sign ONCE ->
 signature verification -> FINAL SHA-256 -> release-manifest.json +
 SHA256SUMS.txt (both describe the FINAL distributed bytes) -> immutable
-candidate retention -> human gates (evidence record) -> publish THE SAME
-retained bytes (no build, no sign)
+candidate retention -> catalog-derived run manifests -> verified
+qualification-bundle.json -> validated machine reports + explicit human
+attestation -> schema-3 external evidence -> publish THE SAME retained bytes
+(no build, no sign)
 ```
 
 - `scripts/release-qualify.ps1` enforces the exact SHA, refuses dirty
@@ -356,7 +366,7 @@ retained bytes (no build, no sign)
   split into two least-privilege jobs. JOB 1 `verify` (contents: read)
   checks out the TRUSTED release policy at the executing workflow revision
   (`policy/`; the candidate can never replace it), the candidate source
-  (`candidate-source/`, data only), takes the Stage A run id + the schema-v2
+  (`candidate-source/`, data only), takes the Stage A run id + the schema-v3
   external evidence, downloads the EXACT retained artifact (cross-run
   `download-artifact@v7` with `run-id`/`repository`/`github-token`),
   re-verifies every production condition against those downloaded bytes
@@ -388,13 +398,14 @@ retained bytes (no build, no sign)
   mixed-DPI qualification (`docs/release/mixed-dpi-qualification.md`), and
   Windows 10/11 compatibility (`docs/release/compatibility-matrix.md`). Their
   PASS results must be recorded in `release-external-evidence.json`
-  (schemaVersion 2), bound to the exact candidate SHA, final artifact hash,
-  Stage A run id, and candidate artifact name
-  (`docs/release/publication-gates.md`); RC qualification-only runs never
+  (schemaVersion 3), bound to the exact candidate SHA, final artifact hash,
+  Stage A run id, candidate artifact name, qualification bundle, and machine
+  report hashes (`docs/release/publication-gates.md`); schema 2 is
+  diagnostic-only. RC qualification-only runs never
   need evidence and their manifests honestly report
   `productionReleaseEligibility = BLOCKED_EXTERNAL`.
 - Release-tooling regression tests: `scripts/release-tooling-tests.ps1`
-  (150 deterministic adversarial cases, including signing-provider policy,
+  (the deterministic adversarial corpus, including signing-provider policy,
   the release-policy trust boundary (old candidates rejected under CURRENT
   policy, policy-schema contract, candidate-policy isolation, publisher
   identity policy, Stage A/B dispatch contracts), Stage B zero candidate

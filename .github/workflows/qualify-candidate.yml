@@ -137,6 +137,20 @@ jobs:
           # the script text (R21-001).
           .\scripts\release-qualify.ps1 -Ci -Sha $env:REQUESTED_SHA -Version $env:EXPECTED_VERSION -Sign -OutDir (Join-Path $env:RUNNER_TEMP 'release-artifacts')
 
+      # Bind deterministic ValidationDriver evidence to the exact retained
+      # executable after release finalization. Only matching validation tooling
+      # may be built/copied; the RC candidate bytes are never rebuilt, signed,
+      # or replaced. The resulting bundle travels with the immutable artifact.
+      - name: Create exact-candidate deterministic qualification bundle
+        shell: pwsh
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'release-artifacts'
+          $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
+          $candidate = Join-Path $dir ([string]$manifest.artifactFileName)
+          .\scripts\qualify-release-candidate.ps1 -CandidateDir $dir -TabDock $candidate -SourceRoot $env:GITHUB_WORKSPACE -Tier deterministic
+
       # Immutable retention of the exact qualified RC artifact.
       - name: Upload qualified release artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
@@ -165,10 +179,13 @@ jobs:
           - Source commit: `$($env:REQUESTED_SHA)
           - Semantic version: `$($manifest.semanticVersion)`
           - Final distributed SHA-256: `$($manifest.artifactSha256)`
+          - Qualification bundle: `qualification-bundle.json` (schema 1; deterministic synthetic topology)
           - Signing: `$($manifest.signingStatus)` / `$($manifest.signatureVerification)`
           - releaseMode: `$($manifest.releaseMode)` (never publishable)
 
-          This artifact supports RC/beta testing only. The production publication
+          This artifact supports RC/beta testing only. The retained bundle is
+          bound to the exact RC bytes but is deterministic/synthetic evidence;
+          it cannot satisfy a physical mixed-DPI gate. The production publication
           chain requires a signed candidate from prepare-release-candidate.yml and the
           publish-release.yml gate.
           "@

@@ -18,7 +18,7 @@ The driver SHALL discover or accept explicit TabDock and GuineaPig paths for Deb
 - **WHEN** the driver is invoked with `--configuration Release` against Release artifacts
 - **THEN** it locates both executables, validates their candidate identities, and runs the selected catalog scenario or shard
 
-#### Scenario: All runs as verified bounded shards
+#### Scenario: All runs as bounded shards
 - **WHEN** the driver is invoked with `--yes all`
 - **THEN** it runs the catalog-declared shards sequentially in isolated child directories, verifies each child manifest and exit outcome, and reports the first disagreement or non-pass shard without a monolithic impossible budget
 

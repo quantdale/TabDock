@@ -34,7 +34,19 @@ Because v1.0.0 advertises Windows 10 and Windows 11 x64, production publication 
 - **THEN** the compatibility gate is rejected and remains blocked
 
 ### Requirement: External production evidence is an auditable record
-Production publication SHALL require a `release-external-evidence.json` record with `schemaVersion: 2`, exact `sourceCommitSha`, `artifactSha256`, `candidateWorkflowRunId`, and `candidateArtifactName` bindings, and mandatory human and physical gates. Machine-produced gate records SHALL additionally reference a verified qualification-bundle path and SHA-256 plus the relevant run-manifest hash, scenario IDs, observed topology classification, and outcome evidence. Human smoke SHALL remain an explicit attestation bound to the same source, final artifact, Stage-A identity, operator, completion time, and preferably the verified bundle. Missing, malformed, stale, synthetic, replay-only, blocked, skipped, or flaky evidence SHALL fail closed.
+Production publication SHALL require a `release-external-evidence.json` record
+with `schemaVersion: 3`, exact `sourceCommitSha`, `artifactSha256`,
+`candidateWorkflowRunId`, and `candidateArtifactName` bindings, and mandatory
+human and physical gates. Machine-produced gate records SHALL additionally
+reference a verified qualification-bundle path and SHA-256 plus the relevant
+run-manifest hash, scenario IDs, observed topology classification, and outcome
+evidence. Windows compatibility records SHALL bind structured machine reports
+for real Windows 10 and Windows 11 x64 systems. Human smoke SHALL remain an
+explicit attestation bound to the same source, final artifact, Stage-A
+identity, operator, completion time, and preferably the verified bundle.
+Schema 2 remains diagnostic/read-compatible but cannot satisfy the current
+publication contract. Missing, malformed, stale, synthetic, replay-only,
+blocked, skipped, or flaky evidence SHALL fail closed.
 
 #### Scenario: Evidence from another candidate cannot be reused
 - **WHEN** any source SHA, executable hash, Stage-A run/artifact identity, bundle hash, or run-manifest hash differs from the candidate being published
@@ -63,3 +75,25 @@ Release tooling SHALL import structured Windows compatibility and independent-ma
 #### Scenario: A report claims PASS with blocked scenarios
 - **WHEN** an imported report claims a machine gate PASS but its bundle contains a blocked, skipped, replay-only, or unclassified-flake required scenario
 - **THEN** import fails closed and the external gate remains blocked
+
+### Requirement: Stage-B qualification evidence handoff SHALL remain data-only
+When physical or independent-machine qualification artifacts are not present in
+the retained Stage-A candidate artifact, publication tooling SHALL accept an
+optional separately retained handoff containing only the merged external
+evidence record and its staged `qualification/external` files. The trusted
+Stage-B workflow SHALL reject unallowed handoff paths, SHALL source candidate
+bytes only from the exact Stage-A artifact, and SHALL re-verify every referenced
+bundle, machine report, run-manifest, and candidate hash before publication.
+It SHALL never dot-source, launch, or execute anything from the handoff.
+
+#### Scenario: A data-only handoff supplies external bundle files
+- **WHEN** Stage B receives a named handoff whose files are limited to the
+  merged evidence record and `qualification/external/**`
+- **THEN** it stages those files as data, re-runs trusted verification against
+  the Stage-A candidate, and permits no candidate or returned-script execution
+
+#### Scenario: A handoff attempts to smuggle candidate-controlled content
+- **WHEN** the downloaded handoff contains source files, scripts, arbitrary
+  paths, or a conflicting retained candidate artifact
+- **THEN** staging fails closed before publication and the Stage-A candidate
+  remains the only candidate-byte authority

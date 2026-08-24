@@ -579,7 +579,35 @@ placeholders until the user repopulates or deletes them.
   ABI evidence (44-byte contract, get/set round trip) plus a per-machine
   environment report for the compatibility matrix.
 
-## 3. WinEvent pipeline: event → handler → effect
+## 3. Qualification control plane: source → candidate → evidence
+
+Release qualification is deliberately outside the Shepherd runtime authority.
+The ValidationDriver catalog describes dispatchable scenarios and projects
+into plans, shards, capability observations, and documentation. Direct/shard
+runs emit schema-2 manifests; `all` imports those child manifests into a
+verified parent hierarchy. The parent never treats a child exit code or
+console line as evidence without re-reading the child manifest and hashing its
+linked artifacts.
+
+The release scripts then create a schema-1 `qualification-bundle.json` that
+binds the source SHA, exact candidate executable, release manifest, driver,
+catalog generation, run-manifest hashes, outcome counts, and relative result/
+JUnit/timeline files. The offline verifier is data-only and privacy-bounded.
+Independent-machine reports are untrusted imports: package/report/bundle
+hashes, candidate identity, native ABI, OS/build, outcomes, and observed
+topology are checked before schema-3 external evidence is written. Stage B
+loads only trusted release policy and never executes the candidate, returned
+tooling, or candidate-controlled source.
+
+The virtual topology laboratory reuses pure placement/partition policy seams
+and covers monitor rectangles, work areas, effective DPI, negative/above-origin
+coordinates, clamp/restore, and topology transitions. Its generation and fixed
+seed are recorded with `syntheticTopology=true`; this is deterministic policy
+coverage and cannot satisfy a physical mixed-DPI gate. See
+`docs/release/qualification-control-plane.md` for the operator chain and
+schema migration.
+
+## 4. WinEvent pipeline: event → handler → effect
 
 Hooks installed in `WinEventMonitor.Start` (`WinEventMonitor`): `EVENT_OBJECT_DESTROY`,
 `EVENT_SYSTEM_FOREGROUND`, `EVENT_OBJECT_REORDER`, `EVENT_OBJECT_NAMECHANGE`, `EVENT_SYSTEM_MINIMIZESTART`,
@@ -659,7 +687,7 @@ titles, URLs, document contents, or arbitrary user paths.
 
 ---
 
-## 4. Persistence & journal
+## 5. Persistence & journal
 
 Two distinct files in `%APPDATA%\TabDock\`:
 
@@ -725,7 +753,7 @@ crash-recovery protection.
 
 ---
 
-## 5. Log-line index
+## 6. Log-line index
 
 `%APPDATA%\TabDock\logs\TabDock.log`, 1 MB rotation (`LoggingService`). Lines that
 tests and agents may rely on:
@@ -774,7 +802,7 @@ Rules:
 
 ---
 
-## 6. Deeper docs
+## 7. Deeper docs
 
 - `AGENTS.md` — build/publish commands, code style, guarded process-spawn pattern, perf invariants.
 - `docs/TESTING.md` — ValidationDriver/GuineaPig harness reference, scenario list, repro techniques.

@@ -3,6 +3,13 @@
 **Status: NOT PERFORMED — BLOCKED_EXTERNAL until executed on real mixed-DPI
 hardware against the exact Stage A candidate bytes.**
 
+The current publication evidence contract is schema 3. Schema 2 examples in
+older release records are diagnostic history only; a production physical PASS
+must include a verified `qualificationBundle`, `runManifestSha256`, exact
+candidate hash, and structured `observedTopology` with
+`syntheticTopology=false`, `replayOnly=false`, at least two monitors, and
+distinct DPI values including a non-default value.
+
 Deterministic repository tests (the headless xUnit geometry and monitor-DPI
 suites) are **not** equivalent to physical mixed-DPI hardware qualification.
 This procedure is the required human/hardware gate. It must be executed against the
@@ -116,14 +123,14 @@ reported as such in `release-manifest.json`
 exactly `PASS` / `FAIL` / `BLOCKED_EXTERNAL` / `BLOCKED_ENVIRONMENT`.
 
 A PASS qualification must additionally be recorded **exactly once** in
-`release-external-evidence.json` with `schemaVersion: 2` and the bindings
+`release-external-evidence.json` with `schemaVersion: 3` and the bindings
 proven above (any reuse with a different SHA/hash/run/artifact fails; any
 `completedAt` in the future fails; any wrong schema version fails — see
 `docs/release/publication-gates.md`):
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "sourceCommitSha": "<exact 40-char candidate SHA>",
   "artifactSha256": "<exact FINAL artifact SHA-256>",
   "candidateWorkflowRunId": "<Stage A prepare-release-candidate run ID>",

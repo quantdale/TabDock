@@ -3,6 +3,10 @@
 **Status: NOT PERFORMED — BLOCKED_EXTERNAL until executed by a human on real
 Windows against the exact Stage A candidate bytes.**
 
+The current publication record is external-evidence schema 3. The human smoke
+attestation remains a distinct operator-authored field; importing machine
+reports or a qualification bundle never creates this attestation.
+
 This is the final human gate for the **exact release candidate artifact**
 (the FINAL distributed `TabDock.exe` from Stage A). It is a smoke test, not an
 exhaustive suite: every item is a quick manual check on a real desktop. It may
@@ -51,7 +55,7 @@ cryptographically bound to the Stage A run that produced them:
 3. Execute items 1–38 below on that verified binary.
 
 Expected evidence format (see "Recording"): exactly one
-`release-external-evidence.json` authored once with `schemaVersion: 2`, the
+`release-external-evidence.json` authored once with `schemaVersion: 3`, the
 exact `sourceCommitSha` / `artifactSha256` / `candidateWorkflowRunId` /
 `candidateArtifactName` above, and every gate carrying an ISO-8601
 `completedAt` (not in the future beyond 5 minutes), `operator`, and `evidence`.
@@ -178,14 +182,14 @@ is exactly `PASS` / `FAIL` / `BLOCKED_EXTERNAL` / `BLOCKED_ENVIRONMENT` — see
 "External gate lifecycle" in `docs/release/publication-gates.md`.
 
 The evidence file `release-external-evidence.json` must be authored **exactly
-once** with `schemaVersion: 2` and the bindings proven above (any reuse with a
+once** with `schemaVersion: 3` and the bindings proven above (any reuse with a
 different SHA, hash, run id, or artifact name fails; any `completedAt` in the
 future fails; any wrong schema version fails — the publication gate fails
 closed). A PASS smoke is recorded there as:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "sourceCommitSha": "<exact 40-char candidate SHA>",
   "artifactSha256": "<exact FINAL artifact SHA-256>",
   "candidateWorkflowRunId": "<Stage A prepare-release-candidate run ID>",

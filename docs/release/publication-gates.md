@@ -5,7 +5,7 @@ PERFORMED — `BLOCKED_EXTERNAL` until real operators qualify the exact final
 artifact.**
 
 This document defines the trust model for TabDock production publication, the
-`release-external-evidence.json` schema (v2), and the exact two-stage dispatch
+`release-external-evidence.json` schema (v3), and the exact two-stage dispatch
 sequence for a production release. The enforcement described here is code, not
 intent: `scripts/release-tooling.ps1` (shared by the publication workflow and
 `scripts/release-tooling-tests.ps1`) refuses publication when any required
@@ -206,7 +206,7 @@ exportable-PFX secrets). Qualification-only unsigned RC workflows
 A separate, manually dispatched publication workflow split into TWO jobs
 (least privilege; see the job description below) that:
 
-1. accepts the Stage A **workflow run ID** (and the schema-v2 evidence
+1. accepts the Stage A **workflow run ID** (and the schema-v3 evidence
    record) — never a version or tag input;
 2. verifies the trusted dispatch contract (both jobs): `github.ref ==
    refs/heads/main` and `github.workflow_sha == github.sha`, then checks out
@@ -237,7 +237,7 @@ A separate, manually dispatched publication workflow split into TWO jobs
    certificate subject, verified timestamp + timestamper identity),
    Authenticode (`signtool verify /pa /v /tw` + RFC3161 timestamp
    verification of the downloaded bytes, certificate identity cross-checked
-   against the manifest), schema-v2 external evidence, and Windows 10/11
+   against the manifest), schema-v3 external evidence, and Windows 10/11
    compatibility evidence;
 5. **JOB 1 handoff:** writes `publication-verification.json` +
    `RELEASE_NOTES.md` (the verified same-run handoff, uploaded as
@@ -357,11 +357,18 @@ case fails if any mutable `actions/*@v` remains; `Get-CheckoutSteps` tolerates
 pinned forms). Each workflow file also carries a short header comment with
 the same update recipe.
 
-## Evidence schema (`release-external-evidence.json`, v2)
+## Evidence schema (`release-external-evidence.json`, v3)
+
+Schema 3 is the current publication contract. It retains the exact source,
+artifact, Stage-A run, human-smoke, physical, and Windows compatibility fields
+from schema 2 and adds a `qualificationBundle` binding plus structured machine
+report records. Schema 2 remains readable for compatibility diagnostics but is
+rejected by `Test-PublicationEligibility` because it cannot bind the
+machine-produced qualification artifacts.
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "sourceCommitSha": "<exact 40-char candidate SHA>",
   "artifactSha256": "<exact FINAL artifact SHA-256, lowercase>",
   "candidateWorkflowRunId": "<Stage A workflow run ID that produced the candidate>",
@@ -400,6 +407,19 @@ the same update recipe.
 }
 ```
 
+Schema 3 adds the machine evidence bridge. `qualificationBundle` contains a
+relative path, SHA-256, source/candidate hashes, primary run-manifest hash,
+catalog generation as recorded by the bundle, automated outcome, and the
+synthetic/replay classification. `physicalMixedDpi` additionally contains
+`qualificationBundleSha256`, `runManifestSha256`, exact `candidateSha256`, a
+structured `observedTopology`, and a bound `machineReport`. Each
+`windowsCompatibility.windows10/windows11` entry contains a structured
+`machineReport` with the OS/build, x64 architecture, native ABI PASS result,
+qualification-bundle hash, primary run hash, report hash, and relative report
+path. `scripts/merge-qualification-evidence.ps1` creates these fields only
+after offline report/package/bundle verification; Stage B re-verifies the
+staged files and never trusts the prose `evidence` field alone.
+
 ## External gate vocabulary and lifecycle
 
 Externally visible statuses are exactly `PASS`, `FAIL`, `BLOCKED_EXTERNAL`, and
@@ -421,7 +441,7 @@ State machine (each mandatory gate):
                  │  evidence record absent/malformed    │────> FAIL (Stage B, fail-closed)
                  │  or gate missing / FAIL / BLOCKED    │     publication refused
                  └──────────────┬────────────────────────┘
-                                │ schemaVersion 2 + bindings + PASS
+                                     │ schemaVersion 3 + bundle + bindings + PASS
                                 ▼
                  candidate bytes proven (SHA+run+artifact+timestamps) ──> PASS
                                       else ──> FAIL / BLOCKED*
@@ -445,14 +465,15 @@ rejected, and missing evidence is `BLOCKED_EXTERNAL` / `FAIL`, never `PASS`.
 
 | Gate | Prerequisite | Exact command / procedure | Expected evidence format | Artifact + run binding | Vocabulary |
 |------|--------------|---------------------------|--------------------------|------------------------|------------|
-| `finalWindowsHumanSmoke` | Real Windows 10/11 x64 desktop with 2–3 apps; exact Stage A artifact downloaded and hash-verified | Download `tabdock-candidate-<sha>-<run-id>` from Stage A run; `Get-FileHash` == `finalSignedSha256` == `SHA256SUMS.txt`; execute the 38 checks in `docs/release/final-smoke.md` | `finalWindowsHumanSmoke: { status: PASS, completedAt: ISO-8601, operator, evidence }` (checklist + OS build + native-ABI report) | `sourceCommitSha` + `artifactSha256` + `candidateWorkflowRunId` + `candidateArtifactName` must equal the verified Stage A run/artifact/hash; `completedAt` not in the future; `schemaVersion == 2` enforced | `PASS` / `FAIL` / `BLOCKED_EXTERNAL` / `BLOCKED_ENVIRONMENT` |
+| `finalWindowsHumanSmoke` | Real Windows 10/11 x64 desktop with 2–3 apps; exact Stage A artifact downloaded and hash-verified | Download `tabdock-candidate-<sha>-<run-id>` from Stage A run; `Get-FileHash` == `finalSignedSha256` == `SHA256SUMS.txt`; execute the 38 checks in `docs/release/final-smoke.md` | `finalWindowsHumanSmoke: { status: PASS, completedAt: ISO-8601, operator, evidence }` (checklist + OS build + native-ABI report) | `sourceCommitSha` + `artifactSha256` + `candidateWorkflowRunId` + `candidateArtifactName` must equal the verified Stage A run/artifact/hash; `completedAt` not in the future; schema 3 and the qualification bundle are enforced | `PASS` / `FAIL` / `BLOCKED_EXTERNAL` / `BLOCKED_ENVIRONMENT` |
 | `physicalMixedDpi` | Two monitors at 100% + 150% (or documented mixed-DPI hardware); same exact verified artifact | Same download+verify preamble; execute 16 scenarios in `docs/release/mixed-dpi-qualification.md` (record per-scenario monitor/handle/DPI/geometry JSON) | `physicalMixedDpi: { status: PASS, completedAt: ISO-8601, operator, evidence }` (16 scenarios + evidence dir) | Same four-way binding + future/`schemaVersion` enforcement as above | `PASS` / `FAIL` / `BLOCKED_EXTERNAL` / `BLOCKED_ENVIRONMENT` (`BLOCKED_NO_MIXED_DPI_HARDWARE` when hardware absent) |
 | `windowsCompatibility.windows10` | Real Windows 10 x64 machine (recent build) | Same download+verify preamble on that machine; `TabDock.exe --selftest-native-abi` → capture the full environment report | `windowsCompatibility: { status: PASS, windows10: { status: PASS, build, operator, completedAt: ISO-8601, nativeAbiEvidence, evidence } }` | Same four-way binding + `build` + `nativeAbiEvidence` required; stale reuse (different SHA/hash/run) rejected | `PASS` only; `FAIL`/`BLOCKED_EXTERNAL`/missing fails closed |
 | `windowsCompatibility.windows11` | Real Windows 11 x64 machine | Same as Windows 10 entry, on Windows 11 | `windows11: { status: PASS, build, operator, completedAt: ISO-8601, nativeAbiEvidence, evidence }` | Same four-way binding as Windows 10; both entries required | `PASS` only; `FAIL`/`BLOCKED_EXTERNAL`/missing fails closed |
 
 Stale-evidence guard: any SHA, hash, run id, or artifact name mismatch between
 the evidence and the Stage A bytes fails the gate; any `completedAt` in the
-future beyond the 5-minute tolerance fails; any `schemaVersion != 2` fails.
+future beyond the 5-minute tolerance fails; any publication `schemaVersion != 3`
+or missing qualification-bundle binding fails.
 Missing evidence fails closed (`BLOCKED_EXTERNAL`). These rules are enforced
 by `scripts/release-tooling.ps1` (`Test-ExternalEvidenceFile`,
 `Test-CompletedAt`, and `Test-PublicationEligibility`'s run/artifact binding)
@@ -460,7 +481,8 @@ and are regression-covered by `scripts/release-tooling-tests.ps1`.
 
 Validation rules (enforced by `Test-ExternalEvidenceFile`):
 
-- `schemaVersion` must be exactly `2` (no other value accepted; see state machine).
+- `schemaVersion` must be exactly `3` for publication (schema 2 is a
+  backwards-readable diagnostic format only).
 - `sourceCommitSha` must be exactly 40 hex characters and MUST equal the
   candidate SHA (the Stage A run `head_sha`).
 - `artifactSha256` must be exactly 64 hex characters and MUST equal the FINAL
@@ -490,7 +512,7 @@ Validation rules (enforced by `Test-ExternalEvidenceFile`):
 | Property | RC qualification-only (`qualify-candidate.yml`) | Production (Stage A + Stage B) |
 |----------|---------------------------------------|--------------------------------|
 | Workflow | `qualify-candidate.yml`, dispatch with `sha` (+ optional `version`, `signing-required`) | Stage A: `prepare-release-candidate.yml`; Stage B: `publish-release.yml` |
-| External evidence | never required | required in Stage B: schema-v2 record with all gates PASS, bound to run + artifact + SHA + hash |
+| External evidence | never required | required in Stage B: schema-v3 record with all gates PASS, bound to run + artifact + SHA + hash + qualification bundle |
 | Signing | optional: `not-configured` (unsigned) or `local-pfx` (dev/private cert, never the public-GA signer) | mandatory in Stage A through the APPROVED production provider (`digicert-stm`, non-exportable `CLOUD_HSM` key; run fails `BLOCKED_EXTERNAL` without an approved configured signer); Stage B independently re-verifies `signtool verify /pa` + timestamp + certificate identity with no provider access |
 | Build/sign at publication | n/a (nothing is published) | Stage B downloads the Stage A artifact; ZERO rebuild, ZERO re-sign |
 | Manifest `productionReleaseEligibility` | `BLOCKED_EXTERNAL` (honest at qualification time) | `BLOCKED_EXTERNAL` in the manifest; `ELIGIBLE` only in `publication-verification.json` after the Stage B gate |
@@ -541,14 +563,19 @@ passes and attached to the release alongside `release-external-evidence.json`.
       (`docs/release/compatibility-matrix.md` — `TabDock.exe
       --selftest-native-abi` on each OS, capture the environment report).
    4. Author `release-external-evidence.json` **exactly once** with
-      `schemaVersion: 2`, `sourceCommitSha` = the Stage A `head_sha`,
+      `schemaVersion: 3`, `sourceCommitSha` = the Stage A `head_sha`,
       `artifactSha256` = the verified final hash, `candidateWorkflowRunId` = the
       Stage A run id, `candidateArtifactName` = the downloaded artifact name,
       and every gate `completedAt` at actual completion time (ISO-8601, not in
       the future) with `operator` and `evidence`. Stale or future-dated evidence
       will be rejected; there is no second authoring that can reuse old bindings.
 3. **Stage B — publish:** dispatch `publish-release.yml` from `main` with
-   `run-id=<Stage A run id>` and `external-evidence=<the record>`. Stage B
+   `run-id=<Stage A run id>` and `external-evidence=<the record>`. If the
+   merged physical/compatibility bundles were not retained inside the Stage-A
+   candidate artifact, upload the data-only directory produced with
+   `merge-qualification-evidence.ps1 -HandoffDir` and also provide
+   `qualification-evidence-run-id` plus
+   `qualification-evidence-artifact-name`. Stage B
    verifies the trusted dispatch contract, checks out the trusted policy at
    the executing workflow revision, verifies the run, locates and downloads
    the exact artifact (candidate source checked out as data only),
@@ -615,7 +642,7 @@ silently merely to pass the gate.
   (`Test-SemanticVersion`, `Get-ProjectSemanticVersion`,
   `Get-ReleaseTagFromVersion`, `Assert-ReleaseTagMatchesVersion`),
   `Complete-ReleaseRecords` (final-hash records + triple consistency),
-  `Test-ExternalEvidenceFile` (schema v2 + SHA + artifact + run + artifact
+  `Test-ExternalEvidenceFile` (schema v3 + qualification bundle + SHA + artifact + run + artifact
   name binding + gates + completedAt quality), the release-policy schema
   contract (`Get-ReleasePolicySchemaVersion` / `Get-MinimumAcceptedProductionPolicySchema` /
   `Test-ReleasePolicySchema`), the current publisher-identity policy

@@ -18,6 +18,9 @@ permissions:
 
 jobs:
   build:
+    permissions:
+      contents: read
+      actions: write
     runs-on: windows-latest
     steps:
       # Current checkout action: Node 24 action runtime (runner-supported).
@@ -71,6 +74,36 @@ jobs:
       - name: Run release-tooling regression suite
         shell: pwsh
         run: .\scripts\release-tooling-tests.ps1
+
+      # Retain the deterministic ValidationDriver hierarchy as a CI artifact.
+      # This is native-free evidence only: the topology report is explicitly
+      # synthetic and never satisfies a physical mixed-DPI publication gate.
+      - name: Generate deterministic qualification artifacts
+        shell: pwsh
+        env:
+          GITHUB_SHA_VALUE: ${{ github.sha }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP ("tabdock-qualification-" + $env:GITHUB_SHA_VALUE)
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          $env:TABDOCK_VALIDATION_DRIVER_PATH = Join-Path $env:GITHUB_WORKSPACE 'tests\ValidationDriver\TabDock.ValidationDriver\bin\Release\net8.0-windows\TabDock.ValidationDriver.exe'
+          $env:TABDOCK_VALIDATION_ARTIFACT_ROOT = $root
+          $env:TABDOCK_VALIDATION_RUN_KIND = 'deterministic'
+          dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -c Release --no-restore --no-build -- --selftest all --configuration Release --rid none
+          if ($LASTEXITCODE -ne 0) { throw "deterministic ValidationDriver exited $LASTEXITCODE" }
+          $manifest = Get-ChildItem -LiteralPath $root -Recurse -File -Filter run-manifest.json | Select-Object -First 1
+          if ($null -eq $manifest) { throw 'deterministic qualification did not produce a run-manifest.json' }
+          $run = Get-Content -LiteralPath $manifest.FullName -Raw | ConvertFrom-Json
+          "Qualification source SHA: $env:GITHUB_SHA_VALUE" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "Qualification run manifest schema: $($run.schemaVersion); catalog: $($run.catalogGeneration); outcome: $($run.outcome)" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "Topology evidence: syntheticTopology=true (deterministic lab; not physical qualification)" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload deterministic qualification artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: tabdock-qualification-${{ github.sha }}
+          path: ${{ runner.temp }}/tabdock-qualification-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 30
 
   # Independent native-ABI evidence on a second Windows OS build (the
   # windows-2022 runner image): proves the WINDOWPLACEMENT 44-byte user32

@@ -10,6 +10,50 @@ this text.
 
 ## CURRENT STATUS
 
+## QUALIFICATION CONTROL PLANE CAMPAIGN (2026-08-24, IN PROGRESS)
+
+Objective: connect the ValidationDriver catalog, hierarchical manifests,
+candidate-bound bundles, independent-machine reports, virtual topology
+coverage, external evidence, and trusted Stage-B publication into one
+fail-closed control plane. Preserve the Shepherd/no-reparent product and do
+not run guarded physical SendInput without a proven exclusive supervised
+desktop.
+
+Starting authority was independently verified before branching: clean
+`codex/native-interaction-determinism-20260824` at `09a204d...`, with PR #12
+still open/draft at its original head `eca8670...` and base `main`. The active
+branch is `codex/qualification-control-plane-20260824`; resolve its current
+HEAD dynamically because this file must not self-reference its containing
+commit. Completed implementation waves are the catalog (`81caac9`),
+hierarchical manifests (`608a360`), and bundle/verifier/topology lab
+(`aab112a`). Remaining work is the evidence/package/workflow/docs final wave,
+full deterministic qualification, push, and authenticated stacked-PR handoff.
+
+Current contracts: catalog generation
+`scenario-catalog-2026-08-24-v1` with 127 dispatchable scenarios and 13 typed
+shards; run-manifest schema 2; qualification-bundle, handoff-package, and
+machine-report schema 1; external release evidence schema 3. The topology lab
+uses generation `virtual-topology-lab-2026-08-24-v1`, fixed seed `20260824`,
+and bounded transition coverage; every lab result is explicitly synthetic.
+
+Current focused validation: Release build has 0 warnings/0 errors;
+ValidationDriver Release deterministic self-tests are 125/125; the expanded
+release-tooling corpus is 177/177; all PowerShell scripts parse; package
+handoff smoke and offline bundle/report verification passed. The exact-candidate
+driver identity path was tightened so parent/child hashes remain equal even
+when a copied ValidationDriver executable is used. Physical qualification was
+not run: this host is Windows 11 build 26200 x64 with one 1920x1080 monitor at
+96 DPI and no exclusive desktop lease. The known physical repetitions
+(`dragreorder` H2 flip-back, split-drag-release zero-delta polyline, and
+capture-inline-ui second-tab assertion) remain unclassified and are not fixed
+by simulation.
+
+Next action: finish OpenSpec/docs/workflow reconciliation, run Debug/Release
+builds and suites plus canonical validation/publish, inspect the complete diff,
+commit coherent final waves, push the active branch, independently recheck PR
+#12, and report any GitHub-authentication limitation without mutating PR #12
+or `main`.
+
 ## NATIVE INTERACTION DETERMINISM CAMPAIGN (2026-08-24, COMPLETE FOR THIS ENVIRONMENT)
 
 Objective: classify physical ValidationDriver outcomes without mislabeling

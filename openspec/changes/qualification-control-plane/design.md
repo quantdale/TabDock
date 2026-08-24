@@ -40,13 +40,22 @@ The parent records every shard even after a failure or cancellation. It may stop
 
 Add a small portable verifier model that accepts a bundle directory and JSON root record, returns structured failures, and never starts a process. The bundle artifact index uses forward-slash relative paths and SHA-256. The verifier rejects absolute paths, `..`, duplicate entries, missing files, modified bytes, unsupported schemas, inconsistent counts, future timestamps, candidate/source disagreement, and synthetic physical claims. The release PowerShell module calls this verifier through a deterministic JSON contract or its equivalent PowerShell validation helpers; Stage B continues to use only trusted policy code.
 
-Existing schema-1 direct manifests remain readable for diagnostics and migration tests, but only new schema-2 child/parent manifests and bundle schema-1 records are eligible for release evidence. The accepted-version policy is explicit in code and documented.
+New direct, shard, and parent manifests emit schema 2. The reader may retain
+schema-1 compatibility for diagnostics and migration tests, but schema-1
+records cannot satisfy release evidence. Qualification bundles, handoff
+packages, and machine reports use schema 1; external release evidence uses
+schema 3 for machine-bound publication records. The accepted-version policy
+is explicit in code and documented.
 
 ### Evidence bridge is exact-byte and additive
 
 `qualify-release-candidate.ps1` takes a retained artifact directory, verifies `release-manifest.json`, checksums, and applicable signature state, and requires the candidate executable hash to equal `artifactSha256`. It passes that explicit path to ValidationDriver and sets a bounded artifact root. It never invokes build output over the candidate or copies another executable into its place. It writes a bundle containing the release manifest hash, child/parent manifest hashes, driver hash, and physical/synthetic classification.
 
-The external-evidence builder gains import/merge functions for bundles and independent-machine reports. Existing schemaVersion 2 remains the release evidence version; new machine-bound fields are required for machine gates but old records remain distinguishable and fail closed where those fields are absent. Human smoke remains a separate attestation record.
+The external-evidence builder gains import/merge functions for bundles and
+independent-machine reports. Schema 3 is required when qualification-bundle
+and machine-report bindings are used for publication; schema 2 remains
+readable for compatibility and diagnostic tests but cannot satisfy the current
+publication contract. Human smoke remains a separate attestation record.
 
 ### Topology laboratory uses pure policy models
 
@@ -54,7 +63,7 @@ Add `VirtualTopology`, `VirtualMonitor`, and pure placement/partition helpers in
 
 ### Workflow changes retain immutable and least-privilege boundaries
 
-The build/qualification workflows retain the new deterministic bundle artifacts and summaries. Candidate qualification may run in Stage A/RC jobs, but publication only downloads and verifies records. No workflow change introduces a candidate execution step in `publish-release.yml`; static release-tooling tests continue to scan for that class of regression.
+The build/qualification workflows retain the new deterministic bundle artifacts and summaries. Candidate qualification may run in Stage A/RC jobs, but publication only downloads and verifies records. When later physical or independent-machine evidence is staged after Stage A, `merge-qualification-evidence.ps1 -HandoffDir` emits a bounded data-only handoff containing the merged evidence and `qualification/external` files; the optional Stage-B input stages only those paths before the trusted verifier rechecks them. No workflow change introduces a candidate execution step in `publish-release.yml`; static release-tooling tests continue to scan for that class of regression.
 
 ## Risks / Trade-offs
 
@@ -72,4 +81,3 @@ The build/qualification workflows retain the new deterministic bundle artifacts 
 3. Add bundle creation/verification and deterministic fixtures; then wire release tooling and workflows to retain/verify them.
 4. Add independent-machine export/import and topology laboratory reports.
 5. Update docs/specs and run all deterministic gates. Rollback is a branch-level revert of the campaign commits; no application state or release artifact is mutated by the verifier.
-
