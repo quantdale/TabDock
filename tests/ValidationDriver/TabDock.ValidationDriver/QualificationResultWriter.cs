@@ -148,6 +148,33 @@ internal static class QualificationResultWriter
         GuardedProc.Log($"RESULT_JSON scenario=virtual-topology-lab status={outcome.Code} syntheticTopology=true seed={report.Seed} artifact=<validation-artifact>/{stem}.json");
     }
 
+    internal static void WriteResourceStability(ResourceStabilityRunArtifact artifact)
+    {
+        string root = ResultRoot();
+        string jsonPath = ResourceStabilityArtifactWriter.Write(artifact, root);
+        string junitPath = ResourceStabilityArtifactWriter.WriteJUnit(artifact, root);
+        RegisterManifestEntry(new ScenarioManifestEntry(
+            "resource-stability",
+            1,
+            artifact.Outcome,
+            artifact.FailureReason,
+            new
+            {
+                resourceOnly = true,
+                syntheticMeasurements = artifact.SyntheticMeasurements,
+                measurementTarget = artifact.MeasurementTarget,
+            },
+            Path.GetFileName(jsonPath),
+            Path.GetFileName(junitPath),
+            string.Empty,
+            artifact.StartedUtc,
+            artifact.EndedUtc));
+        GuardedProc.Log(
+            $"RESULT_JSON scenario=resource-stability status={artifact.Outcome} " +
+            $"syntheticMeasurements={artifact.SyntheticMeasurements.ToString().ToLowerInvariant()} " +
+            "artifact=<validation-artifact>/resource-stability.json");
+    }
+
     public static void WriteScenario(Ctx ctx)
     {
         ctx.FinishedUtc ??= DateTimeOffset.UtcNow;

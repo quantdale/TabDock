@@ -23,6 +23,12 @@ internal sealed class Options
     public string? GuineaPigPath;
     public string? Shard;
     public int Reruns;
+    public bool ResourceSoak;
+    public bool ResourceHeadless;
+    public string ResourceProfile = "all";
+    public int ResourceSeed = 20260824;
+    public int ResourceDurationSeconds;
+    public string? ResourceArtifactOutput;
 }
 
 /// <summary>A window under test: a guinea pig or a real app (wt/chrome) for maximize-repro.</summary>

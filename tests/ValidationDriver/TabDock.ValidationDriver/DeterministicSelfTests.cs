@@ -43,9 +43,11 @@ internal static class DeterministicSelfTests
             tests.AddRange(TopologyTests());
         if (normalized is "all" or "stress" or "deterministic")
             tests.AddRange(StressTests());
+        if (normalized is "all" or "resource" or "deterministic")
+            tests.AddRange(ResourceTests());
         if (tests.Count == 0)
         {
-            Console.WriteLine($"Unknown self-test suite '{suite}'. Use split, identity, manifest, or all.");
+            Console.WriteLine($"Unknown self-test suite '{suite}'. Use split, identity, manifest, resource, or all.");
             return 2;
         }
 
@@ -1156,6 +1158,200 @@ internal static class DeterministicSelfTests
             }
             return true;
         });
+    }
+
+    private static IEnumerable<(string Id, Func<bool> Test)> ResourceTests()
+    {
+        yield return ("R01-flat-series-passes", () =>
+        {
+            ResourceSeriesAnalysis result = ResourceSeriesAnalyzer.Analyze(
+                "flat",
+                ResourceSnapshots(Enumerable.Repeat(100L, 10).ToArray()));
+            return result.Passed
+                && result.Metrics.All(metric => metric.Trend == ResourceTrend.Flat);
+        });
+
+        yield return ("R02-warmup-growth-reaches-settled-plateau", () =>
+        {
+            ResourceSeriesAnalysis result = ResourceSeriesAnalyzer.Analyze(
+                "warmup",
+                ResourceSnapshots(new long[] { 100, 140, 180, 180, 180, 180, 180, 180 }));
+            ResourceMetricAnalysis handles = result.Metrics.Single(metric => metric.Metric == ResourceMetric.HandleCount);
+            return result.Passed && handles.Baseline == 180 && handles.FinalDelta == 0;
+        });
+
+        yield return ("R03-bounded-native-noise-passes", () =>
+        {
+            ResourceSeriesAnalysis result = ResourceSeriesAnalyzer.Analyze(
+                "noise",
+                ResourceSnapshots(new long[] { 100, 101, 100, 102, 101, 100, 101, 100 }));
+            return result.Passed
+                && result.Metrics.Single(metric => metric.Metric == ResourceMetric.HandleCount).Trend
+                    == ResourceTrend.BoundedNoise;
+        });
+
+        foreach (ResourceMetric metric in new[]
+        {
+            ResourceMetric.HandleCount,
+            ResourceMetric.UserObjectCount,
+            ResourceMetric.GdiObjectCount,
+        })
+        {
+            ResourceMetric captured = metric;
+            yield return ($"R04-native-{metric}-leak-fails", () =>
+            {
+                ResourceSeriesAnalysis result = ResourceSeriesAnalyzer.Analyze(
+                    "native-leak",
+                    ResourceSnapshots(
+                        Enumerable.Range(0, 10).Select(index => 100L + index).ToArray(),
+                        captured));
+                ResourceMetricAnalysis analysis = result.Metrics.Single(item => item.Metric == captured);
+                return result.Outcome == ResourceStabilityOutcome.Fail
+                    && analysis.Trend == ResourceTrend.MonotonicGrowth;
+            });
+        }
+
+        yield return ("R05-private-memory-growth-fails", () =>
+        {
+            ResourceSeriesAnalysis result = ResourceSeriesAnalyzer.Analyze(
+                "private-memory-leak",
+                ResourceSnapshots(
+                    Enumerable.Range(0, 10)
+                        .Select(index => 100L * 1024 * 1024 + index * 2L * 1024 * 1024)
+                        .ToArray(),
+                    ResourceMetric.PrivateBytes));
+            return result.Outcome == ResourceStabilityOutcome.Fail
+                && result.Metrics.Single(item => item.Metric == ResourceMetric.PrivateBytes).Trend
+                    == ResourceTrend.MonotonicGrowth;
+        });
+
+        yield return ("R06-transient-spike-recovering-passes", () =>
+        {
+            ResourceSeriesAnalysis result = ResourceSeriesAnalyzer.Analyze(
+                "spike",
+                ResourceSnapshots(new long[] { 100, 100, 100, 100, 150, 100, 101, 100, 100, 100 }));
+            ResourceMetricAnalysis analysis = result.Metrics.Single(item => item.Metric == ResourceMetric.HandleCount);
+            return result.Passed
+                && analysis.Trend == ResourceTrend.TransientSpike
+                && analysis.PeakDelta == 50;
+        });
+
+        yield return ("R07-late-leak-is-not-hidden", () =>
+        {
+            ResourceSeriesAnalysis result = ResourceSeriesAnalyzer.Analyze(
+                "late-leak",
+                ResourceSnapshots(new long[] { 100, 100, 100, 100, 100, 101, 102, 103, 104, 105 }));
+            ResourceMetricAnalysis analysis = result.Metrics.Single(item => item.Metric == ResourceMetric.HandleCount);
+            return result.Outcome == ResourceStabilityOutcome.Fail
+                && analysis.Trend is ResourceTrend.LateGrowth or ResourceTrend.MonotonicGrowth;
+        });
+
+        yield return ("R08-process-generation-change-blocks", () =>
+        {
+            List<ResourceSnapshot> snapshots = ResourceSnapshots(Enumerable.Repeat(100L, 8).ToArray()).ToList();
+            snapshots[6] = snapshots[6] with
+            {
+                ProcessIdentity = new ResourceProcessIdentity(999, 2),
+            };
+            return ResourceSeriesAnalyzer.Analyze("generation", snapshots).Outcome
+                == ResourceStabilityOutcome.Blocked;
+        });
+
+        yield return ("R09-missing-metric-blocks", () =>
+        {
+            List<ResourceSnapshot> snapshots = ResourceSnapshots(Enumerable.Repeat(100L, 8).ToArray())
+                .Select(snapshot => snapshot with { GdiObjectCount = null })
+                .ToList();
+            ResourceSeriesAnalysis result = ResourceSeriesAnalyzer.Analyze("missing", snapshots);
+            return result.Outcome == ResourceStabilityOutcome.Blocked
+                && result.Metrics.Single(item => item.Metric == ResourceMetric.GdiObjectCount).Trend
+                    == ResourceTrend.Unavailable;
+        });
+
+        yield return ("R10-counter-reset-blocks", () =>
+        {
+            ResourceSeriesAnalysis result = ResourceSeriesAnalyzer.Analyze(
+                "reset",
+                ResourceSnapshots(new long[] { 100, 100, 100, 100, 0, 1, 1, 1 }));
+            ResourceMetricAnalysis analysis = result.Metrics.Single(item => item.Metric == ResourceMetric.HandleCount);
+            return result.Outcome == ResourceStabilityOutcome.Blocked
+                && analysis.Trend == ResourceTrend.CounterReset;
+        });
+
+        yield return ("R11-invalid-order-blocks", () =>
+        {
+            List<ResourceSnapshot> snapshots = ResourceSnapshots(Enumerable.Repeat(100L, 8).ToArray()).ToList();
+            snapshots[4] = snapshots[4] with { Sequence = snapshots[3].Sequence };
+            return ResourceSeriesAnalyzer.Analyze("invalid-order", snapshots).Outcome
+                == ResourceStabilityOutcome.Blocked;
+        });
+
+        yield return ("R12-insufficient-settled-samples-blocks", () =>
+        {
+            ResourceSeriesAnalysis result = ResourceSeriesAnalyzer.Analyze(
+                "short",
+                ResourceSnapshots(new long[] { 100, 100, 100, 100 }),
+                new ResourceStabilityOptions { WarmupSamples = 3, MinimumSettledSamples = 2 });
+            return result.Outcome == ResourceStabilityOutcome.Blocked;
+        });
+
+        yield return ("R13-unavailable-process-identity-blocks", () =>
+        {
+            List<ResourceSnapshot> snapshots = ResourceSnapshots(Enumerable.Repeat(100L, 8).ToArray()).ToList();
+            snapshots[5] = snapshots[5] with
+            {
+                ProcessIdentity = new ResourceProcessIdentity(42, 0),
+                MeasurementError = "process-exited",
+            };
+            return ResourceSeriesAnalyzer.Analyze("process-exit", snapshots).Outcome
+                == ResourceStabilityOutcome.Blocked;
+        });
+
+        yield return ("R14-all-snapshot-metrics-are-explicit", () =>
+        {
+            ResourceSnapshot snapshot = ResourceSnapshots(new long[] { 1, 1, 1, 1, 1, 1, 1, 1 })[0];
+            return Enum.GetValues<ResourceMetric>().All(metric => snapshot.Value(metric) is not null);
+        });
+    }
+
+    private static IReadOnlyList<ResourceSnapshot> ResourceSnapshots(
+        long[] values,
+        ResourceMetric focus = ResourceMetric.HandleCount)
+    {
+        var snapshots = new List<ResourceSnapshot>(values.Length);
+        DateTimeOffset start = DateTimeOffset.UnixEpoch;
+        for (int i = 0; i < values.Length; i++)
+        {
+            long? handles = values[i];
+            long? user = 100;
+            long? gdi = 100;
+            long? privateBytes = 100L * 1024 * 1024;
+            long? workingSet = 50L * 1024 * 1024;
+            long? threads = 10;
+            long? windows = 1;
+            switch (focus)
+            {
+                case ResourceMetric.UserObjectCount: user = values[i]; break;
+                case ResourceMetric.GdiObjectCount: gdi = values[i]; break;
+                case ResourceMetric.PrivateBytes: privateBytes = values[i]; break;
+                case ResourceMetric.WorkingSet: workingSet = values[i]; break;
+                case ResourceMetric.ThreadCount: threads = values[i]; break;
+                case ResourceMetric.TopLevelWindowCount: windows = values[i]; break;
+            }
+            snapshots.Add(new ResourceSnapshot(
+                i + 1,
+                i < 3 ? "warmup" : "settled",
+                start.AddSeconds(i),
+                new ResourceProcessIdentity(42, 1),
+                handles,
+                user,
+                gdi,
+                privateBytes,
+                workingSet,
+                threads,
+                windows));
+        }
+        return snapshots;
     }
 
     private sealed class FakeDesktopProbe : IDesktopQualificationProbe

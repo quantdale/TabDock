@@ -62,6 +62,40 @@ internal static class Program
                     opt.Cycles = n;
                     i++;
                     break;
+                case "--resource-soak":
+                    opt.ResourceSoak = true;
+                    break;
+                case "--resource-headless":
+                    opt.ResourceSoak = true;
+                    opt.ResourceHeadless = true;
+                    break;
+                case "--profile":
+                    if (i + 1 >= args.Length)
+                        return Usage("--profile requires a resource profile name.");
+                    opt.ResourceProfile = args[++i];
+                    break;
+                case "--duration-seconds":
+                    if (i + 1 >= args.Length
+                        || !int.TryParse(args[i + 1], out int duration)
+                        || duration < 1
+                        || duration > 600)
+                    {
+                        return Usage("--duration-seconds requires an integer from 1 through 600.");
+                    }
+                    opt.ResourceDurationSeconds = duration;
+                    i++;
+                    break;
+                case "--artifact-output":
+                    if (i + 1 >= args.Length)
+                        return Usage("--artifact-output requires a directory path.");
+                    opt.ResourceArtifactOutput = args[++i];
+                    break;
+                case "--seed":
+                    if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out int seed))
+                        return Usage("--seed requires a 32-bit integer.");
+                    opt.ResourceSeed = seed;
+                    i++;
+                    break;
                 case "--reruns":
                 case "--rerun":
                     if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out int reruns) || reruns < 0 || reruns > 5)
@@ -123,6 +157,8 @@ internal static class Program
             && !string.Equals(opt.Rid, "win-x64", StringComparison.OrdinalIgnoreCase))
             return Usage("--rid must be auto, none, or win-x64.");
         opt.Rid = opt.Rid.ToLowerInvariant();
+        if (opt.ResourceSoak && opt.Cycles.GetValueOrDefault(100) > 10_000)
+            return Usage("resource --cycles is capped at 10000 to keep evidence and process lifetime bounded.");
 
         try
         {
@@ -154,6 +190,8 @@ internal static class Program
             GuardedProc.Log($"Deterministic qualification runId={TestRunProvenance.RunId}.");
             return DeterministicSelfTests.Run(selfTestSuite);
         }
+        if (opt.ResourceSoak)
+            return ResourceSoakRunner.Run(opt);
         if (listRequested)
             return ListScenarios();
         if (scenarios.Count == 0 && opt.Shard == null)
@@ -474,6 +512,12 @@ internal static class Program
         Console.WriteLine("Options:");
         Console.WriteLine("  --yes          skip the interactive confirmation (supervised runs)");
         Console.WriteLine("  --selftest NAME run native-free split/identity contracts (split|identity|all)");
+        Console.WriteLine("  --resource-headless run bounded CI-safe resource lifecycle profiles with synthetic snapshots");
+        Console.WriteLine("  --resource-soak run the same profiles plus read-only counters for a run-owned TabDock process");
+        Console.WriteLine("  --profile NAME    resource profile: all, group-capture, split, layout, picker-icon, winevent, diagnostics, persistence, restart");
+        Console.WriteLine("  --duration-seconds N  resource sample duration (1-600; opt-in local soak)");
+        Console.WriteLine("  --artifact-output PATH  resource evidence root (default: temp TabDock-ResourceStability)");
+        Console.WriteLine("  --seed N        deterministic resource-profile seed (default 20260824)");
         Console.WriteLine("  --plan GATE    print a JSON qualification plan without sending input (physicalMixedDpi|automated|release|all)");
         Console.WriteLine("  --cycles N     cycle count for maximize-repro (default 3) and repeat-cycles (default 5)");
         Console.WriteLine("  --reruns N     run N additional bounded investigation attempts; never best-of-N (default 0)");

@@ -19,6 +19,12 @@
     <None Include="..\ValidationDriver\fixtures\native-replay\*.json"
           Link="fixtures\native-replay\%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\ResourceStability.cs"
+             Link="ValidationDriver\ResourceStability.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\ResourceLifecycleProfiles.cs"
+             Link="ValidationDriver\ResourceLifecycleProfiles.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\ResourceStabilityArtifact.cs"
+             Link="ValidationDriver\ResourceStabilityArtifact.cs" />
   </ItemGroup>
 
 </Project>
