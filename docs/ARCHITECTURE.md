@@ -624,6 +624,39 @@ revalidates that snapshot before pairing a captured guest.
   remains capture-disabled until restart. It never silently leaves guests in a
   degraded lifecycle mode.
 
+### Native-event replay and measurement boundary
+
+`Services/WinEventRoutingPolicy.cs` is the native-free admission seam for the
+hook callback. The callback still performs the live captured-member lookup,
+passes the resolved object through the policy, and posts only relevant events.
+The posted handler performs a second reference-identity lookup before invoking
+guest lifecycle callbacks. That second lookup is intentional HWND-generation
+protection: an event queued for a released or recycled handle must not act on a
+new member. `Services/NativeInteractionReplay.cs` models this policy boundary
+with explicit identities, identity probe results, visibility, foreground, and
+native intents/refusals; it does not emulate USER32 or create windows.
+
+The bounded WinEvent measurement suite exercises captured and irrelevant event
+storms, child/object filtering, desktop reorder, queued stale dispatch, and
+lifecycle callback counts. Its representative result is one callback membership
+probe and one dispatch revalidation per relevant captured event; child/irrelevant
+events perform zero membership probes. No cross-event HWND cache was accepted:
+the dispatch probe is the safety proof against handle reuse, so removing it
+would change observable fail-closed behavior rather than merely reduce work.
+
+The physical ValidationDriver has a separate evidence boundary. A
+`DesktopQualificationLease` records privacy-safe session/monitor/foreground
+state and invalidates permanently on foreign coverage, foreign foreground,
+identity change, or unverifiable observations. `TestRunProvenance` supplies the
+ownership categories `OWNED_PROCESS`, `OWNED_WINDOW`,
+`ADOPTED_EXTERNAL_WINDOW`, `FOREIGN`, and `STALE_RECYCLED`; `OWNED_WINDOW` and
+`ADOPTED_EXTERNAL_WINDOW` are the only input-target categories, while only
+`OWNED_PROCESS` is eligible for the process kill list. An adopted external
+window may be an input target only while its complete stable identity still
+matches. `NativeInteractionTimeline`
+and the root run manifest link bounded role-based evidence without persisting
+titles, URLs, document contents, or arbitrary user paths.
+
 ---
 
 ## 4. Persistence & journal

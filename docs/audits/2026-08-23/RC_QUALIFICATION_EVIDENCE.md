@@ -128,3 +128,35 @@ executed with two reproduced-and-fixed product defects and one critical
 cold-start crash fixed; completion requires an exclusively available desktop.
 Signing, Stage-B, and mixed-DPI topology unavailable. PR #12 therefore REMAINS
 DRAFT; classification recorded in the final handoff.
+
+## Native interaction determinism campaign delta — 2026-08-24
+
+The prior entries above are historical PR #12 evidence and retain their
+original vocabulary (`FLAKE`, `SKIP_BROWSER_NOT_INSTALLED`, signing/Stage-B
+labels). New campaign artifacts use the canonical eight-way contract:
+`PASS`, `FAIL_PRODUCT`, `FAIL_HARNESS`, `BLOCKED_ENVIRONMENT`,
+`BLOCKED_SUPERVISED`, `BLOCKED_CAPABILITY`, `SKIP_CAPABILITY`, and
+`FLAKE_UNCLASSIFIED`.
+
+The campaign branch is stacked from the exact PR #12 head and does not alter
+PR #12. It adds a pre-launch capability matrix, a fail-closed
+`DesktopQualificationLease`, explicit run ownership categories, bounded
+privacy-safe timelines, a root `run-manifest.json`, replay seams/fixtures, and
+deterministic rerun aggregation. A valid first-attempt failure followed by a
+pass remains `FLAKE_UNCLASSIFIED`; a blocked first attempt followed by a pass
+remains blocked.
+
+Deterministic campaign result before final full-gate repetition:
+
+| Gate | Result |
+| --- | --- |
+| ValidationDriver native-free self-tests | PASS — 96/96 |
+| WinEvent routing/replay focused unit tests | PASS — 13/13 |
+| ValidationDriver Release build | PASS — 0 warnings / 0 errors |
+| Physical H2 drag, split zero-delta, inline second-tab repeats | BLOCKED_SUPERVISED / BLOCKED_ENVIRONMENT — no exclusive safe desktop |
+
+The WinEvent measurement storm recorded 30 callbacks, 20 callback membership
+probes, 20 dispatch revalidations, 20 posts/lifecycle callbacks, at least 10
+irrelevant rejections, and zero stale dispatches. The dispatch revalidation was
+retained because it is the HWND-generation safety proof; no speculative cache
+optimization was accepted.

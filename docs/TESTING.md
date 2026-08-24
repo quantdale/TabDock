@@ -81,7 +81,10 @@ self-contained publish smoke. It never sends desktop input.
 2. Spawns a fresh TabDock instance plus guinea-pig windows.
 3. Drives them exclusively with real `SendInput` mouse/keyboard events at UIA-read coordinates. Current UIA contracts use stable IDs such as `GroupSelector`, `WorkspaceTabs`, `CaptureGroupThese`, `SplitHalfLeft`, and `SplitHalfRight`; scenario lookup should prefer those IDs over visible copy.
 4. Asserts on window state, screen pixels, the TabDock log, and the pigs' window-message logs.
-5. Kills every process it spawned when the scenario finishes (or fails).
+5. Cleans up only processes whose run provenance proves that this invocation
+   spawned them. Adopted external windows (for example a Windows 11 Notepad
+   broker surface) may be bounded input targets while their identity matches,
+   but their owning processes are never cleanup-owned.
 
 Because it sends real input, the run must be supervised: do not touch the mouse or keyboard during a scenario.
 
@@ -102,8 +105,73 @@ Options:
 - `--rid auto|none|win-x64` — select RID-aware discovery (default `auto`).
 - `--tabdock PATH` / `--guineapig PATH` — override artifact discovery.
 - `--shard NAME` — run one named bounded shard.
+- `--reruns N` — run up to five additional investigation attempts. The first
+  attempt remains authoritative; a valid first-attempt failure followed by a
+  pass is reported as `FLAKE_UNCLASSIFIED`, never as best-of-N PASS.
 - `--list` — print every dispatchable scenario and shard assignment, then exit
   without starting TabDock or sending input.
+
+### Qualification outcome contract
+
+Every scenario uses one canonical outcome value, serialized identically in the
+console result, JSON, JUnit, run manifest, and process exit mapping:
+
+| Outcome | Meaning | Release PASS? |
+| --- | --- | --- |
+| `PASS` | Assertions passed with valid prerequisites and lease continuity. | Yes |
+| `FAIL_PRODUCT` | A product assertion failed after the environment proof was valid. | No |
+| `FAIL_HARNESS` | Driver/setup/evidence infrastructure failed. | No |
+| `BLOCKED_ENVIRONMENT` | The desktop/session/topology was not safe or provable. | No |
+| `BLOCKED_SUPERVISED` | A required supervised operator/hardware condition was absent. | No |
+| `BLOCKED_CAPABILITY` | A required capability such as signing or Stage-B was absent. | No |
+| `SKIP_CAPABILITY` | An optional application/topology capability was unavailable. | No |
+| `FLAKE_UNCLASSIFIED` | A valid first attempt failed but a later investigation rerun passed. | No |
+
+Capability discovery runs before state isolation, process launch, or input. The
+scenario descriptor receives a privacy-safe application/topology/session/input
+snapshot and can return runnable, capability-skip, or environment-blocked.
+During a physical scenario, `DesktopQualificationLease` snapshots the
+foreground identity, test-owned visible windows, monitor/DPI topology,
+virtual-screen geometry, session lock state, and test-runner identity. It
+checkpoints the point and foreground immediately before guarded input and
+authoritative physical assertions. A foreign covering/foreground window,
+identity change, or unverifiable observation invalidates the lease permanently;
+the driver refuses input and records `BLOCKED_ENVIRONMENT` evidence.
+
+Each scenario writes a bounded privacy-safe timeline and the run writes one
+`run-manifest.json` linking candidate SHA, executable hashes, capability matrix,
+attempt outcomes, aggregate counts, JSON/JUnit files, timeline files, and
+ownership evidence. The manifest is release evidence, not a best-of-N summary:
+blocked, skipped, and rerun-flake categories remain non-pass.
+
+Native-free replay fixtures live under
+`tests/ValidationDriver/fixtures/native-replay/`. They exercise the smallest
+policy/state seams for WinEvent routing, stale identity refusal, hide/show/
+destroy ordering, drag cause classification, split drag phases, and inline
+capture handoff. Run them with the unit suite and the driver self-tests; no
+fixture creates an HWND or claims a physical input result.
+
+### Physical qualification workflow
+
+Only run the Release driver from a demonstrably exclusive, supervised Windows
+session. Build the final committed SHA first, confirm no unrelated top-level
+window covers the target desktop, and keep the operator away from mouse and
+keyboard input for the duration:
+
+```powershell
+dotnet build TabDock.sln -c Release
+dotnet build tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -c Release
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes dragreorder
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes split-drag-release
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --yes capture-inline-ui
+```
+
+The three repeat cases above remain real-input cases even though their policy
+portions have replay fixtures. Without an exclusive desktop, do not retry
+through a foreign foreground window: record `BLOCKED_ENVIRONMENT` or
+`BLOCKED_SUPERVISED`, preserve the manifest/timeline, and run the headless
+replay/model coverage instead. A successful rerun after a valid-environment
+failure is `FLAKE_UNCLASSIFIED` until the cause is understood.
 
 Core scenarios (from `Program.cs` / `Scenarios.cs`):
 
@@ -348,10 +416,12 @@ browser executable name or title is never sufficient; browser tests use a
 unique temporary profile and validate the isolated process ancestry. Cleanup
 only touches identities launched and still provable for the current run.
 
-The browser tier reports `SKIP_BROWSER_NOT_INSTALLED` for an absent browser and
-`BLOCKED_BROWSER_HARNESS` when an installed browser cannot be safely launched
-or proven. It records the local page's viewport and resize sequence before any
-guest corrective click; a pass never depends on clicking the browser pane.
+The browser tier reports `SKIP_CAPABILITY` for an absent browser and
+`FAIL_HARNESS` when an installed browser cannot be safely launched or proven.
+An unsafe desktop or foreign covering window is `BLOCKED_ENVIRONMENT`, not a
+browser/product failure. It records the local page's viewport and resize
+sequence before any guest corrective click; a pass never depends on clicking
+the browser pane.
 
 **Run-budget note:** each driver process has a bounded 12-spawn scenario cap
 and 10-minute safety budget. `all` is now a guarded parent orchestrator: it
@@ -415,6 +485,7 @@ Options:
   --rid auto|none|win-x64
   --tabdock PATH --guineapig PATH
   --shard NAME    run one bounded shard
+  --reruns N      bounded investigation reruns; never best-of-N
   --list          list scenarios and shard assignments
 ```
 
@@ -429,17 +500,6 @@ Options:
 > verified against committed application source. No scenario may assert on
 > instrumentation absent from committed source — see §D.
 
-### Scenario status vocabulary
-
-Scenario results use four statuses: `PASS`, `FAIL`, `SKIP`, and `BLOCKED`
-(`QualificationStatus` in `Scenarios.cs`). A scenario starts `PASS`; a failed
-`Check` marks it `FAIL`, `Skip(reason)` marks it `SKIP`, and
-`Blocked(reason)` marks it `BLOCKED`. SKIP does not latch upward: a later
-failed `Check` demotes an already-skipped scenario to `FAIL` (a skip must
-never remain green when a real assertion fails). The runner treats only
-`PASS` and `SKIP` as success for exit-code purposes; `FAIL` and `BLOCKED`
-fail the run.
-
 ### Run constraints
 
 Verified facts about the harness's own limits — several are easy to mistake for
@@ -448,20 +508,20 @@ scenario failures:
 - **Bounded budgets.** Each driver process has a 10-minute cancellation token
   and each scenario has a 12-spawn cap. The `all` parent starts each hermetic
   shard in a separate guarded child process, so a growing scenario catalog does
-  not consume one impossible global budget. A budget abort still returns code
-  `5` and is not a pass.
+  not consume one impossible global budget. A budget abort is
+  `FAIL_HARNESS` and is not a pass.
 - **No TabDock may already be running.** The run banner advertises that the
   driver spawns a fresh TabDock and aborts if one is already running
   (`Program.cs:108`); the enforcement is a per-scenario preflight in
   `StartScenario` that refuses to proceed while a TabDock process it did not
   spawn is alive (`Scenarios.cs:356-362`). A second *driver* instance is
   refused separately by a named mutex (`Program.cs:84-89`, exit code 2).
-- **Exit codes.** `0` — all scenarios passed; `1` — usage error (unknown
-  option/scenario, or a scenario family missing its required `--guest`);
-  `2` — another driver instance holds the mutex; `3` — user declined the
-  interactive confirmation; `4` — `TabDock.exe` or `TabDock.GuineaPig.exe`
-  build not found (`Program.cs:91-102`); `5` — any scenario failure **or** the
-  10-minute budget abort.
+- **Exit codes.** `0` — `PASS`; `10` — `SKIP_CAPABILITY`; `11` —
+  `BLOCKED_CAPABILITY`; `12` — `BLOCKED_ENVIRONMENT`; `13` —
+  `BLOCKED_SUPERVISED`; `20` — `FAIL_PRODUCT`; `21` — `FAIL_HARNESS`; `22` —
+  `FLAKE_UNCLASSIFIED`. Usage/coordination/artifact failures retain process
+  codes `1`–`4` because they happen before a scenario result exists. The
+  `all` shard parent rehydrates child result codes through the same mapping.
 - **Artifact and guest selection.** `--configuration`, `--rid`, explicit
   executable paths, and `--guest` are validated before input begins. `--help`
   and `--list` are authoritative and do not start TabDock. Supported guest
@@ -474,13 +534,16 @@ A scenario is a `static void (Ctx ctx, Options opt)` method plus CLI
 registration. To add one:
 
 1. **Write the body** in `Scenarios.cs` as a method of that shape. Use
-   `ctx.Check(bool, "description")` for every assertion — it logs `PASS`/`FAIL`
-   and accumulates into `ctx.Pass` (`Scenarios.cs:70-74`); a false check or any
-   thrown exception marks the scenario FAIL (runner at `Scenarios.cs:304-323`).
+   `ctx.Check(bool, "description")` for every assertion — it logs `PASS` or
+   records a canonical failure (`Scenarios.cs`); an assertion becomes
+   `FAIL_PRODUCT` only when the desktop lease was valid at the boundary.
+   Lease invalidation produces `BLOCKED_ENVIRONMENT`; setup/evidence
+   exceptions produce `FAIL_HARNESS`.
    For guests use `SpawnPig`/`SpawnGuest` (`Scenarios.cs:559-636`), and read
    `opt.Cycles`/`opt.Guest` from the `Options` struct (`Scenarios.cs:15-20`)
-   when the scenario is parameterized. Waits should go through `Util.WaitUntil`,
-   which honors the run budget (`GuardedProc.cs:211-227`). `Ctx` also carries
+   when the scenario is parameterized. Waits should go through `Util.WaitUntil`
+   or `ScenarioWait.Until`, which use monotonic deadlines, expose the last
+   observed state, and honor the run budget (`GuardedProc.cs`). `Ctx` also carries
    `TabDock`/`TabDockPid`/`MainHwnd`, `Guests`, `Containers`, and `LogOffset`
    (`Scenarios.cs:59-75`).
 2. **Register the name** in the runner switch (`Scenarios.cs:226-290`) so

@@ -10,6 +10,50 @@ this text.
 
 ## CURRENT STATUS
 
+## NATIVE INTERACTION DETERMINISM CAMPAIGN (2026-08-24, ACTIVE)
+
+Objective: classify physical ValidationDriver outcomes without mislabeling
+foreign-desktop interference, preserve bounded privacy-safe evidence, turn
+native-event policy into deterministic replay, and measure WinEvent work while
+preserving the Shepherd/no-reparent architecture.
+
+Git authority for this campaign: branch
+`codex/native-interaction-determinism-20260824`, based directly on PR #12 head
+`eca8670759f9bc42aee58ec5f59b33fd0adab3f0`; PR #12 remains draft and unchanged.
+The campaign branch currently has uncommitted implementation/documentation
+changes; resolve final HEAD dynamically before handoff.
+
+Baseline before edits: Debug/Release builds 0 warnings/0 errors; Debug and
+Release unit suites 675/675; ValidationDriver self-tests 38/38;
+release-tooling 150/150; strict OpenSpec 30/30; canonical Release CI/publish
+validation green; diff check clean. No physical run was authorized because the
+desktop was not demonstrably exclusive and safe for SendInput.
+
+Completed in the current campaign: canonical eight-way `ScenarioOutcome`
+contract with exit/JUnit/JSON/manifest mappings and rerun aggregation;
+central capability preflight; fail-closed `DesktopQualificationLease`;
+explicit provenance ownership categories and adopted-external cleanup
+exclusion; bounded `NativeInteractionTimeline`; root run manifest with
+capability matrix and executable hashes; condition-wait seam; pure WinEvent
+routing and native interaction replay seams with fixtures; deterministic lease,
+outcome, replay, lifecycle, split, identity, and fixed-seed stress tests;
+canonical shard exit aggregation; and documentation/OpenSpec artifacts.
+
+Current validation: driver self-tests 96/96; focused WinEvent/replay tests
+13/13; Release driver build 0 warnings/0 errors. Physical repeat cases
+`dragreorder` H2, split drag/release zero-delta, and inline-capture second-tab
+remain unrun on an exclusive desktop and must not be called product failures.
+
+Historical disposition verified before edits: staged/atomic `state.json.bak`,
+pending-recovery compaction, orphan `.recovered` cleanup, intentional-hide
+finalization, diagnostic-suppression cleanup, split member liveness, dormant
+split drag projection, direct `GroupViewModel` mutation coverage, and layout
+dirty-check behavior are ALREADY FIXED. Existing physical repeat findings are
+NEEDS REPRODUCTION under the new lease; no speculative Shepherd change was
+made. Next action: finish campaign audit/ledger, run full deterministic gates,
+commit coherent waves, push this stacked draft branch if remote authority is
+available, and leave PR #12 draft/unmerged.
+
 ## RELEASE QUALIFICATION CAMPAIGN (2026-08-23/24, COMPLETE FOR THIS ENVIRONMENT)
 
 Objective: take PR #12 from CI-qualified RC to highest achievable release
