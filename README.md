@@ -78,6 +78,21 @@ single-file publish smoke test.
 .\scripts\validate.ps1 -Configuration Release -Ci -Publish
 ```
 
+The CI path also runs a bounded, headless resource-lifecycle gate. For a
+longer safe local investigation, use the ValidationDriver resource command;
+it uses synthetic/policy fixtures by default and never sends physical input:
+
+```powershell
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- `
+  --resource-headless --configuration Release --rid none --cycles 500 `
+  --profile all --seed 20260824 --artifact-output .\artifacts\resource-stability
+```
+
+`--resource-soak` is an opt-in read-only process counter mode for a freshly
+started, run-owned TabDock with isolated application data. Resource evidence
+is resource-only qualification; it does not satisfy supervised physical
+input, mixed-DPI, Windows-version, signing, or final human-smoke gates.
+
 ### Support diagnostics
 
 Every build carries its semantic version, source commit, build configuration,

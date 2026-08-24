@@ -43,6 +43,13 @@ The policy checkout is the trusted authority for the publication decision.
 | Independent-machine report | `1` | Exact current schema; source, candidate, package, bundle, and run hashes are checked |
 | External release evidence | `3` | Publication requires v3 and a qualification-bundle binding; v2 remains readable for non-publication compatibility tests |
 
+Resource stability is an additional resource-only result inside the existing
+ValidationDriver manifest hierarchy. Its `resource-stability.json` and
+`resource-stability.junit.xml` files bind to the same source/run/driver
+identity and declare whether measurements are synthetic. The result can gate
+resource regressions, but it cannot satisfy physical-input, mixed-DPI,
+Windows-version, signing, or final human-smoke requirements.
+
 Paths inside records use portable forward-slash relative paths. Absolute paths,
 empty segments, `.`/`..`, duplicate artifact entries, duplicate JSON
 properties, missing files, modified bytes, malformed timestamps, future

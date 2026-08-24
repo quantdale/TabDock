@@ -20,6 +20,11 @@
     After building, run the ValidationDriver with --yes and the named scenario
     or shard. The harness drives the desktop with real SendInput input; do not
     touch the mouse or keyboard during a run.
+
+    -Ci also runs the bounded, headless resource-lifecycle gate. It uses only
+    deterministic policy seams and synthetic measurements; it never sends
+    desktop input. Set TABDOCK_RESOURCE_ARTIFACT_OUTPUT to retain its
+    machine-readable evidence outside the script's temporary root.
 #>
 [CmdletBinding()]
 param(
@@ -234,6 +239,25 @@ try {
     }
     Invoke-Step "Build + run headless unit tests ($Configuration)" {
         dotnet test $UnitTestProject -c $Configuration --nologo @noRestore
+    }
+
+    if ($Ci) {
+        $resourceArtifactRoot = $env:TABDOCK_RESOURCE_ARTIFACT_OUTPUT
+        if ([string]::IsNullOrWhiteSpace($resourceArtifactRoot)) {
+            $resourceArtifactRoot = Join-Path $TempRoot 'resource-stability'
+        }
+        Invoke-Step "Headless resource lifecycle gate ($Configuration)" {
+            # This branch is deliberately synthetic/headless. It does not use
+            # --yes, SendInput, a desktop lease, or arbitrary user windows.
+            dotnet run --project $DriverProject -c $Configuration @noRestore --no-build -- `
+                --resource-headless `
+                --configuration $Configuration `
+                --rid none `
+                --cycles 32 `
+                --profile all `
+                --seed 20260824 `
+                --artifact-output $resourceArtifactRoot
+        }
     }
 
     # Hermetic behavior is qualified by the xUnit suite above. The remaining

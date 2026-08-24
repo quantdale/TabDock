@@ -58,6 +58,32 @@ uploaded automatically. The command-line report can observe the machine and
 native TabDock surfaces without an instance; the `Ctrl+Alt+Shift+D` hotkey adds
 the richer live logical snapshot when a session is running.
 
+## Resource lifecycle qualification boundary
+
+Resource stability is measured in the validation boundary, not on normal
+production startup. `tests/ValidationDriver/TabDock.ValidationDriver` owns the
+read-only Windows probe for process identity, process handles, USER/GDI
+objects, private bytes, working set, threads, and TabDock-owned top-level
+window count. Each sample is immutable and privacy-safe; a missing field,
+probe error, process-generation change, counter reset, or invalid ordering is
+blocked rather than converted to zero.
+
+The analyzer excludes only an explicit warm-up prefix and then evaluates
+settled baseline/final/peak/tail deltas and trend/slope. Native object counts
+use strict small budgets; byte counters allow documented WPF/CLR noise. The
+headless profiles layer on existing split/geometry/WinEvent policy seams and
+isolated persistence/diagnostic/picker fixtures for group-capture, split,
+layout, picker/icon, WinEvent, diagnostics, persistence, and restart churn.
+The optional process mode observes a run-owned TabDock only; it never moves,
+reparents, hides, or otherwise mutates guest HWNDs, so Shepherd remains the
+only native presentation authority.
+
+The retained `resource-stability.json`/JUnit evidence is registered in the
+existing run manifest with `resourceOnly` and `syntheticMeasurements` flags,
+source/run/driver identity, metric budgets, profiles, snapshots, and outcome.
+Synthetic resource PASS is deliberately not an OS-version, mixed-DPI,
+physical-input, signing, or human-smoke PASS.
+
 ---
 
 ## 1. Startup sequence

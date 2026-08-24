@@ -110,6 +110,67 @@ Options:
   pass is reported as `FLAKE_UNCLASSIFIED`, never as best-of-N PASS.
 - `--list` — print every dispatchable scenario and shard assignment, then exit
   without starting TabDock or sending input.
+- `--resource-headless` — run the bounded CI-safe resource lifecycle profiles
+  with deterministic synthetic counters; this mode never sends input.
+- `--resource-soak` — run the same profiles and, by default, sample a freshly
+  started run-owned TabDock process without sending input. Use only for an
+  opt-in local investigation.
+- `--profile NAME` — select `all`, `group-capture`, `split`, `layout`,
+  `picker-icon`, `winevent`, `diagnostics`, `persistence`, or `restart`.
+- `--duration-seconds N` — choose a 1–600 second process sampling duration for
+  an opt-in soak; `--cycles N` controls profile cycles (default 100).
+- `--seed N` — select the deterministic lifecycle seed (default `20260824`).
+- `--artifact-output PATH` — retain JSON/JUnit/run-manifest evidence at an
+  explicit directory; otherwise a temporary directory is used.
+
+### Resource-lifecycle qualification
+
+Resource qualification answers a different question from functional
+correctness: whether repeated lifecycle ownership returns native/UI/process
+resources to a bounded plateau. The validation-side snapshot records process
+start identity, handles, USER objects, GDI objects, private bytes, working
+set, threads, and TabDock-owned top-level window count. It does not record
+titles, URLs, command lines, document names, credentials, or user paths.
+
+The analyzer ignores only a configured warm-up prefix, requires settled
+samples, and reports baseline/final/peak/tail deltas and trend. Native object
+counts use strict small budgets; byte counters have documented WPF/CLR
+headroom. Missing/error evidence, invalid sequence or timestamp, a process
+generation change, and a counter reset are `BLOCKED`, never `PASS`.
+
+The reusable headless profiles cover:
+
+- group/capture membership churn;
+- split focus/suspend/resume/exit and layout partition churn;
+- picker refresh, stale icon-generation rejection, and close/reopen state;
+- WinEvent routing admission and stop/restart lifecycle;
+- bounded diagnostic trace fill/clear;
+- isolated persistence temp/primary/backup cleanup; and
+- process-generation/restart residue.
+
+Run the CI-safe gate directly:
+
+```powershell
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- `
+  --resource-headless --configuration Release --rid none --cycles 32 `
+  --profile all --seed 20260824 --artifact-output .\artifacts\resource-stability
+```
+
+The opt-in process mode is read-only, uses only a freshly started TabDock with
+isolated application data, and cleans run-owned processes in `finally`. It is
+not an hour-long hosted CI job; increase cycles or use `--duration-seconds`
+for a local extended soak. Real-input extensions remain subject to the
+existing `DesktopQualificationLease` and supervised policy. A synthetic
+resource PASS is resource-only evidence and cannot satisfy physical-input,
+mixed-DPI, Windows 10/11, signing, or human-smoke gates.
+
+Each resource run writes `resource-stability.json` and
+`resource-stability.junit.xml` and registers them in the normal
+`run-manifest.json`. The JSON contains schema/source/driver/run identity,
+metric definitions, profiles, snapshots or summaries, thresholds, trends, and
+PASS/FAIL/BLOCKED classification. Set
+`TABDOCK_RESOURCE_ARTIFACT_OUTPUT` when invoking `scripts\validate.ps1 -Ci` to
+retain the short CI gate's evidence outside its temporary validation root.
 
 ### Qualification outcome contract
 

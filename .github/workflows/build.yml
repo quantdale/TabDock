@@ -61,7 +61,21 @@ jobs:
         env:
           OPENSPEC_NO_UPDATE_CHECK: "1"
           OPENSPEC_TELEMETRY: "0"
+          TABDOCK_RESOURCE_ARTIFACT_OUTPUT: ${{ runner.temp }}/tabdock-qualification-${{ github.sha }}/resource-stability
         run: .\scripts\validate.ps1 -Configuration Release -Ci -Publish
+
+      # The bounded resource gate is part of validate.ps1 above. Retain its
+      # data-only evidence even when a later qualification step fails; it is
+      # resource-only synthetic evidence and cannot satisfy physical/manual
+      # release gates.
+      - name: Upload resource-stability evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: tabdock-resource-stability-${{ github.sha }}
+          path: ${{ runner.temp }}/tabdock-qualification-${{ github.sha }}/resource-stability
+          if-no-files-found: warn
+          retention-days: 30
 
       # The release-control regression suite (P1): deterministic adversarial
       # tests of the two-stage release chain, the signing-provider policy,

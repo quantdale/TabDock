@@ -7,26 +7,41 @@ Resolve them dynamically at every fresh session. This file never records a
 self-referential SHA or treats an old CI run as evidence for the commit that
 contains this text.
 
-## CURRENT CAMPAIGN — MAINLINE RELEASE-CANDIDATE CLOSURE
+## CURRENT CAMPAIGN — MAINLINE LONG-RUN RESOURCE LIFECYCLE HARDENING
 
-**Objective:** consolidate current mainline with the completed ship-readiness,
-native-interaction-determinism, and qualification-control-plane campaigns;
-remove branch/specification/release-state drift; and leave one exact,
-deterministically qualified integration lineage ready for remaining external
-gates.
+**Objective:** instrument and qualify sustained TabDock lifecycle churn for
+native/UI/process resource stability, fix concrete ownership defects found by
+measurement, and deliver the complete result on `main` with a bounded
+headless gate and opt-in safe extended soak.
 
-**Plan:** `.agent/plans/mainline-release-closure-2026-08-24.md`
+**Plan:** `.agent/plans/resource-lifecycle-hardening-2026-08-24.md`
 
-**Status:** internally qualified and delivered as an exact-SHA RC checkpoint.
-Independent convergence found one ValidationDriver harness defect: foreground
-arrangement required the new target to be foreground before attempting the
-switch. The committed fix and two deterministic lease regressions are green;
-the fresh ignored candidate/evidence lineage under
-`.artifacts/mainline-release-closure-<final-head>/` is verified and pushed with
-the history-preserving lineage to PR #12. Historical candidates for
-`159d094...` and `1cc529f...` are diagnostic only and must not be reused.
+**Status:** active; Wave 0 mainline normalization, integrated baseline, source
+ownership audit, resource model/analyzer, lifecycle profiles, artifact writer,
+headless gate, CI wiring, OpenSpec planning, and documentation are complete.
+Final Release validation, repeated extended evidence, commit/push, and archive
+remain.
 
-### Authoritative topology
+### Current phase
+
+- Wave 0: complete.
+- Baseline revalidation: complete after integration; Debug/Release builds and
+  unit suites were green, release tooling was 177/177, canonical Debug CI
+  validation passed, and OpenSpec was 35/35.
+- Ownership audit: complete in
+  `.agent/investigations/resource-ownership-audit-2026-08-24.md`; no concrete
+  production resource leak has been reproduced or asserted.
+- Measurement/analyzer: implemented with Windows driver-side snapshots,
+  strict native-count/byte budgets, fail-closed unavailable/error/generation
+  handling, and 19 unit tests plus 16 deterministic self-tests.
+- Lifecycle profiles/evidence: implemented for eight complementary profiles;
+  headless 128-cycle repeats and a 256-cycle run passed, and a run-owned
+  process sample passed with flat observed counters.
+- CI/docs/OpenSpec: bounded `validate.ps1 -Ci` gate, retained workflow
+  evidence, documentation, and strict-valid change
+  `resource-lifecycle-qualification` are in the worktree.
+
+### Mainline checkpoint
 
 - Session start `origin/main` was
   `c2c480707f9e9fdfa753b4885f53bca270c775bc`.
@@ -39,9 +54,11 @@ the history-preserving lineage to PR #12. Historical candidates for
   ship-readiness `eca8670...`, native determinism `09a204d...`, and
   qualification control `b0101a3...`. No historical campaign branch was
   rebased, force-pushed, rewritten, or merged into `main`.
-- The integration branch is `codex/mainline-release-closure-20260824` and
-  targets `main`. Main’s planner/executor adapter files are present, and
-  `scripts/sync-agent-configs.ps1` completed with no generated-copy drift.
+- The qualified head `df89d15467ea854a685dc0417c3708e32b183497` was
+  fast-forwarded onto local `main`; immediately after normalization local
+  `main` and `origin/main` were identical at that SHA. All further work is
+  directly on `main`; current uncommitted campaign edits must be committed and
+  pushed before handoff.
 
 ### Completed reconciliation
 
@@ -108,12 +125,46 @@ the history-preserving lineage to PR #12. Historical candidates for
 - GitHub CLI remains unauthenticated, but the existing PR #12 was updated by
   an ordinary fast-forward push; public PR metadata confirms it is open/draft,
   mergeable, targets `main`, and hosted `build` plus `native-abi-evidence`
-  checks passed for the pushed head. Do not merge to `main` or publish.
+  checks passed for the pushed head. This campaign is now authorized to develop
+  directly on `main`; do not publish or weaken release-integrity gates.
 
-### Handoff action
+### Validation and evidence rules
 
-The repository handoff is complete. The remaining release work after exact-SHA
-requalification is external:
-supervised physical repetitions, mixed-DPI hardware, Windows 10 and independent
-Windows 11 evidence, approved production signing, and human smoke. Do not
-convert those missing prerequisites to PASS and do not merge or publish.
+- Resource evidence must be immutable, privacy-safe, source/run-bound, and
+  machine-readable. Missing or inaccessible measurements never become PASS.
+- Synthetic/headless resource PASS is resource-only and cannot satisfy
+  supervised physical input, mixed-DPI, Windows-version, signing, or human
+  smoke gates.
+- No guarded `SendInput` or blind desktop automation is authorized without a
+  proven exclusive supervised lease. Autonomous runs use pure seams or
+  test-owned processes/windows and clean up in `finally`.
+- Keep generated artifacts, logs, caches, machine paths, credentials, and
+  secrets out of Git.
+
+### Current campaign measurements
+
+- Headless synthetic resource gate: 32-cycle CI profile PASS; five consecutive
+  128-cycle runs PASS; 256-cycle all-profile run PASS.
+- Run-owned Debug TabDock process sample: 16 samples, synthetic=false,
+  PASS. Handles 956→956, USER 24→24, GDI 18→18, threads 13→13, top-level
+  windows 9→9, private bytes 68,186,112→68,186,112, working set
+  124,657,664→124,657,664; all trends Flat.
+- No actual production leak was found. No production ownership fix was
+  justified; the only cleanup correction was in the validation runner's
+  process-wrapper handling.
+
+### Known external blockers retained
+
+Supervised physical repetitions, `dragreorder` H2 flip-back,
+`split-drag-release` zero-delta, `capture-inline-ui` second-tab, mixed-DPI
+hardware, real Windows 10 x64, independent Windows 11, approved production
+signing, and final human smoke remain blocked unless real evidence is
+obtained. Do not convert these gates to synthetic PASS.
+
+### Next action
+
+Run the final Debug/Release ladder, Release resource gate and safe extended
+soak repeatedly; update task/state records, archive the completed OpenSpec
+change, commit meaningful checkpoints on `main`, push `origin/main`, and prove
+identical SHAs with a clean worktree. Keep all supervised, hardware, OS,
+signing, and human-smoke gates honestly blocked.
