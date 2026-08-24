@@ -464,6 +464,27 @@ internal static class DeterministicSelfTests
                 && dpi.RequiresSupervision
                 && dpi.DestructiveState == ScenarioDestructiveState.TestOwnedMutation;
         });
+
+        yield return ("CAT11-explicit-candidate-does-not-require-repo-marker", () =>
+        {
+            string candidate = Path.Combine(Path.GetTempPath(), "tabdock-explicit-candidate.exe");
+            string previousCandidate = Scenarios.TabDockExe;
+            string previousPig = Scenarios.PigExe;
+            try
+            {
+                Scenarios.ConfigureArtifacts("Release", "none", candidate, null);
+                return string.Equals(Scenarios.TabDockExe, Path.GetFullPath(candidate), StringComparison.OrdinalIgnoreCase)
+                    && string.IsNullOrEmpty(Scenarios.PigExe);
+            }
+            finally
+            {
+                Scenarios.ConfigureArtifacts(
+                    Scenarios.SelectedConfiguration,
+                    Scenarios.SelectedRid,
+                    previousCandidate,
+                    string.IsNullOrEmpty(previousPig) ? null : previousPig);
+            }
+        });
     }
 
     private static IEnumerable<(string Id, Func<bool> Test)> ManifestTests()

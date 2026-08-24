@@ -98,10 +98,22 @@ if (-not $SkipBuildTooling) {
 if (-not (Test-Path -LiteralPath $driverBuilt -PathType Leaf)) { throw "matching ValidationDriver executable is unavailable: $driverBuilt" }
 $driverPath = Join-Path $toolRoot 'TabDock.ValidationDriver.exe'
 Copy-Item -LiteralPath $driverBuilt -Destination $driverPath -Force
+$driverStem = [IO.Path]::GetFileNameWithoutExtension($driverBuilt)
+foreach ($companion in @(Get-ChildItem -LiteralPath ([IO.Path]::GetDirectoryName($driverBuilt)) -File | Where-Object {
+    $_.Name -in @("$driverStem.dll", "$driverStem.deps.json", "$driverStem.runtimeconfig.json")
+})) {
+    Copy-Item -LiteralPath $companion.FullName -Destination (Join-Path $toolRoot $companion.Name) -Force
+}
 $pigPath = $null
 if (Test-Path -LiteralPath $pigBuilt -PathType Leaf) {
     $pigPath = Join-Path $toolRoot 'TabDock.GuineaPig.exe'
     Copy-Item -LiteralPath $pigBuilt -Destination $pigPath -Force
+    $pigStem = [IO.Path]::GetFileNameWithoutExtension($pigBuilt)
+    foreach ($companion in @(Get-ChildItem -LiteralPath ([IO.Path]::GetDirectoryName($pigBuilt)) -File | Where-Object {
+        $_.Name -in @("$pigStem.dll", "$pigStem.deps.json", "$pigStem.runtimeconfig.json")
+    })) {
+        Copy-Item -LiteralPath $companion.FullName -Destination (Join-Path $toolRoot $companion.Name) -Force
+    }
 }
 
 $physicalLease = [string]$env:TABDOCK_VALIDATION_DESKTOP_LEASE -eq 'exclusive-supervised'
@@ -138,6 +150,7 @@ $oldRunKind = $env:TABDOCK_VALIDATION_RUN_KIND
 $oldParentRun = $env:TABDOCK_VALIDATION_PARENT_RUN_ID
 $oldShard = $env:TABDOCK_VALIDATION_SHARD
 $oldGithubSha = $env:GITHUB_SHA
+$oldDriverPath = $env:TABDOCK_VALIDATION_DRIVER_PATH
 try {
     $env:TABDOCK_VALIDATION_ARTIFACT_ROOT = $runRoot
     Remove-Item Env:TABDOCK_VALIDATION_RESULT_ROOT -ErrorAction SilentlyContinue
@@ -145,6 +158,7 @@ try {
     Remove-Item Env:TABDOCK_VALIDATION_PARENT_RUN_ID -ErrorAction SilentlyContinue
     Remove-Item Env:TABDOCK_VALIDATION_SHARD -ErrorAction SilentlyContinue
     $env:GITHUB_SHA = $sourceSha
+    $env:TABDOCK_VALIDATION_DRIVER_PATH = $driverPath
     if ($physicalRunnable) {
         if ($null -eq $pigPath) { throw 'physical qualification requires a matching GuineaPig executable' }
         $driverArgs = @('--yes', '--configuration', 'Release', '--rid', 'win-x64', '--tabdock', $tabDockFull, '--guineapig', $pigPath, 'all')
@@ -155,7 +169,20 @@ try {
     }
     $driverLog = Join-Path $outputRoot 'validation-driver.log'
     $driverErr = Join-Path $outputRoot 'validation-driver.err.log'
-    $process = Start-Process -FilePath $driverPath -ArgumentList $driverArgs -WorkingDirectory $sourceRootFull -RedirectStandardOutput $driverLog -RedirectStandardError $driverErr -NoNewWindow -Wait -PassThru
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $driverPath
+    $startInfo.WorkingDirectory = $sourceRootFull
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $driverArgs) { [void]$startInfo.ArgumentList.Add([string]$argument) }
+    $process = [Diagnostics.Process]::Start($startInfo)
+    if ($null -eq $process) { throw 'could not start the matching ValidationDriver process' }
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    [IO.File]::WriteAllText($driverLog, $stdoutTask.Result, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($driverErr, $stderrTask.Result, [Text.UTF8Encoding]::new($false))
     if ($process.ExitCode -ne 0) { throw "deterministic ValidationDriver exited $($process.ExitCode); see qualification/validation-driver.log" }
 }
 finally {
@@ -165,6 +192,7 @@ finally {
     if ($null -eq $oldParentRun) { Remove-Item Env:TABDOCK_VALIDATION_PARENT_RUN_ID -ErrorAction SilentlyContinue } else { $env:TABDOCK_VALIDATION_PARENT_RUN_ID = $oldParentRun }
     if ($null -eq $oldShard) { Remove-Item Env:TABDOCK_VALIDATION_SHARD -ErrorAction SilentlyContinue } else { $env:TABDOCK_VALIDATION_SHARD = $oldShard }
     if ($null -eq $oldGithubSha) { Remove-Item Env:GITHUB_SHA -ErrorAction SilentlyContinue } else { $env:GITHUB_SHA = $oldGithubSha }
+    if ($null -eq $oldDriverPath) { Remove-Item Env:TABDOCK_VALIDATION_DRIVER_PATH -ErrorAction SilentlyContinue } else { $env:TABDOCK_VALIDATION_DRIVER_PATH = $oldDriverPath }
 }
 
 $runManifests = @(Get-ChildItem -LiteralPath $runRoot -Recurse -File -Filter 'run-manifest.json' | ForEach-Object { $_.FullName })

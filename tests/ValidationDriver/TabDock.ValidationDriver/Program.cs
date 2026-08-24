@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Threading;
 
 namespace TabDock.ValidationDriver;
@@ -34,6 +36,7 @@ internal static class Program
         var opt = new Options();
         var scenarios = new List<string>();
         string? selfTestSuite = null;
+        string? planGate = null;
         bool listRequested = false;
         bool helpRequested = false;
         for (int i = 0; i < args.Length; i++)
@@ -47,6 +50,11 @@ internal static class Program
                     if (i + 1 >= args.Length)
                         return Usage("--selftest requires split, identity, or all.");
                     selfTestSuite = args[++i];
+                    break;
+                case "--plan":
+                    if (i + 1 >= args.Length)
+                        return Usage("--plan requires a gate (physicalMixedDpi|automated|release|all).");
+                    planGate = args[++i];
                     break;
                 case "--cycles":
                     if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out int n) || n < 1)
@@ -128,6 +136,8 @@ internal static class Program
 
         if (helpRequested)
             return Usage(null, 0);
+        if (planGate != null)
+            return PrintQualificationPlan(planGate, opt);
         if (selfTestSuite != null)
         {
             // Deterministic runs may still be bound to the exact retained
@@ -299,7 +309,7 @@ internal static class Program
         string parentRoot = TestRunProvenance.ArtifactDirectory;
         string candidateSha = QualificationResultWriter.CandidateSha();
         string candidateExecutableSha = QualificationResultWriter.Sha256File(Scenarios.TabDockExe);
-        string driverSha = QualificationResultWriter.Sha256File(Assembly.GetExecutingAssembly().Location);
+        string driverSha = QualificationResultWriter.DriverIdentitySha256();
         var imports = new List<ChildManifestVerification>();
 
         try
@@ -464,6 +474,7 @@ internal static class Program
         Console.WriteLine("Options:");
         Console.WriteLine("  --yes          skip the interactive confirmation (supervised runs)");
         Console.WriteLine("  --selftest NAME run native-free split/identity contracts (split|identity|all)");
+        Console.WriteLine("  --plan GATE    print a JSON qualification plan without sending input (physicalMixedDpi|automated|release|all)");
         Console.WriteLine("  --cycles N     cycle count for maximize-repro (default 3) and repeat-cycles (default 5)");
         Console.WriteLine("  --reruns N     run N additional bounded investigation attempts; never best-of-N (default 0)");
         Console.WriteLine("  --guest KIND   guest app for scenarios that need one: pig (default), wt, chrome-nogpu, chrome-gpu, chrome-normal, edge-normal, firefox-normal, codex, chatgptclassic");
@@ -478,6 +489,8 @@ internal static class Program
 
     private static int ListScenarios()
     {
+        Console.WriteLine($"Scenario catalog: {ScenarioCatalog.Generation} ({ScenarioCatalog.All.Count} dispatchable scenario(s))");
+        Console.WriteLine();
         Console.WriteLine("AllOrder (what 'all' runs, fresh TabDock per scenario):");
         foreach (string s in ScenarioCatalog.AllOrder)
             Console.WriteLine($"  {s}");
@@ -502,5 +515,108 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine("Also dispatchable but not in the arrays above: realapp, browser-multi.");
         return 0;
+    }
+
+    private static int PrintQualificationPlan(string gate, Options options)
+    {
+        string normalized = gate.Trim().ToLowerInvariant();
+        IReadOnlyList<ScenarioDefinition> required = normalized switch
+        {
+            "physicaldpimixed" or "physicalmixeddpi" or "mixed-dpi" or "mixed_dpi"
+                => ScenarioCatalog.All.Where(definition => definition.RequiresMixedDpi
+                    || definition.RequiresNonDefaultDpi
+                    || definition.RequiresNegativeCoordinates).ToArray(),
+            "automated" or "deterministic"
+                => ScenarioCatalog.All.Where(definition => definition.IncludeInAll).ToArray(),
+            "release" or "production"
+                => ScenarioCatalog.All.Where(definition => definition.MayContributeReleaseEvidence
+                    && definition.IncludeInAll).ToArray(),
+            "all" => ScenarioCatalog.All.ToArray(),
+            _ => Array.Empty<ScenarioDefinition>(),
+        };
+        if (required.Count == 0 && normalized is not "physicaldpimixed" and not "physicalmixeddpi"
+            and not "mixed-dpi" and not "mixed_dpi")
+            return Usage($"Unknown or empty qualification plan gate '{gate}'.");
+
+        ScenarioCapabilitySnapshot snapshot = ScenarioCapabilities.CaptureCurrent();
+        DesktopQualificationSnapshot desktop = new NativeDesktopQualificationProbe().Capture();
+        var requiredRows = required.Select(definition => PlanRow(definition, options, snapshot, required: true)).ToArray();
+        var optionalRows = ScenarioCatalog.All
+            .Where(definition => !required.Contains(definition))
+            .Where(definition => definition.ExecutionClass is not ScenarioExecutionClass.Browser
+                and not ScenarioExecutionClass.UserOwnedApplication)
+            .Select(definition => PlanRow(definition, options, snapshot, required: false))
+            .ToArray();
+        var payload = new
+        {
+            schemaVersion = 1,
+            planKind = "qualification-plan",
+            gate = normalized,
+            catalogGeneration = ScenarioCatalog.Generation,
+            syntheticTopology = false,
+            environment = new
+            {
+                os = Environment.OSVersion.VersionString,
+                osBuild = Environment.OSVersion.Version.Build,
+                architecture = RuntimeInformation.OSArchitecture.ToString(),
+                processArchitecture = RuntimeInformation.ProcessArchitecture.ToString(),
+                interactiveSession = snapshot.InteractiveSessionAvailable,
+                workstationLocked = snapshot.WorkstationLocked,
+            },
+            topology = new
+            {
+                syntheticTopology = false,
+                monitorCount = desktop.Monitors.Count,
+                dpiValues = desktop.Monitors.Where(monitor => monitor.Dpi != 0)
+                    .Select(monitor => (int)monitor.Dpi).Distinct().OrderBy(value => value).ToArray(),
+                mixedDpi = desktop.MixedDpiAvailable,
+                negativeCoordinates = desktop.Monitors.Any(monitor => monitor.Left < 0 || monitor.Top < 0),
+                monitors = desktop.Monitors.Select(monitor => new
+                {
+                    left = monitor.Left,
+                    top = monitor.Top,
+                    right = monitor.Right,
+                    bottom = monitor.Bottom,
+                    dpi = monitor.Dpi,
+                }).ToArray(),
+            },
+            required = requiredRows,
+            optional = optionalRows,
+        };
+        Console.WriteLine(JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));
+        return 0;
+    }
+
+    private static object PlanRow(
+        ScenarioDefinition definition,
+        Options options,
+        ScenarioCapabilitySnapshot snapshot,
+        bool required)
+    {
+        ScenarioCapabilityResolution resolution = ScenarioCapabilities.Resolve(
+            ScenarioCapabilities.Describe(definition, options), snapshot);
+        return new
+        {
+            id = definition.Id,
+            dispatch = definition.DispatchIdentifier,
+            shard = definition.Shard,
+            required,
+            executionClass = definition.ExecutionClass.ToString(),
+            inputRequirement = definition.InputRequirement.ToString(),
+            requiresInteractiveSession = definition.RequiresInteractiveSession,
+            requiresSupervision = definition.RequiresSupervision,
+            requiresMultiMonitor = definition.RequiresMultiMonitor,
+            requiresMixedDpi = definition.RequiresMixedDpi,
+            requiresNonDefaultDpi = definition.RequiresNonDefaultDpi,
+            requiresNegativeCoordinates = definition.RequiresNegativeCoordinates,
+            destructiveState = definition.DestructiveState.ToString(),
+            expectedRuntimeSeconds = definition.ExpectedRuntimeSeconds,
+            mayContributeReleaseEvidence = definition.MayContributeReleaseEvidence,
+            runnable = resolution.Runnable,
+            outcome = resolution.Runnable
+                ? ScenarioOutcomeContract.Code(ScenarioOutcomeKind.Pass)
+                : ScenarioOutcomeContract.Code(resolution.Outcome ?? ScenarioOutcomeKind.FailHarness),
+            reason = resolution.Reason,
+        };
     }
 }

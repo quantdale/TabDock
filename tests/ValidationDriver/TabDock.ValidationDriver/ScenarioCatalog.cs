@@ -455,11 +455,46 @@ internal static partial class Scenarios
             Path.Combine("bin", configuration, "net8.0-windows"),
             "TabDock.exe",
             rid);
-        PigExe = ResolveArtifact(
-            guineaPigPath,
-            Path.Combine("tests", "ValidationDriver", "TabDock.GuineaPig", "bin", configuration, "net8.0-windows"),
-            "TabDock.GuineaPig.exe",
-            rid);
+        bool shouldResolveDefaultPig = string.IsNullOrWhiteSpace(guineaPigPath)
+            && string.IsNullOrWhiteSpace(tabDockPath);
+        if (string.IsNullOrWhiteSpace(guineaPigPath) && !string.IsNullOrWhiteSpace(tabDockPath))
+        {
+            try
+            {
+                string root = Path.GetFullPath(RepoRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                string candidate = Path.GetFullPath(tabDockPath);
+                shouldResolveDefaultPig = candidate.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+            }
+            catch (InvalidOperationException)
+            {
+                shouldResolveDefaultPig = false;
+            }
+        }
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(guineaPigPath) || shouldResolveDefaultPig)
+            {
+                PigExe = ResolveArtifact(
+                    guineaPigPath,
+                    Path.Combine("tests", "ValidationDriver", "TabDock.GuineaPig", "bin", configuration, "net8.0-windows"),
+                    "TabDock.GuineaPig.exe",
+                    rid);
+            }
+            else
+            {
+                PigExe = string.Empty;
+            }
+        }
+        catch (InvalidOperationException) when (!string.IsNullOrWhiteSpace(tabDockPath)
+            && string.IsNullOrWhiteSpace(guineaPigPath))
+        {
+            // Native-free self-tests and qualification-plan commands need only
+            // the explicitly bound candidate. A copied driver package may not
+            // contain a TabDock.sln marker, so absence of an optional GuineaPig
+            // must not make those commands depend on the original repository.
+            PigExe = string.Empty;
+        }
     }
 
     private static string ResolveArtifact(string? explicitPath, string relativeDirectory, string fileName, string rid)

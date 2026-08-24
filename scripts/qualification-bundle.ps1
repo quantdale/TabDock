@@ -306,7 +306,13 @@ function Test-QualificationPrivacyObject {
     )
     if ($null -eq $Value) { return }
     if ($Value -is [string]) {
-        if ($Value -match '(?i)(https?://|[A-Za-z]:[\\/]|(?:^|[\\/])Users(?:[\\/]|$)|%USERPROFILE%|%APPDATA%)') {
+        # Environment placeholders and the bounded validation-artifact token
+        # are intentional redactions emitted by the driver, not personal paths.
+        # Reject concrete drive/user paths and URLs while allowing those
+        # portable markers to survive in evidence.
+        $hasConcretePath = $Value -match '(?i)(https?://|[A-Za-z]:[\\/]|(?:^|[\\/])Users(?:[\\/]|$))'
+        $hasRedactionMarker = $Value -match '(?i)(%USERPROFILE%|%APPDATA%|%LOCALAPPDATA%|<validation-artifact>)'
+        if ($hasConcretePath -and -not $hasRedactionMarker) {
             [void]$Failures.Add("privacy-sensitive value at '$Path' is not permitted")
         }
         return
@@ -322,7 +328,8 @@ function Test-QualificationPrivacyObject {
     if ($Value -is [System.Collections.IDictionary]) {
         foreach ($key in $Value.Keys) {
             $propertyName = [string]$key
-            if ($propertyName -match '(?i)(title|url|document(text)?|raw(window|desktop)|user(path|name)|absolute(path)?|password|secret|token)') {
+            $privacyContractProperty = $propertyName -in @('privacySafe', 'containsRawDesktopData', 'containsTitles', 'containsUrls', 'containsUserPaths')
+            if (-not $privacyContractProperty -and $propertyName -match '(?i)(title|url|document(text)?|raw(window|desktop)|user(path|name)|absolute(path)?|password|secret|token)') {
                 [void]$Failures.Add("privacy-sensitive property '$Path.$propertyName' is not permitted")
             }
             Test-QualificationPrivacyObject -Value $Value[$key] -Path "$Path.$propertyName" -Failures $Failures
@@ -331,7 +338,8 @@ function Test-QualificationPrivacyObject {
     }
     if ($Value -is [pscustomobject]) {
         foreach ($property in $Value.PSObject.Properties) {
-            if ($property.Name -match '(?i)(title|url|document(text)?|raw(window|desktop)|user(path|name)|absolute(path)?|password|secret|token)') {
+            $privacyContractProperty = $property.Name -in @('privacySafe', 'containsRawDesktopData', 'containsTitles', 'containsUrls', 'containsUserPaths')
+            if (-not $privacyContractProperty -and $property.Name -match '(?i)(title|url|document(text)?|raw(window|desktop)|user(path|name)|absolute(path)?|password|secret|token)') {
                 [void]$Failures.Add("privacy-sensitive property '$Path.$($property.Name)' is not permitted")
             }
             Test-QualificationPrivacyObject -Value $property.Value -Path "$Path.$($property.Name)" -Failures $Failures
@@ -605,6 +613,19 @@ function Test-QualificationEvidenceBinding {
         }
         catch { [void]$failures.Add("qualification bundle primary run manifest cannot be bound: $($_.Exception.Message)") }
         if ([string](Get-QualificationProperty $reference 'automatedOutcome') -ne [string](Get-QualificationProperty (Get-QualificationProperty $bundle 'outcome') 'overall')) { [void]$failures.Add('qualification bundle evidence automatedOutcome disagrees') }
+        if ($RequirePhysicalTopology) {
+            $bundleOutcome = Get-QualificationProperty $bundle 'outcome'
+            if ([string](Get-QualificationProperty $bundleOutcome 'overall') -ne 'PASS') {
+                [void]$failures.Add('physical qualification evidence cannot bind a non-PASS automated outcome')
+            }
+            $bundleCounts = Get-QualificationProperty $bundleOutcome 'scenarioCounts'
+            foreach ($code in @('FAIL_PRODUCT', 'FAIL_HARNESS', 'BLOCKED_ENVIRONMENT', 'BLOCKED_SUPERVISED', 'BLOCKED_CAPABILITY', 'SKIP_CAPABILITY', 'FLAKE_UNCLASSIFIED')) {
+                $count = Get-QualificationProperty $bundleCounts $code
+                if ($null -ne $count -and [int]$count -gt 0) {
+                    [void]$failures.Add("physical qualification evidence contains non-PASS outcome '$code'")
+                }
+            }
+        }
     }
     if ($RequirePhysicalTopology -and ([bool](Get-QualificationProperty $reference 'syntheticTopology') -or [bool](Get-QualificationProperty $reference 'replayOnly'))) {
         [void]$failures.Add('synthetic or replay qualification evidence cannot satisfy a physical release gate')

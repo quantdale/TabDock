@@ -290,6 +290,7 @@ internal static class QualificationResultWriter
                 kind => ScenarioOutcomeContract.Code(kind),
                 kind => entries.Count(entry => string.Equals(entry.Result, ScenarioOutcomeContract.Code(kind), StringComparison.Ordinal)),
                 StringComparer.Ordinal);
+        string driverPath = DriverIdentityPath();
         var manifest = new
         {
             schemaVersion = 2,
@@ -323,12 +324,12 @@ internal static class QualificationResultWriter
             executableSha256 = new
             {
                 candidate = Sha256File(Scenarios.TabDockExe),
-                test = Sha256File(System.Reflection.Assembly.GetExecutingAssembly().Location),
+                test = Sha256File(driverPath),
             },
             driverIdentity = new
             {
-                fileName = Path.GetFileName(System.Reflection.Assembly.GetExecutingAssembly().Location),
-                sha256 = Sha256File(System.Reflection.Assembly.GetExecutingAssembly().Location),
+                fileName = Path.GetFileName(driverPath),
+                sha256 = Sha256File(driverPath),
             },
             scenarios = entries.Select(entry => new
             {
@@ -742,6 +743,20 @@ internal static class QualificationResultWriter
         return ScenarioOutcomeKind.FailHarness;
     }
 
+    private static string DriverIdentityPath()
+    {
+        string? configured = Environment.GetEnvironmentVariable("TABDOCK_VALIDATION_DRIVER_PATH");
+        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
+            return Path.GetFullPath(configured);
+
+        string assemblyPath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+        string? processPath = Environment.ProcessPath;
+        if (!string.IsNullOrWhiteSpace(processPath)
+            && Path.GetFileNameWithoutExtension(processPath).Contains("ValidationDriver", StringComparison.OrdinalIgnoreCase))
+            return Path.GetFullPath(processPath);
+        return assemblyPath;
+    }
+
     private static string GitBranch()
     {
         try
@@ -784,6 +799,9 @@ internal static class QualificationResultWriter
             return "unavailable";
         }
     }
+
+    internal static string DriverIdentitySha256()
+        => Sha256File(DriverIdentityPath());
 
     private static string ApplicationVersion()
     {
