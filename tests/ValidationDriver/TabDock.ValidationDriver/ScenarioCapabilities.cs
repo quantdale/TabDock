@@ -15,7 +15,9 @@ internal sealed record ScenarioDescriptor(
     bool RequiresMixedDpi = false,
     bool RequiresNonDefaultDpi = false,
     bool RequiresSigning = false,
-    bool RequiresStageB = false);
+    bool RequiresStageB = false,
+    ScenarioInputRequirement InputRequirement = ScenarioInputRequirement.SendInput,
+    bool RequiresNegativeCoordinates = false);
 
 /// <summary>Privacy-safe capability snapshot used by preflight and manifests.</summary>
 internal sealed record ScenarioCapabilitySnapshot(
@@ -84,39 +86,36 @@ internal static class ScenarioCapabilities
 {
     public static ScenarioDescriptor Describe(string scenario, Options options)
     {
-        string? browser = null;
-        if (scenario == "browser-multi")
-            browser = "chrome-and-edge";
-        else if (scenario.StartsWith("browser-", StringComparison.Ordinal))
+        if (!ScenarioCatalog.TryGet(scenario, out ScenarioDefinition definition))
+            return new ScenarioDescriptor(scenario);
+        return Describe(definition, options);
+    }
+
+    public static ScenarioDescriptor Describe(ScenarioDefinition definition, Options options)
+    {
+        string? browser = definition.RequiredBrowsers.FirstOrDefault();
+        if (browser == null && definition.ExecutionClass == ScenarioExecutionClass.Browser)
             browser = options.Guest;
-        else if (scenario == "chrometabdrag"
-            || scenario == "chromeinput"
-            || scenario.StartsWith("keyboardinput-chrome", StringComparison.Ordinal))
-            browser = "chrome-normal";
-        else if (scenario.StartsWith("keyboardinput-edge", StringComparison.Ordinal))
-            browser = "edge-normal";
 
-        string? application = scenario switch
+        string? application = definition.RequiredApplications.FirstOrDefault();
+        if (application == null
+            && definition.ApplicationsByGuest.TryGetValue(options.Guest, out string? guestApplication))
         {
-            "keyboardinput-notepad" => "notepad-broker",
-            "maximize-repro" when string.Equals(options.Guest, "wt", StringComparison.OrdinalIgnoreCase)
-                => "windows-terminal",
-            _ => null,
-        };
-
-        bool topology = scenario.Contains("multi-monitor", StringComparison.OrdinalIgnoreCase);
-        bool dpi = scenario.Contains("dpi", StringComparison.OrdinalIgnoreCase);
+            application = guestApplication;
+        }
 
         return new ScenarioDescriptor(
-            scenario,
+            definition.Id,
             browser,
             application,
-            RequiresInteractiveSession: true,
-            RequiresMultiMonitor: topology,
-            RequiresMixedDpi: scenario.Contains("mixed", StringComparison.OrdinalIgnoreCase),
-            RequiresNonDefaultDpi: dpi,
-            RequiresSigning: scenario.Contains("signing", StringComparison.OrdinalIgnoreCase),
-            RequiresStageB: scenario.Contains("stage-b", StringComparison.OrdinalIgnoreCase));
+            RequiresInteractiveSession: definition.RequiresInteractiveSession,
+            RequiresMultiMonitor: definition.RequiresMultiMonitor,
+            RequiresMixedDpi: definition.RequiresMixedDpi,
+            RequiresNonDefaultDpi: definition.RequiresNonDefaultDpi,
+            RequiresSigning: definition.RequiresSigning,
+            RequiresStageB: definition.RequiresStageB,
+            InputRequirement: definition.InputRequirement,
+            RequiresNegativeCoordinates: definition.RequiresNegativeCoordinates);
     }
 
     public static ScenarioCapabilityResolution Resolve(
@@ -158,12 +157,22 @@ internal static class ScenarioCapabilities
                 $"{descriptor.Name}: workstation is locked");
         }
 
-        if (descriptor.RequiresInteractiveSession && !snapshot.SendInputAvailable)
+        if (descriptor.RequiresInteractiveSession
+            && descriptor.InputRequirement == ScenarioInputRequirement.SendInput
+            && !snapshot.SendInputAvailable)
         {
             return ScenarioCapabilityResolution.Blocked(
                 snapshot,
                 ScenarioOutcomeKind.BlockedEnvironment,
                 $"{descriptor.Name}: interactive SendInput capability could not be proven");
+        }
+
+        if (descriptor.RequiresNegativeCoordinates && !snapshot.NegativeVirtualCoordinatesAvailable)
+        {
+            return ScenarioCapabilityResolution.Blocked(
+                snapshot,
+                ScenarioOutcomeKind.BlockedEnvironment,
+                $"{descriptor.Name}: negative virtual coordinates are unavailable");
         }
 
         if (descriptor.RequiresMultiMonitor && !snapshot.MultiMonitorAvailable)

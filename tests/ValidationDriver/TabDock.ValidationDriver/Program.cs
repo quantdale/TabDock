@@ -145,10 +145,10 @@ internal static class Program
             opt.Shard = opt.Shard.ToLowerInvariant();
             if (scenarios.Count != 0)
                 return Usage("--shard cannot be combined with a scenario argument.");
-            if (!Scenarios.OrchestratedShardNames.Concat(Scenarios.ExplicitOnlyShardNames)
+            if (!ScenarioCatalog.OrchestratedShardNames.Concat(ScenarioCatalog.ExplicitOnlyShardNames)
                 .Contains(opt.Shard, StringComparer.Ordinal))
                 return Usage($"Unknown shard '{opt.Shard}'.");
-            scenarios.AddRange(Scenarios.GetShardScenarios(opt.Shard));
+            scenarios.AddRange(ScenarioCatalog.GetShardScenarios(opt.Shard));
         }
 
         if (scenarios.Count == 1 && string.Equals(scenarios[0], "all", StringComparison.Ordinal))
@@ -157,20 +157,19 @@ internal static class Program
         Scenarios.ConfigureArtifacts(opt.Configuration, opt.Rid, opt.TabDockPath, opt.GuineaPigPath);
         foreach (string s in scenarios)
         {
-            bool known = Array.IndexOf(Scenarios.AllOrder, s) >= 0
-                || s == "realapp" || s == "browser-multi"
-                || Array.IndexOf(Scenarios.BrowserOnlyScenarios, s) >= 0
-                || Array.IndexOf(Scenarios.StandaloneExtraScenarios, s) >= 0;
-            if (!known)
+            if (!ScenarioCatalog.TryGet(s, out ScenarioDefinition definition))
                 return Usage($"Unknown scenario '{s}'.");
         }
-        if (scenarios.Contains("realapp") && Array.IndexOf(Scenarios.RealAppGuestKinds, opt.Guest) < 0)
-            return Usage($"realapp requires --guest {string.Join("|", Scenarios.RealAppGuestKinds)}.");
+        if (scenarios.Any(s => ScenarioCatalog.TryGet(s, out ScenarioDefinition definition)
+            && definition.ExecutionClass == ScenarioExecutionClass.UserOwnedApplication)
+            && !ScenarioCatalog.RealAppGuestKinds.Contains(opt.Guest, StringComparer.OrdinalIgnoreCase))
+            return Usage($"real-app scenarios require --guest {string.Join("|", ScenarioCatalog.RealAppGuestKinds)}.");
         foreach (string s in scenarios)
         {
-            if ((s == "browser-multi" || Array.IndexOf(Scenarios.BrowserOnlyScenarios, s) >= 0)
-                && Array.IndexOf(Scenarios.BrowserGuestKinds, opt.Guest) < 0)
-                return Usage($"{s} requires --guest {string.Join("|", Scenarios.BrowserGuestKinds)}.");
+            if (ScenarioCatalog.TryGet(s, out ScenarioDefinition definition)
+                && definition.ExecutionClass == ScenarioExecutionClass.Browser
+                && !ScenarioCatalog.BrowserGuestKinds.Contains(opt.Guest, StringComparer.OrdinalIgnoreCase))
+                return Usage($"{s} requires --guest {string.Join("|", ScenarioCatalog.BrowserGuestKinds)}.");
         }
 
         // Single-instance guard (guarded-spawn pattern rule 3).
@@ -272,7 +271,7 @@ internal static class Program
 
         Console.WriteLine($"[PID {Environment.ProcessId}] TabDock real-input shard orchestrator ({Scenarios.SelectedConfiguration}, RID {Scenarios.SelectedRid}).");
         Console.WriteLine($"Artifacts: TabDock={Scenarios.TabDockExe}; GuineaPig={Scenarios.PigExe}");
-        Console.WriteLine($"Shards: {string.Join(", ", Scenarios.OrchestratedShardNames)}");
+        Console.WriteLine($"Shards: {string.Join(", ", ScenarioCatalog.OrchestratedShardNames)}");
         Console.WriteLine("Each shard is a separate guarded driver process with its own 12-spawn and 10-minute limits.");
         if (!opt.Yes)
         {
@@ -289,10 +288,10 @@ internal static class Program
         int completed = 0;
         try
         {
-            foreach (string shard in Scenarios.OrchestratedShardNames)
+            foreach (string shard in ScenarioCatalog.OrchestratedShardNames)
             {
                 Console.WriteLine();
-                GuardedProc.Log($"=== SHARD {shard} ({Scenarios.GetShardScenarios(shard).Count} scenario(s)) ===");
+                GuardedProc.Log($"=== SHARD {shard} ({ScenarioCatalog.GetShardScenarios(shard).Count} scenario(s)) ===");
                 using Process child = GuardedProc.SpawnDriverShard(CreateShardProcessInfo(opt, shard));
                 if (!child.WaitForExit((int)TimeSpan.FromMinutes(11).TotalMilliseconds))
                 {
@@ -388,7 +387,7 @@ internal static class Program
         Console.WriteLine("Usage: TabDock.ValidationDriver.exe [options] <scenario|all>");
         Console.WriteLine();
         Console.WriteLine("Scenarios:");
-        foreach (string s in Scenarios.AllOrder)
+        foreach (string s in ScenarioCatalog.AllOrder)
             Console.WriteLine($"  {s}");
         Console.WriteLine("  all            runs every bounded hermetic shard in separate child processes");
         Console.WriteLine();
@@ -410,25 +409,25 @@ internal static class Program
     private static int ListScenarios()
     {
         Console.WriteLine("AllOrder (what 'all' runs, fresh TabDock per scenario):");
-        foreach (string s in Scenarios.AllOrder)
+        foreach (string s in ScenarioCatalog.AllOrder)
             Console.WriteLine($"  {s}");
         Console.WriteLine();
         Console.WriteLine("BrowserOnlyScenarios (need --guest chrome-normal|edge-normal|firefox-normal):");
-        foreach (string s in Scenarios.BrowserOnlyScenarios)
+        foreach (string s in ScenarioCatalog.BrowserOnlyScenarios)
             Console.WriteLine($"  {s}");
         Console.WriteLine();
         Console.WriteLine("StandaloneExtraScenarios (each spawns its own guest):");
-        foreach (string s in Scenarios.StandaloneExtraScenarios)
+        foreach (string s in ScenarioCatalog.StandaloneExtraScenarios)
             Console.WriteLine($"  {s}");
         Console.WriteLine();
         Console.WriteLine("RealAppGuestKinds (--guest value for realapp):");
-        foreach (string s in Scenarios.RealAppGuestKinds)
+        foreach (string s in ScenarioCatalog.RealAppGuestKinds)
             Console.WriteLine($"  {s}");
         Console.WriteLine();
         Console.WriteLine("Shards:");
-        foreach (string shard in Scenarios.OrchestratedShardNames)
-            Console.WriteLine($"  {shard} ({Scenarios.GetShardScenarios(shard).Count} scenario(s))");
-        foreach (string shard in Scenarios.ExplicitOnlyShardNames)
+        foreach (string shard in ScenarioCatalog.OrchestratedShardNames)
+            Console.WriteLine($"  {shard} ({ScenarioCatalog.GetShardScenarios(shard).Count} scenario(s))");
+        foreach (string shard in ScenarioCatalog.ExplicitOnlyShardNames)
             Console.WriteLine($"  {shard} (explicit --guest/real-app selection required)");
         Console.WriteLine();
         Console.WriteLine("Also dispatchable but not in the arrays above: realapp, browser-multi.");

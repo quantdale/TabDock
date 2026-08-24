@@ -29,6 +29,7 @@ internal static class DeterministicSelfTests
             tests.AddRange(WaitTests());
         if (normalized is "all" or "lease" or "capability" or "deterministic")
         {
+            tests.AddRange(CatalogTests());
             tests.AddRange(CapabilityTests());
             tests.AddRange(LeaseTests());
             tests.AddRange(TimelineTests());
@@ -377,6 +378,82 @@ internal static class DeterministicSelfTests
                 delay: milliseconds => ticks += milliseconds * Stopwatch.Frequency / 1000,
                 honorCancellation: false);
             return result.TimedOut && result.LastObserved == "describe-error:InvalidOperationException";
+        });
+    }
+
+    private static IEnumerable<(string Id, Func<bool> Test)> CatalogTests()
+    {
+        yield return ("CAT01-catalog-generation-is-stable", () =>
+            ScenarioCatalog.Generation == "scenario-catalog-2026-08-24-v1"
+            && ScenarioCatalog.All.Count == 127);
+
+        yield return ("CAT02-catalog-validates-without-errors", () =>
+        {
+            ScenarioCatalog.Validate();
+            return true;
+        });
+
+        yield return ("CAT03-every-entry-resolves-a-handler", () =>
+            ScenarioCatalog.All.All(item => ScenarioCatalog.TryResolve(item.Id, out _, out _)));
+
+        yield return ("CAT04-all-order-is-a-catalog-projection", () =>
+            ScenarioCatalog.AllOrder.SequenceEqual(
+                ScenarioCatalog.All.Where(item => item.IncludeInAll).Select(item => item.Id)));
+
+        yield return ("CAT05-explicit-browser-and-user-app-are-out-of-all", () =>
+            ScenarioCatalog.All
+                .Where(item => item.ExecutionClass is ScenarioExecutionClass.Browser or ScenarioExecutionClass.UserOwnedApplication)
+                .All(item => !item.IncludeInAll && ScenarioCatalog.ExplicitOnlyShardNames.Contains(item.Shard)));
+
+        yield return ("CAT06-duplicate-ID-is-rejected", () =>
+        {
+            ScenarioDefinition first = ScenarioCatalog.All[0];
+            IReadOnlyList<string> errors = ScenarioCatalog.ValidateDefinitions(
+                new[] { first, first },
+                ScenarioCatalog.AllShards);
+            return errors.Any(error => error.Contains("duplicate scenario IDs", StringComparison.Ordinal));
+        });
+
+        yield return ("CAT07-unknown-shard-is-rejected", () =>
+        {
+            ScenarioDefinition invalid = ScenarioCatalog.All[0] with { Shard = "missing-shard" };
+            IReadOnlyList<string> errors = ScenarioCatalog.ValidateDefinitions(
+                new[] { invalid },
+                ScenarioCatalog.AllShards);
+            return errors.Any(error => error.Contains("unknown shard", StringComparison.Ordinal));
+        });
+
+        yield return ("CAT08-budget-overflow-is-rejected", () =>
+        {
+            ScenarioDefinition invalid = ScenarioCatalog.All[0] with { Shard = "tiny-shard", ExpectedRuntimeSeconds = 60 };
+            var shard = new ScenarioShardDefinition("tiny-shard", true, false, 1, 1);
+            IReadOnlyList<string> errors = ScenarioCatalog.ValidateDefinitions(new[] { invalid }, new[] { shard });
+            return errors.Any(error => error.Contains("runtime budget", StringComparison.Ordinal));
+        });
+
+        yield return ("CAT09-shard-membership-is-disjoint", () =>
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (ScenarioShardDefinition shard in ScenarioCatalog.AllShards)
+            {
+                foreach (string scenario in ScenarioCatalog.GetShardScenarios(shard.Name))
+                {
+                    if (!seen.Add(shard.Name + "\u0000" + scenario))
+                        return false;
+                }
+            }
+            return ScenarioCatalog.All.All(item => seen.Contains(item.Shard + "\u0000" + item.Id));
+        });
+
+        yield return ("CAT10-catalog-entry-preserves-release-policy-fields", () =>
+        {
+            ScenarioDefinition browser = ScenarioCatalog.All.Single(item => item.Id == "browser-multi");
+            ScenarioDefinition dpi = ScenarioCatalog.All.Single(item => item.Id == "capture-dpi-unaware-guest");
+            return !browser.MayContributeReleaseEvidence
+                && browser.RequiredBrowsers.Contains("chrome-and-edge")
+                && dpi.RequiresNonDefaultDpi
+                && dpi.RequiresSupervision
+                && dpi.DestructiveState == ScenarioDestructiveState.TestOwnedMutation;
         });
     }
 
