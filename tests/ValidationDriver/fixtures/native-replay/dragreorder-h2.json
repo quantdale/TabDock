@@ -1,0 +1,11 @@
+{
+  "name": "dragreorder-h2-target-and-polyline",
+  "expectedTarget": "tab-strip-container",
+  "initialGeometryGeneration": 7,
+  "points": [
+    { "targetIdentity": "tab-strip-container", "x": 420, "y": 116, "geometryGeneration": 7, "inputDelivered": true },
+    { "targetIdentity": "tab-strip-container", "x": 360, "y": 116, "geometryGeneration": 7, "inputDelivered": true },
+    { "targetIdentity": "tab-strip-container", "x": 300, "y": 116, "geometryGeneration": 7, "inputDelivered": true }
+  ],
+  "expectedDispositions": ["Valid", "InputTargetNeverReached", "GeometryStale", "ProductIgnoredValidInput", "ZeroDeltaPolyline"]
+}

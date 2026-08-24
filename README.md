@@ -134,20 +134,20 @@ WPF relies on COM activation, reflection emit, and other runtime features that a
 ## How to use
 
 1. Launch `TabDock.exe`. The main launcher window appears.
-2. Click **New group**. From an open group, use **Add App** to open the inline
+2. Click **New group**. From an open group, use **Add window** to open the inline
    capture surface; press **Ctrl+Alt+G** when no group is selected to use the
    standalone capture picker.
 3. In the picker, select the windows you want to group and choose whether to add them to a new group or an existing one.
-   Once a group is open, use its Group ▾ menu to switch between open groups or
+   Once a group is open, use its Workspace ▾ menu to switch between open groups or
    create another group without returning to the launcher.
 4. The container window shows a tab for each captured window. Click tabs to switch, drag tabs to reorder, or drag a tab out of the strip to release it back to a standalone window.
    Use the always-visible **Split ▾** control to pair the active tab with an eligible partner. With a presented pair it exposes LEFT/RIGHT focus and **End split**; with a dormant pair it exposes **Resume/show split** actions. The control is disabled until two captured tabs are available.
    `Ctrl+Alt+PageUp` and `Ctrl+Alt+PageDown` navigate the current TabDock group even when a captured guest has focus. They are scoped to the foreground guest/container; unrelated desktop applications are never switched. Local `Ctrl+Tab` / `Ctrl+Shift+Tab` remains available in the container.
-5. Double-click the group name in the title bar — or use the Group ▾ menu's
+5. Double-click the group name in the title bar — or use the Workspace ▾ menu's
    **Rename group** — to rename it (Enter commits, Escape cancels, blank names
    are rejected).
 6. Click the colored chip in the title bar to change the group's accent color.
-7. Use the Group ▾ menu's **Delete group** to remove a group: captured windows
+7. Use the Workspace ▾ menu's **Delete group** to remove a group: captured windows
    are released back to standalone (applications keep running) and the group is
    not restored after a restart.
 8. Closing a container asks whether to close the grouped applications or release them back to standalone windows.
@@ -188,7 +188,7 @@ Use this checklist to verify a build before considering it ready.
 
 1. Open **Chrome**, **Windows Terminal**, and **Cursor** (or any editor) as separate windows.
 2. Launch TabDock and press **Ctrl+Alt+G**.
-3. Select the three windows in the picker and click **Group these**.
+3. Select the three windows in the picker and click **Group selected**.
 4. Verify the container opens with three tabs and the active window fills the content area.
 
 ### Tab switching and reordering
@@ -201,11 +201,11 @@ Use this checklist to verify a build before considering it ready.
 ### Group identity
 
 1. Double-click the group name and rename it to "Acme Corp - Invoice".
-2. Open the Group ▾ menu and choose **Rename group**; rename it again and verify
+2. Open the Workspace ▾ menu and choose **Rename group**; rename it again and verify
    the title bar/group selector update immediately, that a blank name is
    rejected, and that the new name survives a restart.
 3. Click the colored chip and choose a different accent color; verify the title bar/tab highlight updates.
-4. Open the Group ▾ menu and choose **Delete group**; confirm the prompt.
+4. Open the Workspace ▾ menu and choose **Delete group**; confirm the prompt.
     Verify the captured windows return to standalone AND keep running, the
     container closes, and the group does not come back after restarting TabDock.
 
@@ -307,6 +307,14 @@ Use this checklist to verify a build before considering it ready.
 
 ## Releases and release qualification
 
+The machine-verifiable qualification control plane, schema migration, exact
+candidate handoff, offline bundle verifier, independent-machine import/merge,
+and synthetic topology boundary are documented in
+[`docs/release/qualification-control-plane.md`](docs/release/qualification-control-plane.md).
+Use that procedure when moving evidence between machines; do not copy a local
+build over a retained candidate or treat a deterministic topology result as a
+physical gate.
+
 ### Version contract
 
 `TabDock.csproj`'s `<Version>` is the single authoritative version mechanism.
@@ -323,8 +331,10 @@ SOURCE SHA -> clean exact checkout -> audited restore -> publish ONCE ->
 execute and qualify THE PUBLISHED EXE -> Authenticode sign ONCE ->
 signature verification -> FINAL SHA-256 -> release-manifest.json +
 SHA256SUMS.txt (both describe the FINAL distributed bytes) -> immutable
-candidate retention -> human gates (evidence record) -> publish THE SAME
-retained bytes (no build, no sign)
+candidate retention -> catalog-derived run manifests -> verified
+qualification-bundle.json -> validated machine reports + explicit human
+attestation -> schema-3 external evidence -> publish THE SAME retained bytes
+(no build, no sign)
 ```
 
 - `scripts/release-qualify.ps1` enforces the exact SHA, refuses dirty
@@ -356,7 +366,7 @@ retained bytes (no build, no sign)
   split into two least-privilege jobs. JOB 1 `verify` (contents: read)
   checks out the TRUSTED release policy at the executing workflow revision
   (`policy/`; the candidate can never replace it), the candidate source
-  (`candidate-source/`, data only), takes the Stage A run id + the schema-v2
+  (`candidate-source/`, data only), takes the Stage A run id + the schema-v3
   external evidence, downloads the EXACT retained artifact (cross-run
   `download-artifact@v7` with `run-id`/`repository`/`github-token`),
   re-verifies every production condition against those downloaded bytes
@@ -388,13 +398,14 @@ retained bytes (no build, no sign)
   mixed-DPI qualification (`docs/release/mixed-dpi-qualification.md`), and
   Windows 10/11 compatibility (`docs/release/compatibility-matrix.md`). Their
   PASS results must be recorded in `release-external-evidence.json`
-  (schemaVersion 2), bound to the exact candidate SHA, final artifact hash,
-  Stage A run id, and candidate artifact name
-  (`docs/release/publication-gates.md`); RC qualification-only runs never
+  (schemaVersion 3), bound to the exact candidate SHA, final artifact hash,
+  Stage A run id, candidate artifact name, qualification bundle, and machine
+  report hashes (`docs/release/publication-gates.md`); schema 2 is
+  diagnostic-only. RC qualification-only runs never
   need evidence and their manifests honestly report
   `productionReleaseEligibility = BLOCKED_EXTERNAL`.
 - Release-tooling regression tests: `scripts/release-tooling-tests.ps1`
-  (150 deterministic adversarial cases, including signing-provider policy,
+  (the deterministic adversarial corpus, including signing-provider policy,
   the release-policy trust boundary (old candidates rejected under CURRENT
   policy, policy-schema contract, candidate-policy isolation, publisher
   identity policy, Stage A/B dispatch contracts), Stage B zero candidate

@@ -1,0 +1,11 @@
+{
+  "name": "inline-capture-second-tab-authoritative-handoff",
+  "authoritativeFinalOrder": ["first", "third", "second"],
+  "targetIdentity": "second",
+  "finalIdentityResult": "Match",
+  "expectedResolution": {
+    "disposition": "CapturedByIdentity",
+    "authoritativeIndex": 2
+  },
+  "negativeCases": ["target-recycled", "target-absent-from-final-order"]
+}

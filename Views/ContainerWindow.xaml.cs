@@ -1843,15 +1843,37 @@ public partial class ContainerWindow : Window
             _viewModel.RequestAddWindows();
     }
 
+    private static bool TryGetTabFromButton(object sender, out TabViewModel tab)
+    {
+        if (sender is Button { DataContext: TabViewModel value })
+        {
+            tab = value;
+            return true;
+        }
+
+        tab = null!;
+        return false;
+    }
+
+    private void PopOutTab(TabViewModel tab)
+    {
+        _log.Log($"TAB[popout-button] guest=0x{tab.Model.Hwnd.ToInt64():X}");
+        EndDrag();
+        _viewModel.ReleaseTab(tab);
+    }
+
+    private void TabClose_Click(object sender, RoutedEventArgs e)
+    {
+        if (TryGetTabFromButton(sender, out TabViewModel tab))
+            PopOutTab(tab);
+        e.Handled = true;
+    }
+
     private void TabClose_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (sender is Button button && button.DataContext is TabViewModel tab)
-        {
-            _log.Log($"TAB[popout-button] guest=0x{tab.Model.Hwnd.ToInt64():X}");
-            EndDrag();
-            _viewModel.ReleaseTab(tab);
-            e.Handled = true;
-        }
+        if (TryGetTabFromButton(sender, out TabViewModel tab))
+            PopOutTab(tab);
+        e.Handled = true;
     }
 
     /// <summary>
@@ -1860,9 +1882,39 @@ public partial class ContainerWindow : Window
     /// never be hidden by a half click (the pre-composite tab-selection path
     /// could misinterpret one split member as needing to hide the other).
     /// </summary>
+    private bool FocusSplitHalf(Border half)
+    {
+        if (half.Tag is not string side || (side != "LEFT" && side != "RIGHT"))
+            return false;
+        if (half.DataContext is not SplitCompositeViewModel composite)
+            return false;
+
+        TabViewModel target = side == "LEFT" ? composite.Left : composite.Right;
+        // Keyboard and mouse activation both route through the canonical
+        // member-focus operation so split semantics cannot drift.
+        FocusSplitMember(target);
+        return true;
+    }
+
+    private void SplitHalf_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Enter or Key.Space))
+            return;
+        // The close button is nested inside the focusable half. Its own Click
+        // handler owns Enter/Space; do not let the bubbled key also focus the
+        // half and produce a second action.
+        for (DependencyObject? cur = e.OriginalSource as DependencyObject; cur != null; cur = VisualTreeHelper.GetParent(cur))
+        {
+            if (cur is Button)
+                return;
+        }
+        if (sender is Border half && FocusSplitHalf(half))
+            e.Handled = true;
+    }
+
     private void SplitHalf_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (sender is not Border half || half.Tag is not string side || (side != "LEFT" && side != "RIGHT"))
+        if (sender is not Border half)
             return;
         // The half's own × button handles its click; ignore clicks that land on
         // it (PreviewMouseLeftButtonDown tunnels root-first, so this half
@@ -1872,15 +1924,8 @@ public partial class ContainerWindow : Window
             if (cur is Button)
                 return;
         }
-        if (half.DataContext is not SplitCompositeViewModel composite)
-            return;
-        TabViewModel target = side == "LEFT" ? composite.Left : composite.Right;
-        // Route through the canonical member-focus operation so a half-click on
-        // the ALREADY-active member still re-asserts it as the z-top focused
-        // member (a direct pane click may have left the foreground member on the
-        // other member; SetActiveTab alone would no-op and never re-glue).
-        FocusSplitMember(target);
-        e.Handled = true;
+        if (FocusSplitHalf(half))
+            e.Handled = true;
     }
 
     /// <summary>
@@ -1905,16 +1950,30 @@ public partial class ContainerWindow : Window
     /// the survivor is promoted to the single full-width guest via the existing
     /// HandleSplitMemberRemoved path.
     /// </summary>
-    private void SplitHalfClose_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    private bool PopOutSplitHalf(Button button)
     {
-        if (sender is not Button button || button.Tag is not string side || (side != "LEFT" && side != "RIGHT"))
-            return;
+        if (button.Tag is not string side || (side != "LEFT" && side != "RIGHT"))
+            return false;
         if (button.DataContext is not SplitCompositeViewModel composite)
-            return;
+            return false;
         TabViewModel target = side == "LEFT" ? composite.Left : composite.Right;
         _log.Log($"TAB[popout-button] guest=0x{target.Model.Hwnd.ToInt64():X} (split half)");
         EndDrag();
         _viewModel.ReleaseTab(target);
+        return true;
+    }
+
+    private void SplitHalfClose_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button)
+            PopOutSplitHalf(button);
+        e.Handled = true;
+    }
+
+    private void SplitHalfClose_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is Button button)
+            PopOutSplitHalf(button);
         e.Handled = true;
     }
 
@@ -1968,6 +2027,27 @@ public partial class ContainerWindow : Window
         {
             MessageBox.Show(this, CaptureFailureReport.Build(failures), "Capture results", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+    }
+
+    private void TabsListBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        bool contextMenuKey = e.Key == Key.Apps
+            || (e.Key == Key.F10 && (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift);
+        if (!contextMenuKey || TabsListBox.SelectedItem is not TabViewModel tab)
+            return;
+
+        if (TabsListBox.ItemContainerGenerator.ContainerFromItem(tab) is not ListBoxItem item
+            || FindTabContextMenuOwner(item) is not FrameworkElement owner
+            || owner.ContextMenu is not ContextMenu menu)
+            return;
+
+        ConfigureSplitMenuItems(menu, tab);
+        _openTabContextMenu = menu;
+        BeginChromePopup();
+        menu.PlacementTarget = owner;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.IsOpen = true;
+        e.Handled = true;
     }
 
     private void InlineCapture_Canceled(object? sender, EventArgs e) => CloseCapturePanel();
@@ -2035,7 +2115,7 @@ public partial class ContainerWindow : Window
             // Release only if the HWND still identifies the just-captured
             // window; otherwise the raw handle may already belong to an
             // unrelated replacement window.
-            if (MatchesCapturedWindow(cw))
+            if (_shepherd.IsCurrentCapturedWindow(cw))
                 _shepherd.Release(cw);
             else
                 _log.Log($"Capture cleanup refused for recycled HWND 0x{hwnd.ToInt64():X}; leaving the replacement window untouched.");
@@ -2053,7 +2133,7 @@ public partial class ContainerWindow : Window
                 // in an unsupported lifecycle mode while the bounded retry
                 // timer runs. Release the just-captured identity immediately;
                 // the retry policy may recover for a later user attempt.
-                if (MatchesCapturedWindow(cw))
+                if (_shepherd.IsCurrentCapturedWindow(cw))
                     ReleaseCapturedWindow(cw, show: true);
                 else
                     _log.Log($"Capture cleanup refused for recycled HWND 0x{hwnd.ToInt64():X} after monitor admission failure; replacement left untouched.");
@@ -2086,31 +2166,27 @@ public partial class ContainerWindow : Window
 
     private static bool MatchesCaptureTarget(WindowCaptureTarget expected)
     {
-        if (!NativeMethods.IsWindow(expected.Hwnd))
-            return false;
-
-        // Title is deliberately not compared: it is mutable display metadata,
-        // and a browser tab/editor renaming itself between picker selection
-        // and capture must not veto an otherwise-identical target.
-        NativeMethods.GetWindowThreadProcessId(expected.Hwnd, out uint pid);
-        string? className = NativeMethods.GetClassNameString(expected.Hwnd);
-        string? exePath = NativeMethods.GetProcessImagePath(pid);
-        return pid == expected.ProcessId
-            && string.Equals(className, expected.ClassName, StringComparison.Ordinal)
-            && string.Equals(exePath, expected.ExePath, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool MatchesCapturedWindow(CapturedWindow captured)
-    {
-        if (!NativeMethods.IsWindow(captured.Hwnd))
-            return false;
-
-        NativeMethods.GetWindowThreadProcessId(captured.Hwnd, out uint pid);
-        string? className = NativeMethods.GetClassNameString(captured.Hwnd);
-        string? exePath = NativeMethods.GetProcessImagePath(pid);
-        return pid == captured.ProcessId
-            && string.Equals(className, captured.OriginalClassName, StringComparison.Ordinal)
-            && string.Equals(exePath, captured.ExePath, StringComparison.OrdinalIgnoreCase);
+        // Reuse the same strong pre-token gate that Shepherd uses immediately
+        // before capture-token installation. Title remains mutable display
+        // metadata, while PID/thread/class/executable/process-start identity
+        // must all match. The final Shepherd transaction still revalidates
+        // authoritatively after this picker handoff check.
+        var candidate = new CapturedWindow
+        {
+            Hwnd = expected.Hwnd,
+            ProcessId = expected.ProcessId,
+            WindowThreadId = expected.WindowThreadId,
+            ProcessStartTimeUtcTicks = expected.ProcessStartTimeUtcTicks,
+            OriginalClassName = expected.ClassName,
+            ExePath = expected.ExePath,
+        };
+        return WindowIdentityGate.EvaluateBeforeCaptureToken(
+                candidate,
+                NativeWindowIdentityApi.Instance,
+                verifyExecutable: true,
+                verifyProcessInstance: true,
+                out _)
+            == WindowIdentityResult.Match;
     }
 
     /// <summary>
@@ -2275,6 +2351,20 @@ public partial class ContainerWindow : Window
         if (newWindow != null && NativeMethods.IsWindow(newWindow.Hwnd))
         {
             LayoutShepherdActiveWindow();
+            // Mirror the WM_ACTIVATE reassert and the split-member switch path:
+            // an ordinary switch performed while this container already holds
+            // the OS foreground (tab click / Ctrl+Tab on active chrome) fires
+            // no WM_ACTIVATE, so without this grant the foreground silently
+            // stays on the chrome and typed input misses the visible guest
+            // (physically reproduced by torture-tabswitch-rapid/random during
+            // release qualification: zero SHEPHERD[bring-to-front] lines and
+            // every foreground assertion failing). Guarded so background or
+            // programmatic switches never steal focus from other apps.
+            if (!IsContainerChromeInteractionActive()
+                && NativeMethods.GetForegroundWindow() == _containerHwnd)
+            {
+                _shepherd.SetForeground(newWindow);
+            }
         }
 
         if (oldWindow != null && !oldWindowHidden && _viewModel.Tabs.Any(t => t.Model == oldWindow))

@@ -29,23 +29,47 @@ internal static partial class Scenarios
         ClickTabByTitle(ctx, container, a.Title);
         ctx.Check(Util.WaitUntil(() => IsDocked(a.Hwnd, host), 3000), "global navigation starts with A active");
 
+        // The picker admits selections in candidate-enumeration order, not
+        // checkbox order (physically observed [c,b,a] on 2026-08-23), so the
+        // strip neighbors must be derived from the LIVE strip instead of
+        // assuming capture order.
+        GuestInfo[] stripOrder = TabStripOrder(container, a, b, c);
+        int indexOfA = Array.IndexOf(stripOrder, a);
+        int indexOfB = Array.IndexOf(stripOrder, b);
+        GuestInfo nextOfA = stripOrder[(indexOfA + 1) % stripOrder.Length];
+
         bool sent = Input.SendHotkeyCtrlAltPageTo(a.Hwnd, previous: false);
         ctx.Check(sent, "Ctrl+Alt+PageDown sent from a captured guest");
-        ctx.Check(Util.WaitUntil(() => IsDocked(b.Hwnd, host), 3000),
-            "PageDown from captured guest selects the next tab");
+        ctx.Check(Util.WaitUntil(() => IsDocked(nextOfA.Hwnd, host), 3000),
+            $"PageDown from captured guest selects the next tab ({nextOfA.Title})");
 
-        sent = Input.SendHotkeyCtrlAltPageTo(b.Hwnd, previous: true);
+        sent = Input.SendHotkeyCtrlAltPageTo(nextOfA.Hwnd, previous: true);
         ctx.Check(sent, "Ctrl+Alt+PageUp sent from a captured guest");
         ctx.Check(Util.WaitUntil(() => IsDocked(a.Hwnd, host), 3000),
             "PageUp from captured guest selects the previous tab");
 
+        // Hand foreground to the TabDock process through a REAL strip click:
+        // Windows denies programmatic foreground theft to background
+        // processes, so the harness must activate like a user. Active becomes
+        // nextOfA; the global operation must behave identically from there.
+        ClickTabByTitle(ctx, container, nextOfA.Title);
+        ctx.Check(Util.WaitUntil(() => NativeMethods.GetForegroundWindow() == container, 3000),
+            "owning container holds foreground after a real strip click");
+        GuestInfo secondNext = stripOrder[(Array.IndexOf(stripOrder, nextOfA) + 1) % stripOrder.Length];
         sent = Input.SendHotkeyCtrlAltPageTo(container, previous: false);
         ctx.Check(sent, "Ctrl+Alt+PageDown sent from the owning container");
-        ctx.Check(Util.WaitUntil(() => IsDocked(b.Hwnd, host), 3000),
+        ctx.Check(Util.WaitUntil(() => IsDocked(secondNext.Hwnd, host), 3000),
             "PageDown from the owning container uses the same navigation operation");
 
         ClickTabByTitle(ctx, container, a.Title);
-        long splitOffset = EnterSplitTwo(ctx, container, a);
+        ctx.Check(Util.WaitUntil(() => NativeMethods.GetForegroundWindow() == container, 3000),
+            "container holds foreground before split menu interaction");
+        long splitOffset = TabDockLog.RecordLogLength();
+        // Three tabs are admitted here, so "Split screen" is the >=3-tab partner
+        // submenu (Scenarios.Split.cs header): choosing 'Split with B' makes A
+        // LEFT and B RIGHT. The two-tab EnterSplitTwo direct action is invalid
+        // in this state.
+        ClickTabSubmenuItem(ctx, container, a.Title, "Split screen", b.Title);
         ctx.Check(TabDockLog.WaitForLogLine(splitOffset, "SPLIT[enter]", 3000),
             "global navigation scenario entered the presented split");
         AssertSplitPanes(ctx, host, a, b, "global navigation presented split");
@@ -164,7 +188,7 @@ internal static partial class Scenarios
             : Uia.FindDescendantByAutomationId(main, "CaptureAdmissionStatus", out _);
         if (status == null || status.Current.IsOffscreen || status.Current.BoundingRectangle.IsEmpty)
         {
-            ctx.Block("BLOCKED_ENVIRONMENT: durable journal failure was not safely inducible on this desktop; rerun after launching with a supervised unavailable AppData journal and use --scenario capture-admission-blocked.");
+            ctx.BlockSupervised("durable journal failure was not safely inducible on this desktop; rerun with the supervised unavailable-AppData journal setup documented in docs/TESTING.md.");
             return;
         }
 

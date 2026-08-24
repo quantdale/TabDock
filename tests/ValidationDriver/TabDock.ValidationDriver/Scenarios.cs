@@ -22,6 +22,7 @@ internal sealed class Options
     public string? TabDockPath;
     public string? GuineaPigPath;
     public string? Shard;
+    public int Reruns;
 }
 
 /// <summary>A window under test: a guinea pig or a real app (wt/chrome) for maximize-repro.</summary>
@@ -62,14 +63,6 @@ internal sealed class GuestInfo
     public string? VerifyFilePath;
 }
 
-internal enum QualificationStatus
-{
-    Pass,
-    Fail,
-    Skip,
-    Blocked,
-}
-
 internal sealed record AssertionEvidence(string Name, bool Passed);
 
 /// <summary>Per-scenario state: the TabDock instance, spawned guests, containers, and assertion results.</summary>
@@ -85,12 +78,15 @@ internal sealed class Ctx
     public readonly List<GuestInfo> Guests = new List<GuestInfo>();
     public readonly List<IntPtr> Containers = new List<IntPtr>();
     public readonly List<WindowIdentity> ContainerIdentities = new List<WindowIdentity>();
-    public bool Pass = true;
-    public QualificationStatus Status { get; private set; } = QualificationStatus.Pass;
+    public ScenarioOutcome Outcome { get; private set; } = ScenarioOutcome.Pass;
+    public bool Pass => Outcome.IsReleasePass;
     public DateTimeOffset StartedUtc { get; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? FinishedUtc { get; set; }
     public readonly List<AssertionEvidence> Assertions = new();
     public readonly List<string> FailureReasons = new();
+    public int Attempt { get; set; } = 1;
+    public NativeInteractionTimeline Timeline { get; set; } = new();
+    public ScenarioCapabilitySnapshot? Capabilities { get; set; }
     public string? ExpectedState { get; set; }
     public string? ObservedState { get; set; }
     // Captured immediately before cleanup so the result artifact describes
@@ -104,36 +100,78 @@ internal sealed class Ctx
     public bool? LiveSplitPairPresented { get; set; }
     public string? LiveActiveGuest { get; set; }
 
+    /// <summary>
+    /// A lease is installed by physical scenarios after preflight and before
+    /// any guarded input. Native-free/preflight contexts may leave it null.
+    /// </summary>
+    public DesktopQualificationLease? DesktopLease { get; set; }
+
     public void Check(bool condition, string what)
     {
         GuardedProc.Log($"  {(condition ? "PASS" : "FAIL")}: {what}");
         Assertions.Add(new AssertionEvidence(what, condition));
         if (!condition)
         {
-            Pass = false;
-            // A failed assertion is authoritative regardless of earlier skips:
-            // a scenario that skipped a prerequisite and then failed a real
-            // check must report FAIL, never remain green SKIP.
-            Status = QualificationStatus.Fail;
-            FailureReasons.Add(what);
+            if (DesktopLease != null && !DesktopLease.IsValid)
+                SetOutcome(ScenarioOutcomeKind.BlockedEnvironment, DesktopLease.LastFailureReason ?? what, log: false);
+            else
+                SetOutcome(ScenarioOutcomeKind.FailProduct, what, log: false);
         }
     }
 
-    public void Skip(string reason)
+    public void FailProduct(string reason)
     {
-        GuardedProc.Log($"  SKIP: {reason}");
-        // Skips never mask an already-decided failure.
-        if (Status != QualificationStatus.Fail)
-            Status = QualificationStatus.Skip;
-        Pass = Pass && Status != QualificationStatus.Fail;
-        FailureReasons.Add(reason);
+        SetOutcome(ScenarioOutcomeKind.FailProduct, reason);
     }
 
-    public void Block(string reason)
+    public void FailHarness(string reason)
     {
-        GuardedProc.Log($"  BLOCKED: {reason}");
-        Status = QualificationStatus.Blocked;
-        Pass = false;
+        SetOutcome(ScenarioOutcomeKind.FailHarness, reason);
+    }
+
+    public void BlockEnvironment(string reason)
+    {
+        SetOutcome(ScenarioOutcomeKind.BlockedEnvironment, reason);
+    }
+
+    public void BlockSupervised(string reason)
+    {
+        SetOutcome(ScenarioOutcomeKind.BlockedSupervised, reason);
+    }
+
+    public void BlockCapability(string reason)
+    {
+        SetOutcome(ScenarioOutcomeKind.BlockedCapability, reason);
+    }
+
+    public void SkipCapability(string reason)
+    {
+        SetOutcome(ScenarioOutcomeKind.SkipCapability, reason);
+    }
+
+    public void MarkFlake(string reason)
+    {
+        SetOutcome(ScenarioOutcomeKind.FlakeUnclassified, reason);
+    }
+
+    /// <summary>Compatibility alias during scenario migration; maps to environment blocking.</summary>
+    public void Block(string reason) => BlockEnvironment(reason);
+
+    /// <summary>Compatibility alias during scenario migration; maps to a capability skip.</summary>
+    public void Skip(string reason) => SkipCapability(reason);
+
+    private void SetOutcome(ScenarioOutcomeKind kind, string reason, bool log = true)
+    {
+        if (log)
+            GuardedProc.Log($"  {ScenarioOutcomeContract.Code(kind)}: {reason}");
+
+        ScenarioOutcome next = new(kind, reason);
+        if (Outcome.Kind == ScenarioOutcomeKind.Pass
+            || ScenarioOutcomeContract.ExitCode(kind) > ScenarioOutcomeContract.ExitCode(Outcome.Kind))
+        {
+            Outcome = next;
+        }
+
         FailureReasons.Add(reason);
     }
 }
@@ -236,507 +274,108 @@ internal static partial class Scenarios
             .Any(dir => File.Exists(Path.Combine(dir, executable)));
     }
 
+    /// <summary>
+    /// The standalone picker title includes the product name. Keep driver
+    /// discovery stable across that presentation copy instead of coupling
+    /// native-window lookup to one exact localized-looking title string.
+    /// </summary>
+    private static bool IsCapturePickerTitle(string? title)
+        => !string.IsNullOrWhiteSpace(title)
+            && title.StartsWith("Capture windows", StringComparison.Ordinal);
+
     private static readonly Random Rng = new Random();
 
     // Keep each real-input process comfortably below the fixed 10-minute
     // GuardedProc budget. The original split category grew to 30 scenarios and
     // hit that budget before its final cases; these explicit groups preserve
     // logical coverage without increasing any safety timeout or spawn cap.
-    public static readonly string[] SplitCoreScenarios =
-    {
-        "split-single-disabled", "split-two-auto", "split-select-partner", "split-exit",
-        "split-resize", "split-move", "split-minrestore", "split-reorder",
-        "split-popout-left", "split-popout-right",
-    };
-
-    public static readonly string[] SplitRenderScenarios =
-    {
-        "split-selfclose", "split-native-move-reassert", "split-native-resize-reassert",
-        "split-contextmenu-render-stability", "split-closebutton-left", "split-closebutton-right",
-        "split-click-third", "split-third-tab-hover-persists", "split-third-tab-click-persists",
-        "split-four-tab-nonmember-switching",
-        "split-three-app-client-settle",
-        "split-diagnostic-snapshot",
-        "split-dormant-member-removal",
-        "split-drag-release-render-stability", "drag-release-render-stability",
-        "split-guest-does-not-overflow-pane", "split-narrow-container-constraints",
-    };
-
-    public static readonly string[] SplitFocusScenarios =
-    {
-        "split-directclick", "split-repeat-cycles", "split-composite",
-        "split-three-tab-partner-popout", "split-focus-bidirectional",
-        "split-partner-permutation", "split-maximize-restore-no-overlap",
-    };
-
-    public static readonly string[] OrchestratedShardNames =
-    {
-        "core-lifecycle", "capture-group", "split-core", "split-render", "split-focus", "drag-z-order",
-        "crash-recovery", "keyboard-input", "dpi-multi-monitor", "startup", "diagnostics",
-    };
-
-    public static readonly string[] ExplicitOnlyShardNames =
-    {
-        "browser", "real-app",
-    };
-
-    public static readonly string[] AllOrder =
-    {
-        "rename", "popout", "closewin", "closewin-hide", "selfclose", "selfhide", "selfminhide",
-        "tabswitch-hidesafety", "minrestore", "maximize-repro", "repeat-cycles", "crossfeature",
-        "hotkey-afterclose", "persist-kill", "dragreorder", "chrometabdrag",
-        "closegroupprompt", "exitpopulated",
-        // expand-e2e-coverage additions: each guards an H-series bug that had no
-        // automated coverage before this change. All are pig-only/hermetic (the
-        // launcher-hint one is a pure UIA read) and join `all` per the spec.
-        "container-minimize-retains-tabs", "hotkey-hold-single-picker", "popout-inactive-keeps-active",
-        "double-capture-refused", "persist-active-tab-index", "restored-group-survives-member-reclose",
-        "selfminimize-timer-vs-teardown", "launcher-empty-state-hint",
-        // Vertical left/right split-screen coverage. All pig-only/hermetic (no
-        // --guest needed) and join `all`; bodies live in Scenarios.Split.cs.
-        "split-single-disabled", "split-two-auto", "split-select-partner", "split-exit",
-        "split-resize", "split-move", "split-minrestore", "split-reorder",
-        "split-popout-left", "split-popout-right", "split-selfclose", "split-native-move-reassert",
-        "split-native-resize-reassert", "split-contextmenu-render-stability", "split-closebutton-left",
-        "split-closebutton-right", "split-click-third",
-        "split-third-tab-hover-persists", "split-third-tab-click-persists",
-        "split-four-tab-nonmember-switching",
-        "split-three-app-client-settle",
-        "split-diagnostic-snapshot",
-        "split-dormant-member-removal",
-        "split-drag-release-render-stability", "drag-release-render-stability",
-        "split-directclick", "split-repeat-cycles", "contextmenu-render-stability",
-        "chrome-click-render-stability", "tab-closebutton-popout", "tab-middleclick-popout",
-        "capture-inline-ui", "group-create-inline",
-        "three-app-torture",
-        "group-dropdown-stability", "add-window-toggle", "group-rename-menu",
-        "group-delete-populated", "split-composite",
-        // Split-symmetry / window-state hardening (goal §4-§14): regression
-        // scenarios for the partner-member pop-out defect, bidirectional
-        // member focus, initiator/partner permutation, and maximize/restore
-        // pane partitioning.
-        "split-three-tab-partner-popout", "split-focus-bidirectional",
-        "split-partner-permutation", "split-maximize-restore-no-overlap",
-        // Post-audit containment (guest native-minimum) scenarios.
-        "split-guest-does-not-overflow-pane", "split-narrow-container-constraints",
-        "single-guest-does-not-overflow-content",
-        "hung-guest-mintrack",
-        "crashkill-maximized-recovery", "crashkill-minimized-recovery",
-        "crashkill-split-rescue",
-        "startup-local-stack-above-unrelated-when-guest-present",
-        // R22 qualification torture harness (Scenarios.Torture.cs): hermetic
-        // pig-only soaks; categorized in GetScenarioShard's torture- block.
-        "torture-tabswitch-rapid", "torture-tabswitch-random", "torture-split-member-destroy",
-        "torture-closegroup-same-process", "torture-minrestore-soak", "torture-crash-restart-soak",
-    };
-
-    /// <summary>
-    /// "realapp" is deliberately NOT in AllOrder/"all": it attaches to the user's
-    /// own live app (Codex/ChatGPT Classic) rather than a disposable guest, so it
-    /// must always be invoked explicitly by name with --guest codex|chatgptclassic,
-    /// never swept in by a blanket "all" run.
-    /// </summary>
-    public static readonly string[] RealAppGuestKinds = { "codex", "chatgptclassic" };
-
-    /// <summary>
-    /// Real-browser scenarios (docs/internal/TEST_PLAN.md section 5) are also
-    /// deliberately NOT in AllOrder/"all": each needs an explicit --guest
-    /// {chrome-normal|edge-normal|firefox-normal} to mean anything, so a blanket
-    /// "all" run must not silently launch real browsers with no guest chosen.
-    /// </summary>
-    // Previously also listed hotkey-afterclose/persist-kill/dragreorder
-    // and every contentinput/chromeinput/alttabinput/keyboardinput* scenario, none
-    // of which read opt.Guest at all (they spawn a hardcoded pig/Chrome/Notepad
-    // guest directly) — that mislabeling made Program.cs demand a bogus
-    // --guest {chrome-normal|edge-normal|firefox-normal} to run them at all, which
-    // in turn made "all" (which includes hotkey-afterclose/persist-kill/
-    // dragreorder via AllOrder) fail its own argument validation before spawning
-    // anything. Confirmed by running `all` and hitting this exact Usage() error.
-    public static readonly string[] BrowserOnlyScenarios =
-    {
-        "browser-lifecycle", "browser-tabswitch-hidesafety", "browser-dragreorder", "browser-soak",
-        "browser-split-persistent-render",
-    };
-    public static readonly string[] BrowserGuestKinds = { "chrome-normal", "edge-normal", "brave-normal", "firefox-normal" };
-
-    /// <summary>
-    /// Scenarios that read `RunScenario`'s switch fine but were left off of
-    /// every allowlist in `Program.cs`'s CLI validation when
-    /// `contentinput`/`chromeinput`/`alttabinput`/`keyboardinput*` were pulled
-    /// out of the mislabeled `BrowserOnlyScenarios` (see KNOWN_ISSUES.md
-    /// H-NEW2) — with neither list matching, `Program.cs`'s `known` check
-    /// rejected every one of them, making them uninvokable from the CLI at
-    /// all. None take --guest and none belong in AllOrder/"all" (each spawns
-    /// its own hardcoded pig/Chrome/Edge/Notepad guest; folding them into
-    /// "all" would slow every run down for coverage the browser-* scenarios
-    /// already give via an explicit --guest).
-    /// </summary>
-    public static readonly string[] StandaloneExtraScenarios =
-    {
-        "contentinput", "chromeinput", "alttabinput",
-        "keyboardinput", "keyboardinput-chrome", "keyboardinput-notepad", "keyboardinput-rapid-switch",
-        "keyboardinput-chrome-altswitch", "keyboardinput-edge-altswitch", "keyboardinput-chrome-omnibox-altswitch",
-        "realworkflow-altswitch", "directclick-foreground-pairing", "dragout-by-titlebar",
-        "crashkill-rescue", "crashkill-rapidswitch-rescue", "crashkill-selfhide-not-rescued", "realapp-multi-render",
-        "instant-tabswitch", "reattach-thenclick-othertab", "reattach-repeated-cycles",
-        "picker-owner-is-requesting-container", "picker-owner-falls-back-when-container-closed",
-        "rename-edge-cases", "multi-group-independent-interaction", "dragreorder-then-immediate-popout",
-        "keyboard-only-tab-navigation", "crashkill-during-active-drag", "dwm-transitions-disabled-on-capture",
-        "dragprobe",
-"capture-dpi-unaware-guest",
-"capture-dpi-system-guest",
-        "split-comparison-observe",
-        "startup-group-not-hidden-behind-existing-window",
-        "startup-does-not-steal-foreground-after-external-activation",
-        "global-tab-navigation", "split-affordance", "capture-admission-blocked",
-    };
-
-    /// <summary>
-    /// Selects the application and GuineaPig artifacts for one driver process.
-    /// The default is deterministic discovery of the RID-specific output, with
-    /// a no-RID fallback for projects (such as GuineaPig) that are normally
-    /// built without a runtime identifier. Explicit paths always win.
-    /// </summary>
-    public static void ConfigureArtifacts(string configuration, string rid, string? tabDockPath, string? guineaPigPath)
-    {
-        SelectedConfiguration = configuration;
-        SelectedRid = rid;
-        TabDockExe = ResolveArtifact(
-            tabDockPath,
-            "TabDock",
-            Path.Combine("bin", configuration, "net8.0-windows"),
-            "TabDock.exe",
-            rid);
-        PigExe = ResolveArtifact(
-            guineaPigPath,
-            "GuineaPig",
-            Path.Combine("tests", "ValidationDriver", "TabDock.GuineaPig", "bin", configuration, "net8.0-windows"),
-            "TabDock.GuineaPig.exe",
-            rid);
-    }
-
-    private static string ResolveArtifact(string? explicitPath, string label, string relativeDirectory, string fileName, string rid)
-    {
-        if (!string.IsNullOrWhiteSpace(explicitPath))
-            return Path.GetFullPath(explicitPath);
-
-        var candidates = new List<string>();
-        if (!string.Equals(rid, "none", StringComparison.OrdinalIgnoreCase))
-        {
-            string selectedRid = string.Equals(rid, "auto", StringComparison.OrdinalIgnoreCase) ? "win-x64" : rid;
-            candidates.Add(Path.Combine(RepoRoot, relativeDirectory, selectedRid, fileName));
-        }
-        candidates.Add(Path.Combine(RepoRoot, relativeDirectory, fileName));
-
-        foreach (string candidate in candidates)
-        {
-            if (File.Exists(candidate))
-                return candidate;
-        }
-
-        // Return the most likely path so the caller's diagnostic names the
-        // requested configuration/RID rather than hiding the missing artifact.
-        return candidates[0];
-    }
-
-    /// <summary>
-    /// Returns the stable category for every registered scenario. A new
-    /// scenario must be assigned here; ValidateShardCoverage is called at
-    /// startup and fails closed if registration and categorization diverge.
-    /// </summary>
-    public static string? GetScenarioShard(string name)
-    {
-        if (name == "realapp" || name == "realapp-multi-render")
-            return "real-app";
-        if (name == "browser-multi" || Array.IndexOf(BrowserOnlyScenarios, name) >= 0)
-            return "browser";
-        if (name == "global-tab-navigation")
-            return "keyboard-input";
-        if (name == "split-affordance")
-            return "split-focus";
-        if (name == "capture-admission-blocked")
-            return "diagnostics";
-        // R22 qualification torture harness (Scenarios.Torture.cs). Shard
-        // mapping follows each soak's dominant cost driver: tab-switch soaks
-        // are click/input churn (keyboard-input), member-destroy drives the
-        // split relationship lifecycle (split-core), the close-group prompt
-        // exercises multi-capture grouping (capture-group), the min/restore
-        // soak is split presentation focus (split-focus), and the crash/restart
-        // soak is rescue-journal recovery (crash-recovery).
-        if (name.StartsWith("torture-", StringComparison.Ordinal))
-        {
-            return name switch
-            {
-                "torture-tabswitch-rapid" or "torture-tabswitch-random" => "keyboard-input",
-                "torture-split-member-destroy" => "split-core",
-                "torture-closegroup-same-process" => "capture-group",
-                "torture-minrestore-soak" => "split-focus",
-                "torture-crash-restart-soak" => "crash-recovery",
-                _ => null,
-            };
-        }
-        if (name.StartsWith("crashkill-", StringComparison.Ordinal))
-            return "crash-recovery";
-        if (Array.IndexOf(SplitCoreScenarios, name) >= 0)
-            return "split-core";
-        if (Array.IndexOf(SplitRenderScenarios, name) >= 0)
-            return "split-render";
-        if (Array.IndexOf(SplitFocusScenarios, name) >= 0)
-            return "split-focus";
-        if (name == "split-comparison-observe")
-            return "split-render";
-        if (name.StartsWith("split-", StringComparison.Ordinal) || name == "split")
-            return null;
-        if (name.Contains("drag", StringComparison.Ordinal)
-            || name.Contains("contextmenu", StringComparison.Ordinal)
-            || name.Contains("chrome-click", StringComparison.Ordinal)
-            || name.Contains("directclick", StringComparison.Ordinal)
-            || name == "tab-middleclick-popout")
-            return "drag-z-order";
-        if (name.Contains("keyboard", StringComparison.Ordinal)
-            || name.Contains("input", StringComparison.Ordinal)
-            || name.Contains("alttab", StringComparison.Ordinal)
-            || name.Contains("altswitch", StringComparison.Ordinal)
-            || name == "realworkflow-altswitch")
-            return "keyboard-input";
-        if (name.StartsWith("startup-", StringComparison.Ordinal))
-            return "startup";
-        if (name.Contains("dpi", StringComparison.Ordinal)
-            || name.Contains("mintrack", StringComparison.Ordinal)
-            || name == "maximize-repro"
-            || name == "minrestore"
-            || name == "container-minimize-retains-tabs"
-            || name == "selfminimize-timer-vs-teardown")
-            return "dpi-multi-monitor";
-        if (name.Contains("picker", StringComparison.Ordinal)
-            || name.Contains("dwm", StringComparison.Ordinal)
-            || name == "capture-inline-ui"
-            || name == "launcher-empty-state-hint"
-            || name == "add-window-toggle")
-            return "diagnostics";
-        if (name.Contains("capture", StringComparison.Ordinal)
-            || name.Contains("group", StringComparison.Ordinal)
-            || name.Contains("persist", StringComparison.Ordinal)
-            || name.Contains("reattach", StringComparison.Ordinal)
-            || name == "instant-tabswitch"
-            || name == "double-capture-refused"
-            || name == "three-app-torture"
-            || name == "tab-closebutton-popout")
-            return "capture-group";
-
-        // These are intentionally the small, ordinary lifecycle set. Keeping
-        // this explicit makes a future registration fail validation instead of
-        // silently disappearing into an arbitrary shard.
-        switch (name)
-        {
-            case "rename":
-            case "rename-edge-cases":
-            case "popout":
-            case "closewin":
-            case "closewin-hide":
-            case "selfclose":
-            case "selfhide":
-            case "selfminhide":
-            case "tabswitch-hidesafety":
-            case "repeat-cycles":
-            case "crossfeature":
-            case "hotkey-afterclose":
-            case "hotkey-hold-single-picker":
-            case "closegroupprompt":
-            case "exitpopulated":
-            case "popout-inactive-keeps-active":
-            case "multi-group-independent-interaction":
-            case "single-guest-does-not-overflow-content":
-                return "core-lifecycle";
-            default:
-                return null;
-        }
-    }
-
-    public static void ValidateShardCoverage()
-    {
-        var registered = AllOrder
-            .Concat(BrowserOnlyScenarios)
-            .Concat(StandaloneExtraScenarios)
-            .Concat(new[] { "realapp", "browser-multi" })
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-
-        var unknown = registered
-            .Where(name => GetScenarioShard(name) == null)
-            .ToArray();
-        if (unknown.Length != 0)
-            throw new InvalidOperationException("Uncategorized ValidationDriver scenario(s): " + string.Join(", ", unknown));
-
-        foreach (string shard in OrchestratedShardNames.Concat(ExplicitOnlyShardNames))
-        {
-            if (GetShardScenarios(shard).Count == 0)
-                throw new InvalidOperationException($"ValidationDriver shard '{shard}' has no scenarios.");
-        }
-    }
-
-    public static IReadOnlyList<string> GetShardScenarios(string shard)
-    {
-        if (string.Equals(shard, "browser", StringComparison.Ordinal))
-            return BrowserOnlyScenarios.Concat(new[] { "browser-multi" }).ToArray();
-        if (string.Equals(shard, "real-app", StringComparison.Ordinal))
-            return new[] { "realapp", "realapp-multi-render" };
-
-        return AllOrder
-            .Concat(StandaloneExtraScenarios)
-            .Where(name => string.Equals(GetScenarioShard(name), shard, StringComparison.Ordinal))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-    }
-
+    // Scenario registration, shard ownership, and dispatch metadata are defined by ScenarioCatalog.
     // -------------------------------------------------------------------------
     // Runner
     // -------------------------------------------------------------------------
-    public static bool RunScenario(string name, Options opt)
+    public static bool RunScenario(string name, Options opt, int attempt = 1)
     {
-        Action<Ctx, Options>? body = name switch
+        if (!ScenarioCatalog.TryResolve(name, out Action<Ctx, Options>? body, out ScenarioDefinition? definition))
         {
-            "rename" => Rename,
-            "popout" => PopOut,
-            "closewin" => CloseWin,
-            "closewin-hide" => CloseWinHide,
-            "selfclose" => SelfClose,
-            "selfhide" => SelfHide,
-            "selfminhide" => SelfMinHide,
-            "tabswitch-hidesafety" => TabSwitchHideSafety,
-            "minrestore" => MinRestore,
-            "maximize-repro" => MaximizeRepro,
-            "repeat-cycles" => RepeatCycles,
-            "crossfeature" => CrossFeature,
-            "hotkey-afterclose" => HotkeyAfterClose,
-            "persist-kill" => PersistKill,
-            "dragreorder" => DragReorder,
-            "dragprobe" => DragProbe,
-            "chrometabdrag" => ChromeTabDrag,
-            "realapp" => RealAppFillMaxHide,
-            "closegroupprompt" => CloseGroupPrompt,
-            "exitpopulated" => ExitPopulated,
-            "container-minimize-retains-tabs" => ContainerMinimizeRetainsTabs,
-            "hotkey-hold-single-picker" => HotkeyHoldSinglePicker,
-            "popout-inactive-keeps-active" => PopOutInactiveKeepsActive,
-            "double-capture-refused" => DoubleCaptureRefused,
-            "persist-active-tab-index" => PersistActiveTabIndex,
-            "restored-group-survives-member-reclose" => RestoredGroupSurvivesMemberReclose,
-            "selfminimize-timer-vs-teardown" => SelfMinimizeTimerVsTeardown,
-            "launcher-empty-state-hint" => LauncherEmptyStateHint,
-            "global-tab-navigation" => GlobalTabNavigation,
-            "split-affordance" => SplitAffordance,
-            "capture-admission-blocked" => CaptureAdmissionBlocked,
-            "split-single-disabled" => SplitSingleDisabled,
-            "split-two-auto" => SplitTwoAuto,
-            "split-select-partner" => SplitSelectPartner,
-            "split-exit" => SplitExit,
-            "split-resize" => SplitResize,
-            "split-move" => SplitMove,
-            "split-minrestore" => SplitMinRestore,
-            "split-reorder" => SplitReorder,
-            "split-popout-left" => SplitPopoutLeft,
-            "split-popout-right" => SplitPopoutRight,
-            "split-selfclose" => SplitSelfClose,
-            "split-native-move-reassert" => SplitNativeMoveReassert,
-            "split-native-resize-reassert" => SplitNativeResizeReassert,
-            "split-contextmenu-render-stability" => SplitContextMenuRenderStability,
-            "split-closebutton-left" => SplitCloseButtonLeft,
-            "split-closebutton-right" => SplitCloseButtonRight,
-            "split-click-third" => SplitClickThird,
-            "split-third-tab-hover-persists" => SplitThirdTabHoverPersists,
-            "split-third-tab-click-persists" => SplitThirdTabClickPersists,
-            "split-four-tab-nonmember-switching" => SplitFourTabNonmemberSwitching,
-            "split-three-app-client-settle" => SplitThreeAppClientSettle,
-            "split-diagnostic-snapshot" => SplitDiagnosticSnapshot,
-            "split-dormant-member-removal" => SplitDormantMemberRemoval,
-            "split-comparison-observe" => SplitComparisonObserve,
-            "split-drag-release-render-stability" => SplitDragReleaseRenderStability,
-            "drag-release-render-stability" => DragReleaseRenderStability,
-            "split-directclick" => SplitDirectClick,
-            "split-repeat-cycles" => SplitRepeatCycles,
-            "contextmenu-render-stability" => ContextMenuRenderStability,
-            "chrome-click-render-stability" => ChromeClickRenderStability,
-            "tab-closebutton-popout" => TabCloseButtonPopout,
-            "tab-middleclick-popout" => TabMiddleClickPopout,
-            "capture-inline-ui" => CaptureInlineUi,
-            "group-create-inline" => GroupCreateInline,
-            "group-dropdown-stability" => GroupDropdownStability,
-            "add-window-toggle" => AddWindowToggle,
-            "group-rename-menu" => GroupRenameMenu,
-            "group-delete-populated" => GroupDeletePopulated,
-            "split-composite" => SplitComposite,
-            "split-three-tab-partner-popout" => SplitThreeTabPartnerPopout,
-            "split-focus-bidirectional" => SplitFocusBidirectional,
-            "split-partner-permutation" => SplitPartnerPermutation,
-            "split-maximize-restore-no-overlap" => SplitMaximizeRestoreNoOverlap,
-            "split-guest-does-not-overflow-pane" => SplitGuestDoesNotOverflowPane,
-            "split-narrow-container-constraints" => SplitNarrowContainerConstraints,
-            "single-guest-does-not-overflow-content" => SingleGuestDoesNotOverflowContent,
-            "hung-guest-mintrack" => HungGuestMinTrack,
-            "crashkill-maximized-recovery" => CrashKillMaximizedRecovery,
-            "crashkill-minimized-recovery" => CrashKillMinimizedRecovery,
-            "crashkill-split-rescue" => CrashKillSplitRescue,
-"capture-dpi-unaware-guest" => CaptureDpiUnawareGuest,
-"capture-dpi-system-guest" => CaptureDpiSystemGuest,
-            "three-app-torture" => ThreeAppTorture,
-            "torture-tabswitch-rapid" => TortureTabSwitchRapid,
-            "torture-tabswitch-random" => TortureTabSwitchRandom,
-            "torture-split-member-destroy" => TortureSplitMemberDestroy,
-            "torture-closegroup-same-process" => TortureCloseGroupSameProcess,
-            "torture-minrestore-soak" => TortureMinRestoreSoak,
-            "torture-crash-restart-soak" => TortureCrashRestartSoak,
-            "browser-lifecycle" => BrowserLifecycle,
-            "browser-tabswitch-hidesafety" => BrowserTabSwitchHideSafety,
-            "browser-dragreorder" => BrowserDragReorder,
-            "browser-multi" => BrowserMulti,
-            "browser-soak" => BrowserSoak,
-            "browser-split-persistent-render" => BrowserSplitPersistentRender,
-            "contentinput" => ContentInput,
-            "chromeinput" => ChromeInput,
-            "alttabinput" => AltTabInput,
-            "keyboardinput" => KeyboardInput,
-            "keyboardinput-chrome" => KeyboardInputChrome,
-            "keyboardinput-notepad" => KeyboardInputNotepad,
-            "keyboardinput-rapid-switch" => KeyboardInputRapidSwitch,
-            "keyboardinput-chrome-altswitch" => KeyboardInputChromeAltSwitch,
-            "keyboardinput-edge-altswitch" => KeyboardInputEdgeAltSwitch,
-            "keyboardinput-chrome-omnibox-altswitch" => KeyboardInputChromeOmniboxAltSwitch,
-            "realworkflow-altswitch" => RealWorkflowAltSwitch,
-            "directclick-foreground-pairing" => DirectClickForegroundPairing,
-            "dragout-by-titlebar" => DragOutByTitlebar,
-            "crashkill-rescue" => CrashKillRescue,
-            "crashkill-rapidswitch-rescue" => CrashKillRapidSwitchRescue,
-            "crashkill-selfhide-not-rescued" => CrashKillSelfHideNotRescued,
-            "realapp-multi-render" => RealAppMultiRender,
-            "instant-tabswitch" => InstantTabSwitch,
-            "reattach-thenclick-othertab" => ReattachThenClickOtherTab,
-            "reattach-repeated-cycles" => ReattachRepeatedCycles,
-            "picker-owner-is-requesting-container" => PickerOwnerIsRequestingContainer,
-            "picker-owner-falls-back-when-container-closed" => PickerOwnerFallsBackWhenContainerClosed,
-            "rename-edge-cases" => RenameEdgeCases,
-            "multi-group-independent-interaction" => MultiGroupIndependentInteraction,
-            "dragreorder-then-immediate-popout" => DragReorderThenImmediatePopOut,
-            "keyboard-only-tab-navigation" => KeyboardOnlyTabNavigation,
-            "crashkill-during-active-drag" => CrashKillDuringActiveDrag,
-            "dwm-transitions-disabled-on-capture" => DwmTransitionsDisabledOnCapture,
-            "startup-group-not-hidden-behind-existing-window" => StartupGroupNotHiddenBehindExistingWindow,
-            "startup-does-not-steal-foreground-after-external-activation" => StartupDoesNotStealForegroundAfterExternalActivation,
-            "startup-local-stack-above-unrelated-when-guest-present" => StartupLocalStackAboveUnrelatedWhenGuestPresent,
-            _ => null,
-        };
-        if (body == null)
+            GuardedProc.Log($"Unknown or unresolvable scenario '{name}'.");
+            return false;
+        }
+        ScenarioCapabilitySnapshot capabilities = ScenarioCapabilities.CaptureCurrent();
+        ScenarioCapabilityResolution capabilityResolution = ScenarioCapabilities.Resolve(
+            ScenarioCapabilities.Describe(definition!, opt), capabilities);
+        if (!capabilityResolution.Runnable)
         {
-            GuardedProc.Log($"Unknown scenario '{name}'. Known: {string.Join(", ", AllOrder)}");
+            // Capability outcomes are written without starting TabDock or
+            // clearing persisted user state. A missing browser, locked
+            // workstation, or absent topology is a preflight result, not a
+            // product assertion and must not run destructive setup.
+            Input.ResetIdentityScope(name);
+            var preflight = new Ctx
+            {
+                Name = name,
+                Attempt = attempt,
+                Capabilities = capabilities,
+            };
+            ScenarioOutcomeKind outcome = capabilityResolution.Outcome
+                ?? ScenarioOutcomeKind.FailHarness;
+            switch (outcome)
+            {
+                case ScenarioOutcomeKind.SkipCapability:
+                    preflight.SkipCapability(capabilityResolution.Reason ?? "capability unavailable");
+                    break;
+                case ScenarioOutcomeKind.BlockedCapability:
+                    preflight.BlockCapability(capabilityResolution.Reason ?? "capability blocked");
+                    break;
+                case ScenarioOutcomeKind.BlockedEnvironment:
+                    preflight.BlockEnvironment(capabilityResolution.Reason ?? "environment blocked");
+                    break;
+                default:
+                    preflight.FailHarness(capabilityResolution.Reason ?? "capability preflight failed");
+                    break;
+            }
+            preflight.FinishedUtc = DateTimeOffset.UtcNow;
+            QualificationResultWriter.WriteScenario(preflight);
+            GuardedProc.Log($"SCENARIO {name}: {preflight.Outcome.Code} ({preflight.Outcome.Reason})");
+            return false;
+        }
+
+        var timeline = new NativeInteractionTimeline();
+        var lease = DesktopQualificationLease.CreateNative(timeline);
+        lease.Start();
+        if (!lease.IsValid)
+        {
+            Input.ResetIdentityScope(name);
+            var blocked = new Ctx
+            {
+                Name = name,
+                Attempt = attempt,
+                Timeline = timeline,
+                Capabilities = capabilities,
+                DesktopLease = lease,
+            };
+            blocked.BlockEnvironment(lease.LastFailureReason ?? "desktop qualification lease could not start");
+            blocked.FinishedUtc = DateTimeOffset.UtcNow;
+            QualificationResultWriter.WriteScenario(blocked);
+            lease.Close();
+            GuardedProc.Log($"SCENARIO {name}: {blocked.Outcome.Code} ({blocked.Outcome.Reason})");
             return false;
         }
 
         GuardedProc.Log($"=== SCENARIO {name} ===");
         Ctx? ctx = null;
+        string? setupFailureReason = null;
+        GuardedProc.SetTimeline(timeline);
         try
         {
             ctx = StartScenario(name);
-            body(ctx, opt);
+            ctx.Attempt = attempt;
+            ctx.Timeline = timeline;
+            ctx.Capabilities = capabilities;
+            ctx.DesktopLease = lease;
+            Input.SetDesktopLease(lease);
+            if (ctx.MainIdentity.HasValue)
+                lease.RegisterTarget(ctx.MainIdentity.Value, "TabDockMainWindow");
+            body!(ctx, opt);
         }
         catch (OperationCanceledException)
         {
@@ -748,34 +387,56 @@ internal static partial class Scenarios
         catch (Exception ex)
         {
             GuardedProc.Log($"  ERROR: {ex.Message}");
+            setupFailureReason = $"scenario setup failed: {ex.GetType().Name}";
             if (ctx != null)
                 ctx.Check(false, $"unhandled exception: {ex.GetType().Name}");
         }
         finally
         {
-            if (ctx != null)
+            try
             {
-                QualificationResultWriter.CaptureLiveEvidence(ctx);
-                Cleanup(ctx);
-                ctx.Check(NoSpawnedGuestWindowsRemain(ctx), "cleanup left no spawned guest top-level windows");
-                ctx.FinishedUtc = DateTimeOffset.UtcNow;
-                QualificationResultWriter.WriteScenario(ctx);
+                Input.SetDesktopLease(null);
+                if (ctx != null)
+                {
+                    QualificationResultWriter.CaptureLiveEvidence(ctx);
+                    Cleanup(ctx);
+                    ctx.Check(NoSpawnedGuestWindowsRemain(ctx), "cleanup left no spawned guest top-level windows");
+                    ctx.FinishedUtc = DateTimeOffset.UtcNow;
+                    lease.Close();
+                    QualificationResultWriter.WriteScenario(ctx);
+                }
+                else
+                {
+                    // StartScenario can fail after isolating state.json but before
+                    // it returns a context (for example, a spawned TabDock never
+                    // creates its MainWindow). Clean tracked processes first so a
+                    // partial app cannot write over the restored user state, then
+                    // apply the snapshot directly.
+                    GuardedProc.CleanupTrackedProcesses();
+                    RestoreStateSnapshot();
+                    GuardedProc.Log("  Cleanup: setup failed before context creation; state snapshot restored.");
+                    var failedSetup = new Ctx
+                    {
+                        Name = name,
+                        Attempt = attempt,
+                        Timeline = timeline,
+                        Capabilities = capabilities,
+                        DesktopLease = lease,
+                    };
+                    failedSetup.FailHarness(setupFailureReason ?? "scenario setup failed before context creation");
+                    failedSetup.FinishedUtc = DateTimeOffset.UtcNow;
+                    lease.Close();
+                    QualificationResultWriter.WriteScenario(failedSetup);
+                }
+                GuardedProc.Log($"SCENARIO {name}: {(ctx == null ? "FAIL_HARNESS" : ctx.Outcome.Code)}");
             }
-            else
+            finally
             {
-                // StartScenario can fail after isolating state.json but before
-                // it returns a context (for example, a spawned TabDock never
-                // creates its MainWindow). Clean tracked processes first so a
-                // partial app cannot write over the restored user state, then
-                // apply the snapshot directly.
-                GuardedProc.CleanupTrackedProcesses();
-                RestoreStateSnapshot();
-                GuardedProc.Log("  Cleanup: setup failed before context creation; state snapshot restored.");
+                GuardedProc.SetTimeline(null);
             }
-            GuardedProc.Log($"SCENARIO {name}: {(ctx == null ? "FAIL" : ctx.Status.ToString().ToUpperInvariant())}");
         }
         return ctx != null
-            && (ctx.Status is QualificationStatus.Pass or QualificationStatus.Skip);
+            && ctx.Outcome.IsReleasePass;
     }
 
     // -------------------------------------------------------------------------
@@ -1525,7 +1186,7 @@ internal static partial class Scenarios
             VerifyToken = fileName,
             VerifyFilePath = tempFile,
         };
-        RememberGuestWindow(g);
+        RememberGuestWindow(g, adoptExternalWhenUntracked: !isOurProcess);
         ctx.Guests.Add(g);
         GuardedProc.Log($"  Notepad guest '{g.Title}' PID {g.Pid} HWND 0x{g.Hwnd.ToInt64():X} file='{fileName}' isOurProcess={isOurProcess}.");
         return g;
@@ -1533,7 +1194,8 @@ internal static partial class Scenarios
 
     /// <summary>
     /// Opens the capture picker with the real Ctrl+Alt+G hotkey, real-clicks the row for each
-    /// guest (aborting if a row is missing or ambiguous), real-clicks "Group these", and waits
+    /// guest (aborting if a row is missing or ambiguous), real-clicks the stable
+    /// "CaptureGroupThese" submit control, and waits
     /// for the newly created container (EnumWindows diff so pre-existing/restored containers
     /// are never confused with the new one).
     /// </summary>
@@ -1563,7 +1225,7 @@ internal static partial class Scenarios
         // snapshot can be stale for freshly created windows (observed: the picker was
         // visible per EnumWindows but absent from RootElement children), so bridge
         // into UIA from the HWND instead of searching the desktop tree.
-        IntPtr pickerHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 10000);
+        IntPtr pickerHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, IsCapturePickerTitle, 10000);
         if (pickerHwnd == IntPtr.Zero)
             throw new InvalidOperationException("'Capture windows' picker did not appear within 10s.");
         Input.RegisterDiscoveredWindow(pickerHwnd, "TabDockCapturePicker");
@@ -1629,7 +1291,7 @@ internal static partial class Scenarios
                 throw lastMiss ?? new InvalidOperationException($"Picker row for '{g.Title}' not found.");
 
             // Real-click the checkbox and verify it toggled on; the CheckBox's
-            // CanExecute gate on "Group these" depends on it. Use the row center
+            // CanExecute gate on the submit action depends on it. Use the row center
             // (the whole WPF CheckBox content is clickable) rather than the glyph
             // edge, which can miss on high-DPI or differently-templated rows.
             GuardedProc.Log($"  CaptureIntoGroup: toggling row for '{g.Title}' (controlType={row.Current.ControlType.ProgrammaticName}, rect={Uia.GetElementRect(row)}).");
@@ -1682,9 +1344,9 @@ internal static partial class Scenarios
             Thread.Sleep(200);
         }
 
-        AutomationElement? groupBtn = Uia.FindDescendantByName(picker, ControlType.Button, "Group these", null, out int btnCount);
+        AutomationElement? groupBtn = Uia.FindDescendantByAutomationId(picker, "CaptureGroupThese", out int btnCount);
         if (groupBtn == null || btnCount != 1)
-            throw new InvalidOperationException($"'Group these' button not found uniquely (count={btnCount}).");
+            throw new InvalidOperationException($"'CaptureGroupThese' button not found uniquely (count={btnCount}).");
         bool pickerClosed = false;
         for (int attempt = 0; attempt < 3 && !pickerClosed; attempt++)
         {
@@ -1697,7 +1359,7 @@ internal static partial class Scenarios
                 picker = Uia.FromHwnd(pickerHwnd);
                 if (picker == null)
                     break;
-                groupBtn = Uia.FindDescendantByName(picker, ControlType.Button, "Group these", null, out btnCount);
+                groupBtn = Uia.FindDescendantByAutomationId(picker, "CaptureGroupThese", out btnCount);
                 if (groupBtn == null || btnCount != 1)
                     break;
             }
@@ -1711,11 +1373,11 @@ internal static partial class Scenarios
                 catch { return false; }
             }, 2000);
             if (!groupBtnEnabled)
-                throw new InvalidOperationException("'Group these' button is still disabled 2s after the selected rows were verified On.");
+                throw new InvalidOperationException("'CaptureGroupThese' button is still disabled 2s after the selected rows were verified On.");
             (int bx, int by) = Uia.Center(groupBtn);
             IntPtr wfp = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = bx, y = by });
             IntPtr wfpRoot = NativeMethods.GetAncestor(wfp, NativeMethods.GA_ROOT);
-            GuardedProc.Log($"  Clicking 'Group these' attempt {attempt + 1} at ({bx},{by}); windowFromPoint root=0x{wfpRoot.ToInt64():X} picker=0x{pickerHwnd.ToInt64():X} fg=0x{NativeMethods.GetForegroundWindow().ToInt64():X}.");
+            GuardedProc.Log($"  Clicking 'CaptureGroupThese' attempt {attempt + 1} at ({bx},{by}); windowFromPoint root=0x{wfpRoot.ToInt64():X} picker=0x{pickerHwnd.ToInt64():X} fg=0x{NativeMethods.GetForegroundWindow().ToInt64():X}.");
             if (!EnsureClickable(pickerHwnd, bx, by))
             {
                 if (attempt < 2 && RepositionVerifiedWindow(pickerHwnd, "picker"))
@@ -1723,7 +1385,7 @@ internal static partial class Scenarios
                     GuardedProc.Log("  CaptureIntoGroup: moved the verified picker to a virtual-screen corner before retrying; the next button point remains guard-gated.");
                     continue;
                 }
-                throw new InvalidOperationException("'Group these' point was obscured or failed identity proof; refusing to click blind.");
+                throw new InvalidOperationException("'CaptureGroupThese' point was obscured or failed identity proof; refusing to click blind.");
             }
             Input.ClickAt(bx, by);
             pickerClosed = Util.WaitUntil(() => !NativeMethods.IsWindow(pickerHwnd), 3000, 50);
@@ -1742,10 +1404,10 @@ internal static partial class Scenarios
                 }
             }
             if (!pickerClosed)
-                GuardedProc.Log($"  WARNING: picker still open after 'Group these' attempt {attempt + 1}; rediscovering before retry.");
+                GuardedProc.Log($"  WARNING: picker still open after 'CaptureGroupThese' attempt {attempt + 1}; rediscovering before retry.");
         }
         if (!pickerClosed)
-            throw new InvalidOperationException("'Group these' did not close the verified capture picker after three guarded attempts.");
+            throw new InvalidOperationException("'CaptureGroupThese' did not close the verified capture picker after three guarded attempts.");
 
         IntPtr container = IntPtr.Zero;
         Util.WaitUntil(() =>
@@ -1807,7 +1469,16 @@ internal static partial class Scenarios
             && string.Equals(identity.Title, "TabDock", StringComparison.Ordinal);
     }
 
-    private static void RememberGuestWindow(GuestInfo guest)
+    /// <summary>
+    /// Pins a guest window's identity into the run's input scope. When
+    /// <paramref name="adoptExternalWhenUntracked"/> is set and the owning
+    /// process was never spawned by this run (documented broker flow:
+    /// Windows 11 Notepad opens the spawned temp file as a tab inside an
+    /// already-running instance), the window is ADOPTED instead: its full
+    /// stable identity is pinned and re-verified before every input, while its
+    /// process stays untracked so cleanup never kills a user process.
+    /// </summary>
+    private static void RememberGuestWindow(GuestInfo guest, bool adoptExternalWhenUntracked = false)
     {
         if (!Discover.TryCaptureIdentity(guest.Hwnd, out WindowIdentity identity)
             || identity.ProcessId != guest.Pid
@@ -1816,6 +1487,12 @@ internal static partial class Scenarios
             throw new InvalidOperationException($"Guest HWND 0x{guest.Hwnd.ToInt64():X} failed process/class/title identity verification.");
         }
         guest.Identity = identity;
+        if (adoptExternalWhenUntracked && !TestRunProvenance.IsProcessInScope(identity.ProcessId))
+        {
+            if (!TestRunProvenance.TryAdoptExternalWindow(identity, "External." + guest.Role, out string adoptReason))
+                throw new InvalidOperationException($"Refusing to adopt external guest HWND 0x{guest.Hwnd.ToInt64():X}: {adoptReason}.");
+            return;
+        }
         Input.RegisterIdentity(identity, guest.Role);
     }
 
@@ -1913,6 +1590,30 @@ internal static partial class Scenarios
         if (list == null)
             return null;
         return Uia.FindDescendantByName(list, ControlType.Text, null, guestTitle, out count);
+    }
+
+    /// <summary>
+    /// Orders guests by their live tab-strip X positions (the strip renders tabs
+    /// left-to-right in model order). Capture admission follows candidate
+    /// enumeration order rather than checkbox order, so scenarios that assert
+    /// next/previous navigation MUST derive expectations from the strip instead
+    /// of assuming capture order. Throws when any title is not uniquely present
+    /// with a live bounding rect, so callers never navigate on stale data.
+    /// </summary>
+    private static GuestInfo[] TabStripOrder(IntPtr container, params GuestInfo[] pigs)
+    {
+        var positioned = new List<(double X, GuestInfo Pig)>(pigs.Length);
+        foreach (GuestInfo pig in pigs)
+        {
+            AutomationElement? tab = FindTabText(container, pig.Title, out int count);
+            if (tab == null || count != 1)
+                throw new InvalidOperationException($"Tab '{pig.Title}' was not uniquely present while deriving strip order (count={count}).");
+            System.Windows.Rect rect = tab.Current.BoundingRectangle;
+            if (rect.IsEmpty || rect.Width <= 0 || rect.Height <= 0)
+                throw new InvalidOperationException($"Tab '{pig.Title}' reported no live bounding rect while deriving strip order.");
+            positioned.Add((rect.X, pig));
+        }
+        return positioned.OrderBy(p => p.X).Select(p => p.Pig).ToArray();
     }
 
     /// <summary>
@@ -2308,15 +2009,11 @@ internal static partial class Scenarios
     }
 
     /// <summary>
-    /// Real-clicks the container's "+" (add window to group) caption button.
-    /// Tries a UIA Name match first ("Add window to group" is the button's
-    /// ToolTip in Views/ContainerWindow.xaml); WPF's ButtonBaseAutomationPeer
-    /// does not promote ToolTipService.ToolTip into the automation Name (only
-    /// HelpText), so in practice this UIA lookup is expected to miss and fall
-    /// through to the same DPI-scaled pixel-offset technique ClickMaximizeButton
-    /// already uses for the rest of this button row (4th button from the right,
-    /// after Minimize/Maximize/Close) — kept as the first attempt anyway since
-    /// a future template change could add an explicit AutomationProperties.Name.
+    /// Real-clicks the container's "+" (add window to workspace) caption
+    /// button. Prefers the stable AutomationId "AddWindowButton" (pinned by
+    /// the release-candidate UI contract), then the accessible name "Add
+    /// window to workspace", then the same DPI-scaled pixel-offset technique
+    /// ClickMaximizeButton uses for this button row.
     /// </summary>
     private static void ClickAddWindowButton(IntPtr container)
     {
@@ -2330,7 +2027,15 @@ internal static partial class Scenarios
             int count = 0;
             AutomationElement? addBtn = containerEl == null
                 ? null
-                : Uia.FindDescendantByName(containerEl, ControlType.Button, "Add window to group", null, out count);
+                : Uia.FindDescendantByAutomationId(containerEl, "AddWindowButton", out count);
+            string resolvedBy = "AutomationId AddWindowButton";
+            if (addBtn == null || count != 1)
+            {
+                addBtn = containerEl == null
+                    ? null
+                    : Uia.FindDescendantByName(containerEl, ControlType.Button, "Add window to workspace", null, out count);
+                resolvedBy = "Name 'Add window to workspace'";
+            }
             int x, y;
             List<(int X, int Y)> candidatePoints;
             if (addBtn != null && count == 1)
@@ -2343,11 +2048,12 @@ internal static partial class Scenarios
                     ((int)(addRect.X + Math.Max(5, addRect.Width * 0.10)), (int)(addRect.Y + addRect.Height / 2)),
                     ((int)(addRect.X + Math.Max(5, addRect.Width * 0.90)), (int)(addRect.Y + addRect.Height / 2)),
                 };
+                GuardedProc.Log($"  ClickAddWindowButton: resolved via {resolvedBy} at ({x},{y}).");
             }
             else
             {
                 (x, y) = CaptionButtonCenterFromRight(container, 3);
-                GuardedProc.Log($"  ClickAddWindowButton: UIA Name lookup found {count} match(es) for 'Add window to group'; falling back to the pixel-offset caption-button position ({x},{y}).");
+                GuardedProc.Log($"  ClickAddWindowButton: UIA lookups found {count} match(es); falling back to the pixel-offset caption-button position ({x},{y}).");
                 candidatePoints = new List<(int X, int Y)> { (x, y) };
             }
 
@@ -2368,6 +2074,28 @@ internal static partial class Scenarios
 
             throw new InvalidOperationException("Could not bring the container to the foreground and its 'Add window' button is obscured — refusing to click blind.");
         }
+    }
+
+    /// <summary>
+    /// Resolves the inline capture row's toggle CheckBox for one guest: first by
+    /// the stable accessible name "Select <title>" from the redesigned row
+    /// template (checkbox is a SIBLING of the title text), then by the legacy
+    /// ancestor-of-title-text structure. Throws when neither resolves uniquely,
+    /// so callers never click or read toggle state from the wrong element.
+    /// </summary>
+    private static AutomationElement ResolveInlineRowCheckBox(AutomationElement root, GuestInfo g)
+    {
+        AutomationElement? box = Uia.FindDescendantByName(root, ControlType.CheckBox, "Select " + g.Title, null, out int byName);
+        if (box != null && byName == 1)
+            return box;
+        AutomationElement? textEl = Uia.FindDescendantByName(root, ControlType.Text, null, g.Title, out _);
+        if (textEl != null)
+        {
+            box = Uia.NearestAncestorOfType(textEl, ControlType.CheckBox);
+            if (box != null)
+                return box;
+        }
+        throw new InvalidOperationException($"Inline panel checkbox for '{g.Title}' was not uniquely resolvable (byName={byName}).");
     }
 
     /// <summary>
@@ -2397,7 +2125,10 @@ internal static partial class Scenarios
         foreach (GuestInfo g in guests)
         {
             // Row-find with a bounded wait: the picker enumerates windows
-            // asynchronously after the panel opens.
+            // asynchronously after the panel opens. The title Text element is
+            // only the enumeration signal; the toggle lives in a SIBLING
+            // checkbox (accessible name "Select <title>") in the redesigned
+            // row template, so resolve the checkbox explicitly.
             AutomationElement? textEl = null;
             var rowSw = Stopwatch.StartNew();
             while (textEl == null && rowSw.ElapsedMilliseconds < 12000)
@@ -2411,22 +2142,14 @@ internal static partial class Scenarios
             }
             if (textEl == null)
                 throw new InvalidOperationException($"Inline panel row for '{g.Title}' not found within 12s.");
-            AutomationElement? row = Uia.NearestAncestorOfType(textEl, ControlType.CheckBox) ?? textEl;
 
             bool toggledOn = false;
             for (int attempt = 0; attempt < 3 && !toggledOn; attempt++)
             {
                 root = Uia.FromHwnd(existingContainer)
                     ?? throw new InvalidOperationException("Inline capture root disappeared before a retry.");
-                textEl = Uia.FindDescendantByName(root, ControlType.Text, null, g.Title, out int retryTextCount);
-                if (textEl == null || retryTextCount != 1)
-                    throw new InvalidOperationException($"Inline panel row for '{g.Title}' was not uniquely rediscovered before retry (count={retryTextCount}).");
-                row = Uia.NearestAncestorOfType(textEl, ControlType.CheckBox) ?? textEl;
-                (int cx, int cy) = attempt switch
-                {
-                    0 => Uia.Center(textEl),
-                    _ => Uia.Center(row),
-                };
+                AutomationElement row = ResolveInlineRowCheckBox(root, g);
+                (int cx, int cy) = Uia.Center(row);
                 if (!EnsureClickable(existingContainer, cx, cy))
                 {
                     if (attempt < 2 && RepositionVerifiedWindow(existingContainer, "TabDock container"))
@@ -2437,14 +2160,14 @@ internal static partial class Scenarios
                         Thread.Sleep(150);
                         continue;
                     }
-                    throw new InvalidOperationException($"Inline panel row for '{g.Title}' was obscured or failed identity proof; refusing to click blind.");
+                    throw new InvalidOperationException($"Inline panel checkbox for '{g.Title}' was obscured or failed identity proof; refusing to click blind.");
                 }
                 Input.ClickAt(cx, cy);
                 Thread.Sleep(350);
                 toggledOn = Uia.GetToggleState(row) == System.Windows.Automation.ToggleState.On;
             }
             if (!toggledOn)
-                throw new InvalidOperationException($"Inline panel row for '{g.Title}' did not toggle on after real clicks.");
+                throw new InvalidOperationException($"Inline panel checkbox for '{g.Title}' did not toggle on after real clicks.");
             Thread.Sleep(200);
         }
 

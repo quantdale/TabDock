@@ -72,8 +72,18 @@ on:
         required: true
         type: string
       external-evidence:
-        description: 'release-external-evidence.json content (schemaVersion 2) proving finalWindowsHumanSmoke, physicalMixedDpi, and windowsCompatibility PASS for the exact candidate. REQUIRED.'
+        description: 'release-external-evidence.json content (schemaVersion 3) proving the human, physical, and Windows compatibility gates with qualification-bundle and structured machine-report bindings for the exact candidate. REQUIRED.'
         required: true
+        type: string
+      qualification-evidence-run-id:
+        description: 'Optional workflow run ID containing a data-only handoff produced by merge-qualification-evidence.ps1 -HandoffDir. Required when external evidence references qualification/external files not retained in Stage A.'
+        required: false
+        default: ''
+        type: string
+      qualification-evidence-artifact-name:
+        description: 'Optional artifact name for the data-only qualification evidence handoff. The artifact must contain release-external-evidence.json and qualification/external/** only.'
+        required: false
+        default: ''
         type: string
 
 permissions:
@@ -100,6 +110,7 @@ jobs:
     outputs:
       head_sha: ${{ steps.resolve-run.outputs.head_sha }}
       candidate_artifact_name: ${{ steps.locate-candidate.outputs.artifact_name }}
+      qualification_bundle_sha256: ${{ steps.publication-gate.outputs.qualification_bundle_sha256 }}
     steps:
       # The trusted policy revision is the revision of THIS workflow being
       # executed. GitHub Actions semantics (official documentation):
@@ -269,6 +280,56 @@ jobs:
           github-token: ${{ github.token }}
           path: candidate-artifact
 
+      # Optional external-machine handoff. This artifact is data-only and is
+      # never dot-sourced or executed. It supplies the staged bundle files
+      # produced after physical/Windows qualification; candidate bytes remain
+      # sourced exclusively from the exact Stage-A artifact above.
+      - name: Validate optional qualification evidence handoff inputs
+        if: ${{ inputs.qualification-evidence-artifact-name != '' }}
+        shell: pwsh
+        env:
+          EVIDENCE_RUN_ID: ${{ inputs.qualification-evidence-run-id }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:EVIDENCE_RUN_ID)) {
+            throw 'qualification-evidence-run-id is required when qualification-evidence-artifact-name is supplied'
+          }
+
+      - name: Download data-only qualification evidence handoff
+        if: ${{ inputs.qualification-evidence-artifact-name != '' }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ inputs.qualification-evidence-artifact-name }}
+          run-id: ${{ inputs.qualification-evidence-run-id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: qualification-evidence-handoff
+
+      - name: Stage bounded qualification evidence data
+        if: ${{ inputs.qualification-evidence-artifact-name != '' }}
+        shell: pwsh
+        env:
+          EVIDENCE_RUN_ID: ${{ inputs.qualification-evidence-run-id }}
+        run: |
+          $handoff = Join-Path $env:GITHUB_WORKSPACE 'qualification-evidence-handoff'
+          if (-not (Test-Path -LiteralPath $handoff -PathType Container)) { throw 'downloaded qualification evidence handoff directory is missing' }
+          foreach ($file in @(Get-ChildItem -LiteralPath $handoff -Recurse -File)) {
+            $relative = [IO.Path]::GetRelativePath($handoff, $file.FullName).Replace('\', '/')
+            if ($relative -eq 'release-external-evidence.json') { continue }
+            if (-not $relative.StartsWith('qualification/external/', [StringComparison]::OrdinalIgnoreCase)) {
+              throw "qualification evidence handoff contains an unallowed path: '$relative'"
+            }
+            $destination = Join-Path (Join-Path $env:GITHUB_WORKSPACE 'candidate-artifact') ($relative.Replace('/', '\'))
+            $parent = [IO.Path]::GetDirectoryName($destination)
+            if (-not (Test-Path -LiteralPath $parent -PathType Container)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+            if (Test-Path -LiteralPath $destination -PathType Leaf) {
+              $sourceHash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+              $destinationHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
+              if ($sourceHash -ne $destinationHash) { throw "qualification evidence would overwrite a different retained artifact: '$relative'" }
+            }
+            else { Copy-Item -LiteralPath $file.FullName -Destination $destination }
+          }
+          "Qualification evidence handoff staged as data-only input from run $env:EVIDENCE_RUN_ID" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
       # Fail-closed publication gate before any release mutation. The shared
       # release-tooling gate runs from the TRUSTED POLICY checkout and
       # re-verifies against the DOWNLOADED bytes: manifest PASS for this
@@ -279,7 +340,7 @@ jobs:
       # was generated and verified by TRUSTED Stage A; Stage B validates the
       # manifest contract but NEVER executes the candidate binary to re-ask
       # it); on-disk SHA == manifest
-      # artifactSha256 == SHA256SUMS.txt; schema-v2 external evidence bound
+      # artifactSha256 == SHA256SUMS.txt; schema-v3 external evidence bound
       # to this SHA, the final artifact hash, and this exact run + artifact,
       # with finalWindowsHumanSmoke, physicalMixedDpi, and
       # windowsCompatibility (Windows 10 + 11) all PASS; signingStatus
@@ -298,6 +359,7 @@ jobs:
       # the already-signed immutable artifact with Windows signature
       # verification and its retained provenance.
       - name: Fail-closed publication gate (trusted policy only)
+        id: publication-gate
         shell: pwsh
         env:
           RELEASE_EXTERNAL_EVIDENCE: ${{ inputs.external-evidence }}
@@ -332,6 +394,12 @@ jobs:
             $gate.Failures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
             throw "Refusing to publish the candidate: $($gate.Failures.Count) gate failure(s)"
           }
+          $evidenceRecord = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+          $bundleSha = [string]$evidenceRecord.qualificationBundle.sha256
+          if ($bundleSha -notmatch '^[0-9a-fA-F]{64}$') { throw 'validated external evidence did not carry a qualification bundle SHA-256' }
+          "qualification_bundle_sha256=$bundleSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "Qualification bundle SHA-256: $bundleSha" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "External evidence schema: $($evidenceRecord.schemaVersion); automated gate: PASS; physical topology: observed non-synthetic mixed-DPI evidence" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           Write-Host 'Publication gate: PASS (evaluated exclusively by the CURRENT trusted policy)' -ForegroundColor Green
 
       # NO CANDIDATE EXECUTION IN STAGE B (trust-boundary closure): the
@@ -370,6 +438,8 @@ jobs:
           New-Item -ItemType Directory -Path $handoff -Force | Out-Null
           $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
           $evidence = Get-Content (Join-Path $dir 'release-external-evidence.json') -Raw | ConvertFrom-Json
+          $bundlePath = Join-Path $dir ([string]$evidence.qualificationBundle.relativePath)
+          $bundleRecord = Get-Content -LiteralPath $bundlePath -Raw | ConvertFrom-Json
           $tag = Get-ReleaseTagFromVersion ([string]$manifest.semanticVersion)
           $verification = [ordered]@{
             recordKind                   = 'publication-verification'
@@ -380,6 +450,9 @@ jobs:
             artifactSha256               = $manifest.artifactSha256
             candidateWorkflowRunId       = $env:CANDIDATE_RUN_ID
             candidateArtifactName        = $env:CANDIDATE_ARTIFACT_NAME
+            externalEvidenceSchemaVersion = [int]$evidence.schemaVersion
+            qualificationBundleSha256     = [string]$evidence.qualificationBundle.sha256
+            qualificationBundleSchemaVersion = [int]$bundleRecord.schemaVersion
             releaseTag                   = $tag
             productionReleaseEligibility = 'ELIGIBLE'
             verifiedAt                   = [DateTimeOffset]::UtcNow.ToString('O')
@@ -462,7 +535,7 @@ jobs:
           # relies on the pristine Stage A candidate artifact containing it
           # (Stage A never produces release-external-evidence.json).
           Copy-Item -LiteralPath (Join-Path $dir 'release-external-evidence.json') -Destination (Join-Path $handoff 'release-external-evidence.json')
-          Write-Host "Verified handoff written: publication-verification.json + RELEASE_NOTES.md + release-external-evidence.json (derived tag $tag)" -ForegroundColor Green
+          Write-Host "Verified handoff written: publication-verification.json + RELEASE_NOTES.md + release-external-evidence.json (qualification bundle $($evidence.qualificationBundle.sha256), derived tag $tag)" -ForegroundColor Green
 
       # The verified same-run handoff is the ONLY thing the publish job
       # consumes from this job. It is small (verdict record + release notes +

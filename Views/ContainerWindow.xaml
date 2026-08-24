@@ -7,36 +7,88 @@
         xmlns:vm="clr-namespace:TabDock.ViewModels"
         mc:Ignorable="d"
         Title="{Binding Name}"
-        Height="600"
-        Width="900"
-        MinWidth="320"
-        MinHeight="240"
+        Height="640"
+        Width="980"
+        MinWidth="420"
+        MinHeight="300"
         WindowStyle="None"
         ResizeMode="CanResize"
-        Background="{Binding AccentBrush}"
+        Background="{StaticResource TdWindowBackgroundBrush}"
+        Foreground="{StaticResource TdTextBrush}"
+        FontFamily="Segoe UI Variable Text, Segoe UI"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
         Name="Root">
 
     <Window.Resources>
         <Style TargetType="Button" x:Key="CaptionButtonStyle">
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Foreground" Value="#E7ECF4" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Width" Value="46" />
-            <Setter Property="Height" Value="32" />
+            <Setter Property="Height" Value="38" />
             <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets, Segoe UI Symbol" />
             <Setter Property="FontSize" Value="10" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="CaptionBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="CaptionBorder" Property="Background" Value="#273242" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="CaptionBorder" Property="Background" Value="#344154" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="CaptionBorder" Property="BorderBrush" Value="#B9CCFF" />
+                                <Setter TargetName="CaptionBorder" Property="BorderThickness" Value="1" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="CaptionBorder" Property="Opacity" Value="0.4" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="Button" x:Key="ChromePillButtonStyle" BasedOn="{StaticResource TdGhostButton}">
+            <Setter Property="Foreground" Value="#E7ECF4" />
+            <Setter Property="MinHeight" Value="26" />
+            <Setter Property="Padding" Value="9,3" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True" />
+        </Style>
+
+        <Style TargetType="Button" x:Key="TabCloseButtonStyle" BasedOn="{StaticResource TdGhostButton}">
+            <Setter Property="Width" Value="22" />
+            <Setter Property="Height" Value="22" />
+            <Setter Property="MinHeight" Value="22" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="7,0,0,0" />
+            <Setter Property="Foreground" Value="#AAB5C4" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="ToolTip" Value="Pop out" />
             <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True" />
         </Style>
     </Window.Resources>
 
     <WindowChrome.WindowChrome>
-        <WindowChrome CaptionHeight="32"
+        <WindowChrome CaptionHeight="38"
                       GlassFrameThickness="0"
                       ResizeBorderThickness="6"
                       CornerRadius="0" />
     </WindowChrome.WindowChrome>
 
-    <Grid>
+    <Grid Background="{StaticResource TdWindowBackgroundBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -44,134 +96,144 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Custom caption -->
-        <Grid Height="32" Background="{Binding AccentBrush}" Grid.Row="0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
+        <!-- Custom caption. Accent is retained as workspace identity rather than
+             flooding the entire window background with a saturated color. -->
+        <Border Grid.Row="0" Height="38" Background="#10161F"
+                BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="0,0,0,1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
 
-            <!-- Accent color chip / color picker -->
-            <Button Grid.Column="0" Width="16" Height="16" Margin="12,0,8,0"
-                    Background="{Binding AccentBrush}" BorderBrush="White" BorderThickness="1"
-                    WindowChrome.IsHitTestVisibleInChrome="True"
-                    ToolTip="Change accent color" Click="ColorChip_Click">
-                <Button.ContextMenu>
-                    <ContextMenu x:Name="ColorContextMenu">
-                        <MenuItem Header="Blue" Click="ColorMenuItem_Click" Tag="#2196F3" />
-                        <MenuItem Header="Green" Click="ColorMenuItem_Click" Tag="#4CAF50" />
-                        <MenuItem Header="Red" Click="ColorMenuItem_Click" Tag="#F44336" />
-                        <MenuItem Header="Purple" Click="ColorMenuItem_Click" Tag="#9C27B0" />
-                        <MenuItem Header="Orange" Click="ColorMenuItem_Click" Tag="#FF9800" />
-                        <MenuItem Header="Teal" Click="ColorMenuItem_Click" Tag="#009688" />
-                        <MenuItem Header="Pink" Click="ColorMenuItem_Click" Tag="#E91E63" />
-                        <MenuItem Header="Gray" Click="ColorMenuItem_Click" Tag="#607D8B" />
-                    </ContextMenu>
-                </Button.ContextMenu>
-            </Button>
+                <Button Grid.Column="0" Style="{StaticResource CaptionButtonStyle}"
+                        Width="18" Height="18" MinHeight="18" Margin="12,0,9,0"
+                        Padding="0" Background="{Binding AccentBrush}"
+                        BorderBrush="#DDE8FF" BorderThickness="1"
+                        WindowChrome.IsHitTestVisibleInChrome="True"
+                        ToolTip="Change workspace accent" Click="ColorChip_Click"
+                        AutomationProperties.Name="Change workspace accent">
+                    <Button.ContextMenu>
+                        <ContextMenu x:Name="ColorContextMenu">
+                            <MenuItem Header="Blue" Click="ColorMenuItem_Click" Tag="#2196F3" />
+                            <MenuItem Header="Green" Click="ColorMenuItem_Click" Tag="#4CAF50" />
+                            <MenuItem Header="Red" Click="ColorMenuItem_Click" Tag="#F44336" />
+                            <MenuItem Header="Purple" Click="ColorMenuItem_Click" Tag="#9C27B0" />
+                            <MenuItem Header="Orange" Click="ColorMenuItem_Click" Tag="#FF9800" />
+                            <MenuItem Header="Teal" Click="ColorMenuItem_Click" Tag="#009688" />
+                            <MenuItem Header="Pink" Click="ColorMenuItem_Click" Tag="#E91E63" />
+                            <MenuItem Header="Gray" Click="ColorMenuItem_Click" Tag="#607D8B" />
+                        </ContextMenu>
+                    </Button.ContextMenu>
+                </Button>
 
-            <!-- IsHitTestVisibleInChrome is required on every interactive caption
-                 element: the WindowChrome CaptionHeight region otherwise consumes
-                 all clicks as non-client hits (a title double-click maximized the
-                 window instead of starting a rename). -->
-            <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center"
-                       Foreground="White" FontSize="12" FontWeight="SemiBold"
-                       WindowChrome.IsHitTestVisibleInChrome="True"
-                       MouseLeftButtonDown="TitleText_MouseLeftButtonDown">
-                <TextBlock.Style>
-                    <Style TargetType="TextBlock">
-                        <Setter Property="Visibility" Value="Visible" />
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding IsRenaming}" Value="True">
-                                <Setter Property="Visibility" Value="Collapsed" />
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </TextBlock.Style>
-            </TextBlock>
+                <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center"
+                           Foreground="{StaticResource TdTextBrush}" FontSize="12" FontWeight="SemiBold"
+                           MaxWidth="220" TextTrimming="CharacterEllipsis"
+                           WindowChrome.IsHitTestVisibleInChrome="True"
+                           ToolTip="Double-click to rename"
+                           MouseLeftButtonDown="TitleText_MouseLeftButtonDown">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Visible" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsRenaming}" Value="True">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
 
-            <!-- Visibility is driven entirely by the style Setter + IsRenaming
-                 DataTrigger below. Do NOT set Visibility as a local attribute here:
-                 a local value outranks style/trigger setters, so the trigger could
-                 never show the box (the box stayed collapsed forever). -->
-            <TextBox Grid.Column="1" Text="{Binding Name, UpdateSourceTrigger=LostFocus}"
-                     VerticalAlignment="Center" BorderThickness="0" Background="White"
-                     Foreground="Black" Padding="4,2"
-                     WindowChrome.IsHitTestVisibleInChrome="True"
-                     x:Name="RenameBox"
-                     LostFocus="RenameBox_LostFocus"
-                     KeyDown="RenameBox_KeyDown">
-                <TextBox.Style>
-                    <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
-                        <Setter Property="Visibility" Value="Collapsed" />
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding IsRenaming}" Value="True">
-                                <Setter Property="Visibility" Value="Visible" />
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </TextBox.Style>
-            </TextBox>
+                <TextBox Grid.Column="1" Text="{Binding Name, UpdateSourceTrigger=LostFocus}"
+                         VerticalAlignment="Center" MinHeight="26" Height="28" Padding="7,3"
+                         MaxWidth="220" HorizontalAlignment="Stretch"
+                         WindowChrome.IsHitTestVisibleInChrome="True"
+                         x:Name="RenameBox"
+                         AutomationProperties.Name="Rename workspace"
+                         AutomationProperties.HelpText="Type a workspace name, then press Enter to save or Escape to cancel."
+                         LostFocus="RenameBox_LostFocus"
+                         KeyDown="RenameBox_KeyDown">
+                    <TextBox.Style>
+                        <Style TargetType="TextBox" BasedOn="{StaticResource TdTextBox}">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsRenaming}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBox.Style>
+                </TextBox>
 
-            <Button Grid.Column="2" Content="Group ▾" Width="82" Height="24"
-                    HorizontalAlignment="Left" Margin="8,0,0,0"
-                    Background="Transparent" Foreground="White" BorderThickness="0"
-                    WindowChrome.IsHitTestVisibleInChrome="True"
-                    AutomationProperties.AutomationId="GroupSelector"
-                    Click="GroupButton_Click" ToolTip="Switch group or create a group">
-                <Button.ContextMenu>
-                    <ContextMenu x:Name="GroupContextMenu" Closed="GroupContextMenu_Closed" />
-                </Button.ContextMenu>
-            </Button>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Left"
+                            VerticalAlignment="Center" Margin="10,0,0,0">
+                            <Button Style="{StaticResource ChromePillButtonStyle}"
+                                    Content="Workspace ▾" Margin="0,0,2,0"
+                                    AutomationProperties.AutomationId="GroupSelector"
+                                    AutomationProperties.Name="Switch workspace"
+                                    Click="GroupButton_Click" ToolTip="Switch workspace, create a new one, rename, or delete this workspace">
+                        <Button.ContextMenu>
+                            <ContextMenu x:Name="GroupContextMenu" Closed="GroupContextMenu_Closed" />
+                        </Button.ContextMenu>
+                    </Button>
+                    <Button Style="{StaticResource ChromePillButtonStyle}"
+                            Content="Split ▾" Margin="2,0,0,0"
+                            Click="SplitAffordance_Click"
+                            IsEnabled="{Binding CanUseSplitAffordance}"
+                            ToolTip="{Binding SplitAffordanceToolTip}"
+                            AutomationProperties.AutomationId="SplitAffordance"
+                            AutomationProperties.Name="Split tabs"
+                            AutomationProperties.HelpText="{Binding SplitAffordanceToolTip}" />
+                </StackPanel>
 
-            <!-- Always-visible split affordance. The menu is populated from the
-                 existing split controller/policy at click time. -->
-            <Button Grid.Column="3" Content="Split ▾" Width="76" Height="24"
-                    Margin="4,0,0,0" Padding="4,0"
-                    Background="Transparent" Foreground="White" BorderThickness="0"
-                    FontFamily="Segoe UI" FontSize="11"
-                    WindowChrome.IsHitTestVisibleInChrome="True"
-                    Click="SplitAffordance_Click"
-                    IsEnabled="{Binding CanUseSplitAffordance}"
-                    ToolTip="{Binding SplitAffordanceToolTip}"
-                    AutomationProperties.AutomationId="SplitAffordance"
-                    AutomationProperties.Name="Split tabs"
-                    AutomationProperties.HelpText="{Binding SplitAffordanceToolTip}" />
+                <Button Grid.Column="3" Style="{StaticResource CaptionButtonStyle}"
+                        Content="&#xE710;" Click="AddWindow_Click"
+                        IsEnabled="{Binding CaptureAllowed}"
+                        ToolTip="{Binding AddWindowToolTip}"
+                        AutomationProperties.AutomationId="AddWindowButton"
+                        AutomationProperties.Name="Add window to workspace"
+                        AutomationProperties.HelpText="{Binding AddWindowToolTip}" />
 
-            <!-- Add window to group -->
-            <Button Grid.Column="4" Style="{StaticResource CaptionButtonStyle}"
-                    Content="&#xE710;" Click="AddWindow_Click"
-                    IsEnabled="{Binding CaptureAllowed}"
-                    ToolTip="{Binding AddWindowToolTip}"
-                    AutomationProperties.AutomationId="AddWindowButton"
-                    AutomationProperties.Name="Add window to group"
-                    AutomationProperties.HelpText="{Binding AddWindowToolTip}" />
+                <Button Grid.Column="4" Style="{StaticResource CaptionButtonStyle}"
+                        Content="&#xE949;" Click="Minimize_Click" ToolTip="Minimize"
+                        AutomationProperties.Name="Minimize workspace" />
+                <Button Grid.Column="5" Style="{StaticResource CaptionButtonStyle}"
+                        Content="&#xE739;" Click="Maximize_Click" ToolTip="Maximize" x:Name="MaximizeButton"
+                        AutomationProperties.Name="Maximize or restore workspace" />
+                <Button Grid.Column="6" Style="{StaticResource CaptionButtonStyle}"
+                        Content="&#xE106;" Click="Close_Click" ToolTip="Close"
+                        AutomationProperties.Name="Close workspace" />
+                <Border Grid.Column="7" Width="4" Background="{Binding AccentBrush}" />
+            </Grid>
+        </Border>
 
-            <Button Grid.Column="5" Style="{StaticResource CaptionButtonStyle}"
-                    Content="&#xE949;" Click="Minimize_Click" ToolTip="Minimize" />
-            <Button Grid.Column="6" Style="{StaticResource CaptionButtonStyle}"
-                    Content="&#xE739;" Click="Maximize_Click" ToolTip="Maximize" x:Name="MaximizeButton" />
-            <Button Grid.Column="7" Style="{StaticResource CaptionButtonStyle}"
-                    Content="&#xE106;" Click="Close_Click" ToolTip="Close" />
-        </Grid>
-
-        <!-- Tab strip -->
-        <Border Grid.Row="1" Background="#22000000" Height="32">
+        <!-- Tab strip. Preserve the authoritative DisplayTabs/ActiveTab binding
+             contract while making selected state and close affordances legible. -->
+        <Border Grid.Row="1" Background="{StaticResource TdSurfaceBrush}" Height="42"
+                BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="0,0,0,1">
             <ListBox x:Name="TabsListBox"
                      ItemsSource="{Binding DisplayTabs}"
                      SelectedItem="{Binding ActiveTab, Mode=OneWay}"
                      SelectionChanged="TabsListBox_SelectionChanged"
+                     PreviewKeyDown="TabsListBox_PreviewKeyDown"
                      PreviewMouseLeftButtonDown="TabsListBox_PreviewMouseLeftButtonDown_SplitInteraction"
                      PreviewMouseRightButtonDown="TabsListBox_PreviewMouseRightButtonDown"
                      Background="Transparent"
                      BorderThickness="0"
-                     Focusable="False"
+                     Focusable="True"
+                     IsTabStop="True"
+                     KeyboardNavigation.TabNavigation="Continue"
+                     AutomationProperties.AutomationId="WorkspaceTabs"
+                     AutomationProperties.Name="Workspace tabs"
+                     AutomationProperties.HelpText="Use Left and Right arrows to move between tabs. Use Enter or Space on a close button to pop out a tab."
+                     Padding="6,3"
                      ScrollViewer.HorizontalScrollBarVisibility="Auto"
                      ScrollViewer.VerticalScrollBarVisibility="Disabled">
                 <ListBox.ItemsPanel>
@@ -180,38 +242,48 @@
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.ItemContainerStyle>
-                    <Style TargetType="ListBoxItem">
+                <Style TargetType="ListBoxItem">
                         <Setter Property="Padding" Value="0" />
-                        <Setter Property="Margin" Value="2,2,0,2" />
+                        <Setter Property="Margin" Value="0,0,5,0" />
                         <Setter Property="Background" Value="Transparent" />
                         <Setter Property="BorderThickness" Value="0" />
+                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
                         <Setter Property="IsSelected" Value="{Binding IsActive, Mode=TwoWay}" />
                         <Setter Property="AutomationProperties.AutomationId" Value="{Binding AutomationId}" />
+                        <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
                     </Style>
                 </ListBox.ItemContainerStyle>
                 <ListBox.Resources>
-                    <!-- Ordinary single tab. -->
                     <DataTemplate DataType="{x:Type vm:TabViewModel}">
-                        <Border Padding="8,4" CornerRadius="4">
+                        <Border Padding="10,5" CornerRadius="7">
                             <Border.Style>
                                 <Style TargetType="Border">
-                                    <Setter Property="Background" Value="Transparent" />
+                                    <Setter Property="Background" Value="#10161F" />
+                                    <Setter Property="BorderBrush" Value="Transparent" />
+                                    <Setter Property="BorderThickness" Value="1" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                            <Setter Property="Background" Value="#44FFFFFF" />
+                                            <Setter Property="Background" Value="{StaticResource TdAccentSoftBrush}" />
+                                            <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                            <Setter Property="BorderBrush" Value="#B9CCFF" />
+                                            <Setter Property="BorderThickness" Value="2" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </Border.Style>
                             <StackPanel Orientation="Horizontal">
-                                <Image Source="{Binding Icon}" Width="16" Height="16" Margin="0,0,6,0" />
-                                <TextBlock Text="{Binding Title}" Foreground="White" VerticalAlignment="Center" MaxWidth="160" TextTrimming="CharacterEllipsis" />
-                                <Button Content="×" Width="20" Height="20" Margin="6,-1,0,0"
-                                        Padding="0" Background="Transparent" Foreground="#CCFFFFFF"
-                                        BorderThickness="0" FontSize="14" ToolTip="Pop out"
+                                <Image Source="{Binding Icon}" Width="16" Height="16" Margin="0,0,7,0" />
+                                <TextBlock Text="{Binding Title}" Foreground="{StaticResource TdTextBrush}"
+                                           VerticalAlignment="Center" MaxWidth="180"
+                                           TextTrimming="CharacterEllipsis" FontSize="11" />
+                                        <Button Style="{StaticResource TabCloseButtonStyle}"
+                                        Content="×"
+                                        Click="TabClose_Click"
                                         AutomationProperties.AutomationId="TabClose"
-                                        PreviewMouseLeftButtonDown="TabClose_PreviewMouseLeftButtonDown"
-                                        WindowChrome.IsHitTestVisibleInChrome="True" />
+                                        AutomationProperties.Name="Pop out tab"
+                                        PreviewMouseLeftButtonDown="TabClose_PreviewMouseLeftButtonDown" />
                             </StackPanel>
                             <Border.ContextMenu>
                                 <ContextMenu>
@@ -222,18 +294,12 @@
                         </Border>
                     </DataTemplate>
 
-                    <!-- Split pair: ONE visual tab item [ A | B ] with a subtle
-                         central separator, so the strip communicates "LEFT pane +
-                         RIGHT pane" instead of two unrelated tabs. Each half is
-                         independently interactive (click focuses that member
-                         without hiding the partner; × / middle-click / right-click
-                         target that specific member). Right-click menus are built
-                         in code (TabsListBox_PreviewMouseRightButtonDown) so they
-                         carry the split-aware items, so no ContextMenu is declared
-                         on the halves here. -->
                     <DataTemplate DataType="{x:Type vm:SplitCompositeViewModel}">
-                        <Border Padding="6,4" CornerRadius="4"
-                                AutomationProperties.AutomationId="SplitCompositeItem">
+                        <Border Padding="5" CornerRadius="7" Background="{StaticResource TdAccentSoftBrush}"
+                                BorderBrush="{StaticResource TdAccentBrush}" BorderThickness="1"
+                                AutomationProperties.AutomationId="SplitCompositeItem"
+                                AutomationProperties.Name="{Binding AutomationName}"
+                                AutomationProperties.HelpText="Use Tab to reach LEFT or RIGHT, then press Enter or Space to focus that member.">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -241,60 +307,79 @@
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
 
-                                <!-- LEFT half -->
-                                <Border Grid.Column="0" Tag="LEFT" Margin="0,0,3,0"
+                                <Border Grid.Column="0" Tag="LEFT" Padding="6,1" Margin="0,0,3,0" CornerRadius="5"
                                         AutomationProperties.AutomationId="SplitHalfLeft"
+                                        AutomationProperties.Name="{Binding Left.AutomationName}"
+                                        AutomationProperties.HelpText="Focus the LEFT split member"
+                                        Focusable="True" KeyboardNavigation.IsTabStop="True"
+                                        KeyDown="SplitHalf_KeyDown"
                                         PreviewMouseLeftButtonDown="SplitHalf_PreviewMouseLeftButtonDown"
                                         PreviewMouseDown="SplitHalf_PreviewMouseDown">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Background" Value="Transparent" />
+                                            <Setter Property="BorderBrush" Value="Transparent" />
+                                            <Setter Property="BorderThickness" Value="1" />
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Left.IsActive}" Value="True">
-                                                    <Setter Property="Background" Value="#44FFFFFF" />
+                                                    <Setter Property="Background" Value="#345089" />
                                                 </DataTrigger>
+                                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                                    <Setter Property="BorderBrush" Value="#B9CCFF" />
+                                                    <Setter Property="BorderThickness" Value="2" />
+                                                </Trigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Border.Style>
                                     <StackPanel Orientation="Horizontal">
                                         <Image Source="{Binding Left.Icon}" Width="16" Height="16" Margin="0,0,6,0" />
-                                        <TextBlock Text="{Binding Left.Title}" Foreground="White" VerticalAlignment="Center" MaxWidth="120" TextTrimming="CharacterEllipsis" />
-                                        <Button Content="×" Tag="LEFT" Width="18" Height="18" Margin="6,-1,0,0"
-                                                Padding="0" Background="Transparent" Foreground="#CCFFFFFF"
-                                                BorderThickness="0" FontSize="14" ToolTip="Pop out left window"
+                                        <TextBlock Text="{Binding Left.Title}" Foreground="White" VerticalAlignment="Center"
+                                                   MaxWidth="125" TextTrimming="CharacterEllipsis" FontSize="11" />
+                                        <Button Style="{StaticResource TabCloseButtonStyle}" Content="×" Tag="LEFT"
+                                                Click="SplitHalfClose_Click"
+                                                ToolTip="Pop out left window"
                                                 AutomationProperties.AutomationId="SplitCloseLeft"
-                                                PreviewMouseLeftButtonDown="SplitHalfClose_PreviewMouseLeftButtonDown"
-                                                WindowChrome.IsHitTestVisibleInChrome="True" />
+                                                AutomationProperties.Name="Pop out LEFT window"
+                                                PreviewMouseLeftButtonDown="SplitHalfClose_PreviewMouseLeftButtonDown" />
                                     </StackPanel>
                                 </Border>
 
-                                <!-- Central separator -->
-                                <Border Grid.Column="1" Width="1" Background="#66FFFFFF" Margin="0,3" />
+                                <Border Grid.Column="1" Width="1" Background="#668AA5D1" Margin="1,3" />
 
-                                <!-- RIGHT half -->
-                                <Border Grid.Column="2" Tag="RIGHT" Margin="3,0,0,0"
+                                <Border Grid.Column="2" Tag="RIGHT" Padding="6,1" Margin="3,0,0,0" CornerRadius="5"
                                         AutomationProperties.AutomationId="SplitHalfRight"
+                                        AutomationProperties.Name="{Binding Right.AutomationName}"
+                                        AutomationProperties.HelpText="Focus the RIGHT split member"
+                                        Focusable="True" KeyboardNavigation.IsTabStop="True"
+                                        KeyDown="SplitHalf_KeyDown"
                                         PreviewMouseLeftButtonDown="SplitHalf_PreviewMouseLeftButtonDown"
                                         PreviewMouseDown="SplitHalf_PreviewMouseDown">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Background" Value="Transparent" />
+                                            <Setter Property="BorderBrush" Value="Transparent" />
+                                            <Setter Property="BorderThickness" Value="1" />
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Right.IsActive}" Value="True">
-                                                    <Setter Property="Background" Value="#44FFFFFF" />
+                                                    <Setter Property="Background" Value="#345089" />
                                                 </DataTrigger>
+                                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                                    <Setter Property="BorderBrush" Value="#B9CCFF" />
+                                                    <Setter Property="BorderThickness" Value="2" />
+                                                </Trigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Border.Style>
                                     <StackPanel Orientation="Horizontal">
                                         <Image Source="{Binding Right.Icon}" Width="16" Height="16" Margin="0,0,6,0" />
-                                        <TextBlock Text="{Binding Right.Title}" Foreground="White" VerticalAlignment="Center" MaxWidth="120" TextTrimming="CharacterEllipsis" />
-                                        <Button Content="×" Tag="RIGHT" Width="18" Height="18" Margin="6,-1,0,0"
-                                                Padding="0" Background="Transparent" Foreground="#CCFFFFFF"
-                                                BorderThickness="0" FontSize="14" ToolTip="Pop out right window"
+                                        <TextBlock Text="{Binding Right.Title}" Foreground="White" VerticalAlignment="Center"
+                                                   MaxWidth="125" TextTrimming="CharacterEllipsis" FontSize="11" />
+                                        <Button Style="{StaticResource TabCloseButtonStyle}" Content="×" Tag="RIGHT"
+                                                Click="SplitHalfClose_Click"
+                                                ToolTip="Pop out right window"
                                                 AutomationProperties.AutomationId="SplitCloseRight"
-                                                PreviewMouseLeftButtonDown="SplitHalfClose_PreviewMouseLeftButtonDown"
-                                                WindowChrome.IsHitTestVisibleInChrome="True" />
+                                                AutomationProperties.Name="Pop out RIGHT window"
+                                                PreviewMouseLeftButtonDown="SplitHalfClose_PreviewMouseLeftButtonDown" />
                                     </StackPanel>
                                 </Border>
                             </Grid>
@@ -304,23 +389,141 @@
             </ListBox>
         </Border>
 
-        <!-- Inline capture surface. It is part of the container visual tree,
-             rather than another Popup/Window, so routine capture does not add a
-             competing top-level TabDock HWND. -->
+        <!-- Inline capture surface shares the exact picker view-model and now
+             shares its search/selection ergonomics as well. -->
         <Border Grid.Row="2" x:Name="CapturePanel" Visibility="Collapsed"
-                Background="#F2181818" BorderBrush="#55FFFFFF" BorderThickness="0,1,0,1"
-                Padding="12">
+                Background="#F6111720" BorderBrush="{StaticResource TdBorderStrongBrush}"
+                BorderThickness="0,0,0,1" Padding="16" MaxHeight="360">
             <Grid>
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <DockPanel Grid.Row="0" Margin="0,0,0,8">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="Add application" Foreground="White" FontWeight="SemiBold" />
-                        <TextBlock Text="{Binding CaptureAdmissionReason}" Foreground="#FFFFD580"
-                                   Margin="12,0,0,0" TextWrapping="Wrap">
+
+                <Grid Grid.Row="0" Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="Add windows to this workspace" Foreground="{StaticResource TdTextBrush}"
+                                   FontSize="14" FontWeight="SemiBold" />
+                        <TextBlock Text="Search, select one or more windows, then add them together."
+                                   Foreground="{StaticResource TdTextMutedBrush}" FontSize="10" Margin="0,3,0,0" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Style="{StaticResource TdSecondaryButton}"
+                            Content="Refresh" MinHeight="30" Padding="10,4"
+                            AutomationProperties.AutomationId="CaptureRefresh"
+                            Command="{Binding RefreshCommand}" />
+                </Grid>
+
+                <Grid Grid.Row="1" Margin="0,0,0,9">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0" Style="{StaticResource TdTextBox}"
+                             MinHeight="32" Padding="9,5"
+                             Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.Name="Search windows to add"
+                             ToolTip="Filter by window title, executable path, or class" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0">
+                        <Button Style="{StaticResource TdGhostButton}" Content="Select all"
+                                MinHeight="30" Padding="9,4" Command="{Binding SelectAllVisibleCommand}" />
+                        <Button Style="{StaticResource TdGhostButton}" Content="Clear"
+                                MinHeight="30" Padding="9,4" Margin="2,0,0,0"
+                                Command="{Binding ClearSelectionCommand}" />
+                    </StackPanel>
+                </Grid>
+
+                <Border Grid.Row="2" Background="#0D131C" BorderBrush="{StaticResource TdBorderBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="6">
+                    <Grid>
+                        <ListBox ItemsSource="{Binding FilteredWindows}" MaxHeight="190"
+                                 Background="Transparent" BorderThickness="0"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 VirtualizingPanel.IsVirtualizing="True"
+                                 VirtualizingPanel.VirtualizationMode="Recycling">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="Margin" Value="0,0,0,3" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="Background" Value="Transparent" />
+                                    <Setter Property="BorderThickness" Value="0" />
+                                    <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Padding="8,6" CornerRadius="6">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="#111923" />
+                                                <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
+                                                <Setter Property="BorderThickness" Value="1" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                        <Setter Property="BorderBrush" Value="#B9CCFF" />
+                                                        <Setter Property="BorderThickness" Value="2" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <CheckBox Grid.Column="0" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      VerticalAlignment="Center" Margin="0,0,9,0"
+                                                      AutomationProperties.Name="{Binding Title, StringFormat='Select {0}'}"
+                                                      AutomationProperties.HelpText="Select this window for capture" />
+                                            <Image Grid.Column="1" Source="{Binding Icon}" Width="18" Height="18"
+                                                   Margin="0,0,9,0" VerticalAlignment="Center" />
+                                            <StackPanel Grid.Column="2">
+                                                <TextBlock Text="{Binding Title}" Foreground="{StaticResource TdTextBrush}"
+                                                           FontSize="11" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding ExePath}" Foreground="{StaticResource TdTextSubtleBrush}"
+                                                           FontSize="9" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <TextBlock Text="{Binding EmptyFilterText}"
+                                   Foreground="{StaticResource TdTextMutedBrush}" FontSize="11"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   TextAlignment="Center" IsHitTestVisible="False">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasFilteredWindows}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+                </Border>
+
+                <Grid Grid.Row="3" Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding SelectionSummary}" Foreground="{StaticResource TdTextMutedBrush}"
+                                   FontSize="10" AutomationProperties.AutomationId="CaptureSelectionSummary" />
+                        <TextBlock Text="{Binding CaptureAdmissionReason}" Foreground="{StaticResource TdWarningBrush}"
+                                   FontSize="10" TextWrapping="Wrap" Margin="0,2,12,0">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Setter Property="Visibility" Value="Collapsed" />
@@ -333,57 +536,30 @@
                             </TextBlock.Style>
                         </TextBlock>
                     </StackPanel>
-                    <Button DockPanel.Dock="Right" Content="Refresh" Width="72" Height="24"
-                            AutomationProperties.AutomationId="CaptureRefresh"
-                            Command="{Binding RefreshCommand}" />
-                </DockPanel>
-                <ListBox Grid.Row="1" ItemsSource="{Binding Windows}" MaxHeight="190"
-                         Background="#22FFFFFF" BorderThickness="0"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" Foreground="White" Padding="4">
-                                <StackPanel Orientation="Horizontal">
-                                    <Image Source="{Binding Icon}" Width="16" Height="16" Margin="0,0,8,0" />
-                                    <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" MaxWidth="420" />
-                                </StackPanel>
-                            </CheckBox>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-                    <Button Content="Add selected" Width="96" Height="28" Margin="0,0,8,0"
-                            AutomationProperties.AutomationId="CaptureAddSelected"
-                            Command="{Binding GroupSelectedCommand}"
-                            AutomationProperties.HelpText="{Binding CaptureAdmissionReason}" />
-                    <Button Content="Cancel" Width="72" Height="28"
-                            AutomationProperties.AutomationId="CaptureCancel"
-                            Command="{Binding CancelCommand}" />
-                </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button Style="{StaticResource TdPrimaryButton}" Content="Add selected"
+                                MinHeight="32" Padding="12,5" Margin="0,0,8,0"
+                                AutomationProperties.AutomationId="CaptureAddSelected"
+                                Command="{Binding GroupSelectedCommand}"
+                                AutomationProperties.HelpText="{Binding CaptureAdmissionReason}" />
+                        <Button Style="{StaticResource TdSecondaryButton}" Content="Cancel"
+                                MinHeight="32" Padding="11,5"
+                                AutomationProperties.AutomationId="CaptureCancel"
+                                Command="{Binding CancelCommand}" />
+                    </StackPanel>
+                </Grid>
             </Grid>
         </Border>
 
-        <!-- Content area marker: a plain native HWND sized to exactly this
-             region so both production code and the test harness can find
-             "where is the docked position" the same way. Nothing is ever
-             reparented into it — the active guest is a sibling top-level
-             window positioned/shown/hidden to match (see
-             ContainerWindow.xaml.cs's Shepherd active-tab sync). -->
-        <Border Grid.Row="3" Background="#FF1E1E1E" x:Name="ContentBorder">
+        <!-- The marker remains the single native content-area authority. -->
+        <Border Grid.Row="3" Background="#080B10" x:Name="ContentBorder">
             <Grid>
-                <infra:NativeHwndHost x:Name="ContentHost" />
-                <!-- Empty-dock guidance: shown only while the group has zero
-                     tabs (no captured guest exists to occlude it).
-                     Non-hit-testable so it can never intercept clicks meant
-                     for the container. -->
-                <TextBlock Text="No apps docked yet. Use + above to add one."
-                           Foreground="#FF9E9E9E"
-                           FontSize="14"
-                           HorizontalAlignment="Center"
-                           VerticalAlignment="Center"
-                           IsHitTestVisible="False">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
+                <infra:NativeHwndHost x:Name="ContentHost"
+                                      AutomationProperties.AutomationId="ContentHost" />
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            IsHitTestVisible="False" MaxWidth="360">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
                             <Setter Property="Visibility" Value="Collapsed" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding Tabs.Count}" Value="0">
@@ -391,8 +567,20 @@
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
-                    </TextBlock.Style>
-                </TextBlock>
+                    </StackPanel.Style>
+                    <Border Width="52" Height="52" CornerRadius="14"
+                            Background="{StaticResource TdAccentSoftBrush}"
+                            BorderBrush="{StaticResource TdAccentBrush}" BorderThickness="1"
+                            HorizontalAlignment="Center" Margin="0,0,0,12">
+                        <TextBlock Text="+" Foreground="{StaticResource TdAccentBrush}" FontSize="28"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock Text="This workspace is empty" Foreground="{StaticResource TdTextBrush}"
+                               FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                    <TextBlock Text="Use the + button in the title bar to capture one or more app windows."
+                               Foreground="{StaticResource TdTextMutedBrush}" FontSize="11"
+                               TextWrapping="Wrap" TextAlignment="Center" Margin="0,5,0,0" />
+                </StackPanel>
             </Grid>
         </Border>
     </Grid>

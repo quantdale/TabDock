@@ -235,6 +235,8 @@ internal static partial class Scenarios
     // -------------------------------------------------------------------------
     private static void ChromeTabDrag(Ctx ctx, Options opt)
     {
+        if (!RequireBrowserFile(ctx, ChromeExe, "Google Chrome"))
+            return;
         GuestInfo chrome = SpawnGuest(ctx, "chrome-normal");
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, chrome);
 

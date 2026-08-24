@@ -540,7 +540,7 @@ internal static partial class Scenarios
                 Input.ClickAt(activateX, activateY);
             }
             Input.SendHotkeyCtrlAltG();
-            IntPtr picker = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 6000);
+            IntPtr picker = Discover.WaitForTopLevelWindow(ctx.TabDockPid, IsCapturePickerTitle, 6000);
             bool hotkeySeen = TabDockLog.ContainsNewLine(off, "hotkey Ctrl+Alt+G pressed");
             ctx.Check(picker != IntPtr.Zero,
                 $"cycle {i}: picker appeared after hotkey with launcher closed (hotkey log line seen={hotkeySeen})");
@@ -563,8 +563,10 @@ internal static partial class Scenarios
             AutomationElement? containerEl = Uia.FromHwnd(container);
             AutomationElement? addBtn = containerEl == null
                 ? null
-                : Uia.FindDescendantByName(containerEl, ControlType.Button, "", null, out _);
-            ctx.Check(addBtn != null, "container '+' button located via UIA");
+                : Uia.FindDescendantByAutomationId(containerEl, "AddWindowButton", out _);
+            if (addBtn == null)
+            if (addBtn == null && containerEl != null)
+                addBtn = Uia.FindDescendantByName(containerEl, ControlType.Button, "Add window to workspace", null, out _);
             if (addBtn != null)
             {
                 // Compute the point before attempting foreground; if
@@ -834,25 +836,43 @@ internal static partial class Scenarios
         AutomationElement? mainEl = Uia.FromHwnd(ctx.MainHwnd);
         AutomationElement? exitBtn = mainEl == null
             ? null
-            : Uia.FindDescendantByName(mainEl, ControlType.Button, "Exit", null, out int count);
+            : Uia.FindDescendantByName(mainEl, ControlType.Button, "Exit TabDock", null, out int count);
         ctx.Check(exitBtn != null, "launcher Exit button located via UIA");
         if (exitBtn == null)
             return;
 
         // The launcher just reappeared; UIA can retain the pre-hide button
-        // rectangle for a dispatcher turn. Derive a fresh point from the live
-        // native frame (the Exit button is 80 DIP wide with a 16 DIP right and
-        // bottom margin) and still require the point to resolve to the verified
-        // launcher before every real click.
-        int ex = 0;
-        int ey = 0;
+        // rectangle for a dispatcher turn. Prefer a FRESH rect from the live
+        // element each attempt and fall back to the historical bottom-right
+        // pixel estimate only when UIA cannot provide one; either way require
+        // the point to resolve to the verified launcher before every click.
+        int ex;
+        int ey;
         bool exited = false;
         for (int attempt = 0; attempt < 3 && !exited; attempt++)
         {
-            NativeMethods.GetWindowRect(ctx.MainHwnd, out NativeMethods.RECT mainRect);
-            double mainScale = NativeMethods.GetDpiForWindow(ctx.MainHwnd) / 96.0;
-            ex = mainRect.right - (int)(56 * mainScale);
-            ey = mainRect.bottom - (int)(32 * mainScale);
+            System.Windows.Rect? exitRect = null;
+            AutomationElement? freshBtn = Uia.FromHwnd(ctx.MainHwnd) is { } freshRoot
+                ? Uia.FindDescendantByName(freshRoot, ControlType.Button, "Exit TabDock", null, out _)
+                : null;
+            if (freshBtn != null)
+            {
+                System.Windows.Rect r = Uia.GetElementRect(freshBtn);
+                if (!r.IsEmpty && r.Width > 0 && r.Height > 0)
+                    exitRect = r;
+            }
+            if (exitRect is { } rect)
+            {
+                ex = (int)(rect.X + rect.Width / 2);
+                ey = (int)(rect.Y + rect.Height / 2);
+            }
+            else
+            {
+                NativeMethods.GetWindowRect(ctx.MainHwnd, out NativeMethods.RECT mainRect);
+                double mainScale = NativeMethods.GetDpiForWindow(ctx.MainHwnd) / 96.0;
+                ex = mainRect.right - (int)(56 * mainScale);
+                ey = mainRect.bottom - (int)(32 * mainScale);
+            }
             if (!EnsureClickable(ctx.MainHwnd, ex, ey))
             {
                 Thread.Sleep(300);
@@ -992,7 +1012,7 @@ internal static partial class Scenarios
             throw new InvalidOperationException("Could not bring the launcher to the foreground — refusing to click blind.");
         Thread.Sleep(300);
         Input.SendHotkeyCtrlAltG();
-        IntPtr pickerHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, t => t == "Capture windows", 10000);
+        IntPtr pickerHwnd = Discover.WaitForTopLevelWindow(ctx.TabDockPid, IsCapturePickerTitle, 10000);
         if (pickerHwnd == IntPtr.Zero)
             throw new InvalidOperationException("'Capture windows' picker did not appear within 10s.");
         AutomationElement? picker = Uia.FromHwnd(pickerHwnd);
@@ -1327,19 +1347,22 @@ internal static partial class Scenarios
     }
 
     // -------------------------------------------------------------------------
-    // The launcher's "No groups yet" empty-state hint must be visible with zero
-    // groups and hidden once a group exists (MainWindow.xaml DataTrigger on
-    // Groups.Count). Pure UIA read — no input is ever sent to the hint element.
+    // The launcher's empty-state hint must be visible with zero groups and
+    // hidden once a group exists (MainWindow.xaml DataTrigger on Groups.Count).
+    // The redesigned empty state is headed "Create your first workspace"
+    // (MainWindow.xaml); match that stable heading. Pure UIA read — no input
+    // is ever sent to the hint element.
     // -------------------------------------------------------------------------
     private static void LauncherEmptyStateHint(Ctx ctx, Options opt)
     {
+        const string emptyStateHeading = "Create your first workspace";
         AutomationElement? mainEl = Uia.FromHwnd(ctx.MainHwnd);
         ctx.Check(mainEl != null, "launcher MainWindow UIA element available");
         int hintCount = 0;
         AutomationElement? hint = mainEl == null
             ? null
-            : Uia.FindDescendantByName(mainEl, ControlType.Text, null, "No groups yet", out hintCount);
-        ctx.Check(hint != null && hintCount == 1, $"launcher empty-state hint 'No groups yet' found uniquely (count={hintCount})");
+            : Uia.FindDescendantByName(mainEl, ControlType.Text, null, emptyStateHeading, out hintCount);
+        ctx.Check(hint != null && hintCount == 1, $"launcher empty-state hint '{emptyStateHeading}' found uniquely (count={hintCount})");
 
         bool hintVisible = false;
         if (hint != null)
@@ -1367,7 +1390,7 @@ internal static partial class Scenarios
         int hintCount2 = 0;
         AutomationElement? hint2 = mainEl2 == null
             ? null
-            : Uia.FindDescendantByName(mainEl2, ControlType.Text, null, "No groups yet", out hintCount2);
+            : Uia.FindDescendantByName(mainEl2, ControlType.Text, null, emptyStateHeading, out hintCount2);
         bool hintGone = false;
         try
         {

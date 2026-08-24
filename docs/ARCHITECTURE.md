@@ -155,12 +155,22 @@ windows.
 
 ### Capture
 
-Trigger: the `Ctrl+Alt+G` hotkey (`HotkeyService`) or a container's "+" button →
+Trigger: the `Ctrl+Alt+G` hotkey (`HotkeyService`) or a container's "Add window" button →
 `ShowCapturePicker` (`App.xaml`; re-entrancy-guarded via `_pickerOpen` and the
 close-prompt check, `App.xaml`). The picker enumerates top-level windows with
 cheapest-first filters: visible → not tool-window → titled → not own window
 (`GroupManager.IsOwnWindow`, `GroupManager`) → not already captured
 (`GroupManager`) → not DWM-cloaked (`CapturePickerViewModel`).
+
+The picker row's continuity key is a UI-only projection, not a second native
+authority: HWND, PID, GUI thread, process-start ticks, class name, and the
+case-insensitive Windows executable path must all match before a checked row is
+restored after Refresh. Rows whose process identity cannot be read are omitted
+from production enumeration. The final handoff reuses
+`WindowIdentityGate.EvaluateBeforeCaptureToken`, and Shepherd performs its
+authoritative admission transaction again immediately before installing the
+capture token. Titles remain mutable display metadata and are intentionally not
+part of the identity key.
 
 On OK, `App` resolves/creates the target group + container, then calls
 `container.CaptureWindow(hwnd)` (`ContainerWindow.xaml`), which re-checks the
@@ -252,9 +262,9 @@ asserted through the controller's recording presentation-operations seam
 (`IPresentationOperations`) in unit tests; the former CI-only budget-counter
 scaffolding was removed as dead (Wave 1).
 
-The container caption's Group menu switches to an already-open group or creates
+The container caption's Workspace menu switches to an already-open group or creates
 one in the existing shell. The launcher is hidden while a container is open and
-remains only as the no-group/global-hotkey fallback. Routine Add App capture is
+remains only as the no-group/global-hotkey fallback. Routine Add window capture is
 an in-window panel; the standalone picker remains for the fallback path.
 
 - **State** — `SplitPresentationController.Left` / `.Right` hold
@@ -569,7 +579,35 @@ placeholders until the user repopulates or deletes them.
   ABI evidence (44-byte contract, get/set round trip) plus a per-machine
   environment report for the compatibility matrix.
 
-## 3. WinEvent pipeline: event → handler → effect
+## 3. Qualification control plane: source → candidate → evidence
+
+Release qualification is deliberately outside the Shepherd runtime authority.
+The ValidationDriver catalog describes dispatchable scenarios and projects
+into plans, shards, capability observations, and documentation. Direct/shard
+runs emit schema-2 manifests; `all` imports those child manifests into a
+verified parent hierarchy. The parent never treats a child exit code or
+console line as evidence without re-reading the child manifest and hashing its
+linked artifacts.
+
+The release scripts then create a schema-1 `qualification-bundle.json` that
+binds the source SHA, exact candidate executable, release manifest, driver,
+catalog generation, run-manifest hashes, outcome counts, and relative result/
+JUnit/timeline files. The offline verifier is data-only and privacy-bounded.
+Independent-machine reports are untrusted imports: package/report/bundle
+hashes, candidate identity, native ABI, OS/build, outcomes, and observed
+topology are checked before schema-3 external evidence is written. Stage B
+loads only trusted release policy and never executes the candidate, returned
+tooling, or candidate-controlled source.
+
+The virtual topology laboratory reuses pure placement/partition policy seams
+and covers monitor rectangles, work areas, effective DPI, negative/above-origin
+coordinates, clamp/restore, and topology transitions. Its generation and fixed
+seed are recorded with `syntheticTopology=true`; this is deterministic policy
+coverage and cannot satisfy a physical mixed-DPI gate. See
+`docs/release/qualification-control-plane.md` for the operator chain and
+schema migration.
+
+## 4. WinEvent pipeline: event → handler → effect
 
 Hooks installed in `WinEventMonitor.Start` (`WinEventMonitor`): `EVENT_OBJECT_DESTROY`,
 `EVENT_SYSTEM_FOREGROUND`, `EVENT_OBJECT_REORDER`, `EVENT_OBJECT_NAMECHANGE`, `EVENT_SYSTEM_MINIMIZESTART`,
@@ -614,9 +652,42 @@ revalidates that snapshot before pairing a captured guest.
   remains capture-disabled until restart. It never silently leaves guests in a
   degraded lifecycle mode.
 
+### Native-event replay and measurement boundary
+
+`Services/WinEventRoutingPolicy.cs` is the native-free admission seam for the
+hook callback. The callback still performs the live captured-member lookup,
+passes the resolved object through the policy, and posts only relevant events.
+The posted handler performs a second reference-identity lookup before invoking
+guest lifecycle callbacks. That second lookup is intentional HWND-generation
+protection: an event queued for a released or recycled handle must not act on a
+new member. `Services/NativeInteractionReplay.cs` models this policy boundary
+with explicit identities, identity probe results, visibility, foreground, and
+native intents/refusals; it does not emulate USER32 or create windows.
+
+The bounded WinEvent measurement suite exercises captured and irrelevant event
+storms, child/object filtering, desktop reorder, queued stale dispatch, and
+lifecycle callback counts. Its representative result is one callback membership
+probe and one dispatch revalidation per relevant captured event; child/irrelevant
+events perform zero membership probes. No cross-event HWND cache was accepted:
+the dispatch probe is the safety proof against handle reuse, so removing it
+would change observable fail-closed behavior rather than merely reduce work.
+
+The physical ValidationDriver has a separate evidence boundary. A
+`DesktopQualificationLease` records privacy-safe session/monitor/foreground
+state and invalidates permanently on foreign coverage, foreign foreground,
+identity change, or unverifiable observations. `TestRunProvenance` supplies the
+ownership categories `OWNED_PROCESS`, `OWNED_WINDOW`,
+`ADOPTED_EXTERNAL_WINDOW`, `FOREIGN`, and `STALE_RECYCLED`; `OWNED_WINDOW` and
+`ADOPTED_EXTERNAL_WINDOW` are the only input-target categories, while only
+`OWNED_PROCESS` is eligible for the process kill list. An adopted external
+window may be an input target only while its complete stable identity still
+matches. `NativeInteractionTimeline`
+and the root run manifest link bounded role-based evidence without persisting
+titles, URLs, document contents, or arbitrary user paths.
+
 ---
 
-## 4. Persistence & journal
+## 5. Persistence & journal
 
 Two distinct files in `%APPDATA%\TabDock\`:
 
@@ -682,7 +753,7 @@ crash-recovery protection.
 
 ---
 
-## 5. Log-line index
+## 6. Log-line index
 
 `%APPDATA%\TabDock\logs\TabDock.log`, 1 MB rotation (`LoggingService`). Lines that
 tests and agents may rely on:
@@ -731,7 +802,7 @@ Rules:
 
 ---
 
-## 6. Deeper docs
+## 7. Deeper docs
 
 - `AGENTS.md` — build/publish commands, code style, guarded process-spawn pattern, perf invariants.
 - `docs/TESTING.md` — ValidationDriver/GuineaPig harness reference, scenario list, repro techniques.

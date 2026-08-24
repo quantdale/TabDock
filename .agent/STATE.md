@@ -10,6 +10,232 @@ this text.
 
 ## CURRENT STATUS
 
+## QUALIFICATION CONTROL PLANE CAMPAIGN (2026-08-24, COMPLETE LOCALLY)
+
+Objective: connect the ValidationDriver catalog, hierarchical manifests,
+candidate-bound bundles, independent-machine reports, virtual topology
+coverage, external evidence, and trusted Stage-B publication into one
+fail-closed control plane. Preserve the Shepherd/no-reparent product and do
+not run guarded physical SendInput without a proven exclusive supervised
+desktop.
+
+Starting authority was independently verified before branching: clean
+`codex/native-interaction-determinism-20260824` at `09a204d...`, with PR #12
+still open/draft at its original head `eca8670...` and base `main`. The active
+branch is `codex/qualification-control-plane-20260824`; resolve its current
+HEAD dynamically because this file must not self-reference its containing
+commit. Completed implementation waves are the catalog (`81caac9`),
+hierarchical manifests (`608a360`), bundle/verifier/topology lab (`aab112a`),
+candidate evidence and machine handoffs (`9003f3c`), and workflow/operator
+integration (`159d094`).
+
+Current contracts: catalog generation
+`scenario-catalog-2026-08-24-v1` with 127 dispatchable scenarios and 13 typed
+shards; run-manifest schema 2; qualification-bundle, handoff-package, and
+machine-report schema 1; external release evidence schema 3. The topology lab
+uses generation `virtual-topology-lab-2026-08-24-v1`, fixed seed `20260824`,
+and bounded transition coverage; every lab result is explicitly synthetic.
+
+Final deterministic validation: Debug/Release builds are 0 warnings/0 errors;
+Debug/Release unit suites are 686/686; Debug/Release ValidationDriver
+deterministic self-tests are 125/125; release-tooling is 177/177; strict
+OpenSpec is 32/32; modified workflows parse as YAML; the canonical
+`validate.ps1 -Configuration Release -Ci -Publish` log ends with all requested
+steps successful, including native ABI, version, recovery, diagnostic, privacy,
+single-file publish, and OpenSpec checks; and `git diff --check` is clean.
+The exact-candidate bridge produced an unsigned qualification-only candidate
+for source `159d094...`: final artifact SHA-256
+`24852ba5fc5666070b39c7fcf459c44739fd74a0ffba7a41f04e54ea98bbc0b8`, candidate
+bundle schema 1 SHA-256
+`109417d6d9187f1c0f84389c3cb06485e479e91a3e9c8887683ee38755c94f75`, package
+schema 1 SHA-256
+`0d3aa8910d6638e4f80c23fe541f77bbe56202265151ab9494f5f72d72d4fb67`, and
+deterministic independent-machine bundle schema 1 SHA-256
+`6f9e6d2a56e6e73d171e4aea6509b0fa0e8a8de9968c32189daa3cf7c53b215b`.
+The offline verifier and untrusted report import both passed against that
+candidate. The exact bridge corrected copied-driver parent/child identity so
+all manifest hashes remain bound to the driver actually run.
+
+Physical qualification was not run: this host is Windows 11 build 26200 x64
+with one 1920x1080 monitor at 96 DPI and no exclusive desktop lease. No
+guarded SendInput was issued. Real mixed-DPI, Windows 10 independent-machine,
+production signing, and final human smoke remain external blockers. The known
+physical repetitions (`dragreorder` H2 flip-back, split-drag-release zero-delta
+polyline, and capture-inline-ui second-tab assertion) remain unclassified and
+are not fixed by simulation. The virtual lab remains synthetic-only: generation
+`virtual-topology-lab-2026-08-24-v1`, seed `20260824`, fixed monitor/DPI
+boundary matrix, and 256 bounded topology transitions.
+
+Next action: push the clean active branch, independently recheck PR #12, and
+create a draft stacked PR against the campaign branch only if authenticated
+GitHub access is available. Do not mutate PR #12 or `main`.
+
+## NATIVE INTERACTION DETERMINISM CAMPAIGN (2026-08-24, COMPLETE FOR THIS ENVIRONMENT)
+
+Objective: classify physical ValidationDriver outcomes without mislabeling
+foreign-desktop interference, preserve bounded privacy-safe evidence, turn
+native-event policy into deterministic replay, and measure WinEvent work while
+preserving the Shepherd/no-reparent architecture.
+
+Git authority for this campaign: branch
+`codex/native-interaction-determinism-20260824`, based directly on PR #12 head
+`eca8670759f9bc42aee58ec5f59b33fd0adab3f0`; PR #12 remains draft and unchanged.
+The implementation and campaign documentation are committed in coherent
+waves; resolve final HEAD dynamically before handoff because this file never
+self-identifies its own containing commit.
+
+Baseline before edits: Debug/Release builds 0 warnings/0 errors; Debug and
+Release unit suites 675/675; ValidationDriver self-tests 38/38;
+release-tooling 150/150; strict OpenSpec 30/30; canonical Release CI/publish
+validation green; diff check clean. No physical run was authorized because the
+desktop was not demonstrably exclusive and safe for SendInput.
+
+Completed in the current campaign: canonical eight-way `ScenarioOutcome`
+contract with exit/JUnit/JSON/manifest mappings and rerun aggregation;
+central capability preflight; fail-closed `DesktopQualificationLease`;
+explicit provenance ownership categories and adopted-external cleanup
+exclusion; bounded `NativeInteractionTimeline`; root run manifest with
+capability matrix and executable hashes; condition-wait seam; pure WinEvent
+routing and native interaction replay seams with fixtures; deterministic lease,
+outcome, replay, lifecycle, split, identity, and fixed-seed stress tests;
+canonical shard exit aggregation; and documentation/OpenSpec artifacts.
+
+Current validation at the last substantive implementation checkpoint:
+Debug/Release builds 0 warnings/0 errors; Debug/Release unit suites 686/686;
+ValidationDriver self-tests 96/96; focused WinEvent/replay tests 13/13;
+release-tooling 150/150; strict OpenSpec 31/31; canonical Release CI/publish
+validation PASS including native ABI, version, privacy, recovery, and
+single-file publish smoke; diff check clean. Physical repeat cases
+`dragreorder` H2, split drag/release zero-delta, and inline-capture second-tab
+remain unrun on an exclusive desktop and must not be called product failures.
+
+Historical disposition verified before edits: staged/atomic `state.json.bak`,
+pending-recovery compaction, orphan `.recovered` cleanup, intentional-hide
+finalization, diagnostic-suppression cleanup, split member liveness, dormant
+split drag projection, direct `GroupViewModel` mutation coverage, and layout
+dirty-check behavior are ALREADY FIXED. Existing physical repeat findings are
+NEEDS REPRODUCTION under the new lease; no speculative Shepherd change was
+made. Next action: an authenticated maintainer may create the stacked draft
+PR; do not merge or alter PR #12 automatically.
+
+Handoff state: the campaign branch is pushed and tracks its origin branch; PR
+#12 remains draft with its original head/base. GitHub CLI could not create the
+requested draft stacked PR because this session has no GitHub authentication
+(`gh auth login`/`GH_TOKEN` is required). No merge, readiness change, or PR #12
+mutation was attempted. The last substantive evidence checkpoint is
+`8f87586`; resolve the branch's current HEAD dynamically because this state
+file never records a self-referential SHA. Physical qualification remains
+`BLOCKED_SUPERVISED`/`BLOCKED_ENVIRONMENT` without an exclusive safe desktop.
+
+## RELEASE QUALIFICATION CAMPAIGN (2026-08-23/24, COMPLETE FOR THIS ENVIRONMENT)
+
+Objective: take PR #12 from CI-qualified RC to highest achievable release
+readiness: supervised/native qualification, real-app interop, identity stress,
+DPI/topology, crash/recovery, signing, Stage-B; fix only reproduced defects.
+Starting point: clean tree at handoff head `db6d3e6`; origin/main `ba3115a`;
+PR #12 open/draft with that head (verified via GitHub REST after a transient
+network outage).
+
+Executed and fixed (each: repro → root cause → minimal fix → regression):
+- PRODUCT Critical: launcher cold-start FATAL crash on empty state (TwoWay
+  Run.Text binding to ObservableCollection.Count). Fixed d60bf7b with
+  LauncherStartupBindingTests (4 facts incl. source contract).
+- PRODUCT High: ordinary tab switches left foreground on container chrome
+  (zero SHEPHERD[bring-to-front] during rapid switches; split path already
+  granted it). Fix on final commit: SetForeground in SyncShepherdActiveWindow
+  when container is active and no chrome interaction is open.
+- HARNESS: seven stale contracts vs redesigned UI (capture-order assumption →
+  live TabStripOrder helper; two-tab EnterSplitTwo misuse → partner submenu;
+  'Add window to group'→AddWindowButton AutomationId; ancestor-checkbox →
+  sibling 'Select <title>' checkbox; 'Exit'→'Exit TabDock' + fresh-rect click;
+  'No groups yet'→'Create your first workspace'; ClickTabSubmenuItem parent-
+  rect wait). Commit 60d01f3 plus final-commit harness fixes.
+- HARNESS provenance gaps: Windows 11 Notepad single-instance broker adoption
+  (TryAdoptExternalWindow: identity-pinned input target, process never
+  tracked/killed); Chrome-requiring standalone scenarios now SKIP
+  (SKIP_BROWSER_NOT_INSTALLED) instead of Win32Exception.
+- SPEC: release-engineering exact-binary requirement now uses SHALL; strict
+  OpenSpec validate --all --strict is 30/30.
+
+Deterministic gates all green on the final committed tree: Debug/Release
+builds 0w/0e; Debug+Release suites 675/675 each; release-tooling 150/150
+(requires pwsh; PS5.1 run fails its own syntax — record for future sessions);
+driver self-tests 38/38; canonical `validate.ps1 -Configuration Release -Ci
+-Publish` PASS incl. native ABI (Win11 26200), doctor/pending-recovery/
+redirected-lifecycle/support-bundle privacy smokes, OpenSpec 30/30, publish
++version smoke; `git diff --check` clean. Hosted CI `build` green on prior
+head db6d3e6 (run 32639177096); final push re-triggers it.
+
+Supervised physical qualification (Release artifacts, guarded SendInput):
+global-tab-navigation PASS 24/24; split-affordance PASS; capture-admission-
+blocked BLOCKED_ENVIRONMENT (by design). Broad suite (`--yes all`, 11 shards)
+executed twice; best-of-N: dpi-multi-monitor PASS, split-core PASS 11/11,
+crash-recovery 7/8, capture-group 13/15, split-focus 5/9, split-render 12/18,
+drag-z-order 5/9, keyboard-input 4/15, startup 1/3, diagnostics 5/8 (+6 Chrome
+SKIPs). Persistent non-passes correlate with an unregistered foreign window
+(operator's maximized Windows Terminal) holding/covering foreground;
+identity-failure-*.json artifacts under %TEMP%\TabDock-Validation\runs\ prove
+the fail-closed refusals. Identical binaries passed several of those scenarios
+in other runs. Remaining repeats need an exclusive-desktop rerun of the FINAL
+SHA before classification as pass or defect; commands unchanged in
+docs/TESTING.md. Full ledger: docs/audits/2026-08-23/RC_QUALIFICATION_EVIDENCE.md.
+
+External gates unchanged: mixed-DPI/multi-monitor topology absent (single
+1920x1080 @96dpi) = BLOCKED_ENVIRONMENT; production signing BLOCKED_SIGNING
+(no DigiCert STM credentials; NOT_CONFIGURED manifest recorded);
+BLOCKED_STAGE_B (no second machine). RC bundle previously produced at
+intermediate SHA 56cc217 under artifacts/rc-candidate (QUALIFICATION_ONLY,
+sha256 66d243bd...); regenerate via scripts/release-qualify.ps1 on final SHA.
+
+Decision: PR #12 REMAINS DRAFT. Classification: RC_BLOCKED_EXTERNAL.
+Next actions: exclusive-desktop rerun of remaining supervised set on final
+SHA; obtain signing credentials; Stage-B machine; mixed-DPI hardware.
+
+## RELEASE-CANDIDATE HARDENING CAMPAIGN (started 2026-08-23, IN PROGRESS)
+
+Objective: continue draft PR #12 from the existing ship-readiness branch and
+implement a second independent hardening pass across capture identity and
+refresh continuity, picker scale, keyboard/accessibility behavior, responsive
+WPF layout, launcher/container projections, source contracts, ValidationDriver,
+documentation, and release qualification. Active plan:
+`.agent/plans/release-candidate-hardening-2026-08-23.md`.
+
+Git was fetched and resolved dynamically before work. The checkout started
+clean on `main` at the stated base, and now tracks the existing branch
+`codex/ship-readiness-overhaul-20260823` at the handoff head. PR #12 is open
+and draft with that branch as head and `main` as base; `origin/main` matches the
+stated base at session start. No main integration was needed.
+
+Current phase: implementation and deterministic qualification complete for picker identity/scale, accessibility
+and keyboard contracts, responsive layout/style polish, launcher/container
+projection hardening, ValidationDriver selector updates, and documentation;
+deterministic release qualification is green. The deterministic baseline was 652/652
+Debug unit tests; the current Debug corpus is 671/671, including 11/11 targeted
+split/source-contract checks. A full-suite persistence hammer exposed a real
+settlement-barrier race: concurrent SaveAsync callers could overwrite the
+highest-generation task reference with an older one. PersistenceService now
+tracks the highest generation under a bookkeeping lock; its native/durable
+transaction architecture is unchanged. Isolated persistence tests pass 5/5 and
+the post-fix full Debug suite passes 671/671.
+
+Verified campaign fixes include strong picker continuity (HWND/PID/thread/
+process-start/class/Windows-path identity), fail-closed final handoff through
+WindowIdentityGate, coalesced filter/selection/icon work for 100/500/1000-row
+sets, dynamic accessible names/help text and visible keyboard focus, stable
+launcher/container/picker AutomationIds, live launcher selection repair,
+responsive long-text layout, and current ValidationDriver selectors.
+Final deterministic evidence: Debug and Release solution builds/tests are
+0-warning/0-error and 671/671; `validate.ps1 -Configuration Release -Ci -Publish`
+passes audited restore with no vulnerable packages, Release driver/GuineaPig/
+performance builds, native ABI, version/doctor/recovery/privacy smokes, OpenSpec
+30/30, and self-contained publish/version; release-tooling is 150/150; strict
+OpenSpec change validation is valid; ValidationDriver deterministic self-tests
+are 38/38. Repeated stability is green for three CapturePicker runs (14/14)
+and two full Debug runs (671/671) after the persistence barrier fix.
+Supervised real-input qualification remains blocked unless an exclusively
+available, provenance-safe Windows desktop is provided; exact reruns and the
+blocked scope are in `docs/TESTING.md`.
+
 ## PRODUCT TRUST & INTERACTION CAMPAIGN (started 2026-08-23, DELIVERY READY)
 
 Objective: close M3 pending-recovery visibility, canonical capture-admission
@@ -49,10 +275,11 @@ exclusively available and provenance-safe. Exact rerun commands are in
 `docs/TESTING.md` and the archived OpenSpec task record at
 `openspec/changes/archive/2026-08-23-product-trust-interaction-campaign/`.
 
-Next action: commit the intended campaign work, push `main`, and verify
-`main == origin/main` with a clean worktree. Supervised Windows qualification,
-production signing, mixed-DPI/negative-coordinate topology, and final human
-smoke remain external gates.
+Historical next action from that completed campaign: commit the intended work
+and push `main`. The current PR-branch release-candidate campaign above
+supersedes it; do not use that historical line as authority for this session.
+Supervised Windows qualification, production signing, mixed-DPI/negative-
+coordinate topology, and final human smoke remain external gates.
 
 ## HISTORICAL CAMPAIGN RECORDS
 

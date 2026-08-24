@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using TabDock.Models;
 using TabDock.Services;
 
@@ -20,6 +21,8 @@ public sealed class SplitCompositeViewModel : ViewModelBase
     {
         Left = left ?? throw new ArgumentNullException(nameof(left));
         Right = right ?? throw new ArgumentNullException(nameof(right));
+        Left.PropertyChanged += Member_PropertyChanged;
+        Right.PropertyChanged += Member_PropertyChanged;
     }
 
     /// <summary>The member rendered in the LEFT half (and focused by a left-half click).</summary>
@@ -27,6 +30,9 @@ public sealed class SplitCompositeViewModel : ViewModelBase
 
     /// <summary>The member rendered in the RIGHT half (and focused by a right-half click).</summary>
     public TabViewModel Right { get; }
+
+    /// <summary>Accessible name that distinguishes the composite's LEFT and RIGHT members.</summary>
+    public string AutomationName => $"Split tab: LEFT {Left.Title}; RIGHT {Right.Title}";
 
     /// <summary>
     /// Stable UI Automation identifier for the generated ListBoxItem. Keeping
@@ -50,5 +56,26 @@ public sealed class SplitCompositeViewModel : ViewModelBase
     }
 
     internal void RefreshActiveState()
-        => IsActive = Left.IsActive || Right.IsActive;
+    {
+        IsActive = Left.IsActive || Right.IsActive;
+        OnPropertyChanged(nameof(AutomationName));
+    }
+
+    /// <summary>
+    /// A guest title can change asynchronously while the split projection stays
+    /// alive. Forward the member's title/accessibility invalidation so UIA does
+    /// not announce the old LEFT/RIGHT names until the next split transition.
+    /// </summary>
+    private void Member_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(TabViewModel.Title) or nameof(TabViewModel.AutomationName))
+            OnPropertyChanged(nameof(AutomationName));
+    }
+
+    /// <summary>Stops the projection from retaining member listeners after split exit.</summary>
+    internal void Detach()
+    {
+        Left.PropertyChanged -= Member_PropertyChanged;
+        Right.PropertyChanged -= Member_PropertyChanged;
+    }
 }

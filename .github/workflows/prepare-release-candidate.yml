@@ -17,7 +17,8 @@ name: prepare-release-candidate
 # Humans then download THAT exact artifact, run the final Windows smoke, the
 # physical mixed-DPI qualification, and the Windows 10/11 compatibility gates
 # against those exact bytes, and author release-external-evidence.json
-# (schemaVersion 2) referencing this run and artifact. The separate
+# (schemaVersion 3) referencing this run, artifact, verified qualification
+# bundle, and structured machine reports. The separate
 # publish-release workflow (STAGE B) later downloads this same artifact and
 # publishes it WITHOUT rebuilding, re-signing, or touching the executable.
 #
@@ -304,6 +305,20 @@ jobs:
           # the script text (R21-001).
           .\scripts\release-qualify.ps1 -Ci -Sha $env:REQUESTED_SHA -Version $env:EXPECTED_VERSION -Sign -OutDir (Join-Path $env:RUNNER_TEMP 'production-candidate')
 
+      # Read the finalized candidate in place and bind deterministic
+      # ValidationDriver evidence to its exact SHA-256. Only matching tooling
+      # is built/copied; the signed candidate is never rebuilt, replaced, or
+      # re-signed. Physical gates remain explicit external capabilities.
+      - name: Create exact-candidate deterministic qualification bundle
+        shell: pwsh
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'production-candidate'
+          $manifest = Get-Content (Join-Path $dir 'release-manifest.json') -Raw | ConvertFrom-Json
+          $candidate = Join-Path $dir ([string]$manifest.artifactFileName)
+          .\scripts\qualify-release-candidate.ps1 -CandidateDir $dir -TabDock $candidate -SourceRoot $env:GITHUB_WORKSPACE -Tier deterministic
+
       # Immutable retention of the exact signed candidate. The artifact name
       # embeds the source SHA and the run id so Stage B can locate the exact
       # artifact and so an artifact name alone is never sufficient
@@ -359,7 +374,8 @@ jobs:
           final distributed SHA-256, execute the human gates against those exact bytes
           (docs/release/final-smoke.md, mixed-dpi-qualification.md,
           compatibility-matrix.md), then author release-external-evidence.json
-          (schemaVersion 2) with candidateWorkflowRunId = `${{ github.run_id }}` and
+          (schemaVersion 3) with candidateWorkflowRunId = `${{ github.run_id }}`, a
+          qualificationBundle binding, and structured machine-report bindings; the
           candidateArtifactName = tabdock-candidate-`$($env:REQUESTED_SHA)`-`${{ github.run_id }}.
           Dispatch the publish-release workflow with that run id and evidence; it
           publishes THESE exact bytes without rebuilding or re-signing.

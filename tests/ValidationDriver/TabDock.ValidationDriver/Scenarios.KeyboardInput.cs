@@ -45,8 +45,24 @@ internal static partial class Scenarios
     // -------------------------------------------------------------------------
     // 18. chromeinput (Test B): Chromium input recovery after activation fix.
     // -------------------------------------------------------------------------
+    /// <summary>
+    /// Uses the canonical SKIP_CAPABILITY outcome when the given browser
+    /// executable is absent, so standalone browser scenarios degrade honestly
+    /// instead of dying on Process.Start Win32Exception. Capability preflight
+    /// normally handles this before setup; this guard remains for direct calls.
+    /// </summary>
+    private static bool RequireBrowserFile(Ctx ctx, string exe, string label)
+    {
+        if (!string.IsNullOrEmpty(exe) && File.Exists(exe))
+            return true;
+        ctx.SkipCapability($"{label} is not installed; rerun on a machine where it is available.");
+        return false;
+    }
+
     private static void ChromeInput(Ctx ctx, Options opt)
     {
+        if (!RequireBrowserFile(ctx, ChromeExe, "Google Chrome"))
+            return;
         string htmlPath = CreateChromeInputTestPage();
         GuestInfo chrome = SpawnClassGuest(ctx, ChromeExe,
             $"--user-data-dir=\"{FreshProfileDir("TabDockChromeProfile")}\" --disable-gpu --app=\"{htmlPath}\"",
@@ -172,6 +188,8 @@ document.getElementById('btn').addEventListener('click', function() {
     // -------------------------------------------------------------------------
     private static void KeyboardInputChrome(Ctx ctx, Options opt)
     {
+        if (!RequireBrowserFile(ctx, ChromeExe, "Google Chrome"))
+            return;
         string htmlPath = CreateChromeKeyboardTestPage();
         GuestInfo chrome = SpawnClassGuest(ctx, ChromeExe,
             $"--user-data-dir=\"{FreshProfileDir("TabDockChromeProfile")}\" --disable-gpu --app=\"{htmlPath}\"",
@@ -238,6 +256,8 @@ document.getElementById('btn').addEventListener('click', function() {
     // -------------------------------------------------------------------------
     private static void KeyboardInputChromeOmniboxAltSwitch(Ctx ctx, Options opt)
     {
+        if (!RequireBrowserFile(ctx, ChromeExe, "Google Chrome"))
+            return;
         string pageA = CreateNamedTestPage("TDVAL-OMNI-A");
         string pageB = CreateNamedTestPage("TDVAL-OMNI-B");
         string uriA = new Uri(pageA).AbsoluteUri;
@@ -295,6 +315,8 @@ document.getElementById('btn').addEventListener('click', function() {
 
     private static void KeyboardInputBrowserAltSwitch(Ctx ctx, string exe, string className, string label)
     {
+        if (!RequireBrowserFile(ctx, exe, label))
+            return;
         string htmlPath = CreateChromeKeyboardTestPage();
         GuestInfo browser = SpawnClassGuest(ctx, exe,
             $"--user-data-dir=\"{FreshProfileDir("TabDockAltSwitchProfile")}\" --disable-gpu --no-first-run --no-default-browser-check --disable-session-crashed-bubble --app=\"{htmlPath}\"",
@@ -580,6 +602,8 @@ input.addEventListener('input', function() {
     // -------------------------------------------------------------------------
     private static void RealWorkflowAltSwitch(Ctx ctx, Options opt)
     {
+        if (!RequireBrowserFile(ctx, ChromeExe, "Google Chrome"))
+            return;
         string htmlPath = CreateChromeKeyboardTestPage();
         GuestInfo browser = SpawnClassGuest(ctx, ChromeExe,
             $"--user-data-dir=\"{FreshProfileDir("TabDockRealWorkflowProfile")}\" --disable-gpu --no-first-run --no-default-browser-check --disable-session-crashed-bubble --app=\"{htmlPath}\"",
@@ -755,11 +779,9 @@ input.addEventListener('input', function() {
     // 38. keyboard-only-tab-navigation: ContainerWindow_PreviewKeyDown
     //     implements Ctrl+Tab / Ctrl+Shift+Tab as an explicit keyboard shortcut
     //     that cycles ActiveTab — the real "keyboard-only tab switch" mechanism
-    //     (TabsListBox itself has Focusable="False" in Views/ContainerWindow.xaml,
-    //     confirmed by reading the XAML rather than by running the app, so
-    //     plain Tab/Shift+Tab focus traversal can never reach it or drive
-    //     arrow-key selection on it). Plain Tab/Shift+Tab is exercised too, but
-    //     only as a "must not crash/hang" check, per that same finding.
+    //     (the redesigned tab strip is explicitly focusable and exposes
+    //     keyboard focus states). Plain Tab/Shift+Tab traversal and arrow-key
+    //     selection are exercised as real-input acceptance checks.
     // -------------------------------------------------------------------------
     private static void KeyboardOnlyTabNavigation(Ctx ctx, Options opt)
     {
@@ -779,6 +801,35 @@ input.addEventListener('input', function() {
                 if (IsDocked(g.Hwnd, host))
                     return g.Hwnd;
             return IntPtr.Zero;
+        }
+
+        AutomationElement containerRoot = Uia.FromHwnd(container)
+            ?? throw new InvalidOperationException("Container UIA root unavailable.");
+        AutomationElement? tabStrip = Uia.FindDescendantByAutomationId(containerRoot, "WorkspaceTabs", out int tabStripCount);
+        ctx.Check(tabStrip != null && tabStripCount == 1,
+            $"workspace tab strip exposes one stable keyboard target (count={tabStripCount})");
+        if (tabStrip != null && tabStripCount == 1)
+        {
+            ctx.Check(tabStrip.Current.IsKeyboardFocusable,
+                "workspace tab strip is keyboard focusable");
+            for (int attempt = 0; attempt < 16 && !tabStrip.Current.HasKeyboardFocus; attempt++)
+            {
+                Input.SendKey(Input.VK_TAB);
+                Thread.Sleep(75);
+            }
+
+            ctx.Check(tabStrip.Current.HasKeyboardFocus,
+                "Tab traversal reaches the workspace tab strip");
+            if (tabStrip.Current.HasKeyboardFocus)
+            {
+                IntPtr beforeArrow = FindDocked();
+                Input.SendKey(Input.VK_RIGHT);
+                ctx.Check(Util.WaitUntil(() => FindDocked() != IntPtr.Zero && FindDocked() != beforeArrow, 3000),
+                    "Right arrow activates the next workspace tab without a mouse click");
+                Input.SendKey(Input.VK_LEFT);
+                ctx.Check(Util.WaitUntil(() => FindDocked() == beforeArrow, 3000),
+                    "Left arrow returns to the previously active workspace tab");
+            }
         }
 
         IntPtr initiallyDocked = FindDocked();

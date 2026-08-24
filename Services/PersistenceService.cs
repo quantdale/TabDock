@@ -61,11 +61,14 @@ public sealed class PersistenceService
     // can therefore never overwrite a newer attempted save.
     private long _lastAttemptedGeneration = -1;
 
-    // Handle to the most recently enqueued off-thread write, so a graceful
-    // shutdown (or a deterministic test) can await the single-writer drain.
-    // This is a reference only; it does not chain or serialize the tasks, so
-    // rapid-save coalescing is preserved.
+    // Handle to the highest-generation enqueued off-thread write, so a
+    // graceful shutdown (or a deterministic test) can await the single-writer
+    // drain. SaveAsync callers can arrive concurrently and acquire the task
+    // bookkeeping gate out of generation order; never let an older caller
+    // replace the barrier for a newer snapshot.
     private System.Threading.Tasks.Task? _lastWriteTask;
+    private long _lastWriteGeneration = -1;
+    private readonly object _writeTaskGate = new();
 
     public PersistenceService(LoggingService log, string? statePath = null)
         : this(log, statePath, path => File.GetAttributes(path), path => File.ReadAllText(path))
@@ -137,7 +140,10 @@ public sealed class PersistenceService
     /// serializes the writes, so coalescing is preserved.
     /// </summary>
     public System.Threading.Tasks.Task WhenWritesSettledAsync()
-        => _lastWriteTask ?? System.Threading.Tasks.Task.CompletedTask;
+    {
+        lock (_writeTaskGate)
+            return _lastWriteTask ?? System.Threading.Tasks.Task.CompletedTask;
+    }
 
     /// <summary>
     /// Safety-boundary save (capture, release, group mutation, rescue). Runs the
@@ -170,7 +176,15 @@ public sealed class PersistenceService
         if (json == null)
             return;
         long generation = System.Threading.Interlocked.Increment(ref _lastAttemptedGeneration);
-        _lastWriteTask = System.Threading.Tasks.Task.Run(() => CommitJson(json, generation));
+        System.Threading.Tasks.Task writeTask = System.Threading.Tasks.Task.Run(() => CommitJson(json, generation));
+        lock (_writeTaskGate)
+        {
+            if (generation > _lastWriteGeneration)
+            {
+                _lastWriteGeneration = generation;
+                _lastWriteTask = writeTask;
+            }
+        }
     }
 
     /// <summary>

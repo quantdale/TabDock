@@ -37,11 +37,19 @@ internal static class GuardedProc
     private static int _scenarioSpawnCount;
     private static int _totalSpawnCount;
     private static readonly List<Process> Tracked = new List<Process>();
+    private static NativeInteractionTimeline? _timeline;
 
     public static void Log(string message)
     {
         Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] {message}");
         Console.Out.Flush();
+    }
+
+    /// <summary>Associates process provenance events with the active scenario timeline.</summary>
+    public static void SetTimeline(NativeInteractionTimeline? timeline)
+    {
+        lock (SpawnLock)
+            _timeline = timeline;
     }
 
     public static Process SpawnGuarded(ProcessStartInfo psi)
@@ -56,6 +64,12 @@ internal static class GuardedProc
             string argumentText = psi.ArgumentList.Count == 0
                 ? psi.Arguments
                 : string.Join(" ", psi.ArgumentList);
+            _timeline?.Record("process-launch-request", "ValidationDriver", data: new Dictionary<string, string>
+            {
+                ["executable"] = System.IO.Path.GetFileName(psi.FileName),
+                ["scenarioSpawn"] = (_scenarioSpawnCount + 1).ToString(),
+                ["runSpawn"] = (_totalSpawnCount + 1).ToString(),
+            });
             Log($"Spawning {_scenarioSpawnCount + 1}/{MaxTotalSpawns} (scenario), {_totalSpawnCount + 1}/{MaxTotalSpawnsHard} (run): {psi.FileName} {argumentText}");
             Process? p = Process.Start(psi);
             if (p == null)
@@ -64,6 +78,11 @@ internal static class GuardedProc
             _scenarioSpawnCount++;
             _totalSpawnCount++;
             Tracked.Add(p);
+            _timeline?.Record("process-launched", "ValidationDriver", data: new Dictionary<string, string>
+            {
+                ["pid"] = p.Id.ToString(),
+                ["executable"] = System.IO.Path.GetFileName(psi.FileName),
+            });
             Log($"Spawned PID {p.Id}.");
             return p;
         }
@@ -89,6 +108,11 @@ internal static class GuardedProc
         lock (SpawnLock)
         {
             Tracked.Add(p);
+            _timeline?.Record("process-admitted-for-cleanup", "ValidationDriver", data: new Dictionary<string, string>
+            {
+                ["pid"] = p.Id.ToString(),
+                ["processName"] = SafeName(p),
+            });
             Log($"Tracking external PID {p.Id} ({SafeName(p)}) for cleanup.");
         }
     }
@@ -119,12 +143,21 @@ internal static class GuardedProc
                 {
                     if (IsAncestorOfCurrentProcess(p.Id))
                     {
+                        _timeline?.Record("cleanup-refused-ancestor", "ValidationDriver", data: new Dictionary<string, string>
+                        {
+                            ["pid"] = p.Id.ToString(),
+                        });
                         Log($"SAFETY: REFUSING to kill tracked PID {p.Id} ({SafeName(p)}) — it is this driver's own " +
                             "process or an ancestor of it (shared-instance host, e.g. Windows Terminal's monarch " +
                             "process), not an isolated spawned child. Skipping kill; any captured window was " +
                             "already closed via WM_CLOSE where applicable.");
                         continue;
                     }
+                    _timeline?.Record("cleanup-process", "ValidationDriver", data: new Dictionary<string, string>
+                    {
+                        ["pid"] = p.Id.ToString(),
+                        ["processName"] = SafeName(p),
+                    });
                     Log($"Killing tracked process {p.Id} ({SafeName(p)})...");
                     p.Kill(entireProcessTree: true);
                     // Do not restore the user's state snapshot while a
@@ -226,21 +259,20 @@ internal static class Util
 
     /// <summary>Polls <paramref name="condition"/> until true or the timeout elapses. Honors the run budget.</summary>
     public static bool WaitUntil(Func<bool> condition, int timeoutMs, int pollMs = 100)
-    {
-        var sw = Stopwatch.StartNew();
-        while (true)
-        {
-            ThrowIfCancelled();
-            bool ok;
-            try { ok = condition(); }
-            catch { ok = false; }
-            if (ok)
-                return true;
-            if (sw.ElapsedMilliseconds >= timeoutMs)
-                return false;
-            Thread.Sleep(pollMs);
-        }
-    }
+        => ScenarioWait.Until(condition, timeoutMs, pollMs).Succeeded;
+
+    /// <summary>
+    /// Observable wait variant used by evidence-producing helpers. Callers can
+    /// retain the last observed state instead of reconstructing a timeout from
+    /// a generic assertion string.
+    /// </summary>
+    public static ScenarioWaitResult WaitUntilObserved(
+        Func<bool> condition,
+        int timeoutMs,
+        int pollMs = 100,
+        Func<string>? describe = null,
+        Action<ScenarioWaitResult>? onTimeout = null)
+        => ScenarioWait.Until(condition, timeoutMs, pollMs, describe, onTimeout);
 
     public static bool RectNear(NativeMethods.RECT a, NativeMethods.RECT b, int tolerance)
     {

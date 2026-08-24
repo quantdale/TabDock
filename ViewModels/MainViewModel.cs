@@ -1,5 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Linq;
 using System.Windows.Input;
 using TabDock.Models;
@@ -101,6 +102,7 @@ public sealed class MainViewModel : ViewModelBase
     public MainViewModel(GroupManager manager)
     {
         _manager = manager;
+        Groups.CollectionChanged += Groups_CollectionChanged;
         _manager.CaptureAdmissionChanged += Manager_CaptureAdmissionChanged;
 
         NewGroupCommand = new RelayCommand(_ => NewGroupRequested?.Invoke(this, EventArgs.Empty));
@@ -117,6 +119,29 @@ public sealed class MainViewModel : ViewModelBase
         });
 
 
+    }
+
+    /// <summary>
+    /// WPF normally clears SelectedItem when its backing row disappears, but
+    /// the launcher can also remove a group through a container window while
+    /// it remains open. Keep the projection valid at the view-model boundary
+    /// so a later Enter/Open command can never target a detached group.
+    /// </summary>
+    private void Groups_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (_selectedGroup == null || Groups.Contains(_selectedGroup))
+            return;
+
+        if (Groups.Count == 0)
+        {
+            SelectedGroup = null;
+            return;
+        }
+
+        int replacementIndex = e.Action == NotifyCollectionChangedAction.Remove
+            ? Math.Min(Math.Max(e.OldStartingIndex, 0), Groups.Count - 1)
+            : 0;
+        SelectedGroup = Groups[replacementIndex];
     }
 
     /// <summary>Projects the startup read-only pending-recovery catalog into the launcher.</summary>

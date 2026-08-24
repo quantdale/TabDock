@@ -1,0 +1,14 @@
+{
+  "name": "split-drag-release-identity-phases",
+  "phases": [
+    { "name": "container", "expectedRoot": "container", "observedRoot": "container", "identityResult": "Match" },
+    { "name": "guest-titlebar", "expectedRoot": "guest-left", "observedRoot": "guest-left", "identityResult": "Match" },
+    { "name": "content-host", "expectedRoot": "guest-left", "observedRoot": "guest-left", "identityResult": "Match" },
+    { "name": "release", "expectedRoot": "container", "observedRoot": "container", "identityResult": "Match" }
+  ],
+  "negativeCases": [
+    "foreign-release-root",
+    "recycled-guest-hwnd",
+    "missing-split-relationship"
+  ]
+}

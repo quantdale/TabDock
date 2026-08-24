@@ -47,7 +47,7 @@ internal static partial class Scenarios
                 IntPtr inputTarget = ctx.MainHwnd;
                 foreach (IntPtr candidate in Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true))
                 {
-                    if (string.Equals(NativeMethods.GetWindowTextString(candidate), "Capture windows", StringComparison.Ordinal))
+                    if (IsCapturePickerTitle(NativeMethods.GetWindowTextString(candidate)))
                     {
                         inputTarget = candidate;
                         break;
@@ -83,7 +83,7 @@ internal static partial class Scenarios
         foreach (IntPtr h in Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true))
         {
             string t = NativeMethods.GetWindowTextString(h) ?? string.Empty;
-            if (t == "Capture windows")
+            if (IsCapturePickerTitle(t))
                 pickers.Add(h);
         }
         ctx.Check(pickers.Count == 1, $"holding Ctrl+Alt+G opened exactly one capture picker (got {pickers.Count})");
@@ -98,7 +98,7 @@ internal static partial class Scenarios
         foreach (IntPtr h in Discover.GetTopLevelWindowsByPid(ctx.TabDockPid, visibleOnly: true))
         {
             string t = NativeMethods.GetWindowTextString(h) ?? string.Empty;
-            if (t == "Capture windows")
+            if (IsCapturePickerTitle(t))
                 ctx.Check(false, "a capture picker is still open after Esc dismissal — expected zero");
         }
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");

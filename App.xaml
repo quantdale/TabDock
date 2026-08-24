@@ -10,5 +10,203 @@
     <Application.Resources>
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
         <converters:ColorToBrushConverter x:Key="ColorToBrushConverter" />
+
+        <!-- Shared product palette. Keeping these resources centralized prevents
+             the launcher, picker, and container from drifting into three separate
+             visual systems again. Accent text and action fill are intentionally
+             separate: the brighter accent is legible on dark surfaces while the
+             darker primary fill keeps white 13px button text above 4.5:1. -->
+        <SolidColorBrush x:Key="TdWindowBackgroundBrush" Color="#0B0F15" />
+        <SolidColorBrush x:Key="TdSurfaceBrush" Color="#121821" />
+        <SolidColorBrush x:Key="TdSurfaceRaisedBrush" Color="#18212D" />
+        <SolidColorBrush x:Key="TdSurfaceHoverBrush" Color="#202B3A" />
+        <SolidColorBrush x:Key="TdBorderBrush" Color="#2A3544" />
+        <SolidColorBrush x:Key="TdBorderStrongBrush" Color="#3B4A5D" />
+        <SolidColorBrush x:Key="TdTextBrush" Color="#F4F7FB" />
+        <SolidColorBrush x:Key="TdTextMutedBrush" Color="#9AA8BA" />
+        <SolidColorBrush x:Key="TdTextSubtleBrush" Color="#738196" />
+        <SolidColorBrush x:Key="TdAccentBrush" Color="#5B8CFF" />
+        <SolidColorBrush x:Key="TdAccentTextBrush" Color="#9AB8FF" />
+        <SolidColorBrush x:Key="TdPrimaryFillBrush" Color="#3F6FD9" />
+        <SolidColorBrush x:Key="TdAccentSoftBrush" Color="#1E315F" />
+        <SolidColorBrush x:Key="TdWarningBrush" Color="#F4C35A" />
+        <SolidColorBrush x:Key="TdWarningSurfaceBrush" Color="#2B2416" />
+        <SolidColorBrush x:Key="TdDangerBrush" Color="#FF7A86" />
+        <SolidColorBrush x:Key="TdDangerSurfaceBrush" Color="#351C24" />
+        <SolidColorBrush x:Key="TdSuccessBrush" Color="#64D3A6" />
+
+        <Style x:Key="TdButton" TargetType="{x:Type Button}">
+            <Setter Property="Foreground" Value="{StaticResource TdTextBrush}" />
+            <Setter Property="Background" Value="{StaticResource TdSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource TdBorderStrongBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="14,7" />
+            <Setter Property="MinHeight" Value="36" />
+            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border x:Name="ButtonBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="7"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              RecognizesAccessKey="True" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.86" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.68" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="#B9CCFF" />
+                                <Setter TargetName="ButtonBorder" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.42" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TdPrimaryButton" TargetType="{x:Type Button}" BasedOn="{StaticResource TdButton}">
+            <Setter Property="Background" Value="{StaticResource TdPrimaryFillBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource TdPrimaryFillBrush}" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+
+        <Style x:Key="TdSecondaryButton" TargetType="{x:Type Button}" BasedOn="{StaticResource TdButton}" />
+
+        <Style x:Key="TdGhostButton" TargetType="{x:Type Button}" BasedOn="{StaticResource TdButton}">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource TdTextMutedBrush}" />
+        </Style>
+
+        <Style x:Key="TdDangerButton" TargetType="{x:Type Button}" BasedOn="{StaticResource TdButton}">
+            <Setter Property="Background" Value="{StaticResource TdDangerSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="#63303C" />
+            <Setter Property="Foreground" Value="{StaticResource TdDangerBrush}" />
+        </Style>
+
+        <Style x:Key="TdTextBox" TargetType="{x:Type TextBox}">
+            <Setter Property="Foreground" Value="{StaticResource TdTextBrush}" />
+            <Setter Property="Background" Value="#0E141D" />
+            <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="10,7" />
+            <Setter Property="MinHeight" Value="36" />
+            <Setter Property="CaretBrush" Value="{StaticResource TdTextBrush}" />
+            <Setter Property="SelectionBrush" Value="{StaticResource TdAccentBrush}" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Style.Triggers>
+                <Trigger Property="IsKeyboardFocused" Value="True">
+                    <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
+                    <Setter Property="BorderThickness" Value="2" />
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.55" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="TdComboBox" TargetType="{x:Type ComboBox}">
+            <Setter Property="Foreground" Value="{StaticResource TdTextBrush}" />
+            <Setter Property="Background" Value="{StaticResource TdSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource TdBorderStrongBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="MinHeight" Value="36" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="{x:Type ComboBoxItem}">
+                        <Setter Property="Foreground" Value="{StaticResource TdTextBrush}" />
+                        <Setter Property="Background" Value="{StaticResource TdSurfaceRaisedBrush}" />
+                        <Setter Property="Padding" Value="9,7" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                        <Style.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter Property="Background" Value="{StaticResource TdSurfaceHoverBrush}" />
+                                <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter Property="BorderBrush" Value="#B9CCFF" />
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
+                    <Setter Property="BorderThickness" Value="2" />
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.55" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="TdListItem" TargetType="{x:Type ListViewItem}">
+            <Setter Property="Foreground" Value="{StaticResource TdTextBrush}" />
+            <Setter Property="Background" Value="{StaticResource TdSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="14" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ListViewItem}">
+                        <Border x:Name="RowBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="9"
+                                Padding="{TemplateBinding Padding}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="RowBorder" Property="Background" Value="{StaticResource TdSurfaceHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="RowBorder" Property="Background" Value="{StaticResource TdAccentSoftBrush}" />
+                                <Setter TargetName="RowBorder" Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="RowBorder" Property="BorderBrush" Value="#B9CCFF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TdSectionLabel" TargetType="{x:Type TextBlock}">
+            <Setter Property="Foreground" Value="{StaticResource TdTextMutedBrush}" />
+            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
     </Application.Resources>
 </Application>

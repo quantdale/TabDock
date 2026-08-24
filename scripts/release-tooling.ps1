@@ -368,7 +368,7 @@ function Test-ExternalEvidenceFile {
         gates (final human Windows smoke, physical mixed-DPI qualification,
         Windows 10/11 x64 compatibility) were performed against the exact
         bytes being published. It is bound to the candidate source SHA, to the
-        final artifact hash, and (schema v2) to the exact Stage A workflow run
+        final artifact hash, and (schema v3) to the exact Stage A workflow run
         and artifact that produced the candidate, so evidence from another
         candidate, another artifact, or another run can never be reused.
 
@@ -387,7 +387,9 @@ function Test-ExternalEvidenceFile {
         [Parameter(Mandatory = $true)][string]$ExpectedSourceSha,
         [Parameter(Mandatory = $true)][string]$ExpectedArtifactSha,
         [string]$ExpectedCandidateRunId = '',
-        [string]$ExpectedCandidateArtifactName = ''
+        [string]$ExpectedCandidateArtifactName = '',
+        [string]$QualificationBundleRoot = '',
+        [switch]$RequireQualificationBundle
     )
     $failures = [System.Collections.Generic.List[string]]::new()
     $evidence = $null
@@ -412,8 +414,12 @@ function Test-ExternalEvidenceFile {
         return [pscustomobject]@{ Valid = $false; Failures = @($failures); Evidence = $null }
     }
 
-    if ($evidence.schemaVersion -ne 2) {
-        $failures.Add("external evidence schemaVersion=$($evidence.schemaVersion) (expected 2)")
+    $evidenceSchema = [int]$evidence.schemaVersion
+    if ($evidenceSchema -notin @(2, 3)) {
+        $failures.Add("external evidence schemaVersion=$($evidence.schemaVersion) (expected 2 or 3)")
+    }
+    if ($RequireQualificationBundle -and $evidenceSchema -ne 3) {
+        $failures.Add("external evidence schemaVersion=$evidenceSchema (schema 3 is required when qualification-bundle binding is required)")
     }
     $evSha = [string]$evidence.sourceCommitSha
     if ($evSha -notmatch '^[0-9a-f]{40}$') {
@@ -445,6 +451,56 @@ function Test-ExternalEvidenceFile {
     }
     elseif (-not [string]::IsNullOrWhiteSpace($ExpectedCandidateArtifactName) -and $evArtifactName -ne $ExpectedCandidateArtifactName) {
         $failures.Add("external evidence candidateArtifactName $evArtifactName != the downloaded Stage A artifact $ExpectedCandidateArtifactName")
+    }
+
+    $bundleReference = $evidence.qualificationBundle
+    if ($RequireQualificationBundle -or $null -ne $bundleReference) {
+        $bundleRoot = if ([string]::IsNullOrWhiteSpace($QualificationBundleRoot)) { Split-Path -Parent ([IO.Path]::GetFullPath($EvidencePath)) } else { $QualificationBundleRoot }
+        $binding = Test-QualificationEvidenceBinding -Evidence $evidence -EvidenceDirectory $bundleRoot `
+            -ExpectedSourceSha $ExpectedSourceSha -ExpectedArtifactSha $ExpectedArtifactSha -RequirePhysicalTopology
+        foreach ($failure in @($binding.Failures)) { $failures.Add([string]$failure) }
+    }
+
+    if ($RequireQualificationBundle) {
+        # A production physical PASS is a structured observation, not a prose
+        # claim. The bundle binding above proves the retained bundle bytes and
+        # this record proves the observed topology was genuinely physical and
+        # mixed-DPI. Synthetic, replay-only, blocked, skipped, and flaky data
+        # therefore cannot be promoted by changing a status string.
+        $physical = $evidence.physicalMixedDpi
+        $observedTopology = if ($null -ne $physical) { $physical.observedTopology } else { $null }
+        if ($null -eq $observedTopology) {
+            $failures.Add('physicalMixedDpi is missing structured observedTopology')
+        }
+        else {
+            if ([bool]$observedTopology.syntheticTopology) { $failures.Add('physicalMixedDpi observedTopology is synthetic') }
+            if ([bool]$observedTopology.replayOnly) { $failures.Add('physicalMixedDpi observedTopology is replay-only') }
+            if ([bool]$observedTopology.physicalGateEligible -ne $true) { $failures.Add('physicalMixedDpi observedTopology is not physicalGateEligible') }
+            if ([int]$observedTopology.monitorCount -lt 2) { $failures.Add('physicalMixedDpi observedTopology has fewer than two monitors') }
+            if ([bool]$observedTopology.mixedDpi -ne $true) { $failures.Add('physicalMixedDpi observedTopology did not observe mixed DPI') }
+            $dpiValues = @($observedTopology.dpiValues | ForEach-Object { [int]$_ })
+            if ($dpiValues.Count -lt 2 -or @($dpiValues | Where-Object { $_ -ne 96 }).Count -eq 0) { $failures.Add('physicalMixedDpi observedTopology has no non-default DPI value') }
+        }
+        $physicalBundleSha = [string]$physical.qualificationBundleSha256
+        if ($physicalBundleSha -notmatch '^[0-9a-fA-F]{64}$') { $failures.Add('physicalMixedDpi is missing a valid qualificationBundleSha256') }
+        elseif ($null -ne $bundleReference -and $physicalBundleSha -ne [string]$bundleReference.sha256) { $failures.Add('physicalMixedDpi qualificationBundleSha256 disagrees with qualificationBundle binding') }
+        if ([string]$physical.candidateSha256 -ne $ExpectedArtifactSha) { $failures.Add('physicalMixedDpi candidateSha256 disagrees with the final artifact') }
+        if ([string]$physical.runManifestSha256 -notmatch '^[0-9a-fA-F]{64}$') { $failures.Add('physicalMixedDpi is missing a valid runManifestSha256') }
+        elseif ($null -ne $bundleReference -and [string]$physical.runManifestSha256 -ne [string]$bundleReference.primaryRunManifestSha256) { $failures.Add('physicalMixedDpi runManifestSha256 disagrees with the bound primary run') }
+        $physicalMachine = $physical.machineReport
+        if ($null -eq $physicalMachine) {
+            $failures.Add('physicalMixedDpi is missing structured machineReport evidence')
+        }
+        else {
+            $physicalMachineResult = Test-ExternalMachineReportBinding -Machine $physicalMachine -ArtifactRoot $bundleRoot -ExpectedSourceSha $ExpectedSourceSha -ExpectedArtifactSha $ExpectedArtifactSha -RequirePhysicalTopology
+            foreach ($failure in @($physicalMachineResult.Failures)) { $failures.Add([string]$failure) }
+            if ($null -ne $physicalMachineResult.Report) {
+                $reportTopology = $physicalMachineResult.Report.topology
+                foreach ($field in @('syntheticTopology', 'replayOnly', 'physicalGateEligible', 'monitorCount', 'mixedDpi')) {
+                    if ([string](Get-QualificationProperty $reportTopology $field) -ne [string](Get-QualificationProperty $observedTopology $field)) { $failures.Add("physicalMixedDpi observedTopology.$field disagrees with the machine report") }
+                }
+            }
+        }
     }
 
     foreach ($gate in @('finalWindowsHumanSmoke', 'physicalMixedDpi')) {
@@ -515,9 +571,152 @@ function Test-ExternalEvidenceFile {
             if ([string]::IsNullOrWhiteSpace([string]$osGate.evidence)) {
                 $failures.Add("windowsCompatibility.$os is missing 'evidence'")
             }
+            if ($RequireQualificationBundle) {
+                $machine = $osGate.machineReport
+                if ($null -eq $machine) {
+                    $failures.Add("windowsCompatibility.$os is missing structured machineReport evidence")
+                }
+                else {
+                    if ([string]$machine.sourceCommitSha -ne $ExpectedSourceSha) { $failures.Add("windowsCompatibility.$os machineReport sourceCommitSha disagrees with the candidate") }
+                    if ([string]$machine.candidateSha256 -ne $ExpectedArtifactSha) { $failures.Add("windowsCompatibility.$os machineReport candidateSha256 disagrees with the final artifact") }
+                    $expectedFamily = if ($os -eq 'windows10') { 'Windows 10' } else { 'Windows 11' }
+                    if ([string]$machine.osFamily -ne $expectedFamily) { $failures.Add("windowsCompatibility.$os machineReport osFamily must be '$expectedFamily'") }
+                    if ([string]$machine.architecture -notin @('X64', 'AMD64')) { $failures.Add("windowsCompatibility.$os machineReport architecture is not x64") }
+                    if ([string]$machine.nativeAbiResult -ne 'PASS') { $failures.Add("windowsCompatibility.$os machineReport nativeAbiResult is not PASS") }
+                    if ([string]$machine.qualificationBundleSha256 -notmatch '^[0-9a-fA-F]{64}$') { $failures.Add("windowsCompatibility.$os machineReport qualificationBundleSha256 is malformed") }
+                    if ([string]$machine.runManifestSha256 -notmatch '^[0-9a-fA-F]{64}$') { $failures.Add("windowsCompatibility.$os machineReport runManifestSha256 is malformed") }
+                    if ([string]$machine.reportSha256 -notmatch '^[0-9a-fA-F]{64}$') { $failures.Add("windowsCompatibility.$os machineReport reportSha256 is malformed") }
+                    if ([string]$machine.verificationStatus -ne 'PASS') { $failures.Add("windowsCompatibility.$os machineReport verificationStatus is not PASS") }
+                    if ([string]::IsNullOrWhiteSpace([string]$machine.qualificationBundleRelativePath)) { $failures.Add("windowsCompatibility.$os machineReport qualificationBundleRelativePath is missing") }
+                    $machinePath = [string]$machine.relativePath
+                    if (-not [string]::IsNullOrWhiteSpace($machinePath) -and -not [string]::IsNullOrWhiteSpace($QualificationBundleRoot)) {
+                        try {
+                            $resolvedMachine = Resolve-QualificationRelativePath -Root $QualificationBundleRoot -RelativePath $machinePath
+                            if (-not (Test-Path -LiteralPath $resolvedMachine.FullPath -PathType Leaf)) { $failures.Add("windowsCompatibility.$os machineReport is missing: '$machinePath'") }
+                            elseif ((Get-QualificationFileSha256 $resolvedMachine.FullPath) -ne [string]$machine.reportSha256) { $failures.Add("windowsCompatibility.$os machineReport hash disagrees: '$machinePath'") }
+                        }
+                        catch { $failures.Add("windowsCompatibility.$os machineReport path is invalid: $($_.Exception.Message)") }
+                    }
+                    $machineResult = Test-ExternalMachineReportBinding -Machine $machine -ArtifactRoot $QualificationBundleRoot -ExpectedSourceSha $ExpectedSourceSha -ExpectedArtifactSha $ExpectedArtifactSha
+                    foreach ($failure in @($machineResult.Failures)) { $failures.Add([string]$failure) }
+                }
+            }
         }
     }
     return [pscustomobject]@{ Valid = $failures.Count -eq 0; Failures = @($failures); Evidence = $evidence }
+}
+
+function Test-ExternalMachineReportBinding {
+    <#
+    Validates one structured machine report and the qualification bundle it
+    references. This helper is data-only: it never launches a returned
+    executable, script, or process.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$Machine,
+        [Parameter(Mandatory = $true)][string]$ArtifactRoot,
+        [Parameter(Mandatory = $true)][string]$ExpectedSourceSha,
+        [Parameter(Mandatory = $true)][string]$ExpectedArtifactSha,
+        [switch]$RequirePhysicalTopology
+    )
+    $failures = [System.Collections.Generic.List[string]]::new()
+    $machinePath = [string](Get-QualificationProperty $Machine 'relativePath')
+    $report = $null
+    $reportFullPath = $null
+    if ([string]::IsNullOrWhiteSpace($machinePath)) {
+        [void]$failures.Add('structured machineReport.relativePath is missing')
+    }
+    else {
+        try { $reportFullPath = (Resolve-QualificationRelativePath -Root $ArtifactRoot -RelativePath $machinePath).FullPath }
+        catch { [void]$failures.Add("structured machineReport.relativePath is invalid: $($_.Exception.Message)") }
+        if ($null -ne $reportFullPath) {
+            if (-not (Test-Path -LiteralPath $reportFullPath -PathType Leaf)) {
+                [void]$failures.Add("structured machineReport is missing: '$machinePath'")
+            }
+            else {
+                $recordedReportSha = [string](Get-QualificationProperty $Machine 'reportSha256')
+                if ($recordedReportSha -notmatch '^[0-9a-fA-F]{64}$') { [void]$failures.Add('structured machineReport.reportSha256 is malformed') }
+                elseif (-not [string]::Equals((Get-QualificationFileSha256 $reportFullPath), $recordedReportSha, [StringComparison]::OrdinalIgnoreCase)) { [void]$failures.Add("structured machineReport hash disagrees: '$machinePath'") }
+                try {
+                    $reportJson = Read-QualificationJsonFile $reportFullPath
+                    foreach ($failure in @($reportJson.DuplicateFailures)) { [void]$failures.Add([string]$failure) }
+                    $report = $reportJson.Value
+                }
+                catch { [void]$failures.Add("structured machineReport is not strict JSON: $($_.Exception.Message)") }
+            }
+        }
+    }
+    if ($null -eq $report) { return [pscustomobject]@{ Valid = $false; Failures = @($failures); Report = $null; Bundle = $null } }
+
+    $reportKind = [string](Get-QualificationProperty $report 'reportKind')
+    if ($reportKind -notin @('independent-machine-qualification', 'external-machine-evidence')) {
+        [void]$failures.Add("structured machineReport reportKind '$reportKind' is unsupported")
+    }
+    $reportSource = [string](Get-QualificationProperty $report 'sourceCommitSha')
+    $reportCandidate = [string](Get-QualificationProperty $report 'candidateSha256')
+    if (-not [string]::Equals($reportSource, $ExpectedSourceSha, [StringComparison]::OrdinalIgnoreCase)) { [void]$failures.Add('structured machineReport sourceCommitSha disagrees with the final candidate') }
+    if (-not [string]::Equals($reportCandidate, $ExpectedArtifactSha, [StringComparison]::OrdinalIgnoreCase)) { [void]$failures.Add('structured machineReport candidateSha256 disagrees with the final candidate') }
+    if (-not [string]::Equals([string](Get-QualificationProperty $Machine 'sourceCommitSha'), $ExpectedSourceSha, [StringComparison]::OrdinalIgnoreCase)) { [void]$failures.Add('machineReport binding sourceCommitSha disagrees with the final candidate') }
+    if (-not [string]::Equals([string](Get-QualificationProperty $Machine 'candidateSha256'), $ExpectedArtifactSha, [StringComparison]::OrdinalIgnoreCase)) { [void]$failures.Add('machineReport binding candidateSha256 disagrees with the final candidate') }
+    $osFamily = [string](Get-QualificationProperty $Machine 'osFamily')
+    if ($osFamily -notin @('Windows 10', 'Windows 11')) { [void]$failures.Add("structured machineReport osFamily '$osFamily' is unsupported") }
+    if ([string](Get-QualificationProperty $Machine 'architecture') -notin @('X64', 'AMD64')) { [void]$failures.Add('structured machineReport architecture is not x64') }
+    if ([string](Get-QualificationProperty $Machine 'nativeAbiResult') -ne 'PASS') { [void]$failures.Add('structured machineReport nativeAbiResult is not PASS') }
+    if ([string](Get-QualificationProperty $Machine 'verificationStatus') -ne 'PASS') { [void]$failures.Add('structured machineReport verificationStatus is not PASS') }
+    $reportPrivacy = Get-QualificationProperty $report 'privacy'
+    if ($null -ne $reportPrivacy -and ([bool](Get-QualificationProperty $reportPrivacy 'privacySafe') -ne $true -or [bool](Get-QualificationProperty $reportPrivacy 'containsRawDesktopData') -ne $false)) {
+        [void]$failures.Add('structured machineReport privacy contract is not explicitly safe')
+    }
+
+    $bundleRelative = [string](Get-QualificationProperty $Machine 'qualificationBundleRelativePath')
+    $bundle = $null
+    $bundlePath = $null
+    if ([string]::IsNullOrWhiteSpace($bundleRelative)) {
+        [void]$failures.Add('structured machineReport.qualificationBundleRelativePath is missing')
+    }
+    else {
+        try { $bundlePath = (Resolve-QualificationRelativePath -Root $ArtifactRoot -RelativePath $bundleRelative).FullPath }
+        catch { [void]$failures.Add("structured machineReport qualification bundle path is invalid: $($_.Exception.Message)") }
+        if ($null -ne $bundlePath) {
+            if (-not (Test-Path -LiteralPath $bundlePath -PathType Leaf)) {
+                [void]$failures.Add("structured machineReport qualification bundle is missing: '$bundleRelative'")
+            }
+            else {
+                $bundleSha = Get-QualificationFileSha256 $bundlePath
+                $expectedBundleSha = [string](Get-QualificationProperty $Machine 'qualificationBundleSha256')
+                if (-not [string]::Equals($bundleSha, $expectedBundleSha, [StringComparison]::OrdinalIgnoreCase)) { [void]$failures.Add('structured machineReport qualificationBundleSha256 disagrees with the referenced bundle') }
+                $bundleVerification = Test-QualificationBundle -BundlePath $bundlePath -ExpectedSourceSha $ExpectedSourceSha -ExpectedArtifactSha $ExpectedArtifactSha -RequirePhysicalTopology:$RequirePhysicalTopology
+                foreach ($failure in @($bundleVerification.Failures)) { [void]$failures.Add([string]$failure) }
+                $bundle = $bundleVerification.Bundle
+                if ($null -ne $bundle) {
+                    $primaryRelative = [string](Get-QualificationProperty $bundle 'primaryRunManifest')
+                    $primaryEntry = @((Get-QualificationProperty $bundle 'runManifests') | Where-Object { [string](Get-QualificationProperty $_ 'relativePath') -eq $primaryRelative }) | Select-Object -First 1
+                    if ($null -ne $primaryEntry -and -not [string]::Equals([string](Get-QualificationProperty $Machine 'runManifestSha256'), [string](Get-QualificationProperty $primaryEntry 'sha256'), [StringComparison]::OrdinalIgnoreCase)) { [void]$failures.Add('structured machineReport runManifestSha256 disagrees with the bundle primary run') }
+                }
+            }
+        }
+    }
+
+    $reportBundleRelative = [string](Get-QualificationProperty $report 'qualificationBundleRelativePath')
+    if (-not [string]::IsNullOrWhiteSpace($reportBundleRelative) -and $null -ne $reportFullPath) {
+        try {
+            $reportBundlePath = (Resolve-QualificationRelativePath -Root ([IO.Path]::GetDirectoryName($reportFullPath)) -RelativePath $reportBundleRelative).FullPath
+            if (-not (Test-Path -LiteralPath $reportBundlePath -PathType Leaf)) { [void]$failures.Add('structured machineReport internal qualification bundle is missing') }
+            elseif (-not [string]::Equals((Get-QualificationFileSha256 $reportBundlePath), [string](Get-QualificationProperty $report 'qualificationBundleSha256'), [StringComparison]::OrdinalIgnoreCase)) { [void]$failures.Add('structured machineReport internal qualification bundle hash disagrees') }
+        }
+        catch { [void]$failures.Add("structured machineReport internal qualification bundle path is invalid: $($_.Exception.Message)") }
+    }
+
+    if ($RequirePhysicalTopology) {
+        $topology = Get-QualificationProperty $report 'topology'
+        if ([bool](Get-QualificationProperty $topology 'syntheticTopology') -or [bool](Get-QualificationProperty $topology 'replayOnly')) { [void]$failures.Add('structured physical machineReport topology is synthetic or replay-only') }
+        if ([bool](Get-QualificationProperty $topology 'physicalGateEligible') -ne $true) { [void]$failures.Add('structured physical machineReport topology is not physicalGateEligible') }
+        if ([int](Get-QualificationProperty $topology 'monitorCount') -lt 2) { [void]$failures.Add('structured physical machineReport observed fewer than two monitors') }
+        if ([bool](Get-QualificationProperty $topology 'mixedDpi') -ne $true) { [void]$failures.Add('structured physical machineReport did not observe mixed DPI') }
+        $dpis = @(Get-QualificationProperty $topology 'dpiValues') | ForEach-Object { [int]$_ }
+        if ($dpis.Count -lt 2 -or @($dpis | Where-Object { $_ -ne 96 }).Count -eq 0) { [void]$failures.Add('structured physical machineReport has no non-default DPI value') }
+    }
+    [pscustomobject]@{ Valid = $failures.Count -eq 0; Failures = @($failures); Report = $report; Bundle = $bundle }
 }
 
 function Find-Signtool {
@@ -949,7 +1148,7 @@ function Test-PublicationEligibility {
           - manifest workflowRunId == the Stage A candidate run id
           - actual file hash == manifest.artifactSha256
           - SHA256SUMS.txt == actual file hash (triple consistency)
-          - external evidence (schema v2) valid, source SHA == requested SHA,
+          - external evidence (schema v3) valid, source SHA == requested SHA,
             artifact SHA == final distributed artifact hash, candidate
             workflow run + artifact == the exact Stage A run and artifact
             being published, finalWindowsHumanSmoke == PASS,
@@ -1247,7 +1446,8 @@ function Test-PublicationEligibility {
     else {
         $evidenceResult = Test-ExternalEvidenceFile $EvidencePath $ExpectedSourceSha $finalHash `
             -ExpectedCandidateRunId $ExpectedCandidateRunId `
-            -ExpectedCandidateArtifactName $ExpectedCandidateArtifactName
+            -ExpectedCandidateArtifactName $ExpectedCandidateArtifactName `
+            -QualificationBundleRoot $ArtifactDir -RequireQualificationBundle
         if (-not $evidenceResult.Valid) {
             foreach ($failure in $evidenceResult.Failures) {
                 $failures.Add([string]$failure)
@@ -1256,4 +1456,16 @@ function Test-PublicationEligibility {
     }
 
     return [pscustomobject]@{ Eligible = $failures.Count -eq 0; Failures = @($failures) }
+}
+
+# Qualification bundles are part of the trusted release-tooling policy
+# surface. The helper is data-only and never executes a candidate or returned
+# evidence.
+$qualificationBundleModule = Join-Path $PSScriptRoot 'qualification-bundle.ps1'
+if (Test-Path -LiteralPath $qualificationBundleModule -PathType Leaf) {
+    . $qualificationBundleModule
+}
+$qualificationPackageModule = Join-Path $PSScriptRoot 'qualification-package.ps1'
+if (Test-Path -LiteralPath $qualificationPackageModule -PathType Leaf) {
+    . $qualificationPackageModule
 }

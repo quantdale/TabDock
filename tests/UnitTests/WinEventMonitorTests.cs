@@ -115,6 +115,56 @@ public class WinEventMonitorTests
         }
     }
 
+    [Fact]
+    public void RepresentativeStorm_MeasuresAdmissionAndDispatchRevalidationSeparately()
+    {
+        string root = CreateRoot("TabDock-winevent-metrics-test-");
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        try
+        {
+            var context = new RecordingContext();
+            SynchronizationContext.SetSynchronizationContext(context);
+            var api = new EventApi();
+            IntPtr desktop = new(0xD);
+            IntPtr foreground = new(0x9999);
+            var member = new CapturedWindow { Hwnd = foreground };
+            var members = new Dictionary<IntPtr, CapturedWindow?> { [foreground] = member };
+
+            using var log = new LoggingService(root);
+            using var monitor = new WinEventMonitor(
+                hwnd => members.TryGetValue(hwnd, out CapturedWindow? value) ? value : null,
+                log,
+                api,
+                () => desktop,
+                () => foreground);
+            Assert.True(monitor.Start());
+
+            for (int i = 0; i < 20; i++)
+                api.Raise(foreground, NativeMethods.EVENT_SYSTEM_FOREGROUND, 0, 0);
+            for (int i = 0; i < 20; i++)
+                context.DispatchNext();
+
+            // Child-object notifications are rejected before a membership
+            // probe: they are irrelevant to the top-level lifecycle policy.
+            for (int i = 0; i < 10; i++)
+                api.Raise(foreground, NativeMethods.EVENT_OBJECT_NAMECHANGE, NativeMethods.OBJID_CLIENT, NativeMethods.CHILDID_SELF);
+
+            WinEventMetrics metrics = monitor.Metrics;
+            Assert.Equal(30, metrics.CallbacksReceived);
+            Assert.Equal(20, metrics.MembershipProbes);
+            Assert.Equal(20, metrics.DispatchMembershipProbes);
+            Assert.Equal(20, metrics.Posts);
+            Assert.Equal(20, metrics.LifecycleCallbacks);
+            Assert.True(metrics.IrrelevantRejected >= 10);
+            Assert.Equal(0, metrics.StaleDispatches);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+            DeleteRoot(root);
+        }
+    }
+
     private static string CreateRoot(string prefix)
     {
         string root = Path.Combine(Path.GetTempPath(), prefix + Guid.NewGuid().ToString("N"));

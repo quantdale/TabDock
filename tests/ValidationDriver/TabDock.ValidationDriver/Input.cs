@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -15,6 +16,8 @@ internal static class Input
     public const ushort VK_SHIFT = 0x10;
     public const ushort VK_MENU = 0x12;
     public const ushort VK_TAB = 0x09;
+    public const ushort VK_LEFT = 0x25;
+    public const ushort VK_RIGHT = 0x27;
     public const ushort VK_DELETE = 0x2E;
     public const ushort VK_A = 0x41;
     public const ushort VK_D = 0x44;
@@ -39,6 +42,10 @@ internal static class Input
     private static int _lastY;
     private static bool _hasLastPoint;
     private static bool _leftButtonHeld;
+    private static DesktopQualificationLease? _desktopLease;
+
+    public static void SetDesktopLease(DesktopQualificationLease? lease)
+        => _desktopLease = lease;
 
     public static void ResetIdentityScope(string? scenario = null)
     {
@@ -52,6 +59,7 @@ internal static class Input
     {
         if (!TestRunProvenance.TryRegisterWindow(identity, role, out string reason))
             throw new InvalidOperationException($"Refusing to register HWND 0x{identity.Hwnd.ToInt64():X}: {reason}.");
+        _desktopLease?.RegisterTarget(identity, role);
     }
 
     public static void RegisterDiscoveredWindow(IntPtr hwnd, string role)
@@ -118,6 +126,12 @@ internal static class Input
             IdentityDiagnostics.RecordPointFailure(_hasLastPoint ? _lastX : 0, _hasLastPoint ? _lastY : 0, root, reason);
             return false;
         }
+        if (_desktopLease != null
+            && !_desktopLease.Checkpoint("foreground-target-admission", target).IsValid)
+        {
+            GuardedProc.Log($"WARNING: refusing foreground operation because the desktop lease rejected HWND 0x{target.Hwnd.ToInt64():X}.");
+            return false;
+        }
         if (identityAttempt > 1)
             GuardedProc.Log($"  Foreground identity proof settled after bounded retry for HWND 0x{target.Hwnd.ToInt64():X}.");
         _activeTarget = target;
@@ -138,16 +152,31 @@ internal static class Input
             Thread.Sleep(30);
             if (!MatchesStableIdentity(target.Hwnd, target))
                 return false;
+            _desktopLease?.RecordInteraction(
+                "foreground-set-attempt",
+                TestRunProvenance.WindowRole(target.Hwnd),
+                target.Hwnd,
+                new Dictionary<string, string> { ["method"] = "SetForegroundWindow" });
             NativeMethods.SetForegroundWindow(target.Hwnd);
             Thread.Sleep(150);
-            if (NativeMethods.GetForegroundWindow() == target.Hwnd
-                && MatchesStableIdentity(target.Hwnd, target))
+            bool foregroundMatch = NativeMethods.GetForegroundWindow() == target.Hwnd
+                && MatchesStableIdentity(target.Hwnd, target);
+            _desktopLease?.RecordInteraction(
+                "foreground-set-result",
+                TestRunProvenance.WindowRole(target.Hwnd),
+                target.Hwnd,
+                new Dictionary<string, string> { ["matched"] = foregroundMatch.ToString() });
+            if (foregroundMatch)
                 return true;
 
             // Fallback: pulse TOPMOST to rise above the covering window, then drop
             // back to the normal band and try again.
             if (!MatchesStableIdentity(target.Hwnd, target))
                 return false;
+            _desktopLease?.RecordInteraction(
+                "foreground-topmost-pulse",
+                TestRunProvenance.WindowRole(target.Hwnd),
+                target.Hwnd);
             NativeMethods.SetWindowPos(target.Hwnd, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
                 NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
             if (!MatchesStableIdentity(target.Hwnd, target))
@@ -206,12 +235,11 @@ internal static class Input
         IntPtr foreground = NativeMethods.GetForegroundWindow();
         if (foreground == IntPtr.Zero)
         {
-            var fgSw = System.Diagnostics.Stopwatch.StartNew();
-            while (foreground == IntPtr.Zero && fgSw.ElapsedMilliseconds < 600)
-            {
-                Thread.Sleep(50);
-                foreground = NativeMethods.GetForegroundWindow();
-            }
+            ScenarioWait.Until(
+                () => (foreground = NativeMethods.GetForegroundWindow()) != IntPtr.Zero,
+                600,
+                50,
+                describe: () => foreground == IntPtr.Zero ? "foreground-unavailable" : $"foreground=0x{foreground.ToInt64():X}");
         }
         bool foregroundUnavailable = foreground == IntPtr.Zero;
         IntPtr root = NativeMethods.GetAncestor(foreground, NativeMethods.GA_ROOT);
@@ -221,6 +249,13 @@ internal static class Input
         bool currentIdentityCaptured = Discover.TryCaptureIdentity(root, out WindowIdentity current);
         bool currentValid = currentIdentityCaptured
             && IsScoped(current, out currentScopeReason);
+        if (currentValid
+            && _desktopLease != null
+            && !_desktopLease.Checkpoint("foreground-before-input", current, requireForeground: true).IsValid)
+        {
+            GuardedProc.Log("WARNING: refusing keyboard input because the desktop lease rejected the foreground continuity proof.");
+            return false;
+        }
         WindowIdentity previousTarget = _activeTarget.Value;
         bool previousTargetLive = MatchesStableIdentity(previousTarget.Hwnd, previousTarget);
         bool targetChanged = currentValid && current.Hwnd != _activeTarget.Value.Hwnd;
@@ -306,10 +341,18 @@ internal static class Input
         }
         if (!currentValid)
         {
+            _desktopLease?.Checkpoint("point-before-input", x: x, y: y);
             GuardedProc.Log(root == IntPtr.Zero
                 ? $"WARNING: refusing coordinate input at ({x},{y}); no window is under the point after bounded identity retries."
                 : $"WARNING: refusing coordinate input at ({x},{y}); root 0x{root.ToInt64():X} is outside the test identity scope after bounded retries: {lastReason}.");
             IdentityDiagnostics.RecordPointFailure(x, y, _activeTarget.Value.Hwnd, lastReason);
+            return false;
+        }
+
+        if (_desktopLease != null
+            && !_desktopLease.Checkpoint("point-before-input", current, x, y).IsValid)
+        {
+            GuardedProc.Log($"WARNING: refusing coordinate input at ({x},{y}) because the desktop lease rejected the target continuity proof.");
             return false;
         }
 
@@ -349,6 +392,19 @@ internal static class Input
     {
         if (!VerifyPointTarget(x, y))
             throw new InvalidOperationException($"Refusing real input at ({x},{y}) because the live target failed identity verification.");
+        if (_activeTarget.HasValue)
+        {
+            _desktopLease?.RecordInteraction(
+                "expected-input-target",
+                TestRunProvenance.WindowRole(_activeTarget.Value.Hwnd),
+                _activeTarget.Value.Hwnd,
+                new Dictionary<string, string>
+                {
+                    ["kind"] = "point",
+                    ["x"] = x.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    ["y"] = y.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                });
+        }
         _lastX = x;
         _lastY = y;
         _hasLastPoint = true;
@@ -821,6 +877,19 @@ internal static class Input
     private static void SendRaw(NativeMethods.INPUT input)
     {
         uint sent = NativeMethods.SendInput(1, new[] { input }, Marshal.SizeOf<NativeMethods.INPUT>());
+        if (_desktopLease != null)
+        {
+            IntPtr hwnd = _activeTarget?.Hwnd ?? IntPtr.Zero;
+            _desktopLease.RecordInteraction(
+                "input-dispatch",
+                hwnd == IntPtr.Zero ? "Unknown" : TestRunProvenance.WindowRole(hwnd),
+                hwnd,
+                new Dictionary<string, string>
+                {
+                    ["inputType"] = input.type == NativeMethods.INPUT_MOUSE ? "mouse" : "keyboard",
+                    ["sent"] = sent.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                });
+        }
         if (sent != 1)
             GuardedProc.Log($"WARNING: SendInput failed: {NativeMethods.FormatLastError()}");
     }

@@ -4,17 +4,21 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
-        Title="Capture windows"
-        Height="520"
-        Width="560"
-        MinWidth="400"
-        MinHeight="300"
+        Title="Capture windows — TabDock"
+        Height="620"
+        Width="700"
+        MinWidth="520"
+        MinHeight="420"
         MaxWidth="{x:Static SystemParameters.MaximizedPrimaryScreenWidth}"
         MaxHeight="{x:Static SystemParameters.MaximizedPrimaryScreenHeight}"
         WindowStartupLocation="CenterOwner"
-        Background="White">
+        Background="{StaticResource TdWindowBackgroundBrush}"
+        Foreground="{StaticResource TdTextBrush}"
+        FontFamily="Segoe UI Variable Text, Segoe UI"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True">
 
-    <Grid Margin="16">
+    <Grid Margin="24">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -23,51 +27,174 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" Text="Select windows to group" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,4" />
-        <TextBlock Grid.Row="1" Text="Only top-level application windows are shown." Foreground="Gray" Margin="0,0,0,12" />
-
-        <Grid Grid.Row="2" Margin="0,0,0,8">
+        <Grid Grid.Row="0" Margin="0,0,0,18">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <TextBlock Grid.Column="0" Text="Add to:" VerticalAlignment="Center" Margin="0,0,8,0" />
-            <ComboBox Grid.Column="1" ItemsSource="{Binding Groups}" SelectedItem="{Binding SelectedGroupOption}" VerticalAlignment="Center" />
-            <Button Grid.Column="2" Content="Refresh" Width="80" Height="28" Margin="8,0,0,0" Command="{Binding RefreshCommand}" />
+            <StackPanel>
+                <TextBlock Text="Capture windows" FontSize="22" FontWeight="SemiBold"
+                           Foreground="{StaticResource TdTextBrush}" />
+                <TextBlock Text="Choose the apps that belong together. Your selection survives refreshes while those windows still exist."
+                           Foreground="{StaticResource TdTextMutedBrush}" FontSize="11"
+                           TextWrapping="Wrap" Margin="0,5,16,0" />
+            </StackPanel>
+            <Button Grid.Column="1" Style="{StaticResource TdSecondaryButton}"
+                    Content="Refresh" Padding="12,6" MinHeight="34"
+                    Command="{Binding RefreshCommand}"
+                    AutomationProperties.AutomationId="CaptureRefresh"
+                    AutomationProperties.Name="Refresh capturable windows" />
         </Grid>
 
-        <Border Grid.Row="3" BorderBrush="#FFE0E0E0" BorderThickness="1" CornerRadius="4" Background="#FFF9F9F9">
-            <ListBox x:Name="WindowsListBox"
-                     ItemsSource="{Binding Windows}"
-                     BorderThickness="0"
-                     Background="Transparent"
-                     Margin="8"
-                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                     VirtualizingPanel.IsVirtualizing="True">
-                <ListBox.ItemContainerStyle>
-                    <Style TargetType="ListBoxItem">
-                        <Setter Property="Padding" Value="6" />
-                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                    </Style>
-                </ListBox.ItemContainerStyle>
-                <ListBox.ItemTemplate>
-                    <DataTemplate>
-                        <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" HorizontalAlignment="Stretch">
-                            <StackPanel Orientation="Horizontal">
-                                <Image Source="{Binding Icon}" Width="16" Height="16" Margin="0,0,8,0" />
-                                <TextBlock Text="{Binding Title}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="360" />
-                            </StackPanel>
-                        </CheckBox>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+        <Grid Grid.Row="1" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="14" />
+                <ColumnDefinition Width="260" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0">
+                <TextBlock Style="{StaticResource TdSectionLabel}" Text="SEARCH WINDOWS" Margin="1,0,0,6" />
+                <TextBox Style="{StaticResource TdTextBox}"
+                         Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                         AutomationProperties.Name="Search capturable windows"
+                         AutomationProperties.HelpText="Filter by window title, executable path, or window class"
+                         ToolTip="Filter by window title, executable path, or window class" />
+            </StackPanel>
+            <StackPanel Grid.Column="2">
+                <TextBlock Style="{StaticResource TdSectionLabel}" Text="DESTINATION" Margin="1,0,0,6" />
+                <ComboBox Style="{StaticResource TdComboBox}"
+                          ItemsSource="{Binding Groups}"
+                          SelectedItem="{Binding SelectedGroupOption}"
+                          AutomationProperties.Name="Destination group"
+                          AutomationProperties.HelpText="Choose an existing workspace or create a new group.">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="2" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="{Binding SelectionSummary}"
+                       Foreground="{StaticResource TdTextMutedBrush}" FontSize="11"
+                       VerticalAlignment="Center"
+                       AutomationProperties.AutomationId="CaptureSelectionSummary" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button Style="{StaticResource TdGhostButton}"
+                        Content="Select all visible" Padding="9,4" MinHeight="28"
+                        Command="{Binding SelectAllVisibleCommand}"
+                        AutomationProperties.Name="Select all visible windows" />
+                <Button Style="{StaticResource TdGhostButton}"
+                        Content="Clear" Padding="9,4" MinHeight="28" Margin="4,0,0,0"
+                        Command="{Binding ClearSelectionCommand}"
+                        AutomationProperties.Name="Clear window selection" />
+            </StackPanel>
+        </Grid>
+
+        <Border Grid.Row="3" Background="{StaticResource TdSurfaceBrush}"
+                BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="1"
+                CornerRadius="10" Padding="8">
+            <Grid>
+                <ListBox x:Name="WindowsListBox"
+                         ItemsSource="{Binding FilteredWindows}"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="Margin" Value="0,0,0,4" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="BorderThickness" Value="0" />
+                            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                            <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Border Padding="10,9" CornerRadius="7">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Background" Value="#0F151E" />
+                                        <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
+                                        <Setter Property="BorderThickness" Value="1" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                <Setter Property="BorderBrush" Value="#B9CCFF" />
+                                                <Setter Property="BorderThickness" Value="2" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <CheckBox Grid.Column="0"
+                                              IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                              VerticalAlignment="Center" Margin="1,0,11,0"
+                                              AutomationProperties.Name="{Binding Title, StringFormat='Select {0}'}"
+                                              AutomationProperties.HelpText="Select this window for capture" />
+                                    <Border Grid.Column="1" Width="34" Height="34" CornerRadius="7"
+                                            Background="#17202C" Margin="0,0,10,0">
+                                        <Image Source="{Binding Icon}" Width="20" Height="20"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Title}" Foreground="{StaticResource TdTextBrush}"
+                                                   FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding ExePath}" Foreground="{StaticResource TdTextSubtleBrush}"
+                                                   FontSize="10" TextTrimming="CharacterEllipsis" Margin="0,3,0,0" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            MaxWidth="360" IsHitTestVisible="False">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasFilteredWindows}" Value="False">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
+                    <TextBlock Text="No matches" Foreground="{StaticResource TdTextBrush}"
+                               FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                    <TextBlock Text="{Binding EmptyFilterText}" Foreground="{StaticResource TdTextMutedBrush}"
+                               FontSize="11" TextAlignment="Center" TextWrapping="Wrap" Margin="0,5,0,0" />
+                </StackPanel>
+            </Grid>
         </Border>
 
-        <StackPanel Grid.Row="4" Margin="0,12,0,0">
-            <TextBlock Text="{Binding CaptureAdmissionReason}" Foreground="#FF9A4D00"
-                       TextWrapping="Wrap" Margin="0,0,0,8"
-                       AutomationProperties.AutomationId="CaptureAdmissionStatus">
+        <Grid Grid.Row="4" Margin="0,14,0,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Text="{Binding CaptureAdmissionReason}"
+                       Foreground="{StaticResource TdWarningBrush}"
+                       TextWrapping="Wrap" Margin="0,0,0,9"
+                       AutomationProperties.AutomationId="CaptureAdmissionStatus"
+                       AutomationProperties.Name="Capture admission status"
+                       AutomationProperties.HelpText="Capture is disabled until the native guest-lifecycle monitor is healthy.">
                 <TextBlock.Style>
                     <Style TargetType="TextBlock">
                         <Setter Property="Visibility" Value="Collapsed" />
@@ -79,17 +206,29 @@
                     </Style>
                 </TextBlock.Style>
             </TextBlock>
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="Group these" Width="100" Height="32" Margin="0,0,8,0" IsDefault="True"
-                        Command="{Binding GroupSelectedCommand}"
-                        IsEnabled="{Binding CaptureAllowed}"
-                        AutomationProperties.AutomationId="CaptureGroupThese"
-                        AutomationProperties.Name="Group selected windows"
-                        AutomationProperties.HelpText="{Binding CaptureAdmissionReason}" />
-                <Button Content="Cancel" Width="80" Height="32" IsCancel="True"
-                        Command="{Binding CancelCommand}"
-                        AutomationProperties.AutomationId="CaptureCancel" />
-            </StackPanel>
-        </StackPanel>
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0"
+                           Text="Tip: type part of an app name to narrow long desktop lists."
+                           Foreground="{StaticResource TdTextSubtleBrush}" FontSize="10"
+                           VerticalAlignment="Center" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button Style="{StaticResource TdPrimaryButton}"
+                            Content="Group selected" MinWidth="124" IsDefault="True"
+                            Command="{Binding GroupSelectedCommand}"
+                            IsEnabled="{Binding CaptureAllowed}"
+                            AutomationProperties.AutomationId="CaptureGroupThese"
+                            AutomationProperties.Name="Group selected windows"
+                            AutomationProperties.HelpText="{Binding CaptureAdmissionReason}" />
+                    <Button Style="{StaticResource TdSecondaryButton}"
+                            Content="Cancel" MinWidth="82" Margin="9,0,0,0" IsCancel="True"
+                            Command="{Binding CancelCommand}"
+                            AutomationProperties.AutomationId="CaptureCancel" />
+                </StackPanel>
+            </Grid>
+        </Grid>
     </Grid>
 </Window>

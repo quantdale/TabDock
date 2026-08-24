@@ -242,6 +242,9 @@ function New-SyntheticArtifactDir {
         ManifestPath   = $records.ManifestPath
         SumsPath       = $records.SumsPath
         ArtifactSha256 = $records.ArtifactSha256
+        BundlePath     = $null
+        BundleSha256   = $null
+        PrimaryRunManifest = $null
     }
 }
 
@@ -378,8 +381,199 @@ function New-TestEvidence {
     }
 }
 
+function New-TestBundleForArtifact {
+    param(
+        [Parameter(Mandatory = $true)][string]$ArtifactDir,
+        [Parameter(Mandatory = $true)][string]$SourceSha,
+        [Parameter(Mandatory = $true)][string]$Version
+    )
+    $qualificationRoot = Join-Path $ArtifactDir 'qualification'
+    $toolingRoot = Join-Path $qualificationRoot 'tooling'
+    $runDir = Join-Path $qualificationRoot 'runs\direct'
+    New-Item -ItemType Directory -Path $toolingRoot,$runDir -Force | Out-Null
+    $driver = Join-Path $toolingRoot 'ValidationDriver.exe'
+    New-DummyArtifact $driver 512
+    $resultPath = Join-Path $runDir 'scenario-a.json'
+    $junitPath = Join-Path $runDir 'scenario-a.junit.xml'
+    $timelinePath = Join-Path $runDir 'scenario-a.timeline.json'
+    [IO.File]::WriteAllText($resultPath, '{"scenario":"scenario-a","result":"PASS"}', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($junitPath, '<testsuite tests="1" failures="0" skipped="0" />', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($timelinePath, '{"schemaVersion":1,"syntheticTopology":false,"events":[]}', [Text.UTF8Encoding]::new($false))
+    $started = [DateTimeOffset]::UtcNow.AddHours(-1)
+    $ended = $started.AddSeconds(1)
+    $artifactSha = Get-FileSha256Lower (Join-Path $ArtifactDir 'TabDock.exe')
+    $driverSha = Get-FileSha256Lower $driver
+    $counts = [ordered]@{}
+    foreach ($code in (Get-QualificationOutcomeCodes)) { $counts[$code] = if ($code -eq 'PASS') { 1 } else { 0 } }
+    $run = [ordered]@{
+        schemaVersion = 2
+        runKind = 'direct'
+        runId = [Guid]::NewGuid().ToString('D')
+        parentRunId = $null
+        shard = $null
+        manifestRelativePath = 'run-manifest.json'
+        catalogGeneration = 'scenario-catalog-2026-08-24-v1'
+        candidateSha = $SourceSha
+        startedUtc = $started
+        endedUtc = $ended
+        outcome = 'PASS'
+        aggregateCounts = $counts
+        attemptCounts = $counts
+        executableSha256 = [ordered]@{ candidate = $artifactSha; test = $driverSha }
+        driverIdentity = [ordered]@{ fileName = 'ValidationDriver.exe'; sha256 = $driverSha }
+        scenarios = @([ordered]@{ scenario = 'scenario-a'; attempt = 1; result = 'PASS'; reason = $null; jsonArtifact = 'scenario-a.json'; junitArtifact = 'scenario-a.junit.xml'; timelineArtifact = 'scenario-a.timeline.json'; startedUtc = $started; endedUtc = $ended })
+        scenarioAggregates = @([ordered]@{ scenario = 'scenario-a'; first = 'PASS'; final = 'PASS'; finalReason = $null; attempts = @([ordered]@{ attempt = 1; result = 'PASS'; reason = $null }) })
+        artifactIndex = @(
+            [ordered]@{ relativePath = 'scenario-a.json'; kind = 'scenario-result'; sha256 = Get-FileSha256Lower $resultPath; exists = $true }
+            [ordered]@{ relativePath = 'scenario-a.junit.xml'; kind = 'junit'; sha256 = Get-FileSha256Lower $junitPath; exists = $true }
+            [ordered]@{ relativePath = 'scenario-a.timeline.json'; kind = 'timeline'; sha256 = Get-FileSha256Lower $timelinePath; exists = $true }
+        )
+    }
+    $runPath = Join-Path $runDir 'run-manifest.json'
+    [IO.File]::WriteAllText($runPath, ($run | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    return New-QualificationBundle -BundleRoot $ArtifactDir -OutputPath (Join-Path $ArtifactDir 'qualification-bundle.json') `
+        -SourceCommitSha $SourceSha -SemanticVersion $Version `
+        -CandidateArtifactPath (Join-Path $ArtifactDir 'TabDock.exe') `
+        -ReleaseManifestPath (Join-Path $ArtifactDir 'release-manifest.json') `
+        -DriverPath $driver -QualificationManifestPaths @($runPath) -PrimaryRunManifestPath $runPath `
+        -StageARunId '123456789' -CandidateArtifactName (Get-CandidateArtifactName -SourceSha $SourceSha)
+}
+
 function Save-TestEvidence {
     param([string]$Path, $Evidence)
+    $evidenceDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($Path))
+    $bundlePath = Join-Path $evidenceDirectory 'qualification-bundle.json'
+    if (-not (Test-Path -LiteralPath $bundlePath -PathType Leaf)) {
+        $bundlePath = Join-Path $evidenceDirectory 'qualification\qualification-bundle.json'
+    }
+    if (-not (Test-Path -LiteralPath $bundlePath -PathType Leaf)) {
+        $candidatePath = Join-Path $evidenceDirectory 'TabDock.exe'
+        $manifestPath = Join-Path $evidenceDirectory 'release-manifest.json'
+        if ((Test-Path -LiteralPath $candidatePath -PathType Leaf) -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+            try {
+                $manifestForBundle = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+                $rebuilt = New-TestBundleForArtifact -ArtifactDir $evidenceDirectory `
+                    -SourceSha ([string]$manifestForBundle.sourceCommitSha) `
+                    -Version ([string]$manifestForBundle.semanticVersion)
+                $bundlePath = $rebuilt.BundlePath
+            }
+            catch {
+                # Deliberately malformed/tampered candidates remain unbound;
+                # the publication gate must report that failure.
+            }
+        }
+    }
+    if (Test-Path -LiteralPath $bundlePath -PathType Leaf) {
+        $bundleJson = Get-Content -LiteralPath $bundlePath -Raw | ConvertFrom-Json
+        $bundleHash = Get-FileSha256Lower $bundlePath
+        $primary = @($bundleJson.runManifests | Where-Object { $_.relativePath -eq $bundleJson.primaryRunManifest }) | Select-Object -First 1
+        $binding = [ordered]@{
+            relativePath = [IO.Path]::GetRelativePath($evidenceDirectory, $bundlePath).Replace('\\', '/')
+            sha256 = $bundleHash
+            sourceCommitSha = [string]$bundleJson.sourceCommitSha
+            candidateSha256 = [string]$bundleJson.candidate.artifactSha256
+            primaryRunManifestSha256 = if ($null -ne $primary) { [string]$primary.sha256 } else { '' }
+            syntheticTopology = [bool]$bundleJson.syntheticTopology
+            replayOnly = [bool]$bundleJson.replayOnly
+            automatedOutcome = [string]$bundleJson.outcome.overall
+        }
+        if ($Evidence -is [System.Collections.IDictionary]) {
+            if (-not $Evidence.Contains('schemaVersion') -or [int]$Evidence['schemaVersion'] -eq 2) {
+                $Evidence['schemaVersion'] = 3
+            }
+            $Evidence['qualificationBundle'] = $binding
+            $physical = if ($Evidence.Contains('physicalMixedDpi')) { $Evidence['physicalMixedDpi'] } else { $null }
+            if ($null -ne $physical) {
+                $physical['qualificationBundleSha256'] = $bundleHash
+                $physical['runManifestSha256'] = $binding.primaryRunManifestSha256
+                $physical['candidateSha256'] = $binding.candidateSha256
+                $physical['observedTopology'] = [ordered]@{ syntheticTopology = $binding.syntheticTopology; replayOnly = $binding.replayOnly; physicalGateEligible = (-not $binding.syntheticTopology -and -not $binding.replayOnly); monitorCount = 2; mixedDpi = $true; dpiValues = @(96, 144) }
+            }
+        }
+        else {
+            $Evidence | Add-Member -NotePropertyName qualificationBundle -NotePropertyValue $binding -Force
+            if (-not $Evidence.PSObject.Properties['schemaVersion'] -or [int]$Evidence.schemaVersion -eq 2) {
+                $Evidence.schemaVersion = 3
+            }
+            $physical = $Evidence.PSObject.Properties['physicalMixedDpi']
+            if ($null -ne $physical -and $null -ne $physical.Value) {
+                $physical.Value | Add-Member -NotePropertyName qualificationBundleSha256 -NotePropertyValue $bundleHash -Force
+                $physical.Value | Add-Member -NotePropertyName runManifestSha256 -NotePropertyValue $binding.primaryRunManifestSha256 -Force
+                $physical.Value | Add-Member -NotePropertyName candidateSha256 -NotePropertyValue $binding.candidateSha256 -Force
+                $physical.Value | Add-Member -NotePropertyName observedTopology -NotePropertyValue ([ordered]@{ syntheticTopology = $binding.syntheticTopology; replayOnly = $binding.replayOnly; physicalGateEligible = (-not $binding.syntheticTopology -and -not $binding.replayOnly); monitorCount = 2; mixedDpi = $true; dpiValues = @(96, 144) }) -Force
+            }
+        }
+        if ($Evidence -is [System.Collections.IDictionary] -and $null -ne $Evidence['windowsCompatibility']) {
+            $machineReportRoot = Join-Path $evidenceDirectory 'machine-reports'
+            New-Item -ItemType Directory -Path $machineReportRoot -Force | Out-Null
+            foreach ($os in @('windows10', 'windows11')) {
+                $osGate = $Evidence['windowsCompatibility'][$os]
+                if ($null -eq $osGate) { continue }
+                $family = if ($os -eq 'windows10') { 'Windows 10' } else { 'Windows 11' }
+                $reportRelative = "machine-reports/$os-machine-report.json"
+                $reportPath = Join-Path $evidenceDirectory ($reportRelative -replace '/', '\')
+                $machineReport = [ordered]@{
+                    schemaVersion = 1
+                    reportKind = 'external-machine-evidence'
+                    sourceCommitSha = [string]$bundleJson.sourceCommitSha
+                    candidateSha256 = [string]$bundleJson.candidate.artifactSha256
+                    osFamily = $family
+                    architecture = 'X64'
+                    nativeAbiResult = 'PASS'
+                    qualificationBundleSha256 = $bundleHash
+                    runManifestSha256 = $binding.primaryRunManifestSha256
+                    verificationStatus = 'PASS'
+                    privacy = [ordered]@{ privacySafe = $true; containsRawDesktopData = $false; containsTitles = $false; containsUrls = $false; containsUserPaths = $false }
+                }
+                [IO.File]::WriteAllText($reportPath, ($machineReport | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+                $osGate['machineReport'] = [ordered]@{
+                    relativePath = $reportRelative
+                    reportSha256 = Get-FileSha256Lower $reportPath
+                    sourceCommitSha = [string]$bundleJson.sourceCommitSha
+                    candidateSha256 = [string]$bundleJson.candidate.artifactSha256
+                    osFamily = $family
+                    architecture = 'X64'
+                    nativeAbiResult = 'PASS'
+                    qualificationBundleSha256 = $bundleHash
+                    runManifestSha256 = $binding.primaryRunManifestSha256
+                    qualificationBundleRelativePath = 'qualification-bundle.json'
+                    verificationStatus = 'PASS'
+                }
+            }
+            if ($null -ne $Evidence['physicalMixedDpi']) {
+                $physicalReportPath = Join-Path $evidenceDirectory 'physical-machine-report.json'
+                $physicalReport = [ordered]@{
+                    schemaVersion = 1
+                    reportKind = 'external-machine-evidence'
+                    sourceCommitSha = [string]$bundleJson.sourceCommitSha
+                    candidateSha256 = [string]$bundleJson.candidate.artifactSha256
+                    osFamily = 'Windows 11'
+                    architecture = 'X64'
+                    nativeAbiResult = 'PASS'
+                    qualificationBundleSha256 = $bundleHash
+                    qualificationBundleRelativePath = 'qualification-bundle.json'
+                    runManifestSha256 = $binding.primaryRunManifestSha256
+                    verificationStatus = 'PASS'
+                    topology = [ordered]@{ syntheticTopology = [bool]$bundleJson.syntheticTopology; replayOnly = [bool]$bundleJson.replayOnly; physicalGateEligible = (-not [bool]$bundleJson.syntheticTopology -and -not [bool]$bundleJson.replayOnly); monitorCount = 2; mixedDpi = $true; dpiValues = @(96, 144) }
+                    privacy = [ordered]@{ privacySafe = $true; containsRawDesktopData = $false; containsTitles = $false; containsUrls = $false; containsUserPaths = $false }
+                }
+                [IO.File]::WriteAllText($physicalReportPath, ($physicalReport | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+                $Evidence['physicalMixedDpi']['machineReport'] = [ordered]@{
+                    relativePath = 'physical-machine-report.json'
+                    reportSha256 = Get-FileSha256Lower $physicalReportPath
+                    sourceCommitSha = [string]$bundleJson.sourceCommitSha
+                    candidateSha256 = [string]$bundleJson.candidate.artifactSha256
+                    osFamily = 'Windows 11'
+                    architecture = 'X64'
+                    nativeAbiResult = 'PASS'
+                    qualificationBundleSha256 = $bundleHash
+                    qualificationBundleRelativePath = 'qualification-bundle.json'
+                    runManifestSha256 = $binding.primaryRunManifestSha256
+                    verificationStatus = 'PASS'
+                }
+            }
+        }
+    }
     $Evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Path -Encoding utf8
 }
 
@@ -478,7 +672,456 @@ $script:stageBCandidateExecutionForbiddenPatterns = @(
     '--selftest'
 )
 
+function New-TestQualificationPackage {
+    <# Creates a small, strict, native-free bundle fixture. #>
+    param(
+        [string]$Name = 'qualification-bundle-valid',
+        [string]$SourceSha = ('a' * 40),
+        [bool]$SyntheticTopology = $false
+    )
+    $dir = Join-Path $testRoot $Name
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $artifact = New-SyntheticArtifactDir -Parent $dir -Name 'candidate' -SourceSha $SourceSha
+    $driver = Join-Path $dir 'ValidationDriver.exe'
+    New-DummyArtifact $driver 512
+    # Keep the handoff fixture framework-dependent-looking so export/run tests
+    # prove that the driver runtime companions remain part of the bounded
+    # package and are copied beside the renamed driver executable.
+    New-DummyArtifact (Join-Path $dir 'ValidationDriver.dll') 256
+    New-DummyArtifact (Join-Path $dir 'ValidationDriver.deps.json') 128
+    New-DummyArtifact (Join-Path $dir 'ValidationDriver.runtimeconfig.json') 128
+    $runDir = Join-Path $dir 'qualification\direct-run'
+    New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+    $resultPath = Join-Path $runDir 'scenario-a.json'
+    $junitPath = Join-Path $runDir 'scenario-a.junit.xml'
+    $timelinePath = Join-Path $runDir 'scenario-a.timeline.json'
+    [IO.File]::WriteAllText($resultPath, (@{ scenario = 'scenario-a'; result = 'PASS'; syntheticTopology = $SyntheticTopology } | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($junitPath, '<testsuite tests="1" failures="0" skipped="0" />', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($timelinePath, (@{ schemaVersion = 1; syntheticTopology = $SyntheticTopology; events = @() } | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+    $started = [DateTimeOffset]::UtcNow.AddHours(-1)
+    $ended = $started.AddSeconds(1)
+    $codes = Get-QualificationOutcomeCodes
+    $aggregateCounts = [ordered]@{}
+    $attemptCounts = [ordered]@{}
+    foreach ($code in $codes) { $aggregateCounts[$code] = if ($code -eq 'PASS') { 1 } else { 0 }; $attemptCounts[$code] = $aggregateCounts[$code] }
+    $runManifest = [ordered]@{
+        schemaVersion = 2
+        runKind = 'direct'
+        runId = [Guid]::NewGuid().ToString('D')
+        parentRunId = $null
+        shard = $null
+        manifestRelativePath = 'run-manifest.json'
+        catalogGeneration = 'scenario-catalog-2026-08-24-v1'
+        candidateSha = $SourceSha
+        startedUtc = $started
+        endedUtc = $ended
+        outcome = 'PASS'
+        outcomeReason = $null
+        aggregateCounts = $aggregateCounts
+        attemptCounts = $attemptCounts
+        executableSha256 = [ordered]@{
+            candidate = $artifact.ArtifactSha256
+            test = Get-FileSha256Lower $driver
+        }
+        driverIdentity = [ordered]@{ fileName = 'ValidationDriver.exe'; sha256 = Get-FileSha256Lower $driver }
+        scenarios = @([ordered]@{
+                scenario = 'scenario-a'
+                attempt = 1
+                result = 'PASS'
+                reason = $null
+                jsonArtifact = 'scenario-a.json'
+                junitArtifact = 'scenario-a.junit.xml'
+                timelineArtifact = 'scenario-a.timeline.json'
+                startedUtc = $started
+                endedUtc = $ended
+            })
+        scenarioAggregates = @([ordered]@{
+                scenario = 'scenario-a'
+                first = 'PASS'
+                final = 'PASS'
+                finalReason = $null
+                attempts = @([ordered]@{ attempt = 1; result = 'PASS'; reason = $null })
+            })
+        artifactIndex = @(
+            [ordered]@{ relativePath = 'scenario-a.json'; kind = 'scenario-result'; sha256 = Get-FileSha256Lower $resultPath; exists = $true }
+            [ordered]@{ relativePath = 'scenario-a.junit.xml'; kind = 'junit'; sha256 = Get-FileSha256Lower $junitPath; exists = $true }
+            [ordered]@{ relativePath = 'scenario-a.timeline.json'; kind = 'timeline'; sha256 = Get-FileSha256Lower $timelinePath; exists = $true }
+        )
+    }
+    $runManifestPath = Join-Path $runDir 'run-manifest.json'
+    [IO.File]::WriteAllText($runManifestPath, ($runManifest | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    $bundlePath = Join-Path $dir 'qualification-bundle.json'
+    $bundle = New-QualificationBundle -BundleRoot $dir -OutputPath $bundlePath `
+        -SourceCommitSha $SourceSha -SemanticVersion '1.0.0' `
+        -CandidateArtifactPath $artifact.Exe -ReleaseManifestPath $artifact.ManifestPath `
+        -DriverPath $driver -QualificationManifestPaths @($runManifestPath) `
+        -PrimaryRunManifestPath $runManifestPath -StageARunId '123456789' `
+        -CandidateArtifactName (Get-CandidateArtifactName -SourceSha $SourceSha) `
+        -SyntheticTopology:$SyntheticTopology
+    return [pscustomobject]@{
+        Dir = $dir
+        ArtifactDir = $artifact.Dir
+        Exe = $artifact.Exe
+        ReleaseManifest = $artifact.ManifestPath
+        Driver = $driver
+        RunManifest = $runManifestPath
+        BundlePath = $bundle.BundlePath
+        BundleSha256 = $bundle.BundleSha256
+        CandidateSha256 = $bundle.CandidateSha256
+    }
+}
+
+function New-TestQualificationHandoff {
+    <# Export a candidate/tooling pair through the same bounded handoff path used by operators. #>
+    param(
+        [string]$Name = 'handoff-valid',
+        [bool]$SyntheticTopology = $true
+    )
+    $fixture = New-TestQualificationPackage -Name "$Name-source" -SyntheticTopology:$SyntheticTopology
+    $handoff = Join-Path $testRoot "$Name-package"
+    $exportScript = Join-Path $repoRoot 'scripts\export-qualification-package.ps1'
+    & $exportScript -CandidateDir $fixture.ArtifactDir -OutputDir $handoff -ValidationDriver $fixture.Driver | Out-Null
+    if (-not $?) { throw 'qualification handoff export failed' }
+    return [pscustomobject]@{
+        Fixture = $fixture
+        PackageDir = $handoff
+        PackageManifest = Join-Path $handoff 'qualification-package.json'
+    }
+}
+
+function New-TestMachineReport {
+    <# Build a privacy-safe report fixture; the verifier, not this helper, is authoritative. #>
+    param(
+        [Parameter(Mandatory = $true)]$Handoff,
+        [string]$Name = 'machine-report-valid'
+    )
+    $fixture = $Handoff.Fixture
+    $packageCheck = Test-QualificationPackage -PackagePath $Handoff.PackageDir
+    if (-not $packageCheck.Valid) { throw "cannot create report fixture from invalid package: $($packageCheck.Failures -join '; ')" }
+    $bundle = Get-Content -LiteralPath $fixture.BundlePath -Raw | ConvertFrom-Json
+    $runRelative = 'qualification/direct-run/run-manifest.json'
+    $runPath = Join-Path $fixture.Dir $runRelative
+    $reportPath = Join-Path $fixture.Dir "$Name.json"
+    $bundleSha = Get-QualificationFileSha256 $fixture.BundlePath
+    $runSha = Get-QualificationFileSha256 $runPath
+    $report = [ordered]@{
+        schemaVersion = 1
+        reportKind = 'independent-machine-qualification'
+        createdUtc = [DateTimeOffset]::UtcNow.AddHours(-1).ToString('O')
+        sourceCommitSha = ('a' * 40)
+        candidateSha256 = $packageCheck.CandidateSha256
+        packageSha256 = Get-QualificationFileSha256 $Handoff.PackageManifest
+        driverSha256 = $packageCheck.DriverSha256
+        os = [ordered]@{ family = 'Windows 11'; build = '26200'; architecture = 'X64'; processArchitecture = 'X64' }
+        nativeAbi = [ordered]@{ status = 'PASS'; exitCode = 0; candidateSha256 = $packageCheck.CandidateSha256; command = '--selftest-native-abi' }
+        topology = [ordered]@{
+            syntheticTopology = [bool]$bundle.syntheticTopology
+            replayOnly = [bool]$bundle.replayOnly
+            physicalGateEligible = $false
+            source = 'virtual-topology-lab'
+            monitorCount = 1
+            mixedDpi = $false
+            dpiValues = @(96)
+            negativeCoordinates = $false
+        }
+        qualification = [ordered]@{
+            tier = 'deterministic'
+            physicalQualification = 'not-executed'
+            overall = [string]$bundle.outcome.overall
+            scenarioCounts = $bundle.outcome.scenarioCounts
+            scenarioCount = [int]$bundle.outcome.scenarioCount
+            attemptCount = [int]$bundle.outcome.attemptCount
+            runManifestRelativePaths = @($runRelative)
+        }
+        runManifestHashes = @([ordered]@{ relativePath = $runRelative; sha256 = $runSha })
+        qualificationBundleRelativePath = 'qualification-bundle.json'
+        qualificationBundleSha256 = $bundleSha
+        evidenceHashes = [ordered]@{ candidateSha256 = $packageCheck.CandidateSha256; driverSha256 = $packageCheck.DriverSha256; bundleSha256 = $bundleSha; primaryRunManifestSha256 = $runSha }
+        privacy = [ordered]@{ privacySafe = $true; containsRawDesktopData = $false; containsTitles = $false; containsUrls = $false; containsUserPaths = $false }
+    }
+    [IO.File]::WriteAllText($reportPath, ($report | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+    return [pscustomobject]@{ Path = $reportPath; Report = $report; Fixture = $fixture }
+}
+
+function New-TestPhysicalMachineReport {
+    param(
+        [Parameter(Mandatory = $true)]$Handoff,
+        [string]$Name = 'physical-machine-report',
+        [string]$OsFamily = 'Windows 11'
+    )
+    $report = New-TestMachineReport -Handoff $Handoff -Name $Name
+    $report.Report.os.family = $OsFamily
+    $report.Report.topology.syntheticTopology = $false
+    $report.Report.topology.replayOnly = $false
+    $report.Report.topology.physicalGateEligible = $true
+    $report.Report.topology.monitorCount = 2
+    $report.Report.topology.mixedDpi = $true
+    $report.Report.topology.dpiValues = @(96, 144)
+    $report.Report.topology.negativeCoordinates = $true
+    [IO.File]::WriteAllText($report.Path, ($report.Report | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+    return $report
+}
+
 try {
+    Write-Host '==> Qualification bundle: exact-byte, manifest, and privacy verification' -ForegroundColor Cyan
+
+    New-TestCase 'qualification-bundle-validates-offline' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-valid'
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath -ExpectedSourceSha ('a' * 40) -ExpectedArtifactSha $pkg.CandidateSha256
+        Assert-True $result.Valid ($result.Failures -join '; ')
+        Assert-True ($result.Bundle.schemaVersion -eq 1) 'bundle schema version must be current'
+        Assert-True ($result.Bundle.syntheticTopology -eq $false) 'normal bundle must not claim synthetic topology'
+    }
+
+    New-TestCase 'qualification-bundle-candidate-hash-substitution-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-candidate-substitution'
+        $bundle = Get-Content -LiteralPath $pkg.BundlePath -Raw | ConvertFrom-Json
+        $bundle.candidate.artifactSha256 = ('f' * 64)
+        $bundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $pkg.BundlePath -Encoding utf8
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True (-not $result.Valid) 'candidate hash substitution must fail offline verification'
+        Assert-True (($result.Failures -join ';') -match 'candidate') 'candidate mismatch must be diagnosed'
+    }
+
+    New-TestCase 'qualification-bundle-source-substitution-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-source-substitution'
+        $bundle = Get-Content -LiteralPath $pkg.BundlePath -Raw | ConvertFrom-Json
+        $bundle.sourceCommitSha = ('c' * 40)
+        $bundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $pkg.BundlePath -Encoding utf8
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath -ExpectedSourceSha ('a' * 40)
+        Assert-True (-not $result.Valid) 'source substitution must fail offline verification'
+    }
+
+    New-TestCase 'qualification-bundle-manifest-tamper-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-manifest-tamper'
+        $run = Get-Content -LiteralPath $pkg.RunManifest -Raw | ConvertFrom-Json
+        $run.outcome = 'FAIL_HARNESS'
+        $run | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $pkg.RunManifest -Encoding utf8
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True (-not $result.Valid) 'modified run manifest must fail offline verification'
+        Assert-True (($result.Failures -join ';') -match 'hash|outcome') 'manifest tamper must be diagnosed'
+    }
+
+    New-TestCase 'qualification-bundle-missing-timeline-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-missing-timeline'
+        Remove-Item -LiteralPath (Join-Path (Split-Path $pkg.RunManifest) 'scenario-a.timeline.json') -Force
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True (-not $result.Valid) 'missing timeline must fail offline verification'
+        Assert-True (($result.Failures -join ';') -match 'missing|hash') 'missing timeline must be diagnosed'
+    }
+
+    New-TestCase 'qualification-bundle-path-traversal-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-path-traversal'
+        $bundle = Get-Content -LiteralPath $pkg.BundlePath -Raw | ConvertFrom-Json
+        $bundle.artifactIndex[0].relativePath = '../escape.json'
+        $bundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $pkg.BundlePath -Encoding utf8
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True (-not $result.Valid) 'path traversal must fail offline verification'
+        Assert-True (($result.Failures -join ';') -match 'traversal|empty|absolute') 'path traversal must be diagnosed'
+    }
+
+    New-TestCase 'qualification-bundle-unsupported-schema-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-future-schema'
+        $bundle = Get-Content -LiteralPath $pkg.BundlePath -Raw | ConvertFrom-Json
+        $bundle.schemaVersion = 99
+        $bundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $pkg.BundlePath -Encoding utf8
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True (-not $result.Valid) 'future bundle schema must fail closed'
+        Assert-True (($result.Failures -join ';') -match 'schemaVersion') 'future schema must be diagnosed'
+    }
+
+    New-TestCase 'qualification-bundle-synthetic-topology-is-not-physical-pass' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-synthetic' -SyntheticTopology $true
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True $result.Valid ($result.Failures -join '; ')
+        $physical = Test-QualificationBundle -BundlePath $pkg.BundlePath -RequirePhysicalTopology
+        Assert-True (-not $physical.Valid) 'synthetic topology must be rejected by a physical gate'
+    }
+
+    New-TestCase 'qualification-bundle-outcome-count-substitution-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-count-substitution'
+        $bundle = Get-Content -LiteralPath $pkg.BundlePath -Raw | ConvertFrom-Json
+        $bundle.outcome.scenarioCounts.PASS = 0
+        $bundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $pkg.BundlePath -Encoding utf8
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True (-not $result.Valid) 'outcome count substitution must fail offline verification'
+        Assert-True (($result.Failures -join ';') -match 'scenarioCounts') 'outcome count mismatch must be diagnosed'
+    }
+
+    Write-Host '==> Independent-machine package and report trust boundary' -ForegroundColor Cyan
+
+    New-TestCase 'qualification-handoff-package-validates-offline' {
+        $handoff = New-TestQualificationHandoff -Name 'handoff-valid'
+        $result = Test-QualificationPackage -PackagePath $handoff.PackageDir -ExpectedSourceSha ('a' * 40) -ExpectedCandidateSha $handoff.Fixture.ArtifactSha256
+        Assert-True $result.Valid ($result.Failures -join '; ')
+        Assert-True ($result.Package.packageKind -eq 'qualification-handoff') 'handoff package kind must be explicit'
+        Assert-True ($result.ArtifactMap.Keys -contains 'candidate/TabDock.exe') 'candidate must be indexed by portable path'
+    }
+
+    New-TestCase 'qualification-handoff-candidate-hash-substitution-fails-closed' {
+        $handoff = New-TestQualificationHandoff -Name 'handoff-candidate-substitution'
+        $manifest = Get-Content -LiteralPath $handoff.PackageManifest -Raw | ConvertFrom-Json
+        $manifest.candidate.sha256 = ('f' * 64)
+        $manifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $handoff.PackageManifest -Encoding utf8
+        $result = Test-QualificationPackage -PackagePath $handoff.PackageDir
+        Assert-True (-not $result.Valid) 'candidate substitution must fail package verification'
+        Assert-True (($result.Failures -join ';') -match 'candidate') 'candidate substitution must be diagnosed'
+    }
+
+    New-TestCase 'qualification-handoff-source-hash-substitution-fails-closed' {
+        $handoff = New-TestQualificationHandoff -Name 'handoff-source-substitution'
+        $manifest = Get-Content -LiteralPath $handoff.PackageManifest -Raw | ConvertFrom-Json
+        $manifest.sourceCommitSha = ('c' * 40)
+        $manifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $handoff.PackageManifest -Encoding utf8
+        $result = Test-QualificationPackage -PackagePath $handoff.PackageDir -ExpectedSourceSha ('a' * 40)
+        Assert-True (-not $result.Valid) 'source substitution must fail package verification'
+        Assert-True (($result.Failures -join ';') -match 'source|release') 'source substitution must be diagnosed'
+    }
+
+    New-TestCase 'qualification-handoff-unindexed-file-fails-closed' {
+        $handoff = New-TestQualificationHandoff -Name 'handoff-unindexed'
+        New-DummyArtifact (Join-Path $handoff.PackageDir 'candidate\untrusted.bin') 8
+        $result = Test-QualificationPackage -PackagePath $handoff.PackageDir
+        Assert-True (-not $result.Valid) 'unindexed returned data must fail package verification'
+        Assert-True (($result.Failures -join ';') -match 'unindexed') 'unindexed file must be diagnosed'
+    }
+
+    New-TestCase 'qualification-handoff-path-traversal-fails-closed' {
+        $handoff = New-TestQualificationHandoff -Name 'handoff-traversal'
+        $manifest = Get-Content -LiteralPath $handoff.PackageManifest -Raw | ConvertFrom-Json
+        $manifest.artifactIndex[0].relativePath = '../outside.bin'
+        $manifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $handoff.PackageManifest -Encoding utf8
+        $result = Test-QualificationPackage -PackagePath $handoff.PackageDir
+        Assert-True (-not $result.Valid) 'path traversal must fail package verification'
+        Assert-True (($result.Failures -join ';') -match 'traversal|empty|absolute') 'path traversal must be diagnosed'
+    }
+
+    New-TestCase 'qualification-handoff-future-timestamp-fails-closed' {
+        $handoff = New-TestQualificationHandoff -Name 'handoff-future'
+        $manifest = Get-Content -LiteralPath $handoff.PackageManifest -Raw | ConvertFrom-Json
+        $manifest.createdUtc = [DateTimeOffset]::UtcNow.AddHours(2).ToString('O')
+        $manifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $handoff.PackageManifest -Encoding utf8
+        $result = Test-QualificationPackage -PackagePath $handoff.PackageDir
+        Assert-True (-not $result.Valid) 'future package timestamps must fail verification'
+        Assert-True (($result.Failures -join ';') -match 'future|timestamp') 'future timestamp must be diagnosed'
+    }
+
+    New-TestCase 'independent-machine-report-validates-offline' {
+        $handoff = New-TestQualificationHandoff -Name 'report-valid'
+        $report = New-TestMachineReport -Handoff $handoff
+        $result = Test-QualificationMachineReport -ReportPath $report.Path -PackagePath $handoff.PackageDir -ExpectedSourceSha ('a' * 40) -ExpectedCandidateSha $handoff.Fixture.ArtifactSha256
+        Assert-True $result.Valid ($result.Failures -join '; ')
+    }
+
+    New-TestCase 'independent-machine-report-candidate-substitution-fails-closed' {
+        $handoff = New-TestQualificationHandoff -Name 'report-candidate-substitution'
+        $report = New-TestMachineReport -Handoff $handoff
+        $report.Report.candidateSha256 = ('f' * 64)
+        $report.Report.nativeAbi.candidateSha256 = ('f' * 64)
+        $report.Report | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $report.Path -Encoding utf8
+        $result = Test-QualificationMachineReport -ReportPath $report.Path -PackagePath $handoff.PackageDir
+        Assert-True (-not $result.Valid) 'report candidate substitution must fail verification'
+        Assert-True (($result.Failures -join ';') -match 'candidate') 'report candidate substitution must be diagnosed'
+    }
+
+    New-TestCase 'independent-machine-report-bundle-hash-substitution-fails-closed' {
+        $handoff = New-TestQualificationHandoff -Name 'report-bundle-substitution'
+        $report = New-TestMachineReport -Handoff $handoff
+        $report.Report.qualificationBundleSha256 = ('f' * 64)
+        $report.Report | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $report.Path -Encoding utf8
+        $result = Test-QualificationMachineReport -ReportPath $report.Path -PackagePath $handoff.PackageDir
+        Assert-True (-not $result.Valid) 'report bundle hash substitution must fail verification'
+        Assert-True (($result.Failures -join ';') -match 'bundle') 'report bundle substitution must be diagnosed'
+    }
+
+    New-TestCase 'synthetic-machine-report-cannot-satisfy-physical-mixed-dpi' {
+        $handoff = New-TestQualificationHandoff -Name 'report-synthetic-physical'
+        $report = New-TestMachineReport -Handoff $handoff
+        $result = Test-QualificationMachineReport -ReportPath $report.Path -PackagePath $handoff.PackageDir -RequirePhysicalMixedDpi
+        Assert-True (-not $result.Valid) 'synthetic report must not satisfy physical mixed-DPI import'
+        Assert-True (($result.Failures -join ';') -match 'synthetic|physical') 'synthetic physical rejection must be diagnosed'
+    }
+
+    Write-Host '==> Qualification evidence import and merge' -ForegroundColor Cyan
+
+    New-TestCase 'qualification-evidence-merge-validates-and-binds-all-machines' {
+        $handoff = New-TestQualificationHandoff -Name 'merge-valid' -SyntheticTopology:$false
+        $windows10 = New-TestMachineReport -Handoff $handoff -Name 'merge-windows10'
+        $windows10.Report.os.family = 'Windows 10'
+        [IO.File]::WriteAllText($windows10.Path, ($windows10.Report | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+        $windows11 = New-TestPhysicalMachineReport -Handoff $handoff -Name 'merge-windows11'
+        $baseEvidencePath = Join-Path $handoff.Fixture.ArtifactDir 'release-external-evidence.json'
+        Save-TestEvidence $baseEvidencePath (New-TestEvidence -SourceSha ('a' * 40) -ArtifactSha $handoff.Fixture.CandidateSha256)
+        $mergedPath = Join-Path $handoff.Fixture.ArtifactDir 'release-external-evidence-merged.json'
+        $handoffDir = Join-Path (Split-Path -Parent $handoff.Fixture.ArtifactDir) 'merge-valid-evidence-handoff'
+        $mergeScript = Join-Path $repoRoot 'scripts\merge-qualification-evidence.ps1'
+        & $mergeScript -ArtifactDir $handoff.Fixture.ArtifactDir -EvidencePath $baseEvidencePath -PackagePath $handoff.PackageDir -MachineReportPath @($windows10.Path, $windows11.Path) -OutputPath $mergedPath -HandoffDir $handoffDir -Operator 'Merge Test Operator'
+        Assert-True (Test-Path -LiteralPath $mergedPath -PathType Leaf) ("merge command did not create output: $mergedPath")
+        Assert-True (Test-Path -LiteralPath (Join-Path $handoffDir 'release-external-evidence.json') -PathType Leaf) 'merge handoff must include the merged evidence record'
+        Assert-True (@(Get-ChildItem -LiteralPath (Join-Path $handoffDir 'qualification\external') -Recurse -File).Count -gt 0) 'merge handoff must include staged qualification evidence'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $handoffDir 'candidate') -PathType Container)) 'merge handoff must not include the retained candidate root'
+        $merged = Get-Content -LiteralPath $mergedPath -Raw | ConvertFrom-Json
+        Assert-True ([int]$merged.schemaVersion -eq 3) 'merged evidence must be schema 3'
+        Assert-True ([string]$merged.physicalMixedDpi.status -eq 'PASS') 'validated physical report must produce physical PASS'
+        Assert-True ([string]$merged.windowsCompatibility.status -eq 'PASS') 'both validated Windows reports must produce compatibility PASS'
+        Assert-True (@($merged.qualificationImports).Count -eq 2) 'merge must record both imported machine reports'
+        Assert-True ((Get-QualificationFileSha256 $handoff.Fixture.Exe) -eq $handoff.Fixture.CandidateSha256) 'merge must not mutate candidate bytes'
+        $gate = Test-ExternalEvidenceFile -EvidencePath $mergedPath -ExpectedSourceSha ('a' * 40) -ExpectedArtifactSha $handoff.Fixture.CandidateSha256 -ExpectedCandidateRunId '123456789' -ExpectedCandidateArtifactName (Get-CandidateArtifactName -SourceSha ('a' * 40)) -QualificationBundleRoot $handoff.Fixture.ArtifactDir -RequireQualificationBundle
+        Assert-True $gate.Valid ($gate.Failures -join '; ')
+    }
+
+    New-TestCase 'qualification-evidence-merge-rejects-candidate-substitution' {
+        $handoff = New-TestQualificationHandoff -Name 'merge-candidate-substitution' -SyntheticTopology:$false
+        $windows10 = New-TestMachineReport -Handoff $handoff -Name 'merge-substitution-windows10'
+        $windows10.Report.os.family = 'Windows 10'
+        $windows11 = New-TestPhysicalMachineReport -Handoff $handoff -Name 'merge-substitution-windows11'
+        $windows11.Report.candidateSha256 = ('f' * 64)
+        $windows11.Report.nativeAbi.candidateSha256 = ('f' * 64)
+        [IO.File]::WriteAllText($windows10.Path, ($windows10.Report | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText($windows11.Path, ($windows11.Report | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+        $baseEvidencePath = Join-Path $handoff.Fixture.ArtifactDir 'release-external-evidence.json'
+        Save-TestEvidence $baseEvidencePath (New-TestEvidence -SourceSha ('a' * 40) -ArtifactSha $handoff.Fixture.CandidateSha256)
+        $mergeScript = Join-Path $repoRoot 'scripts\merge-qualification-evidence.ps1'
+        $thrown = $false
+        try { & $mergeScript -ArtifactDir $handoff.Fixture.ArtifactDir -EvidencePath $baseEvidencePath -PackagePath $handoff.PackageDir -MachineReportPath @($windows10.Path, $windows11.Path) -OutputPath (Join-Path $handoff.Fixture.ArtifactDir 'merge-substitution.json') -Operator 'Merge Test Operator' }
+        catch { $thrown = $true }
+        Assert-True $thrown 'candidate-substituted machine report must stop the merge'
+    }
+
+    New-TestCase 'qualification-evidence-merge-rejects-synthetic-physical-report' {
+        $handoff = New-TestQualificationHandoff -Name 'merge-synthetic-physical'
+        $windows10 = New-TestMachineReport -Handoff $handoff -Name 'merge-synthetic-windows10'
+        $windows10.Report.os.family = 'Windows 10'
+        $windows11 = New-TestMachineReport -Handoff $handoff -Name 'merge-synthetic-windows11'
+        $windows11.Report.os.family = 'Windows 11'
+        [IO.File]::WriteAllText($windows10.Path, ($windows10.Report | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText($windows11.Path, ($windows11.Report | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+        $baseEvidencePath = Join-Path $handoff.Fixture.ArtifactDir 'release-external-evidence.json'
+        Save-TestEvidence $baseEvidencePath (New-TestEvidence -SourceSha ('a' * 40) -ArtifactSha $handoff.Fixture.CandidateSha256)
+        $mergeScript = Join-Path $repoRoot 'scripts\merge-qualification-evidence.ps1'
+        $thrown = $false
+        try { & $mergeScript -ArtifactDir $handoff.Fixture.ArtifactDir -EvidencePath $baseEvidencePath -PackagePath $handoff.PackageDir -MachineReportPath @($windows10.Path, $windows11.Path) -OutputPath (Join-Path $handoff.Fixture.ArtifactDir 'merge-synthetic.json') -Operator 'Merge Test Operator' }
+        catch { $thrown = $true }
+        Assert-True $thrown 'synthetic reports must never be merged as a physical mixed-DPI PASS'
+    }
+
+    New-TestCase 'qualification-evidence-merge-rejects-duplicate-os-reports' {
+        $handoff = New-TestQualificationHandoff -Name 'merge-duplicate-os' -SyntheticTopology:$false
+        $windows10a = New-TestMachineReport -Handoff $handoff -Name 'merge-duplicate-windows10-a'
+        $windows10a.Report.os.family = 'Windows 10'
+        $windows10b = New-TestMachineReport -Handoff $handoff -Name 'merge-duplicate-windows10-b'
+        $windows10b.Report.os.family = 'Windows 10'
+        $windows11 = New-TestPhysicalMachineReport -Handoff $handoff -Name 'merge-duplicate-windows11'
+        foreach ($report in @($windows10a, $windows10b)) { [IO.File]::WriteAllText($report.Path, ($report.Report | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false)) }
+        $baseEvidencePath = Join-Path $handoff.Fixture.ArtifactDir 'release-external-evidence.json'
+        Save-TestEvidence $baseEvidencePath (New-TestEvidence -SourceSha ('a' * 40) -ArtifactSha $handoff.Fixture.CandidateSha256)
+        $mergeScript = Join-Path $repoRoot 'scripts\merge-qualification-evidence.ps1'
+        $thrown = $false
+        try { & $mergeScript -ArtifactDir $handoff.Fixture.ArtifactDir -EvidencePath $baseEvidencePath -PackagePath $handoff.PackageDir -MachineReportPath @($windows10a.Path, $windows10b.Path, $windows11.Path) -OutputPath (Join-Path $handoff.Fixture.ArtifactDir 'merge-duplicate.json') -Operator 'Merge Test Operator' }
+        catch { $thrown = $true }
+        Assert-True $thrown 'duplicate OS reports must not be merged ambiguously'
+    }
+
     Write-Host ''
     Write-Host '==> A. Unsigned path: checksums describe the final artifact' -ForegroundColor Cyan
 
@@ -808,6 +1451,58 @@ try {
         Save-TestEvidence $evidencePath $evidence
         $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
         Assert-True (-not $gate.Eligible) 'physicalMixedDpi=BLOCKED_NO_MIXED_DPI_HARDWARE must fail closed for production'
+    }
+
+    New-TestCase 'physical-pass-without-observed-topology-fails-closed' {
+        $art = New-SyntheticArtifactDir $testRoot 'g-dpi-no-topology' -SourceSha $goodSha -Version $goodVersion
+        $evidence = New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath $evidence
+        $written = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+        $written.physicalMixedDpi.observedTopology = $null
+        $written | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $evidencePath -Encoding utf8
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate.Eligible) 'a physical PASS without observed topology must fail closed'
+        Assert-True (($gate.Failures -join ';') -match 'observedTopology') 'missing topology must be diagnosed'
+    }
+
+    New-TestCase 'synthetic-topology-submitted-as-physical-pass-fails-closed' {
+        $art = New-SyntheticArtifactDir $testRoot 'g-dpi-synthetic-claim' -SourceSha $goodSha -Version $goodVersion
+        $evidence = New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath $evidence
+        $written = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+        $written.physicalMixedDpi.observedTopology.syntheticTopology = $true
+        $written | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $evidencePath -Encoding utf8
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate.Eligible) 'synthetic topology must not be submitted as physical PASS'
+        Assert-True (($gate.Failures -join ';') -match 'synthetic') 'synthetic topology must be diagnosed'
+    }
+
+    New-TestCase 'windows-machine-report-missing-fails-closed' {
+        $art = New-SyntheticArtifactDir $testRoot 'g-compat-report-missing' -SourceSha $goodSha -Version $goodVersion
+        $evidence = New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath $evidence
+        $written = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+        $written.windowsCompatibility.windows10.machineReport = $null
+        $written | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $evidencePath -Encoding utf8
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate.Eligible) 'missing structured Windows machine report must fail closed'
+        Assert-True (($gate.Failures -join ';') -match 'machineReport') 'missing machine report must be diagnosed'
+    }
+
+    New-TestCase 'windows-machine-report-candidate-substitution-fails-closed' {
+        $art = New-SyntheticArtifactDir $testRoot 'g-compat-report-substitution' -SourceSha $goodSha -Version $goodVersion
+        $evidence = New-TestEvidence -SourceSha $goodSha -ArtifactSha $art.ArtifactSha256
+        $evidencePath = Join-Path $art.Dir 'release-external-evidence.json'
+        Save-TestEvidence $evidencePath $evidence
+        $written = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+        $written.windowsCompatibility.windows11.machineReport.candidateSha256 = ('f' * 64)
+        $written | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $evidencePath -Encoding utf8
+        $gate = Test-PublicationEligibility -ArtifactDir $art.Dir -ExpectedSourceSha $goodSha -ExpectedVersion $goodVersion -EvidencePath $evidencePath -ExpectedCandidateRunId $goodRunId -ExpectedCandidateArtifactName $goodArtifactName -ExpectedPublisherSubject $goodPublisherSubject
+        Assert-True (-not $gate.Eligible) 'Windows machine report candidate substitution must fail closed'
+        Assert-True (($gate.Failures -join ';') -match 'candidateSha256') 'machine report candidate substitution must be diagnosed'
     }
 
     New-TestCase 'evidence-missing-gate-fails-closed' {
@@ -2455,7 +3150,8 @@ try {
     New-TestCase 'artifact-uploading-jobs-hold-least-privilege-actions-write' {
         # R21-001d: jobs that call actions/upload-artifact need job-level
         # actions: write (top-level contents: read alone is insufficient);
-        # jobs without uploads must not hold it. build.yml uploads nothing.
+        # jobs without uploads must not hold it. The build qualification
+        # artifact is deliberately retained by the same least-privilege job.
         $rc = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\qualify-candidate.yml'))
         $rcJob = $rc.Substring($rc.IndexOf('  qualify:'))
         Assert-True ($rcJob -match 'permissions:') 'the qualify-candidate.yml upload job must declare job-level permissions'
@@ -2467,8 +3163,8 @@ try {
         Assert-True ($stageAJob -match 'actions: write') 'the Stage A upload job must hold actions: write'
         Assert-True ($stageAJob -match 'contents: read') 'the Stage A upload job must keep contents: read'
         $build = [IO.File]::ReadAllText((Join-Path $repoRoot '.github\workflows\build.yml'))
-        Assert-True ($build -notmatch 'upload-artifact') 'build.yml uploads no artifact'
-        Assert-True ($build -notmatch 'actions:\s*write') 'build.yml must not grant actions: write (no uploads)'
+        Assert-True ($build -match 'upload-artifact') 'build.yml must retain deterministic qualification artifacts'
+        Assert-True ($build -match 'build:\s*\r?\n\s+permissions:\s*\r?\n(?:\s+.*\r?\n){0,4}\s+actions:\s+write') 'build.yml upload job must hold actions: write at job scope'
     }
 
     New-TestCase 'stage-a-github-env-is-appended-never-overwritten' {

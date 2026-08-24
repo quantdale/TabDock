@@ -175,6 +175,59 @@ public class CapturePickerViewModelTests
         }
     }
 
+    [Fact]
+    public void LargeIconRefresh_CoalescesDispatcherResultsWithoutLosingRows()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "TabDock-picker-large-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        const int count = 1000;
+        int batches = 0;
+        try
+        {
+            Dispatcher testDispatcher = Dispatcher.CurrentDispatcher;
+            using var log = new LoggingService(Path.Combine(root, "logs"));
+            var shepherd = new WindowShepherdService(log, Path.Combine(root, "hidden-windows.json"));
+            var persistence = new PersistenceService(log, Path.Combine(root, "state.json"));
+            var manager = new GroupManager(shepherd, persistence, log);
+            DrawingImage icon = FrozenImage();
+            var icons = new IconService(log, _ => icon);
+
+            using var picker = new CapturePickerViewModel(
+                manager,
+                icons,
+                log,
+                () => Enumerable.Range(0, count)
+                    .Select(i => new CapturePickerViewModel.WindowInfo(
+                        new IntPtr(0x700 + i),
+                        (uint)(700 + i),
+                        "SyntheticWindow",
+                        $"Synthetic {i}",
+                        $@"C:\Synthetic\App{i}.exe")),
+                testDispatcher,
+                _ => Interlocked.Increment(ref batches));
+
+            Assert.True(
+                PumpUntil(
+                    testDispatcher,
+                    () => picker.IconResolutionCompletion.IsCompleted
+                        && picker.Windows.Count == count
+                        && picker.Windows.All(row => ReferenceEquals(row.Icon, icon)),
+                    15000),
+                "large icon refresh must complete and apply every current-generation result");
+            Assert.True(batches > 0);
+            Assert.True(batches < count, $"expected coalesced posts, observed {batches} for {count} rows");
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, recursive: true);
+            }
+            catch { }
+        }
+    }
+
     private static DrawingImage FrozenImage()
     {
         var image = new DrawingImage();

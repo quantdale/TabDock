@@ -64,5 +64,35 @@ public class MainViewModelTests : IDisposable
         Assert.False(raised);
     }
 
+    [Fact]
+    public void RemovingSelectedGroup_RepairsLauncherSelectionToLiveProjection()
+    {
+        MainViewModel vm = CreateViewModel(out GroupManager groups);
+        Group first = groups.CreateGroup("first");
+        Group selected = groups.CreateGroup("selected");
+        Group last = groups.CreateGroup("last");
+        vm.SelectedGroup = selected;
+
+        groups.RemoveGroup(selected);
+
+        Assert.DoesNotContain(selected, vm.Groups);
+        Assert.Same(last, vm.SelectedGroup);
+        Assert.Contains(vm.SelectedGroup, vm.Groups);
+        Assert.Equal(2, vm.Groups.Count);
+    }
+
+    [Fact]
+    public void RemovingOnlyGroup_ClearsLauncherSelection()
+    {
+        MainViewModel vm = CreateViewModel(out GroupManager groups);
+        Group only = groups.CreateGroup("only");
+        vm.SelectedGroup = only;
+
+        groups.RemoveGroup(only);
+
+        Assert.Empty(vm.Groups);
+        Assert.Null(vm.SelectedGroup);
+    }
+
     public void Dispose() => _fixture.Dispose();
 }

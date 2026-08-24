@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Threading;
 
 namespace TabDock.ValidationDriver;
@@ -34,6 +36,7 @@ internal static class Program
         var opt = new Options();
         var scenarios = new List<string>();
         string? selfTestSuite = null;
+        string? planGate = null;
         bool listRequested = false;
         bool helpRequested = false;
         for (int i = 0; i < args.Length; i++)
@@ -48,10 +51,22 @@ internal static class Program
                         return Usage("--selftest requires split, identity, or all.");
                     selfTestSuite = args[++i];
                     break;
+                case "--plan":
+                    if (i + 1 >= args.Length)
+                        return Usage("--plan requires a gate (physicalMixedDpi|automated|release|all).");
+                    planGate = args[++i];
+                    break;
                 case "--cycles":
                     if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out int n) || n < 1)
                         return Usage("--cycles requires a positive integer.");
                     opt.Cycles = n;
+                    i++;
+                    break;
+                case "--reruns":
+                case "--rerun":
+                    if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out int reruns) || reruns < 0 || reruns > 5)
+                        return Usage("--reruns requires an integer from 0 through 5 (additional investigation attempts).");
+                    opt.Reruns = reruns;
                     i++;
                     break;
                 case "--guest":
@@ -121,9 +136,21 @@ internal static class Program
 
         if (helpRequested)
             return Usage(null, 0);
+        if (planGate != null)
+            return PrintQualificationPlan(planGate, opt);
         if (selfTestSuite != null)
         {
+            // Deterministic runs may still be bound to the exact retained
+            // candidate. When --tabdock/--guineapig are supplied, configure
+            // those paths before the manifest writer computes executable
+            // identity; no native scenario is launched by this branch.
+            if (!string.IsNullOrWhiteSpace(opt.TabDockPath)
+                || !string.IsNullOrWhiteSpace(opt.GuineaPigPath))
+            {
+                Scenarios.ConfigureArtifacts(opt.Configuration, opt.Rid, opt.TabDockPath, opt.GuineaPigPath);
+            }
             TestRunProvenance.BeginRun();
+            QualificationResultWriter.BeginRun();
             GuardedProc.Log($"Deterministic qualification runId={TestRunProvenance.RunId}.");
             return DeterministicSelfTests.Run(selfTestSuite);
         }
@@ -137,10 +164,10 @@ internal static class Program
             opt.Shard = opt.Shard.ToLowerInvariant();
             if (scenarios.Count != 0)
                 return Usage("--shard cannot be combined with a scenario argument.");
-            if (!Scenarios.OrchestratedShardNames.Concat(Scenarios.ExplicitOnlyShardNames)
+            if (!ScenarioCatalog.OrchestratedShardNames.Concat(ScenarioCatalog.ExplicitOnlyShardNames)
                 .Contains(opt.Shard, StringComparer.Ordinal))
                 return Usage($"Unknown shard '{opt.Shard}'.");
-            scenarios.AddRange(Scenarios.GetShardScenarios(opt.Shard));
+            scenarios.AddRange(ScenarioCatalog.GetShardScenarios(opt.Shard));
         }
 
         if (scenarios.Count == 1 && string.Equals(scenarios[0], "all", StringComparison.Ordinal))
@@ -149,20 +176,19 @@ internal static class Program
         Scenarios.ConfigureArtifacts(opt.Configuration, opt.Rid, opt.TabDockPath, opt.GuineaPigPath);
         foreach (string s in scenarios)
         {
-            bool known = Array.IndexOf(Scenarios.AllOrder, s) >= 0
-                || s == "realapp" || s == "browser-multi"
-                || Array.IndexOf(Scenarios.BrowserOnlyScenarios, s) >= 0
-                || Array.IndexOf(Scenarios.StandaloneExtraScenarios, s) >= 0;
-            if (!known)
+            if (!ScenarioCatalog.TryGet(s, out ScenarioDefinition definition))
                 return Usage($"Unknown scenario '{s}'.");
         }
-        if (scenarios.Contains("realapp") && Array.IndexOf(Scenarios.RealAppGuestKinds, opt.Guest) < 0)
-            return Usage($"realapp requires --guest {string.Join("|", Scenarios.RealAppGuestKinds)}.");
+        if (scenarios.Any(s => ScenarioCatalog.TryGet(s, out ScenarioDefinition definition)
+            && definition.ExecutionClass == ScenarioExecutionClass.UserOwnedApplication)
+            && !ScenarioCatalog.RealAppGuestKinds.Contains(opt.Guest, StringComparer.OrdinalIgnoreCase))
+            return Usage($"real-app scenarios require --guest {string.Join("|", ScenarioCatalog.RealAppGuestKinds)}.");
         foreach (string s in scenarios)
         {
-            if ((s == "browser-multi" || Array.IndexOf(Scenarios.BrowserOnlyScenarios, s) >= 0)
-                && Array.IndexOf(Scenarios.BrowserGuestKinds, opt.Guest) < 0)
-                return Usage($"{s} requires --guest {string.Join("|", Scenarios.BrowserGuestKinds)}.");
+            if (ScenarioCatalog.TryGet(s, out ScenarioDefinition definition)
+                && definition.ExecutionClass == ScenarioExecutionClass.Browser
+                && !ScenarioCatalog.BrowserGuestKinds.Contains(opt.Guest, StringComparer.OrdinalIgnoreCase))
+                return Usage($"{s} requires --guest {string.Join("|", ScenarioCatalog.BrowserGuestKinds)}.");
         }
 
         // Single-instance guard (guarded-spawn pattern rule 3).
@@ -189,6 +215,8 @@ internal static class Program
         Console.WriteLine($"[PID {Environment.ProcessId}] TabDock real-input validation driver ({Scenarios.SelectedConfiguration}, RID {Scenarios.SelectedRid}).");
         Console.WriteLine($"Artifacts: TabDock={Scenarios.TabDockExe}; GuineaPig={Scenarios.PigExe}");
         Console.WriteLine($"Scenarios: {string.Join(", ", scenarios)}");
+        if (opt.Reruns > 0)
+            Console.WriteLine($"Investigation reruns: {opt.Reruns} additional attempt(s); first-attempt outcomes remain authoritative.");
         Console.WriteLine();
         Console.WriteLine("This run will:");
         Console.WriteLine("  - spawn a fresh TabDock instance (aborts if one is already running) plus guinea-pig windows,");
@@ -218,22 +246,26 @@ internal static class Program
 
         Input.SaveCursor();
         TestRunProvenance.BeginRun();
+        QualificationResultWriter.BeginRun();
         GuardedProc.Log($"Validation runId={TestRunProvenance.RunId} marker={TestRunProvenance.MarkerName}.");
-        bool allPassed = true;
         int ran = 0;
         try
         {
             foreach (string s in scenarios)
             {
-                Util.ThrowIfCancelled();
-                allPassed &= Scenarios.RunScenario(s, opt);
-                ran++;
+                for (int attempt = 1; attempt <= opt.Reruns + 1; attempt++)
+                {
+                    Util.ThrowIfCancelled();
+                    Scenarios.RunScenario(s, opt, attempt);
+                    ran++;
+                    if (attempt <= opt.Reruns)
+                        GuardedProc.Log($"=== INVESTIGATION RERUN scenario={s} attempt={attempt + 1}/{opt.Reruns + 1} ===");
+                }
             }
         }
         catch (OperationCanceledException)
         {
             GuardedProc.Log("Run aborted (overall 10-minute budget exceeded or Ctrl+C).");
-            allPassed = false;
         }
         finally
         {
@@ -241,10 +273,11 @@ internal static class Program
             Input.RestoreCursor();
         }
 
-        GuardedProc.Log(allPassed
+        ScenarioOutcome runOutcome = QualificationResultWriter.WriteRunManifest();
+        GuardedProc.Log(runOutcome.IsReleasePass
             ? $"ALL {ran} SCENARIO(S) PASSED."
-            : "ONE OR MORE SCENARIOS FAILED.");
-        return allPassed ? 0 : 5;
+            : $"RUN OUTCOME {runOutcome.Code}: one or more scenarios were not release-pass.");
+        return ScenarioOutcomeContract.ExitCode(runOutcome.Kind);
     }
 
     private static int RunAllShards(Options opt)
@@ -257,7 +290,7 @@ internal static class Program
 
         Console.WriteLine($"[PID {Environment.ProcessId}] TabDock real-input shard orchestrator ({Scenarios.SelectedConfiguration}, RID {Scenarios.SelectedRid}).");
         Console.WriteLine($"Artifacts: TabDock={Scenarios.TabDockExe}; GuineaPig={Scenarios.PigExe}");
-        Console.WriteLine($"Shards: {string.Join(", ", Scenarios.OrchestratedShardNames)}");
+        Console.WriteLine($"Shards: {string.Join(", ", ScenarioCatalog.OrchestratedShardNames)}");
         Console.WriteLine("Each shard is a separate guarded driver process with its own 12-spawn and 10-minute limits.");
         if (!opt.Yes)
         {
@@ -270,43 +303,104 @@ internal static class Program
             }
         }
 
-        bool allPassed = true;
-        int completed = 0;
+        TestRunProvenance.BeginRun();
+        QualificationResultWriter.BeginRun();
+        DateTimeOffset parentStartedUtc = DateTimeOffset.UtcNow;
+        string parentRoot = TestRunProvenance.ArtifactDirectory;
+        string candidateSha = QualificationResultWriter.CandidateSha();
+        string candidateExecutableSha = QualificationResultWriter.Sha256File(Scenarios.TabDockExe);
+        string driverSha = QualificationResultWriter.DriverIdentitySha256();
+        var imports = new List<ChildManifestVerification>();
+
         try
         {
-            foreach (string shard in Scenarios.OrchestratedShardNames)
+            foreach (string shard in ScenarioCatalog.OrchestratedShardNames)
             {
+                string childArtifactBase = Path.Combine(parentRoot, "children", shard);
+                Directory.CreateDirectory(childArtifactBase);
                 Console.WriteLine();
-                GuardedProc.Log($"=== SHARD {shard} ({Scenarios.GetShardScenarios(shard).Count} scenario(s)) ===");
-                using Process child = GuardedProc.SpawnDriverShard(CreateShardProcessInfo(opt, shard));
-                if (!child.WaitForExit((int)TimeSpan.FromMinutes(11).TotalMilliseconds))
+                GuardedProc.Log($"=== SHARD {shard} ({ScenarioCatalog.GetShardScenarios(shard).Count} scenario(s)) ===");
+                ChildManifestVerification import;
+                Process? child = null;
+                try
                 {
-                    GuardedProc.Log($"SHARD {shard}: timed out at the bounded 11-minute parent limit; terminating child.");
-                    try { child.Kill(entireProcessTree: true); } catch { }
-                    allPassed = false;
-                    break;
+                    child = GuardedProc.SpawnDriverShard(
+                        CreateShardProcessInfo(opt, shard, childArtifactBase, TestRunProvenance.RunId));
+                    if (!child.WaitForExit((int)TimeSpan.FromMinutes(11).TotalMilliseconds))
+                    {
+                        GuardedProc.Log($"SHARD {shard}: timed out at the bounded parent limit; terminating child.");
+                        try { child.Kill(entireProcessTree: true); } catch { }
+                        import = ChildManifestVerification.Invalid(
+                            shard,
+                            ScenarioOutcomeContract.ExitCode(ScenarioOutcomeKind.FailHarness),
+                            $"shard {shard} exceeded the bounded parent timeout");
+                    }
+                    else
+                    {
+                        import = QualificationManifestVerifier.ImportChild(
+                            childArtifactBase,
+                            parentRoot,
+                            shard,
+                            TestRunProvenance.RunId,
+                            candidateSha,
+                            candidateExecutableSha,
+                            driverSha,
+                            parentStartedUtc,
+                            child.ExitCode);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    import = ChildManifestVerification.Invalid(
+                        shard,
+                        ScenarioOutcomeContract.ExitCode(ScenarioOutcomeKind.FailHarness),
+                        $"shard process could not be supervised: {ex.GetType().Name}");
+                }
+                finally
+                {
+                    child?.Dispose();
                 }
 
-                completed++;
-                bool passed = child.ExitCode == 0;
-                GuardedProc.Log($"SHARD {shard}: {(passed ? "PASS" : $"FAIL (exit {child.ExitCode})")}");
-                allPassed &= passed;
-                if (!passed)
-                    break;
+                imports.Add(import);
+                GuardedProc.Log(
+                    $"SHARD {shard}: verified={import.Valid} outcome={import.Outcome.Code} exit={import.ExitCode}" +
+                    (import.FailureReason == null ? string.Empty : $" reason={import.FailureReason}"));
             }
+        }
+        catch (OperationCanceledException)
+        {
+            imports.AddRange(ScenarioCatalog.OrchestratedShardNames
+                .Where(shard => !imports.Any(item => item.ExpectedShard == shard))
+                .Select(shard => ChildManifestVerification.Invalid(
+                    shard,
+                    ScenarioOutcomeContract.ExitCode(ScenarioOutcomeKind.FailHarness),
+                    "all-run cancellation left the declared shard unlaunched")));
         }
         finally
         {
             GuardedProc.CleanupTrackedProcesses();
         }
 
-        GuardedProc.Log(allPassed
-            ? $"ALL {completed} SHARD(S) PASSED."
-            : "ONE OR MORE SHARDS FAILED.");
-        return allPassed ? 0 : 5;
+        ParentManifestWriteResult parent = QualificationParentManifestWriter.Write(
+            parentRoot,
+            TestRunProvenance.RunId,
+            parentStartedUtc,
+            candidateSha,
+            candidateExecutableSha,
+            driverSha,
+            ScenarioCatalog.OrchestratedShardNames,
+            imports);
+        GuardedProc.Log(
+            $"RUN_MANIFEST result={parent.Outcome.Code} artifact=<validation-artifact>/run-manifest.json " +
+            $"parentRunId={TestRunProvenance.RunId} childManifests={imports.Count}");
+        return ScenarioOutcomeContract.ExitCode(parent.Outcome.Kind);
     }
 
-    private static ProcessStartInfo CreateShardProcessInfo(Options opt, string shard)
+    private static ProcessStartInfo CreateShardProcessInfo(
+        Options opt,
+        string shard,
+        string childArtifactBase,
+        string parentRunId)
     {
         // A managed DLL must never be executed directly: CreateProcess starts a
         // host that fails CLR assembly binding ("System.Runtime, Version=8.0.0.0").
@@ -346,6 +440,16 @@ internal static class Program
             psi.ArgumentList.Add("--cycles");
             psi.ArgumentList.Add(opt.Cycles.Value.ToString());
         }
+        if (opt.Reruns > 0)
+        {
+            psi.ArgumentList.Add("--reruns");
+            psi.ArgumentList.Add(opt.Reruns.ToString());
+        }
+        psi.Environment["TABDOCK_VALIDATION_ARTIFACT_ROOT"] = childArtifactBase;
+        psi.Environment.Remove("TABDOCK_VALIDATION_RESULT_ROOT");
+        psi.Environment["TABDOCK_VALIDATION_RUN_KIND"] = "shard";
+        psi.Environment["TABDOCK_VALIDATION_PARENT_RUN_ID"] = parentRunId;
+        psi.Environment["TABDOCK_VALIDATION_SHARD"] = shard;
         return psi;
     }
 
@@ -363,14 +467,16 @@ internal static class Program
         Console.WriteLine("Usage: TabDock.ValidationDriver.exe [options] <scenario|all>");
         Console.WriteLine();
         Console.WriteLine("Scenarios:");
-        foreach (string s in Scenarios.AllOrder)
+        foreach (string s in ScenarioCatalog.AllOrder)
             Console.WriteLine($"  {s}");
         Console.WriteLine("  all            runs every bounded hermetic shard in separate child processes");
         Console.WriteLine();
         Console.WriteLine("Options:");
         Console.WriteLine("  --yes          skip the interactive confirmation (supervised runs)");
         Console.WriteLine("  --selftest NAME run native-free split/identity contracts (split|identity|all)");
+        Console.WriteLine("  --plan GATE    print a JSON qualification plan without sending input (physicalMixedDpi|automated|release|all)");
         Console.WriteLine("  --cycles N     cycle count for maximize-repro (default 3) and repeat-cycles (default 5)");
+        Console.WriteLine("  --reruns N     run N additional bounded investigation attempts; never best-of-N (default 0)");
         Console.WriteLine("  --guest KIND   guest app for scenarios that need one: pig (default), wt, chrome-nogpu, chrome-gpu, chrome-normal, edge-normal, firefox-normal, codex, chatgptclassic");
         Console.WriteLine("  --configuration Debug|Release   select build output (default Debug)");
         Console.WriteLine("  --rid auto|none|win-x64         select RID-specific output (default auto)");
@@ -383,29 +489,134 @@ internal static class Program
 
     private static int ListScenarios()
     {
+        Console.WriteLine($"Scenario catalog: {ScenarioCatalog.Generation} ({ScenarioCatalog.All.Count} dispatchable scenario(s))");
+        Console.WriteLine();
         Console.WriteLine("AllOrder (what 'all' runs, fresh TabDock per scenario):");
-        foreach (string s in Scenarios.AllOrder)
+        foreach (string s in ScenarioCatalog.AllOrder)
             Console.WriteLine($"  {s}");
         Console.WriteLine();
         Console.WriteLine("BrowserOnlyScenarios (need --guest chrome-normal|edge-normal|firefox-normal):");
-        foreach (string s in Scenarios.BrowserOnlyScenarios)
+        foreach (string s in ScenarioCatalog.BrowserOnlyScenarios)
             Console.WriteLine($"  {s}");
         Console.WriteLine();
         Console.WriteLine("StandaloneExtraScenarios (each spawns its own guest):");
-        foreach (string s in Scenarios.StandaloneExtraScenarios)
+        foreach (string s in ScenarioCatalog.StandaloneExtraScenarios)
             Console.WriteLine($"  {s}");
         Console.WriteLine();
         Console.WriteLine("RealAppGuestKinds (--guest value for realapp):");
-        foreach (string s in Scenarios.RealAppGuestKinds)
+        foreach (string s in ScenarioCatalog.RealAppGuestKinds)
             Console.WriteLine($"  {s}");
         Console.WriteLine();
         Console.WriteLine("Shards:");
-        foreach (string shard in Scenarios.OrchestratedShardNames)
-            Console.WriteLine($"  {shard} ({Scenarios.GetShardScenarios(shard).Count} scenario(s))");
-        foreach (string shard in Scenarios.ExplicitOnlyShardNames)
+        foreach (string shard in ScenarioCatalog.OrchestratedShardNames)
+            Console.WriteLine($"  {shard} ({ScenarioCatalog.GetShardScenarios(shard).Count} scenario(s))");
+        foreach (string shard in ScenarioCatalog.ExplicitOnlyShardNames)
             Console.WriteLine($"  {shard} (explicit --guest/real-app selection required)");
         Console.WriteLine();
         Console.WriteLine("Also dispatchable but not in the arrays above: realapp, browser-multi.");
         return 0;
+    }
+
+    private static int PrintQualificationPlan(string gate, Options options)
+    {
+        string normalized = gate.Trim().ToLowerInvariant();
+        IReadOnlyList<ScenarioDefinition> required = normalized switch
+        {
+            "physicaldpimixed" or "physicalmixeddpi" or "mixed-dpi" or "mixed_dpi"
+                => ScenarioCatalog.All.Where(definition => definition.RequiresMixedDpi
+                    || definition.RequiresNonDefaultDpi
+                    || definition.RequiresNegativeCoordinates).ToArray(),
+            "automated" or "deterministic"
+                => ScenarioCatalog.All.Where(definition => definition.IncludeInAll).ToArray(),
+            "release" or "production"
+                => ScenarioCatalog.All.Where(definition => definition.MayContributeReleaseEvidence
+                    && definition.IncludeInAll).ToArray(),
+            "all" => ScenarioCatalog.All.ToArray(),
+            _ => Array.Empty<ScenarioDefinition>(),
+        };
+        if (required.Count == 0 && normalized is not "physicaldpimixed" and not "physicalmixeddpi"
+            and not "mixed-dpi" and not "mixed_dpi")
+            return Usage($"Unknown or empty qualification plan gate '{gate}'.");
+
+        ScenarioCapabilitySnapshot snapshot = ScenarioCapabilities.CaptureCurrent();
+        DesktopQualificationSnapshot desktop = new NativeDesktopQualificationProbe().Capture();
+        var requiredRows = required.Select(definition => PlanRow(definition, options, snapshot, required: true)).ToArray();
+        var optionalRows = ScenarioCatalog.All
+            .Where(definition => !required.Contains(definition))
+            .Where(definition => definition.ExecutionClass is not ScenarioExecutionClass.Browser
+                and not ScenarioExecutionClass.UserOwnedApplication)
+            .Select(definition => PlanRow(definition, options, snapshot, required: false))
+            .ToArray();
+        var payload = new
+        {
+            schemaVersion = 1,
+            planKind = "qualification-plan",
+            gate = normalized,
+            catalogGeneration = ScenarioCatalog.Generation,
+            syntheticTopology = false,
+            environment = new
+            {
+                os = Environment.OSVersion.VersionString,
+                osBuild = Environment.OSVersion.Version.Build,
+                architecture = RuntimeInformation.OSArchitecture.ToString(),
+                processArchitecture = RuntimeInformation.ProcessArchitecture.ToString(),
+                interactiveSession = snapshot.InteractiveSessionAvailable,
+                workstationLocked = snapshot.WorkstationLocked,
+            },
+            topology = new
+            {
+                syntheticTopology = false,
+                monitorCount = desktop.Monitors.Count,
+                dpiValues = desktop.Monitors.Where(monitor => monitor.Dpi != 0)
+                    .Select(monitor => (int)monitor.Dpi).Distinct().OrderBy(value => value).ToArray(),
+                mixedDpi = desktop.MixedDpiAvailable,
+                negativeCoordinates = desktop.Monitors.Any(monitor => monitor.Left < 0 || monitor.Top < 0),
+                monitors = desktop.Monitors.Select(monitor => new
+                {
+                    left = monitor.Left,
+                    top = monitor.Top,
+                    right = monitor.Right,
+                    bottom = monitor.Bottom,
+                    dpi = monitor.Dpi,
+                }).ToArray(),
+            },
+            required = requiredRows,
+            optional = optionalRows,
+        };
+        Console.WriteLine(JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));
+        return 0;
+    }
+
+    private static object PlanRow(
+        ScenarioDefinition definition,
+        Options options,
+        ScenarioCapabilitySnapshot snapshot,
+        bool required)
+    {
+        ScenarioCapabilityResolution resolution = ScenarioCapabilities.Resolve(
+            ScenarioCapabilities.Describe(definition, options), snapshot);
+        return new
+        {
+            id = definition.Id,
+            dispatch = definition.DispatchIdentifier,
+            shard = definition.Shard,
+            required,
+            executionClass = definition.ExecutionClass.ToString(),
+            inputRequirement = definition.InputRequirement.ToString(),
+            requiresInteractiveSession = definition.RequiresInteractiveSession,
+            requiresSupervision = definition.RequiresSupervision,
+            requiresMultiMonitor = definition.RequiresMultiMonitor,
+            requiresMixedDpi = definition.RequiresMixedDpi,
+            requiresNonDefaultDpi = definition.RequiresNonDefaultDpi,
+            requiresNegativeCoordinates = definition.RequiresNegativeCoordinates,
+            destructiveState = definition.DestructiveState.ToString(),
+            expectedRuntimeSeconds = definition.ExpectedRuntimeSeconds,
+            mayContributeReleaseEvidence = definition.MayContributeReleaseEvidence,
+            runnable = resolution.Runnable,
+            outcome = resolution.Runnable
+                ? ScenarioOutcomeContract.Code(ScenarioOutcomeKind.Pass)
+                : ScenarioOutcomeContract.Code(resolution.Outcome ?? ScenarioOutcomeKind.FailHarness),
+            reason = resolution.Reason,
+        };
     }
 }
