@@ -1,6 +1,6 @@
 # Plan: Mainline Long-Run Reliability and Native Resource Lifecycle Hardening
 
-**Status:** active — baseline re-establishment and ownership audit
+**Status:** complete — implementation, qualification, and delivery preparation
 **Owner/session:** Codex
 **Updated:** 2026-08-24
 **Target branch:** `main`
@@ -54,6 +54,28 @@ and an exact pushed SHA.
 9. Repeat analyzer, bounded churn, picker/icon, monitor, and representative
    end-to-end safe runs; complete the full validation ladder; commit meaningful
    checkpoints and push exact `main`.
+
+## Completion record
+
+- Mainline normalization: the qualified release-closure head was fast-forwarded
+  from `df89d154...` onto `main`; subsequent checkpoints were committed and
+  pushed directly to `origin/main`.
+- Ownership audit: complete; production lifetimes had explicit cleanup at the
+  inspected boundaries and no concrete production resource leak was reproduced.
+- New validation coverage: immutable snapshots/analyzer, Windows probe,
+  eight lifecycle profiles, source-bound JSON/JUnit evidence, safe CLI, and CI
+  gate are implemented.
+- Counts: 707/707 Debug and Release unit tests; 143/143 Release deterministic
+  self-tests; 16/16 resource self-tests; 177/177 release-tooling tests; strict
+  OpenSpec 35/35.
+- Stability: five consecutive 128-cycle headless runs, a 256-cycle run, a
+  1,000-cycle Release headless soak, and a 64-sample run-owned Release process
+  soak passed. The Release process sample showed handles 956→954, USER 27→24,
+  GDI 19→18, threads 13→13, windows 9→9, private bytes −901,120, and working
+  set +544,768, all within the documented budgets.
+- OpenSpec change `resource-lifecycle-qualification` was archived into the
+  canonical `openspec/specs/resource-lifecycle-qualification/spec.md` after
+  implementation and validation.
 
 ## Constraints and decisions
 

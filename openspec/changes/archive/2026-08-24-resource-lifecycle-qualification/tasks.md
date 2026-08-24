@@ -14,11 +14,11 @@
 
 - [x] 3.1 Add the short headless resource gate to the canonical CI validation script without physical input or arbitrary desktop interaction.
 - [x] 3.2 Retain resource evidence in the hosted build workflow while keeping synthetic resource results separate from physical/manual release gates.
-- [ ] 3.3 Document the command, artifact schema, threshold rationale, and functional/resource/synthetic/supervised/release qualification boundary in project documentation.
+- [x] 3.3 Document the command, artifact schema, threshold rationale, and functional/resource/synthetic/supervised/release qualification boundary in project documentation.
 - [x] 3.4 Create and validate the `resource-lifecycle-qualification` OpenSpec capability artifacts.
 
 ## 4. Verification and delivery
 
-- [ ] 4.1 Run the analyzer, headless gate, and safe extended soak repeatedly and investigate any genuine growth or flakiness.
-- [ ] 4.2 Run the complete Debug/Release build, unit, deterministic, release-tooling, OpenSpec, and canonical validation ladder.
-- [ ] 4.3 Commit meaningful checkpoints on `main`, push `origin/main`, and verify identical SHAs and a clean worktree.
+- [x] 4.1 Run the analyzer, headless gate, and safe extended soak repeatedly and investigate any genuine growth or flakiness.
+- [x] 4.2 Run the complete Debug/Release build, unit, deterministic, release-tooling, OpenSpec, and canonical validation ladder.
+- [x] 4.3 Commit meaningful checkpoints on `main`, push `origin/main`, and verify identical SHAs and a clean worktree.

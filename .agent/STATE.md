@@ -16,18 +16,19 @@ headless gate and opt-in safe extended soak.
 
 **Plan:** `.agent/plans/resource-lifecycle-hardening-2026-08-24.md`
 
-**Status:** active; Wave 0 mainline normalization, integrated baseline, source
+**Status:** implementation and validation complete; Wave 0 mainline normalization, integrated baseline, source
 ownership audit, resource model/analyzer, lifecycle profiles, artifact writer,
 headless gate, CI wiring, OpenSpec planning, and documentation are complete.
-Final Release validation, repeated extended evidence, commit/push, and archive
-remain.
+The completed OpenSpec change is archived; the final state/archive checkpoint
+must be committed and pushed before handoff.
 
 ### Current phase
 
 - Wave 0: complete.
-- Baseline revalidation: complete after integration; Debug/Release builds and
-  unit suites were green, release tooling was 177/177, canonical Debug CI
-  validation passed, and OpenSpec was 35/35.
+- Baseline and final revalidation: complete after integration; Debug/Release
+  builds were 0 warnings/0 errors, Debug/Release unit suites were 707/707,
+  release tooling was 177/177, canonical Release CI/publish validation passed,
+  and strict OpenSpec was 35/35.
 - Ownership audit: complete in
   `.agent/investigations/resource-ownership-audit-2026-08-24.md`; no concrete
   production resource leak has been reproduced or asserted.
@@ -38,8 +39,8 @@ remain.
   headless 128-cycle repeats and a 256-cycle run passed, and a run-owned
   process sample passed with flat observed counters.
 - CI/docs/OpenSpec: bounded `validate.ps1 -Ci` gate, retained workflow
-  evidence, documentation, and strict-valid change
-  `resource-lifecycle-qualification` are in the worktree.
+  evidence, documentation, and archived canonical capability
+  `resource-lifecycle-qualification` are complete.
 
 ### Mainline checkpoint
 
@@ -57,8 +58,9 @@ remain.
 - The qualified head `df89d15467ea854a685dc0417c3708e32b183497` was
   fast-forwarded onto local `main`; immediately after normalization local
   `main` and `origin/main` were identical at that SHA. All further work is
-  directly on `main`; current uncommitted campaign edits must be committed and
-  pushed before handoff.
+  directly on `main`. The last pushed implementation checkpoint is
+  `5f46fd005e1329778b8b5e07ea056d3bcc2b1739`; the final delivery SHA must be
+  resolved dynamically after the state/archive commit and push.
 
 ### Completed reconciliation
 
@@ -95,7 +97,7 @@ remain.
   identity and candidate bytes; their exact paths and hashes are in the session
   handoff. They remain qualification-only and unsigned.
 
-### Deterministic validation at the final source checkpoint
+### Historical pre-campaign validation checkpoint
 
 - Debug/Release solution builds: 0 warnings / 0 errors.
 - Debug/Release unit suites: 686 / 686.
@@ -163,8 +165,6 @@ obtained. Do not convert these gates to synthetic PASS.
 
 ### Next action
 
-Run the final Debug/Release ladder, Release resource gate and safe extended
-soak repeatedly; update task/state records, archive the completed OpenSpec
-change, commit meaningful checkpoints on `main`, push `origin/main`, and prove
-identical SHAs with a clean worktree. Keep all supervised, hardware, OS,
-signing, and human-smoke gates honestly blocked.
+Commit the final state/archive record on `main`, push `origin/main`, prove
+identical SHAs and a clean worktree, then hand off. Keep all supervised,
+hardware, OS, signing, and human-smoke gates honestly blocked.
