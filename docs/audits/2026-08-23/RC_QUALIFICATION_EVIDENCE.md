@@ -146,12 +146,18 @@ deterministic rerun aggregation. A valid first-attempt failure followed by a
 pass remains `FLAKE_UNCLASSIFIED`; a blocked first attempt followed by a pass
 remains blocked.
 
-Deterministic campaign result before final full-gate repetition:
+Final deterministic campaign gate (Release implementation checkpoint):
 
 | Gate | Result |
 | --- | --- |
 | ValidationDriver native-free self-tests | PASS — 96/96 |
 | WinEvent routing/replay focused unit tests | PASS — 13/13 |
+| Debug unit suite | PASS — 686/686 |
+| Release unit suite | PASS — 686/686 |
+| Release tooling suite | PASS — 150/150 |
+| Strict OpenSpec validation | PASS — 31/31 |
+| Canonical Release CI/publish validation | PASS — native ABI, version, privacy, recovery, publish smoke |
+| `git diff --check` | PASS |
 | ValidationDriver Release build | PASS — 0 warnings / 0 errors |
 | Physical H2 drag, split zero-delta, inline second-tab repeats | BLOCKED_SUPERVISED / BLOCKED_ENVIRONMENT — no exclusive safe desktop |
 

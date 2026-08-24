@@ -84,8 +84,11 @@ ordering, recovery fail-closed behavior, or native identity gates.
   provenance, replay, split transitions, identity matrices, and stress seeds
   `0x5EED2026`, `0x51172026`, and `20260824`.
 
-The current native-free driver corpus is 96/96 green. The focused native
-WinEvent/routing/replay tests are 13/13 green at this checkpoint.
+The final deterministic corpus is 96/96 green. Debug and Release unit suites
+are 686/686, the focused native WinEvent/routing/replay tests are 13/13,
+release-tooling is 150/150, strict OpenSpec is 31/31, and canonical Release
+validation/publish is green with the native ABI, version, privacy, recovery,
+and publish smokes included.
 
 ## WinEvent measurement decision
 
