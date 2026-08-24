@@ -98,28 +98,25 @@ invent product work outside this closure campaign.
 ## Final handoff state
 
 The normal merge checkpoint was `7ed8769`, followed by the reconciliation and
-handoff-state commit at the prior checkpoint. Independent convergence then
-found one harness defect in foreground transition admission: the lease checked
-the requested target before `SetForegroundWindow`, so safe transitions between
-registered run windows could be rejected. The fix is scoped to
-`ValidationDriver/Input.cs`, with two deterministic lease regressions. The
-prior candidate is diagnostic only; the final exact source SHA must be resolved
-dynamically from `HEAD` after this fix commit and must bind the fresh candidate
-and all qualification evidence retained under the ignored
+handoff-state commits. Independent convergence then found one harness defect in
+foreground transition admission: the lease checked the requested target before
+`SetForegroundWindow`, so safe transitions between registered run windows could
+be rejected. The fix is scoped to `ValidationDriver/Input.cs`, with two
+deterministic lease regressions. The prior candidate is diagnostic only; the
+final exact source identity now binds the fresh candidate and all qualification
+evidence retained under the ignored
 `.artifacts/mainline-release-closure-<final-head>/` directory.
 
-The prior complete deterministic matrix, strict OpenSpec validation, fresh
+The final deterministic matrix, strict OpenSpec validation, fresh
 qualification-only candidate, offline bundle verification, portable package
 verification, deterministic returned-machine round trip, and data-only report
-import were green. The final matrix must be rerun after the harness fix; the
-ValidationDriver self-test total is now 127/127. The integration branch is
-pushed and local/remote heads match. PR #12 remains open, draft, and unchanged
-at the time of this checkpoint; the final history-preserving push must be
-verified against the live PR surface.
+import are green. The ValidationDriver self-test total is 127/127. The
+integration branch and PR #12 head are pushed and verified at the same commit;
+the PR remains open and draft, with exact-head hosted `build` and
+`native-abi-evidence` checks green.
 
 No internally reproducible Critical/High product regression is known. Remaining
-internal work is the final committed-tree qualification and delivery of the
-harness fix. After that, the remaining blockers are external qualification:
+blockers are external qualification:
 supervised physical repetitions, mixed-DPI hardware, Windows 10/independent
 Windows 11 evidence, production signing, and human smoke. Do not merge to
 `main`, publish, or start another development campaign from this checkpoint.

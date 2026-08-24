@@ -17,14 +17,14 @@ gates.
 
 **Plan:** `.agent/plans/mainline-release-closure-2026-08-24.md`
 
-**Status:** internally qualified and ready for final exact-SHA artifact
-generation and delivery. Independent convergence found one ValidationDriver
-harness defect: foreground arrangement required the new target to be foreground
-before attempting the switch. The committed fix and two deterministic lease
-regressions are green; generate the fresh ignored candidate/evidence lineage
-under `.artifacts/mainline-release-closure-<final-head>/` and push the
-history-preserving lineage to the authorized PR surface. Historical candidates
-for `159d094...` and `1cc529f...` are diagnostic only and must not be reused.
+**Status:** internally qualified and delivered as an exact-SHA RC checkpoint.
+Independent convergence found one ValidationDriver harness defect: foreground
+arrangement required the new target to be foreground before attempting the
+switch. The committed fix and two deterministic lease regressions are green;
+the fresh ignored candidate/evidence lineage under
+`.artifacts/mainline-release-closure-<final-head>/` is verified and pushed with
+the history-preserving lineage to PR #12. Historical candidates for
+`159d094...` and `1cc529f...` are diagnostic only and must not be reused.
 
 ### Authoritative topology
 
@@ -73,6 +73,10 @@ for `159d094...` and `1cc529f...` are diagnostic only and must not be reused.
   and does not establish physical qualification.
 - No candidate binary, returned executable, or returned script was executed by
   the report importer; imported evidence was hash-verified as data only.
+- The final qualification-only artifact, bundle, portable package, deterministic
+  returned bundle, and data-only report import all bind the same final source
+  identity and candidate bytes; their exact paths and hashes are in the session
+  handoff. They remain qualification-only and unsigned.
 
 ### Deterministic validation at the final source checkpoint
 
@@ -101,18 +105,14 @@ for `159d094...` and `1cc529f...` are diagnostic only and must not be reused.
 - Mixed-DPI hardware, real Windows 10 x64 evidence, independent Windows 11
   evidence, approved production signing credentials, and final human smoke
   remain blocked external gates. Synthetic topology remains synthetic-only.
-- GitHub CLI is unauthenticated in this environment, so creation of the new
-  main-targeting draft PR and its pull-request CI run is blocked pending
-  `gh auth login` or `GH_TOKEN`. PR #12 remains open/draft and unchanged; its
-  last live public metadata identified head `eca8670...` targeting `main`.
-  Do not merge to `main` or publish.
+- GitHub CLI remains unauthenticated, but the existing PR #12 was updated by
+  an ordinary fast-forward push; public PR metadata confirms it is open/draft,
+  mergeable, targets `main`, and hosted `build` plus `native-abi-evidence`
+  checks passed for the pushed head. Do not merge to `main` or publish.
 
 ### Handoff action
 
-Generate the exact-candidate bundle/package verification against the final
-committed tree, then push the history-preserving lineage to the authorized PR
-surface. If authenticated GitHub access remains unavailable, record that
-infrastructure blocker. The remaining release work after exact-SHA
+The repository handoff is complete. The remaining release work after exact-SHA
 requalification is external:
 supervised physical repetitions, mixed-DPI hardware, Windows 10 and independent
 Windows 11 evidence, approved production signing, and human smoke. Do not
