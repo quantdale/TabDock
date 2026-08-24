@@ -17,13 +17,13 @@ gates.
 
 **Plan:** `.agent/plans/mainline-release-closure-2026-08-24.md`
 
-**Status:** integration, repository reconciliation, and the prior deterministic
-qualification closure are complete. A final harness hardening defect was found
-during independent convergence: foreground arrangement required the new target
-to be foreground before attempting the switch. The fix and two deterministic
-lease regressions are now in the working tree; commit them, rerun exact-SHA
-qualification, and refresh the ignored candidate/evidence lineage under
-`.artifacts/mainline-release-closure-<final-head>/`. The historical candidates
+**Status:** internally qualified and ready for final exact-SHA artifact
+generation and delivery. Independent convergence found one ValidationDriver
+harness defect: foreground arrangement required the new target to be foreground
+before attempting the switch. The committed fix and two deterministic lease
+regressions are green; generate the fresh ignored candidate/evidence lineage
+under `.artifacts/mainline-release-closure-<final-head>/` and push the
+history-preserving lineage to the authorized PR surface. Historical candidates
 for `159d094...` and `1cc529f...` are diagnostic only and must not be reused.
 
 ### Authoritative topology
@@ -64,8 +64,9 @@ for `159d094...` and `1cc529f...` are diagnostic only and must not be reused.
 - The prior fresh qualification-only candidate was bound to the then-final
   committed source SHA, semantic version 1.0.0, release manifest,
   ValidationDriver, primary run manifest, qualification bundle schema 1, and
-  portable package schema 1. It is invalidated as final evidence by the new
-  harness fix and must be regenerated after the next substantive commit.
+  portable package schema 1. It is invalidated as final evidence by the
+  foreground-transition harness fix. A new candidate must be generated from
+  the final committed tree before handoff.
 - Candidate bundle verification, portable-package verification, deterministic
   returned bundle verification, and data-only returned-report import all
   passed with zero failures. The returned evidence is synthetic-deterministic
@@ -73,7 +74,7 @@ for `159d094...` and `1cc529f...` are diagnostic only and must not be reused.
 - No candidate binary, returned executable, or returned script was executed by
   the report importer; imported evidence was hash-verified as data only.
 
-### Deterministic validation at the merge checkpoint
+### Deterministic validation at the final source checkpoint
 
 - Debug/Release solution builds: 0 warnings / 0 errors.
 - Debug/Release unit suites: 686 / 686.
@@ -82,7 +83,8 @@ for `159d094...` and `1cc529f...` are diagnostic only and must not be reused.
 - Release-tooling regression suite: 177 / 177.
 - Canonical `scripts/validate.ps1 -Configuration Release -Ci -Publish`: PASS,
   including audited restore, native ABI, diagnostics/recovery/privacy,
-  OpenSpec 37/37 before archival, single-file publish, and version smoke.
+  strict OpenSpec 34/34, single-file publish, and version smoke carrying the
+  committed foreground-transition fix identity.
 - No integration conflict or evidence-backed Critical/High regression was
   found. No guarded physical `SendInput` was issued.
 
@@ -107,11 +109,11 @@ for `159d094...` and `1cc529f...` are diagnostic only and must not be reused.
 
 ### Handoff action
 
-Complete the harness-fix commit, rerun the canonical gates and exact-candidate
-bundle/package verification against that committed tree, then push the
-history-preserving lineage to the authorized PR surface. If authenticated
-GitHub access remains unavailable, record that infrastructure blocker. The
-remaining release work after exact-SHA requalification is external:
+Generate the exact-candidate bundle/package verification against the final
+committed tree, then push the history-preserving lineage to the authorized PR
+surface. If authenticated GitHub access remains unavailable, record that
+infrastructure blocker. The remaining release work after exact-SHA
+requalification is external:
 supervised physical repetitions, mixed-DPI hardware, Windows 10 and independent
 Windows 11 evidence, approved production signing, and human smoke. Do not
 convert those missing prerequisites to PASS and do not merge or publish.

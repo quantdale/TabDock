@@ -1,6 +1,6 @@
 # Plan: Mainline Release-Candidate Closure
 
-**Status:** active — final harness hardening and exact-SHA requalification
+**Status:** internally complete — exact-SHA artifact generation and delivery
 **Owner/session:** Codex
 **Updated:** 2026-08-24
 **Integration branch:** `codex/mainline-release-closure-20260824`
