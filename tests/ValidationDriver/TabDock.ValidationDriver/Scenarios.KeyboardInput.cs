@@ -46,15 +46,16 @@ internal static partial class Scenarios
     // 18. chromeinput (Test B): Chromium input recovery after activation fix.
     // -------------------------------------------------------------------------
     /// <summary>
-    /// Skips with the documented SKIP_BROWSER_NOT_INSTALLED status when the
-    /// given browser executable is absent, so standalone browser scenarios
-    /// degrade honestly instead of dying on Process.Start Win32Exception.
+    /// Uses the canonical SKIP_CAPABILITY outcome when the given browser
+    /// executable is absent, so standalone browser scenarios degrade honestly
+    /// instead of dying on Process.Start Win32Exception. Capability preflight
+    /// normally handles this before setup; this guard remains for direct calls.
     /// </summary>
     private static bool RequireBrowserFile(Ctx ctx, string exe, string label)
     {
         if (!string.IsNullOrEmpty(exe) && File.Exists(exe))
             return true;
-        ctx.Skip($"SKIP_BROWSER_NOT_INSTALLED: {label} is not installed; rerun on a machine where it is available.");
+        ctx.SkipCapability($"{label} is not installed; rerun on a machine where it is available.");
         return false;
     }
 

@@ -402,8 +402,8 @@ internal static partial class Scenarios
 
         if (available.Length == 0)
         {
-            GuardedProc.Log($"SKIP_BROWSER_NOT_INSTALLED browser-split-persistent-render scope={requestedScope ?? "all"}.");
-            ctx.Skip($"SKIP_BROWSER_NOT_INSTALLED: no supported isolated Chromium browser is installed for scope '{requestedScope ?? "all"}'.");
+            GuardedProc.Log($"SKIP_CAPABILITY browser-split-persistent-render scope={requestedScope ?? "all"}.");
+            ctx.SkipCapability($"no supported isolated Chromium browser is installed for scope '{requestedScope ?? "all"}'.");
             return;
         }
 

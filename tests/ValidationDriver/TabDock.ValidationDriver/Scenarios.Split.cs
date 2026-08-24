@@ -1413,7 +1413,7 @@ internal static partial class Scenarios
 
         if (!keyboardReady)
         {
-            ctx.Block("Diagnostic snapshot: verified container remained non-foreground after bounded identity-safe activation attempts.");
+            ctx.BlockEnvironment("Diagnostic snapshot: verified container remained non-foreground after bounded identity-safe activation attempts.");
             return;
         }
 

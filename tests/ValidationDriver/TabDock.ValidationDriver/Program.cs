@@ -54,6 +54,13 @@ internal static class Program
                     opt.Cycles = n;
                     i++;
                     break;
+                case "--reruns":
+                case "--rerun":
+                    if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out int reruns) || reruns < 0 || reruns > 5)
+                        return Usage("--reruns requires an integer from 0 through 5 (additional investigation attempts).");
+                    opt.Reruns = reruns;
+                    i++;
+                    break;
                 case "--guest":
                     if (i + 1 >= args.Length)
                         return Usage("--guest requires a value (pig|wt|chrome-nogpu|chrome-gpu|chrome-normal|edge-normal|firefox-normal|codex|chatgptclassic).");
@@ -124,6 +131,7 @@ internal static class Program
         if (selfTestSuite != null)
         {
             TestRunProvenance.BeginRun();
+            QualificationResultWriter.BeginRun();
             GuardedProc.Log($"Deterministic qualification runId={TestRunProvenance.RunId}.");
             return DeterministicSelfTests.Run(selfTestSuite);
         }
@@ -189,6 +197,8 @@ internal static class Program
         Console.WriteLine($"[PID {Environment.ProcessId}] TabDock real-input validation driver ({Scenarios.SelectedConfiguration}, RID {Scenarios.SelectedRid}).");
         Console.WriteLine($"Artifacts: TabDock={Scenarios.TabDockExe}; GuineaPig={Scenarios.PigExe}");
         Console.WriteLine($"Scenarios: {string.Join(", ", scenarios)}");
+        if (opt.Reruns > 0)
+            Console.WriteLine($"Investigation reruns: {opt.Reruns} additional attempt(s); first-attempt outcomes remain authoritative.");
         Console.WriteLine();
         Console.WriteLine("This run will:");
         Console.WriteLine("  - spawn a fresh TabDock instance (aborts if one is already running) plus guinea-pig windows,");
@@ -218,22 +228,26 @@ internal static class Program
 
         Input.SaveCursor();
         TestRunProvenance.BeginRun();
+        QualificationResultWriter.BeginRun();
         GuardedProc.Log($"Validation runId={TestRunProvenance.RunId} marker={TestRunProvenance.MarkerName}.");
-        bool allPassed = true;
         int ran = 0;
         try
         {
             foreach (string s in scenarios)
             {
-                Util.ThrowIfCancelled();
-                allPassed &= Scenarios.RunScenario(s, opt);
-                ran++;
+                for (int attempt = 1; attempt <= opt.Reruns + 1; attempt++)
+                {
+                    Util.ThrowIfCancelled();
+                    Scenarios.RunScenario(s, opt, attempt);
+                    ran++;
+                    if (attempt <= opt.Reruns)
+                        GuardedProc.Log($"=== INVESTIGATION RERUN scenario={s} attempt={attempt + 1}/{opt.Reruns + 1} ===");
+                }
             }
         }
         catch (OperationCanceledException)
         {
             GuardedProc.Log("Run aborted (overall 10-minute budget exceeded or Ctrl+C).");
-            allPassed = false;
         }
         finally
         {
@@ -241,10 +255,11 @@ internal static class Program
             Input.RestoreCursor();
         }
 
-        GuardedProc.Log(allPassed
+        ScenarioOutcome runOutcome = QualificationResultWriter.WriteRunManifest();
+        GuardedProc.Log(runOutcome.IsReleasePass
             ? $"ALL {ran} SCENARIO(S) PASSED."
-            : "ONE OR MORE SCENARIOS FAILED.");
-        return allPassed ? 0 : 5;
+            : $"RUN OUTCOME {runOutcome.Code}: one or more scenarios were not release-pass.");
+        return ScenarioOutcomeContract.ExitCode(runOutcome.Kind);
     }
 
     private static int RunAllShards(Options opt)
@@ -270,7 +285,7 @@ internal static class Program
             }
         }
 
-        bool allPassed = true;
+        ScenarioOutcome aggregateOutcome = ScenarioOutcome.Pass;
         int completed = 0;
         try
         {
@@ -283,15 +298,20 @@ internal static class Program
                 {
                     GuardedProc.Log($"SHARD {shard}: timed out at the bounded 11-minute parent limit; terminating child.");
                     try { child.Kill(entireProcessTree: true); } catch { }
-                    allPassed = false;
+                    aggregateOutcome = new ScenarioOutcome(
+                        ScenarioOutcomeKind.FailHarness,
+                        $"shard {shard} exceeded the bounded parent timeout");
                     break;
                 }
 
                 completed++;
-                bool passed = child.ExitCode == 0;
-                GuardedProc.Log($"SHARD {shard}: {(passed ? "PASS" : $"FAIL (exit {child.ExitCode})")}");
-                allPassed &= passed;
-                if (!passed)
+                ScenarioOutcome shardOutcome = new(
+                    ScenarioOutcomeContract.FromExitCode(child.ExitCode),
+                    child.ExitCode == 0 ? null : $"child exit code {child.ExitCode}");
+                aggregateOutcome = ScenarioOutcomeContract.Aggregate(
+                    new[] { aggregateOutcome, shardOutcome });
+                GuardedProc.Log($"SHARD {shard}: outcome={shardOutcome.Code} exit={child.ExitCode}");
+                if (!shardOutcome.IsReleasePass)
                     break;
             }
         }
@@ -300,10 +320,10 @@ internal static class Program
             GuardedProc.CleanupTrackedProcesses();
         }
 
-        GuardedProc.Log(allPassed
+        GuardedProc.Log(aggregateOutcome.IsReleasePass
             ? $"ALL {completed} SHARD(S) PASSED."
-            : "ONE OR MORE SHARDS FAILED.");
-        return allPassed ? 0 : 5;
+            : $"RUN OUTCOME {aggregateOutcome.Code}: one or more shards were not release-pass.");
+        return ScenarioOutcomeContract.ExitCode(aggregateOutcome.Kind);
     }
 
     private static ProcessStartInfo CreateShardProcessInfo(Options opt, string shard)
@@ -346,6 +366,11 @@ internal static class Program
             psi.ArgumentList.Add("--cycles");
             psi.ArgumentList.Add(opt.Cycles.Value.ToString());
         }
+        if (opt.Reruns > 0)
+        {
+            psi.ArgumentList.Add("--reruns");
+            psi.ArgumentList.Add(opt.Reruns.ToString());
+        }
         return psi;
     }
 
@@ -371,6 +396,7 @@ internal static class Program
         Console.WriteLine("  --yes          skip the interactive confirmation (supervised runs)");
         Console.WriteLine("  --selftest NAME run native-free split/identity contracts (split|identity|all)");
         Console.WriteLine("  --cycles N     cycle count for maximize-repro (default 3) and repeat-cycles (default 5)");
+        Console.WriteLine("  --reruns N     run N additional bounded investigation attempts; never best-of-N (default 0)");
         Console.WriteLine("  --guest KIND   guest app for scenarios that need one: pig (default), wt, chrome-nogpu, chrome-gpu, chrome-normal, edge-normal, firefox-normal, codex, chatgptclassic");
         Console.WriteLine("  --configuration Debug|Release   select build output (default Debug)");
         Console.WriteLine("  --rid auto|none|win-x64         select RID-specific output (default auto)");

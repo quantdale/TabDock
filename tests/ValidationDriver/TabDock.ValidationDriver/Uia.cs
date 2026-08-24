@@ -34,26 +34,25 @@ internal static class Uia
     /// <summary>Waits for a top-level window (desktop child) with the given process id and exact title.</summary>
     public static AutomationElement? WaitForWindowElement(uint pid, string titleExact, int timeoutMs)
     {
-        var sw = Stopwatch.StartNew();
-        while (sw.ElapsedMilliseconds < timeoutMs)
+        AutomationElement? found = null;
+        Util.WaitUntilObserved(() =>
         {
-            Util.ThrowIfCancelled();
             try
             {
                 var cond = new AndCondition(
                     new PropertyCondition(AutomationElement.ProcessIdProperty, unchecked((int)pid)),
                     new PropertyCondition(AutomationElement.NameProperty, titleExact));
-                AutomationElement? el = AutomationElement.RootElement.FindFirst(TreeScope.Children, cond);
-                if (el != null)
-                    return el;
+                found = AutomationElement.RootElement.FindFirst(TreeScope.Children, cond);
             }
             catch
             {
-                // Transient UIA failures while windows churn; retry until timeout.
+                // Transient UIA failures while windows churn; the bounded
+                // wait records the last state and retries at its poll cadence.
+                found = null;
             }
-            Thread.Sleep(200);
-        }
-        return null;
+            return found != null;
+        }, timeoutMs, 200, () => found == null ? "window-not-found" : "window-found");
+        return found;
     }
 
     /// <summary>
@@ -246,10 +245,9 @@ internal static class Uia
     /// </summary>
     public static AutomationElement? FindMenuItemOnDesktop(uint pid, string name, int timeoutMs)
     {
-        var sw = Stopwatch.StartNew();
-        while (sw.ElapsedMilliseconds < timeoutMs)
+        AutomationElement? found = null;
+        Util.WaitUntilObserved(() =>
         {
-            Util.ThrowIfCancelled();
             try
             {
                 // Enumerate via Win32 and bridge with FromHandle: the managed UIA
@@ -258,21 +256,22 @@ internal static class Uia
                 foreach (IntPtr h in Discover.GetTopLevelWindowsByPid(pid, visibleOnly: true))
                 {
                     AutomationElement? top = FromHwnd(h);
-                    AutomationElement? mi = top?.FindFirst(
+                    found = top?.FindFirst(
                         TreeScope.Subtree,
                         new AndCondition(
                             new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.MenuItem),
                             new PropertyCondition(AutomationElement.NameProperty, name)));
-                    if (mi != null)
-                        return mi;
+                    if (found != null)
+                        return true;
                 }
             }
             catch
             {
+                found = null;
             }
-            Thread.Sleep(150);
-        }
-        return null;
+            return false;
+        }, timeoutMs, 150, () => found == null ? "menu-item-not-found" : "menu-item-found");
+        return found;
     }
 
     /// <summary>
@@ -285,30 +284,30 @@ internal static class Uia
         string automationId,
         int timeoutMs)
     {
-        var sw = Stopwatch.StartNew();
-        while (sw.ElapsedMilliseconds < timeoutMs)
+        AutomationElement? found = null;
+        Util.WaitUntilObserved(() =>
         {
-            Util.ThrowIfCancelled();
             try
             {
                 foreach (IntPtr h in Discover.GetTopLevelWindowsByPid(pid, visibleOnly: true))
                 {
                     AutomationElement? top = FromHwnd(h);
-                    AutomationElement? mi = top?.FindFirst(
+                    found = top?.FindFirst(
                         TreeScope.Subtree,
                         new AndCondition(
                             new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.MenuItem),
                             new PropertyCondition(AutomationElement.AutomationIdProperty, automationId)));
-                    if (mi != null)
-                        return mi;
+                    if (found != null)
+                        return true;
                 }
             }
             catch
             {
+                found = null;
             }
-            Thread.Sleep(150);
-        }
-        return null;
+            return false;
+        }, timeoutMs, 150, () => found == null ? "menu-item-not-found" : "menu-item-found");
+        return found;
     }
 
     /// <summary>

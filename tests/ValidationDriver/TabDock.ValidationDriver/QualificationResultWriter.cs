@@ -19,6 +19,30 @@ namespace TabDock.ValidationDriver;
 internal static class QualificationResultWriter
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly object ManifestSync = new();
+    private static readonly List<ScenarioManifestEntry> ManifestEntries = new();
+    private static DateTimeOffset _runStartedUtc;
+
+    private sealed record ScenarioManifestEntry(
+        string Scenario,
+        int Attempt,
+        string Result,
+        string? Reason,
+        object? Capabilities,
+        string JsonArtifact,
+        string JUnitArtifact,
+        string TimelineArtifact,
+        DateTimeOffset StartedUtc,
+        DateTimeOffset EndedUtc);
+
+    public static void BeginRun()
+    {
+        lock (ManifestSync)
+        {
+            ManifestEntries.Clear();
+            _runStartedUtc = DateTimeOffset.UtcNow;
+        }
+    }
 
     public static void WriteDeterministic(string suite, IReadOnlyList<AssertionEvidence> assertions)
     {
@@ -35,7 +59,9 @@ internal static class QualificationResultWriter
             candidateSha = CandidateSha(),
             applicationVersion = ApplicationVersion(),
             environment = EnvironmentFingerprint(),
-            result = failed == 0 ? "PASS" : "FAIL",
+            result = ScenarioOutcomeContract.Code(failed == 0
+                ? ScenarioOutcomeKind.Pass
+                : ScenarioOutcomeKind.FailHarness),
             failureReason = failed == 0 ? null : $"{failed} deterministic contract assertion(s) failed",
             expectedState = "all selected native-free split and provenance contracts pass",
             observedState = $"passed={assertions.Count - failed} failed={failed} total={assertions.Count}",
@@ -55,7 +81,21 @@ internal static class QualificationResultWriter
         string stem = SafeFileName($"deterministic-{suite}");
         File.WriteAllText(Path.Combine(root, $"{stem}.json"), JsonSerializer.Serialize(result, JsonOptions), Encoding.UTF8);
         WriteDeterministicJUnit(root, stem, suite, assertions, failed);
-        GuardedProc.Log($"RESULT_JSON scenario=deterministic-{suite} status={(failed == 0 ? "PASS" : "FAIL")} artifact=<validation-artifact>/{stem}.json");
+        ScenarioOutcome outcome = new(
+            failed == 0 ? ScenarioOutcomeKind.Pass : ScenarioOutcomeKind.FailHarness,
+            failed == 0 ? null : $"{failed} deterministic contract assertion(s) failed");
+        RegisterManifestEntry(new ScenarioManifestEntry(
+            $"deterministic-{suite}",
+            1,
+            outcome.Code,
+            outcome.Reason,
+            null,
+            $"<validation-artifact>/{stem}.json",
+            $"<validation-artifact>/{stem}.junit.xml",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow));
+        GuardedProc.Log($"RESULT_JSON scenario=deterministic-{suite} status={outcome.Code} artifact=<validation-artifact>/{stem}.json");
     }
 
     public static void WriteScenario(Ctx ctx)
@@ -68,17 +108,38 @@ internal static class QualificationResultWriter
         bool pairPresented = ctx.LiveSplitPairPresented ?? split.Presented;
         string? activeGuest = ctx.LiveActiveGuest ?? split.ActiveGuest;
 
+        string stem = SafeFileName(ctx.Name);
+        if (ctx.Attempt > 1)
+            stem += $"-attempt-{ctx.Attempt}";
+        string timelineName = $"{stem}.timeline.json";
+        string timelinePath = Path.Combine(root, timelineName);
+        try
+        {
+            ctx.Timeline.Record("scenario-result", data: new Dictionary<string, string>
+            {
+                ["result"] = ctx.Outcome.Code,
+            });
+            ctx.Timeline.Write(timelinePath);
+        }
+        catch (Exception ex)
+        {
+            GuardedProc.Log($"  Timeline artifact unavailable: {ex.GetType().Name}.");
+        }
+
         var result = new
         {
             runId = TestRunProvenance.RunId,
             scenario = ctx.Name,
-            iteration = 1,
+            iteration = ctx.Attempt,
             startedUtc = ctx.StartedUtc,
             endedUtc = ctx.FinishedUtc,
             candidateSha = CandidateSha(),
             applicationVersion = ApplicationVersion(),
             environment = EnvironmentFingerprint(),
-            result = ctx.Status.ToString().ToUpperInvariant(),
+            capabilities = CapabilityEvidence(ctx.Capabilities),
+            desktopQualification = DesktopEvidence(ctx.DesktopLease?.Snapshot),
+            result = ctx.Outcome.Code,
+            outcomeReason = ctx.Outcome.Reason,
             failureReason = ctx.FailureReasons.Count == 0 ? null : string.Join("; ", ctx.FailureReasons),
             expectedState = ctx.ExpectedState,
             observedState = ctx.ObservedState,
@@ -91,16 +152,144 @@ internal static class QualificationResultWriter
             paneRectangles = ctx.LivePaneRectangles ?? PaneGeometry(ctx, split),
             clientRenderingEvidence = ctx.LiveClientRenderingEvidence ?? GuestGeometry(ctx),
             testIdentities = TestRunProvenance.ScopeSummary(),
+            ownership = TestRunProvenance.OwnershipSummary(),
             assertions = ctx.Assertions,
             diagnosticLogOffset = ctx.LogOffset,
-            traceArtifacts = new[] { $"<validation-artifact>/{Path.GetFileName(TestRunProvenance.ArtifactDirectory)}" },
+            traceArtifacts = new[]
+            {
+                $"<validation-artifact>/{Path.GetFileName(TestRunProvenance.ArtifactDirectory)}",
+                $"<validation-artifact>/{timelineName}",
+            },
         };
 
-        string stem = SafeFileName(ctx.Name);
         string jsonPath = Path.Combine(root, $"{stem}.json");
         File.WriteAllText(jsonPath, JsonSerializer.Serialize(result, JsonOptions), Encoding.UTF8);
         WriteJUnit(root, stem, ctx);
-        GuardedProc.Log($"RESULT_JSON scenario={ctx.Name} status={ctx.Status.ToString().ToUpperInvariant()} artifact=<validation-artifact>/{Path.GetFileName(jsonPath)}");
+        RegisterManifestEntry(new ScenarioManifestEntry(
+            ctx.Name,
+            ctx.Attempt,
+            ctx.Outcome.Code,
+            ctx.Outcome.Reason,
+            CapabilityEvidence(ctx.Capabilities),
+            $"<validation-artifact>/{stem}.json",
+            $"<validation-artifact>/{stem}.junit.xml",
+            $"<validation-artifact>/{timelineName}",
+            ctx.StartedUtc,
+            ctx.FinishedUtc.Value));
+        GuardedProc.Log($"RESULT_JSON scenario={ctx.Name} status={ctx.Outcome.Code} artifact=<validation-artifact>/{Path.GetFileName(jsonPath)}");
+    }
+
+    /// <summary>Writes the single root manifest and returns its canonical run outcome.</summary>
+    public static ScenarioOutcome WriteRunManifest()
+    {
+        string root = ResultRoot();
+        Directory.CreateDirectory(root);
+        ScenarioManifestEntry[] entries;
+        DateTimeOffset started;
+        lock (ManifestSync)
+        {
+            entries = ManifestEntries
+                .OrderBy(entry => entry.Scenario, StringComparer.Ordinal)
+                .ThenBy(entry => entry.StartedUtc)
+                .ToArray();
+            started = _runStartedUtc == default ? DateTimeOffset.UtcNow : _runStartedUtc;
+        }
+
+        var scenarioAggregates = entries
+            .GroupBy(entry => entry.Scenario, StringComparer.Ordinal)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                ScenarioAttempt[] attempts = group
+                    .OrderBy(entry => entry.Attempt)
+                    .Select(entry => new ScenarioAttempt(
+                        entry.Scenario,
+                        entry.Attempt,
+                        new ScenarioOutcome(ParseOutcome(entry.Result), entry.Reason)))
+                    .ToArray();
+                ScenarioOutcome final = new ScenarioAggregate(group.Key, attempts).FinalOutcome;
+                return new
+                {
+                    scenario = group.Key,
+                    first = attempts[0].Outcome.Code,
+                    final = final.Code,
+                    finalReason = final.Reason,
+                    attempts = attempts.Select(attempt => new
+                    {
+                        attempt = attempt.Attempt,
+                        result = attempt.Outcome.Code,
+                        reason = attempt.Outcome.Reason,
+                    }).ToArray(),
+                };
+            })
+            .ToArray();
+        ScenarioOutcome[] finalOutcomes = scenarioAggregates
+            .Select(aggregate => new ScenarioOutcome(ParseOutcome(aggregate.final), aggregate.finalReason))
+            .ToArray();
+        ScenarioOutcome outcome = finalOutcomes.Length == 0
+            ? new ScenarioOutcome(ScenarioOutcomeKind.FailHarness, "no scenario result was recorded")
+            : ScenarioOutcomeContract.Aggregate(finalOutcomes);
+
+        var counts = Enum.GetValues<ScenarioOutcomeKind>()
+            .ToDictionary(
+                kind => ScenarioOutcomeContract.Code(kind),
+                kind => finalOutcomes.Count(final => final.Kind == kind),
+                StringComparer.Ordinal);
+        var attemptCounts = Enum.GetValues<ScenarioOutcomeKind>()
+            .ToDictionary(
+                kind => ScenarioOutcomeContract.Code(kind),
+                kind => entries.Count(entry => string.Equals(entry.Result, ScenarioOutcomeContract.Code(kind), StringComparison.Ordinal)),
+                StringComparer.Ordinal);
+        var manifest = new
+        {
+            schemaVersion = 1,
+            runId = TestRunProvenance.RunId,
+            candidateSha = CandidateSha(),
+            branch = GitBranch(),
+            applicationVersion = ApplicationVersion(),
+            startedUtc = started,
+            endedUtc = DateTimeOffset.UtcNow,
+            environment = EnvironmentFingerprint(),
+            outcome = outcome.Code,
+            outcomeReason = outcome.Reason,
+            aggregateCounts = counts,
+            attemptCounts,
+            capabilityMatrix = entries
+                .Where(entry => entry.Capabilities != null)
+                .OrderBy(entry => entry.Scenario, StringComparer.Ordinal)
+                .ThenBy(entry => entry.Attempt)
+                .Select(entry => new
+                {
+                    scenario = entry.Scenario,
+                    attempt = entry.Attempt,
+                    capabilities = entry.Capabilities,
+                })
+                .ToArray(),
+            executableSha256 = new
+            {
+                candidate = Sha256File(Scenarios.TabDockExe),
+                test = Sha256File(System.Reflection.Assembly.GetExecutingAssembly().Location),
+            },
+            scenarios = entries.Select(entry => new
+            {
+                scenario = entry.Scenario,
+                attempt = entry.Attempt,
+                result = entry.Result,
+                reason = entry.Reason,
+                capabilities = entry.Capabilities,
+                jsonArtifact = entry.JsonArtifact,
+                junitArtifact = entry.JUnitArtifact,
+                timelineArtifact = entry.TimelineArtifact,
+                startedUtc = entry.StartedUtc,
+                endedUtc = entry.EndedUtc,
+            }).ToArray(),
+            scenarioAggregates,
+            ownership = TestRunProvenance.OwnershipSummary(),
+        };
+        string path = Path.Combine(root, "run-manifest.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(manifest, JsonOptions), Encoding.UTF8);
+        GuardedProc.Log($"RUN_MANIFEST result={outcome.Code} artifact=<validation-artifact>/run-manifest.json");
+        return outcome;
     }
 
     public static void CaptureLiveEvidence(Ctx ctx)
@@ -243,6 +432,76 @@ internal static class QualificationResultWriter
             },
         };
 
+    private static object? DesktopEvidence(DesktopQualificationSnapshot? snapshot)
+    {
+        if (snapshot == null)
+            return null;
+        return new
+        {
+            foreground = WindowEvidence(snapshot.Foreground),
+            visibleTestWindows = snapshot.VisibleTestWindows.Select(WindowEvidence).ToArray(),
+            monitors = snapshot.Monitors.Select(monitor => new
+            {
+                left = monitor.Left,
+                top = monitor.Top,
+                right = monitor.Right,
+                bottom = monitor.Bottom,
+                dpi = monitor.Dpi,
+            }).ToArray(),
+            virtualScreen = new
+            {
+                left = snapshot.VirtualLeft,
+                top = snapshot.VirtualTop,
+                width = snapshot.VirtualWidth,
+                height = snapshot.VirtualHeight,
+            },
+            interactiveSessionAvailable = snapshot.InteractiveSessionAvailable,
+            workstationLockedKnown = snapshot.WorkstationLockedKnown,
+            workstationLocked = snapshot.WorkstationLocked,
+            inputDesktop = snapshot.InputDesktop,
+            tabDockCandidateIdentity = snapshot.TabDockCandidateIdentity,
+            testRunnerIdentity = snapshot.TestRunnerIdentity,
+        };
+    }
+
+    private static object? CapabilityEvidence(ScenarioCapabilitySnapshot? snapshot)
+    {
+        if (snapshot == null)
+            return null;
+        return new
+        {
+            chromeAvailable = snapshot.ChromeAvailable,
+            edgeAvailable = snapshot.EdgeAvailable,
+            braveAvailable = snapshot.BraveAvailable,
+            firefoxAvailable = snapshot.FirefoxAvailable,
+            windowsTerminalAvailable = snapshot.WindowsTerminalAvailable,
+            notepadAvailable = snapshot.NotepadAvailable,
+            notepadBrokerBehaviorDetectable = snapshot.NotepadBrokerBehaviorDetectable,
+            monitorCount = snapshot.MonitorCount,
+            multiMonitorAvailable = snapshot.MultiMonitorAvailable,
+            mixedDpiAvailable = snapshot.MixedDpiAvailable,
+            nonDefaultDpiAvailable = snapshot.NonDefaultDpiAvailable,
+            negativeVirtualCoordinatesAvailable = snapshot.NegativeVirtualCoordinatesAvailable,
+            interactiveSessionAvailable = snapshot.InteractiveSessionAvailable,
+            workstationLockedKnown = snapshot.WorkstationLockedKnown,
+            workstationLocked = snapshot.WorkstationLocked,
+            sendInputAvailable = snapshot.SendInputAvailable,
+            candidateSigningConfigured = snapshot.CandidateSigningConfigured,
+            stageBAvailable = snapshot.StageBAvailable,
+        };
+    }
+
+    private static object WindowEvidence(DesktopWindowObservation observation)
+        => new
+        {
+            hwnd = observation.HwndCode,
+            identity = observation.IdentityKey,
+            ownership = observation.Ownership.ToString().ToUpperInvariant(),
+            role = observation.Role,
+            visible = observation.Visible,
+            identityAvailable = observation.IdentityAvailable,
+        };
+
     private static object[] VisibleGuests(Ctx ctx)
         => ctx.Guests.Select(g => new
         {
@@ -281,8 +540,7 @@ internal static class QualificationResultWriter
         string path = Path.Combine(root, $"{stem}.junit.xml");
         var settings = new XmlWriterSettings { Indent = true, Encoding = new UTF8Encoding(false) };
         using XmlWriter writer = XmlWriter.Create(path, settings);
-        int failures = ctx.Status == QualificationStatus.Fail ? 1 : 0;
-        int skipped = ctx.Status is QualificationStatus.Skip or QualificationStatus.Blocked ? 1 : 0;
+        (int failures, int skipped) = ScenarioOutcomeContract.JUnitCounts(ctx.Outcome.Kind);
         writer.WriteStartElement("testsuite");
         writer.WriteAttributeString("name", "TabDock.SplitQualification");
         writer.WriteAttributeString("tests", "1");
@@ -291,7 +549,7 @@ internal static class QualificationResultWriter
         writer.WriteStartElement("testcase");
         writer.WriteAttributeString("classname", "TabDock.ValidationDriver");
         writer.WriteAttributeString("name", ctx.Name);
-        if (ctx.Status == QualificationStatus.Fail)
+        if (failures != 0)
         {
             writer.WriteStartElement("failure");
             writer.WriteAttributeString("message", string.Join("; ", ctx.FailureReasons));
@@ -367,6 +625,65 @@ internal static class QualificationResultWriter
         catch
         {
             return "unknown";
+        }
+    }
+
+    private static void RegisterManifestEntry(ScenarioManifestEntry entry)
+    {
+        lock (ManifestSync)
+            ManifestEntries.Add(entry);
+    }
+
+    private static ScenarioOutcomeKind ParseOutcome(string value)
+    {
+        foreach (ScenarioOutcomeKind kind in Enum.GetValues<ScenarioOutcomeKind>())
+        {
+            if (string.Equals(ScenarioOutcomeContract.Code(kind), value, StringComparison.Ordinal))
+                return kind;
+        }
+        return ScenarioOutcomeKind.FailHarness;
+    }
+
+    private static string GitBranch()
+    {
+        try
+        {
+            string? root = FindRepoRoot();
+            if (root == null)
+                return "unknown";
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "git",
+                WorkingDirectory = root,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                ArgumentList = { "branch", "--show-current" },
+            });
+            if (process == null)
+                return "unknown";
+            string value = process.StandardOutput.ReadToEnd().Trim();
+            process.WaitForExit(2000);
+            return string.IsNullOrWhiteSpace(value) ? "detached" : value;
+        }
+        catch
+        {
+            return "unknown";
+        }
+    }
+
+    private static string Sha256File(string? path)
+    {
+        try
+        {
+            return !string.IsNullOrWhiteSpace(path) && File.Exists(path)
+                ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)))
+                : "unavailable";
+        }
+        catch
+        {
+            return "unavailable";
         }
     }
 

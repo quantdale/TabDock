@@ -15,4 +15,10 @@
     <ProjectReference Include="..\..\TabDock.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\ValidationDriver\fixtures\native-replay\*.json"
+          Link="fixtures\native-replay\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

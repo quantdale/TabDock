@@ -16,7 +16,7 @@ internal static partial class Scenarios
     {
         if (!IsExecutableAvailable(ChromeExe))
         {
-            ctx.Skip("SKIP_BROWSER_NOT_INSTALLED: three-app-torture requires Google Chrome for its browser leg.");
+            ctx.SkipCapability("three-app-torture requires Google Chrome for its browser leg.");
             return;
         }
         GuestInfo chrome = SpawnGuest(ctx, "chrome-normal");

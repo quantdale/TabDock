@@ -10,6 +10,16 @@ using System.Windows.Automation;
 
 namespace TabDock.ValidationDriver;
 
+/// <summary>Explicit ownership categories used by guarded input and cleanup.</summary>
+internal enum RunOwnershipKind
+{
+    OwnedProcess,
+    OwnedWindow,
+    AdoptedExternalWindow,
+    Foreign,
+    StaleRecycled,
+}
+
 /// <summary>
 /// Provenance for one supervised validation-driver invocation. The registry is
 /// deliberately stricter than a PID allow-list: a process is identified by its
@@ -22,6 +32,7 @@ internal static class TestRunProvenance
     {
         public required ProcessIdentity Identity { get; init; }
         public required string Role { get; init; }
+        public RunOwnershipKind Ownership { get; init; } = RunOwnershipKind.OwnedProcess;
         public uint LaunchRootPid { get; init; }
         public IReadOnlyList<uint> Ancestry { get; init; } = Array.Empty<uint>();
     }
@@ -30,6 +41,7 @@ internal static class TestRunProvenance
     {
         public required WindowIdentity Identity { get; init; }
         public required string Role { get; init; }
+        public RunOwnershipKind Ownership { get; init; } = RunOwnershipKind.OwnedWindow;
 
         /// <summary>
         /// True for a pre-existing external window (e.g. Windows 11 Notepad's
@@ -118,6 +130,7 @@ internal static class TestRunProvenance
             {
                 Identity = identity,
                 Role = "ValidationDriver",
+                Ownership = RunOwnershipKind.OwnedProcess,
                 LaunchRootPid = pid,
                 Ancestry = GetProcessAncestry(pid),
             };
@@ -203,6 +216,7 @@ internal static class TestRunProvenance
             {
                 Identity = identity,
                 Role = string.IsNullOrWhiteSpace(role) ? "Unknown" : role,
+                Ownership = RunOwnershipKind.OwnedProcess,
                 LaunchRootPid = launchRootPid,
                 Ancestry = ancestry,
             };
@@ -238,6 +252,7 @@ internal static class TestRunProvenance
             {
                 Identity = identity,
                 Role = string.IsNullOrWhiteSpace(role) ? ProcessRole(identity.ProcessId) : role,
+                Ownership = RunOwnershipKind.OwnedWindow,
             };
         }
         return true;
@@ -269,6 +284,7 @@ internal static class TestRunProvenance
             {
                 Identity = identity,
                 Role = string.IsNullOrWhiteSpace(role) ? "ExternalWindow" : role,
+                Ownership = RunOwnershipKind.AdoptedExternalWindow,
                 AdoptedExternal = true,
             };
         }
@@ -369,9 +385,64 @@ internal static class TestRunProvenance
             {
                 Identity = current,
                 Role = record.Role + ".DynamicSurface",
+                Ownership = RunOwnershipKind.OwnedWindow,
             };
         }
         return true;
+    }
+
+    /// <summary>
+    /// Classifies an observed identity without making it an input target. A
+    /// known HWND whose stable tuple changed is explicitly stale/recycled.
+    /// </summary>
+    public static RunOwnershipKind GetOwnership(WindowIdentity current)
+    {
+        lock (Sync)
+        {
+            if (Windows.TryGetValue(current.Hwnd, out WindowRecord? window))
+            {
+                if (!SameStableIdentity(window.Identity, current))
+                    return RunOwnershipKind.StaleRecycled;
+                return window.Ownership;
+            }
+
+            if (Processes.TryGetValue(current.ProcessId, out ProcessRecord? process)
+                && ProvenanceContract.ProcessIdentityMatches(
+                    process.Identity,
+                    new ProcessIdentity(current.ProcessId, current.ProcessStartTimeUtcTicks, current.ExePath),
+                    PathsEqual))
+                return process.Ownership;
+        }
+
+        return RunOwnershipKind.Foreign;
+    }
+
+    /// <summary>Returns true only for non-driver processes cleanup may terminate.</summary>
+    public static bool IsCleanupOwnedProcess(uint processId)
+    {
+        lock (Sync)
+            return Processes.ContainsKey(processId) && processId != NativeMethods.CurrentProcessId;
+    }
+
+    /// <summary>Returns a privacy-safe ownership view for evidence manifests.</summary>
+    public static IReadOnlyList<object> OwnershipSummary()
+    {
+        lock (Sync)
+        {
+            return Windows.Values
+                .OrderBy(window => window.Identity.Hwnd.ToInt64())
+                .Select(window => (object)new
+                {
+                    hwnd = HwndValue(window.Identity.Hwnd),
+                    pid = window.Identity.ProcessId,
+                    role = window.Role,
+                    ownership = window.Ownership.ToString().ToUpperInvariant(),
+                    executable = Path.GetFileName(window.Identity.ExePath),
+                    processStartTimeUtcTicks = window.Identity.ProcessStartTimeUtcTicks,
+                    windowClass = window.Identity.ClassName,
+                })
+                .ToArray();
+        }
     }
 
     public static bool IsProcessInScope(uint processId)
@@ -474,6 +545,7 @@ internal static class TestRunProvenance
                     startTimeUtcTicks = record.Identity.ProcessStartTimeUtcTicks,
                     executable = RedactPath(record.Identity.ExePath),
                     role = record.Role,
+                    ownership = record.Ownership.ToString().ToUpperInvariant(),
                     launchRootPid = record.LaunchRootPid,
                     ancestry = record.Ancestry,
                 });
@@ -600,6 +672,9 @@ internal static class TestRunProvenance
 
     private static int MarshalLastError()
         => System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+
+    private static string HwndValue(IntPtr hwnd)
+        => hwnd == IntPtr.Zero ? "0x0" : $"0x{hwnd.ToInt64():X}";
 }
 
 /// <summary>
@@ -632,6 +707,12 @@ internal static class ProvenanceContract
     internal static bool DynamicWindowAllowed(string processRole, bool hasRegisteredOwner)
         => processRole.StartsWith("Browser", StringComparison.Ordinal)
             || (processRole.StartsWith("TabDock", StringComparison.Ordinal) && hasRegisteredOwner);
+
+    internal static bool CleanupAllowed(RunOwnershipKind ownership, bool processRegistered)
+        => ownership == RunOwnershipKind.OwnedProcess && processRegistered;
+
+    internal static bool InputAllowed(RunOwnershipKind ownership)
+        => ownership is RunOwnershipKind.OwnedWindow or RunOwnershipKind.AdoptedExternalWindow;
 
     internal static bool AcceptWindowEvidence(
         bool processRegistered,
@@ -817,5 +898,8 @@ internal static class IdentityDiagnostics
         => new { left = rect.Left, top = rect.Top, width = rect.Width, height = rect.Height };
 
     private static string Hwnd(IntPtr hwnd)
+        => hwnd == IntPtr.Zero ? "0x0" : $"0x{hwnd.ToInt64():X}";
+
+    private static string HwndValue(IntPtr hwnd)
         => hwnd == IntPtr.Zero ? "0x0" : $"0x{hwnd.ToInt64():X}";
 }

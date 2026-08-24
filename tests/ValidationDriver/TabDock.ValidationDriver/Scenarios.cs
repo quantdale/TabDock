@@ -22,6 +22,7 @@ internal sealed class Options
     public string? TabDockPath;
     public string? GuineaPigPath;
     public string? Shard;
+    public int Reruns;
 }
 
 /// <summary>A window under test: a guinea pig or a real app (wt/chrome) for maximize-repro.</summary>
@@ -62,14 +63,6 @@ internal sealed class GuestInfo
     public string? VerifyFilePath;
 }
 
-internal enum QualificationStatus
-{
-    Pass,
-    Fail,
-    Skip,
-    Blocked,
-}
-
 internal sealed record AssertionEvidence(string Name, bool Passed);
 
 /// <summary>Per-scenario state: the TabDock instance, spawned guests, containers, and assertion results.</summary>
@@ -85,12 +78,15 @@ internal sealed class Ctx
     public readonly List<GuestInfo> Guests = new List<GuestInfo>();
     public readonly List<IntPtr> Containers = new List<IntPtr>();
     public readonly List<WindowIdentity> ContainerIdentities = new List<WindowIdentity>();
-    public bool Pass = true;
-    public QualificationStatus Status { get; private set; } = QualificationStatus.Pass;
+    public ScenarioOutcome Outcome { get; private set; } = ScenarioOutcome.Pass;
+    public bool Pass => Outcome.IsReleasePass;
     public DateTimeOffset StartedUtc { get; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? FinishedUtc { get; set; }
     public readonly List<AssertionEvidence> Assertions = new();
     public readonly List<string> FailureReasons = new();
+    public int Attempt { get; set; } = 1;
+    public NativeInteractionTimeline Timeline { get; set; } = new();
+    public ScenarioCapabilitySnapshot? Capabilities { get; set; }
     public string? ExpectedState { get; set; }
     public string? ObservedState { get; set; }
     // Captured immediately before cleanup so the result artifact describes
@@ -104,36 +100,78 @@ internal sealed class Ctx
     public bool? LiveSplitPairPresented { get; set; }
     public string? LiveActiveGuest { get; set; }
 
+    /// <summary>
+    /// A lease is installed by physical scenarios after preflight and before
+    /// any guarded input. Native-free/preflight contexts may leave it null.
+    /// </summary>
+    public DesktopQualificationLease? DesktopLease { get; set; }
+
     public void Check(bool condition, string what)
     {
         GuardedProc.Log($"  {(condition ? "PASS" : "FAIL")}: {what}");
         Assertions.Add(new AssertionEvidence(what, condition));
         if (!condition)
         {
-            Pass = false;
-            // A failed assertion is authoritative regardless of earlier skips:
-            // a scenario that skipped a prerequisite and then failed a real
-            // check must report FAIL, never remain green SKIP.
-            Status = QualificationStatus.Fail;
-            FailureReasons.Add(what);
+            if (DesktopLease != null && !DesktopLease.IsValid)
+                SetOutcome(ScenarioOutcomeKind.BlockedEnvironment, DesktopLease.LastFailureReason ?? what, log: false);
+            else
+                SetOutcome(ScenarioOutcomeKind.FailProduct, what, log: false);
         }
     }
 
-    public void Skip(string reason)
+    public void FailProduct(string reason)
     {
-        GuardedProc.Log($"  SKIP: {reason}");
-        // Skips never mask an already-decided failure.
-        if (Status != QualificationStatus.Fail)
-            Status = QualificationStatus.Skip;
-        Pass = Pass && Status != QualificationStatus.Fail;
-        FailureReasons.Add(reason);
+        SetOutcome(ScenarioOutcomeKind.FailProduct, reason);
     }
 
-    public void Block(string reason)
+    public void FailHarness(string reason)
     {
-        GuardedProc.Log($"  BLOCKED: {reason}");
-        Status = QualificationStatus.Blocked;
-        Pass = false;
+        SetOutcome(ScenarioOutcomeKind.FailHarness, reason);
+    }
+
+    public void BlockEnvironment(string reason)
+    {
+        SetOutcome(ScenarioOutcomeKind.BlockedEnvironment, reason);
+    }
+
+    public void BlockSupervised(string reason)
+    {
+        SetOutcome(ScenarioOutcomeKind.BlockedSupervised, reason);
+    }
+
+    public void BlockCapability(string reason)
+    {
+        SetOutcome(ScenarioOutcomeKind.BlockedCapability, reason);
+    }
+
+    public void SkipCapability(string reason)
+    {
+        SetOutcome(ScenarioOutcomeKind.SkipCapability, reason);
+    }
+
+    public void MarkFlake(string reason)
+    {
+        SetOutcome(ScenarioOutcomeKind.FlakeUnclassified, reason);
+    }
+
+    /// <summary>Compatibility alias during scenario migration; maps to environment blocking.</summary>
+    public void Block(string reason) => BlockEnvironment(reason);
+
+    /// <summary>Compatibility alias during scenario migration; maps to a capability skip.</summary>
+    public void Skip(string reason) => SkipCapability(reason);
+
+    private void SetOutcome(ScenarioOutcomeKind kind, string reason, bool log = true)
+    {
+        if (log)
+            GuardedProc.Log($"  {ScenarioOutcomeContract.Code(kind)}: {reason}");
+
+        ScenarioOutcome next = new(kind, reason);
+        if (Outcome.Kind == ScenarioOutcomeKind.Pass
+            || ScenarioOutcomeContract.ExitCode(kind) > ScenarioOutcomeContract.ExitCode(Outcome.Kind))
+        {
+            Outcome = next;
+        }
+
         FailureReasons.Add(reason);
     }
 }
@@ -601,7 +639,7 @@ internal static partial class Scenarios
     // -------------------------------------------------------------------------
     // Runner
     // -------------------------------------------------------------------------
-    public static bool RunScenario(string name, Options opt)
+    public static bool RunScenario(string name, Options opt, int attempt = 1)
     {
         Action<Ctx, Options>? body = name switch
         {
@@ -740,11 +778,81 @@ internal static partial class Scenarios
             return false;
         }
 
+        ScenarioCapabilitySnapshot capabilities = ScenarioCapabilities.CaptureCurrent();
+        ScenarioCapabilityResolution capabilityResolution = ScenarioCapabilities.Resolve(
+            ScenarioCapabilities.Describe(name, opt), capabilities);
+        if (!capabilityResolution.Runnable)
+        {
+            // Capability outcomes are written without starting TabDock or
+            // clearing persisted user state. A missing browser, locked
+            // workstation, or absent topology is a preflight result, not a
+            // product assertion and must not run destructive setup.
+            Input.ResetIdentityScope(name);
+            var preflight = new Ctx
+            {
+                Name = name,
+                Attempt = attempt,
+                Capabilities = capabilities,
+            };
+            ScenarioOutcomeKind outcome = capabilityResolution.Outcome
+                ?? ScenarioOutcomeKind.FailHarness;
+            switch (outcome)
+            {
+                case ScenarioOutcomeKind.SkipCapability:
+                    preflight.SkipCapability(capabilityResolution.Reason ?? "capability unavailable");
+                    break;
+                case ScenarioOutcomeKind.BlockedCapability:
+                    preflight.BlockCapability(capabilityResolution.Reason ?? "capability blocked");
+                    break;
+                case ScenarioOutcomeKind.BlockedEnvironment:
+                    preflight.BlockEnvironment(capabilityResolution.Reason ?? "environment blocked");
+                    break;
+                default:
+                    preflight.FailHarness(capabilityResolution.Reason ?? "capability preflight failed");
+                    break;
+            }
+            preflight.FinishedUtc = DateTimeOffset.UtcNow;
+            QualificationResultWriter.WriteScenario(preflight);
+            GuardedProc.Log($"SCENARIO {name}: {preflight.Outcome.Code} ({preflight.Outcome.Reason})");
+            return false;
+        }
+
+        var timeline = new NativeInteractionTimeline();
+        var lease = DesktopQualificationLease.CreateNative(timeline);
+        lease.Start();
+        if (!lease.IsValid)
+        {
+            Input.ResetIdentityScope(name);
+            var blocked = new Ctx
+            {
+                Name = name,
+                Attempt = attempt,
+                Timeline = timeline,
+                Capabilities = capabilities,
+                DesktopLease = lease,
+            };
+            blocked.BlockEnvironment(lease.LastFailureReason ?? "desktop qualification lease could not start");
+            blocked.FinishedUtc = DateTimeOffset.UtcNow;
+            QualificationResultWriter.WriteScenario(blocked);
+            lease.Close();
+            GuardedProc.Log($"SCENARIO {name}: {blocked.Outcome.Code} ({blocked.Outcome.Reason})");
+            return false;
+        }
+
         GuardedProc.Log($"=== SCENARIO {name} ===");
         Ctx? ctx = null;
+        string? setupFailureReason = null;
+        GuardedProc.SetTimeline(timeline);
         try
         {
             ctx = StartScenario(name);
+            ctx.Attempt = attempt;
+            ctx.Timeline = timeline;
+            ctx.Capabilities = capabilities;
+            ctx.DesktopLease = lease;
+            Input.SetDesktopLease(lease);
+            if (ctx.MainIdentity.HasValue)
+                lease.RegisterTarget(ctx.MainIdentity.Value, "TabDockMainWindow");
             body(ctx, opt);
         }
         catch (OperationCanceledException)
@@ -757,34 +865,56 @@ internal static partial class Scenarios
         catch (Exception ex)
         {
             GuardedProc.Log($"  ERROR: {ex.Message}");
+            setupFailureReason = $"scenario setup failed: {ex.GetType().Name}";
             if (ctx != null)
                 ctx.Check(false, $"unhandled exception: {ex.GetType().Name}");
         }
         finally
         {
-            if (ctx != null)
+            try
             {
-                QualificationResultWriter.CaptureLiveEvidence(ctx);
-                Cleanup(ctx);
-                ctx.Check(NoSpawnedGuestWindowsRemain(ctx), "cleanup left no spawned guest top-level windows");
-                ctx.FinishedUtc = DateTimeOffset.UtcNow;
-                QualificationResultWriter.WriteScenario(ctx);
+                Input.SetDesktopLease(null);
+                if (ctx != null)
+                {
+                    QualificationResultWriter.CaptureLiveEvidence(ctx);
+                    Cleanup(ctx);
+                    ctx.Check(NoSpawnedGuestWindowsRemain(ctx), "cleanup left no spawned guest top-level windows");
+                    ctx.FinishedUtc = DateTimeOffset.UtcNow;
+                    lease.Close();
+                    QualificationResultWriter.WriteScenario(ctx);
+                }
+                else
+                {
+                    // StartScenario can fail after isolating state.json but before
+                    // it returns a context (for example, a spawned TabDock never
+                    // creates its MainWindow). Clean tracked processes first so a
+                    // partial app cannot write over the restored user state, then
+                    // apply the snapshot directly.
+                    GuardedProc.CleanupTrackedProcesses();
+                    RestoreStateSnapshot();
+                    GuardedProc.Log("  Cleanup: setup failed before context creation; state snapshot restored.");
+                    var failedSetup = new Ctx
+                    {
+                        Name = name,
+                        Attempt = attempt,
+                        Timeline = timeline,
+                        Capabilities = capabilities,
+                        DesktopLease = lease,
+                    };
+                    failedSetup.FailHarness(setupFailureReason ?? "scenario setup failed before context creation");
+                    failedSetup.FinishedUtc = DateTimeOffset.UtcNow;
+                    lease.Close();
+                    QualificationResultWriter.WriteScenario(failedSetup);
+                }
+                GuardedProc.Log($"SCENARIO {name}: {(ctx == null ? "FAIL_HARNESS" : ctx.Outcome.Code)}");
             }
-            else
+            finally
             {
-                // StartScenario can fail after isolating state.json but before
-                // it returns a context (for example, a spawned TabDock never
-                // creates its MainWindow). Clean tracked processes first so a
-                // partial app cannot write over the restored user state, then
-                // apply the snapshot directly.
-                GuardedProc.CleanupTrackedProcesses();
-                RestoreStateSnapshot();
-                GuardedProc.Log("  Cleanup: setup failed before context creation; state snapshot restored.");
+                GuardedProc.SetTimeline(null);
             }
-            GuardedProc.Log($"SCENARIO {name}: {(ctx == null ? "FAIL" : ctx.Status.ToString().ToUpperInvariant())}");
         }
         return ctx != null
-            && (ctx.Status is QualificationStatus.Pass or QualificationStatus.Skip);
+            && ctx.Outcome.IsReleasePass;
     }
 
     // -------------------------------------------------------------------------

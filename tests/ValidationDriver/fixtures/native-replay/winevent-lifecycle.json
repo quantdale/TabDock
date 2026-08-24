@@ -1,0 +1,16 @@
+{
+  "name": "winevent-lifecycle-hwnd-reuse",
+  "initialCaptured": ["guest-A", "guest-B"],
+  "initialForeground": "guest-A",
+  "events": [
+    { "kind": "Foreground", "identity": "guest-B", "identityResult": "Match" },
+    { "kind": "Hide", "identity": "guest-B", "identityResult": "Match" },
+    { "kind": "Destroy", "identity": "guest-B", "identityResult": "Match" },
+    { "kind": "Foreground", "identity": "guest-B", "identityResult": "Mismatch" }
+  ],
+  "expected": {
+    "captured": ["guest-A"],
+    "foreground": null,
+    "refusal": "IdentityChanged"
+  }
+}
