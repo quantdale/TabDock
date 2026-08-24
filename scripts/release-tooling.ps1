@@ -387,7 +387,9 @@ function Test-ExternalEvidenceFile {
         [Parameter(Mandatory = $true)][string]$ExpectedSourceSha,
         [Parameter(Mandatory = $true)][string]$ExpectedArtifactSha,
         [string]$ExpectedCandidateRunId = '',
-        [string]$ExpectedCandidateArtifactName = ''
+        [string]$ExpectedCandidateArtifactName = '',
+        [string]$QualificationBundleRoot = '',
+        [switch]$RequireQualificationBundle
     )
     $failures = [System.Collections.Generic.List[string]]::new()
     $evidence = $null
@@ -412,8 +414,12 @@ function Test-ExternalEvidenceFile {
         return [pscustomobject]@{ Valid = $false; Failures = @($failures); Evidence = $null }
     }
 
-    if ($evidence.schemaVersion -ne 2) {
-        $failures.Add("external evidence schemaVersion=$($evidence.schemaVersion) (expected 2)")
+    $evidenceSchema = [int]$evidence.schemaVersion
+    if ($evidenceSchema -notin @(2, 3)) {
+        $failures.Add("external evidence schemaVersion=$($evidence.schemaVersion) (expected 2 or 3)")
+    }
+    if ($RequireQualificationBundle -and $evidenceSchema -ne 3) {
+        $failures.Add("external evidence schemaVersion=$evidenceSchema (schema 3 is required when qualification-bundle binding is required)")
     }
     $evSha = [string]$evidence.sourceCommitSha
     if ($evSha -notmatch '^[0-9a-f]{40}$') {
@@ -445,6 +451,14 @@ function Test-ExternalEvidenceFile {
     }
     elseif (-not [string]::IsNullOrWhiteSpace($ExpectedCandidateArtifactName) -and $evArtifactName -ne $ExpectedCandidateArtifactName) {
         $failures.Add("external evidence candidateArtifactName $evArtifactName != the downloaded Stage A artifact $ExpectedCandidateArtifactName")
+    }
+
+    $bundleReference = $evidence.qualificationBundle
+    if ($RequireQualificationBundle -or $null -ne $bundleReference) {
+        $bundleRoot = if ([string]::IsNullOrWhiteSpace($QualificationBundleRoot)) { Split-Path -Parent ([IO.Path]::GetFullPath($EvidencePath)) } else { $QualificationBundleRoot }
+        $binding = Test-QualificationEvidenceBinding -Evidence $evidence -EvidenceDirectory $bundleRoot `
+            -ExpectedSourceSha $ExpectedSourceSha -ExpectedArtifactSha $ExpectedArtifactSha -RequirePhysicalTopology
+        foreach ($failure in @($binding.Failures)) { $failures.Add([string]$failure) }
     }
 
     foreach ($gate in @('finalWindowsHumanSmoke', 'physicalMixedDpi')) {
@@ -1247,7 +1261,8 @@ function Test-PublicationEligibility {
     else {
         $evidenceResult = Test-ExternalEvidenceFile $EvidencePath $ExpectedSourceSha $finalHash `
             -ExpectedCandidateRunId $ExpectedCandidateRunId `
-            -ExpectedCandidateArtifactName $ExpectedCandidateArtifactName
+            -ExpectedCandidateArtifactName $ExpectedCandidateArtifactName `
+            -QualificationBundleRoot $ArtifactDir -RequireQualificationBundle
         if (-not $evidenceResult.Valid) {
             foreach ($failure in $evidenceResult.Failures) {
                 $failures.Add([string]$failure)
@@ -1256,4 +1271,12 @@ function Test-PublicationEligibility {
     }
 
     return [pscustomobject]@{ Eligible = $failures.Count -eq 0; Failures = @($failures) }
+}
+
+# Qualification bundles are part of the trusted release-tooling policy
+# surface. The helper is data-only and never executes a candidate or returned
+# evidence.
+$qualificationBundleModule = Join-Path $PSScriptRoot 'qualification-bundle.ps1'
+if (Test-Path -LiteralPath $qualificationBundleModule -PathType Leaf) {
+    . $qualificationBundleModule
 }

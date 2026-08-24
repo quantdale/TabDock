@@ -130,6 +130,15 @@ internal static class Program
             return Usage(null, 0);
         if (selfTestSuite != null)
         {
+            // Deterministic runs may still be bound to the exact retained
+            // candidate. When --tabdock/--guineapig are supplied, configure
+            // those paths before the manifest writer computes executable
+            // identity; no native scenario is launched by this branch.
+            if (!string.IsNullOrWhiteSpace(opt.TabDockPath)
+                || !string.IsNullOrWhiteSpace(opt.GuineaPigPath))
+            {
+                Scenarios.ConfigureArtifacts(opt.Configuration, opt.Rid, opt.TabDockPath, opt.GuineaPigPath);
+            }
             TestRunProvenance.BeginRun();
             QualificationResultWriter.BeginRun();
             GuardedProc.Log($"Deterministic qualification runId={TestRunProvenance.RunId}.");

@@ -98,6 +98,56 @@ internal static class QualificationResultWriter
         GuardedProc.Log($"RESULT_JSON scenario=deterministic-{suite} status={outcome.Code} artifact=<validation-artifact>/{stem}.json");
     }
 
+    public static void WriteTopologyLab(VirtualTopologyLabReport report)
+    {
+        string root = ResultRoot();
+        Directory.CreateDirectory(root);
+        const string stem = "virtual-topology-lab";
+        var assertions = report.Cases
+            .Select(item => new AssertionEvidence(item.Name, item.Passed))
+            .ToArray();
+        int failed = assertions.Count(item => !item.Passed);
+        var payload = new
+        {
+            schemaVersion = report.SchemaVersion,
+            labGeneration = report.Generation,
+            syntheticTopology = true,
+            seed = report.Seed,
+            passed = report.Passed,
+            assertionCount = report.AssertionCount,
+            normalizedSha256 = report.NormalizedSha256,
+            topologies = report.Cases.Select(item => new
+            {
+                name = item.Name,
+                monitorCount = item.MonitorCount,
+                dpiValues = item.DpiValues,
+                negativeCoordinates = item.NegativeCoordinates,
+                aboveOrigin = item.AboveOrigin,
+                passed = item.Passed,
+                assertionCount = item.AssertionCount,
+                failure = item.Failure,
+            }).ToArray(),
+        };
+        string jsonPath = Path.Combine(root, $"{stem}.json");
+        File.WriteAllText(jsonPath, JsonSerializer.Serialize(payload, JsonOptions), Encoding.UTF8);
+        WriteDeterministicJUnit(root, stem, "virtual-topology-lab", assertions, failed);
+        ScenarioOutcome outcome = new(
+            report.Passed ? ScenarioOutcomeKind.Pass : ScenarioOutcomeKind.FailHarness,
+            report.Passed ? null : "one or more virtual topology laboratory assertions failed");
+        RegisterManifestEntry(new ScenarioManifestEntry(
+            "virtual-topology-lab",
+            1,
+            outcome.Code,
+            outcome.Reason,
+            new { syntheticTopology = true, seed = report.Seed, labGeneration = report.Generation },
+            $"{stem}.json",
+            $"{stem}.junit.xml",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow));
+        GuardedProc.Log($"RESULT_JSON scenario=virtual-topology-lab status={outcome.Code} syntheticTopology=true seed={report.Seed} artifact=<validation-artifact>/{stem}.json");
+    }
+
     public static void WriteScenario(Ctx ctx)
     {
         ctx.FinishedUtc ??= DateTimeOffset.UtcNow;

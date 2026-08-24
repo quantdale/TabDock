@@ -39,6 +39,8 @@ internal static class DeterministicSelfTests
         }
         if (normalized is "all" or "manifest" or "deterministic")
             tests.AddRange(ManifestTests());
+        if (normalized is "all" or "topology" or "deterministic")
+            tests.AddRange(TopologyTests());
         if (normalized is "all" or "stress" or "deterministic")
             tests.AddRange(StressTests());
         if (tests.Count == 0)
@@ -70,6 +72,8 @@ internal static class DeterministicSelfTests
         }
 
         Console.WriteLine($"SELFTEST SUMMARY suite={normalized} passed={passed} failed={tests.Count - passed} total={tests.Count}");
+        if (normalized is "all" or "topology" or "deterministic")
+            QualificationResultWriter.WriteTopologyLab(VirtualTopologyLab.Run());
         QualificationResultWriter.WriteDeterministic(normalized, evidence);
         QualificationResultWriter.WriteRunManifest();
         return ScenarioOutcomeContract.ExitCode(
@@ -763,6 +767,70 @@ internal static class DeterministicSelfTests
                 : "MISSING";
             return new { relativePath, kind, sha256 = hash, exists };
         }
+    }
+
+    private static IEnumerable<(string Id, Func<bool> Test)> TopologyTests()
+    {
+        yield return ("TOPO01-lab-is-explicitly-synthetic", () =>
+        {
+            VirtualTopologyLabReport report = VirtualTopologyLab.Run();
+            return report.SyntheticTopology
+                && report.SchemaVersion == VirtualTopologyLab.SchemaVersion
+                && report.Generation == VirtualTopologyLab.Generation;
+        });
+
+        yield return ("TOPO02-fixed-matrix-covers-boundaries", () =>
+        {
+            string[] required =
+            {
+                "single-96", "dual-horizontal", "dual-vertical", "negative-left",
+                "above-origin", "asymmetric-work-areas", "mixed-100-125-150-200",
+                "odd-width", "narrow-work-area", "large-coordinates", "removal-reorder-transition",
+            };
+            string[] actual = VirtualTopologyLab.FixedTopologies().Select(topology => topology.Name).ToArray();
+            return required.All(name => actual.Contains(name, StringComparer.Ordinal));
+        });
+
+        yield return ("TOPO03-fixed-seed-is-reproducible", () =>
+        {
+            VirtualTopologyLabReport first = VirtualTopologyLab.Run();
+            VirtualTopologyLabReport second = VirtualTopologyLab.Run();
+            return first.Seed == 20260824
+                && first.NormalizedSha256 == second.NormalizedSha256
+                && first.AssertionCount == second.AssertionCount;
+        });
+
+        yield return ("TOPO04-all-lab-invariants-pass", () =>
+            VirtualTopologyLab.Run().Passed);
+
+        yield return ("TOPO05-mixed-dpi-matrix-is-observed-in-model", () =>
+        {
+            LabTopology mixed = VirtualTopologyLab.FixedTopologies()
+                .Single(topology => topology.Name == "mixed-100-125-150-200");
+            return mixed.HasMixedDpi
+                && new[] { 96, 120, 144, 192 }.All(dpi => mixed.Monitors.Any(monitor => monitor.EffectiveDpi == dpi));
+        });
+
+        yield return ("TOPO06-negative-and-above-origin-rectangles-are-preserved", () =>
+        {
+            LabTopology negative = VirtualTopologyLab.FixedTopologies().Single(topology => topology.Name == "negative-left");
+            LabTopology above = VirtualTopologyLab.FixedTopologies().Single(topology => topology.Name == "above-origin");
+            return negative.HasNegativeCoordinates
+                && above.HasAboveOriginMonitor
+                && negative.VirtualBounds.Left < 0
+                && above.VirtualBounds.Top < 0;
+        });
+
+        yield return ("TOPO07-transition-removal-and-reorder-clamps-to-new-primary", () =>
+        {
+            LabTopology oldTopology = VirtualTopologyLab.FixedTopologies().Single(topology => topology.Name == "mixed-100-125-150-200");
+            LabTopology newTopology = VirtualTopologyLab.FixedTopologies().Single(topology => topology.Name == "removal-reorder-transition");
+            LabRect restored = VirtualTopologyPolicy.RestoreAfterTransition(
+                new LabRect(-2000, 300, -1500, 700),
+                oldTopology,
+                newTopology);
+            return newTopology.Primary.WorkArea.Contains(restored);
+        });
     }
 
     private static IEnumerable<(string Id, Func<bool> Test)> CapabilityTests()

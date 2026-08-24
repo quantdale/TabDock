@@ -242,6 +242,9 @@ function New-SyntheticArtifactDir {
         ManifestPath   = $records.ManifestPath
         SumsPath       = $records.SumsPath
         ArtifactSha256 = $records.ArtifactSha256
+        BundlePath     = $null
+        BundleSha256   = $null
+        PrimaryRunManifest = $null
     }
 }
 
@@ -378,8 +381,129 @@ function New-TestEvidence {
     }
 }
 
+function New-TestBundleForArtifact {
+    param(
+        [Parameter(Mandatory = $true)][string]$ArtifactDir,
+        [Parameter(Mandatory = $true)][string]$SourceSha,
+        [Parameter(Mandatory = $true)][string]$Version
+    )
+    $qualificationRoot = Join-Path $ArtifactDir 'qualification'
+    $toolingRoot = Join-Path $qualificationRoot 'tooling'
+    $runDir = Join-Path $qualificationRoot 'runs\direct'
+    New-Item -ItemType Directory -Path $toolingRoot,$runDir -Force | Out-Null
+    $driver = Join-Path $toolingRoot 'ValidationDriver.exe'
+    New-DummyArtifact $driver 512
+    $resultPath = Join-Path $runDir 'scenario-a.json'
+    $junitPath = Join-Path $runDir 'scenario-a.junit.xml'
+    $timelinePath = Join-Path $runDir 'scenario-a.timeline.json'
+    [IO.File]::WriteAllText($resultPath, '{"scenario":"scenario-a","result":"PASS"}', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($junitPath, '<testsuite tests="1" failures="0" skipped="0" />', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($timelinePath, '{"schemaVersion":1,"syntheticTopology":false,"events":[]}', [Text.UTF8Encoding]::new($false))
+    $started = [DateTimeOffset]::UtcNow.AddHours(-1)
+    $ended = $started.AddSeconds(1)
+    $artifactSha = Get-FileSha256Lower (Join-Path $ArtifactDir 'TabDock.exe')
+    $driverSha = Get-FileSha256Lower $driver
+    $counts = [ordered]@{}
+    foreach ($code in (Get-QualificationOutcomeCodes)) { $counts[$code] = if ($code -eq 'PASS') { 1 } else { 0 } }
+    $run = [ordered]@{
+        schemaVersion = 2
+        runKind = 'direct'
+        runId = [Guid]::NewGuid().ToString('D')
+        parentRunId = $null
+        shard = $null
+        manifestRelativePath = 'run-manifest.json'
+        catalogGeneration = 'scenario-catalog-2026-08-24-v1'
+        candidateSha = $SourceSha
+        startedUtc = $started
+        endedUtc = $ended
+        outcome = 'PASS'
+        aggregateCounts = $counts
+        attemptCounts = $counts
+        executableSha256 = [ordered]@{ candidate = $artifactSha; test = $driverSha }
+        driverIdentity = [ordered]@{ fileName = 'ValidationDriver.exe'; sha256 = $driverSha }
+        scenarios = @([ordered]@{ scenario = 'scenario-a'; attempt = 1; result = 'PASS'; reason = $null; jsonArtifact = 'scenario-a.json'; junitArtifact = 'scenario-a.junit.xml'; timelineArtifact = 'scenario-a.timeline.json'; startedUtc = $started; endedUtc = $ended })
+        scenarioAggregates = @([ordered]@{ scenario = 'scenario-a'; first = 'PASS'; final = 'PASS'; finalReason = $null; attempts = @([ordered]@{ attempt = 1; result = 'PASS'; reason = $null }) })
+        artifactIndex = @(
+            [ordered]@{ relativePath = 'scenario-a.json'; kind = 'scenario-result'; sha256 = Get-FileSha256Lower $resultPath; exists = $true }
+            [ordered]@{ relativePath = 'scenario-a.junit.xml'; kind = 'junit'; sha256 = Get-FileSha256Lower $junitPath; exists = $true }
+            [ordered]@{ relativePath = 'scenario-a.timeline.json'; kind = 'timeline'; sha256 = Get-FileSha256Lower $timelinePath; exists = $true }
+        )
+    }
+    $runPath = Join-Path $runDir 'run-manifest.json'
+    [IO.File]::WriteAllText($runPath, ($run | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    return New-QualificationBundle -BundleRoot $ArtifactDir -OutputPath (Join-Path $ArtifactDir 'qualification-bundle.json') `
+        -SourceCommitSha $SourceSha -SemanticVersion $Version `
+        -CandidateArtifactPath (Join-Path $ArtifactDir 'TabDock.exe') `
+        -ReleaseManifestPath (Join-Path $ArtifactDir 'release-manifest.json') `
+        -DriverPath $driver -QualificationManifestPaths @($runPath) -PrimaryRunManifestPath $runPath `
+        -StageARunId '123456789' -CandidateArtifactName (Get-CandidateArtifactName -SourceSha $SourceSha)
+}
+
 function Save-TestEvidence {
     param([string]$Path, $Evidence)
+    $evidenceDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($Path))
+    $bundlePath = Join-Path $evidenceDirectory 'qualification-bundle.json'
+    if (-not (Test-Path -LiteralPath $bundlePath -PathType Leaf)) {
+        $bundlePath = Join-Path $evidenceDirectory 'qualification\qualification-bundle.json'
+    }
+    if (-not (Test-Path -LiteralPath $bundlePath -PathType Leaf)) {
+        $candidatePath = Join-Path $evidenceDirectory 'TabDock.exe'
+        $manifestPath = Join-Path $evidenceDirectory 'release-manifest.json'
+        if ((Test-Path -LiteralPath $candidatePath -PathType Leaf) -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+            try {
+                $manifestForBundle = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+                $rebuilt = New-TestBundleForArtifact -ArtifactDir $evidenceDirectory `
+                    -SourceSha ([string]$manifestForBundle.sourceCommitSha) `
+                    -Version ([string]$manifestForBundle.semanticVersion)
+                $bundlePath = $rebuilt.BundlePath
+            }
+            catch {
+                # Deliberately malformed/tampered candidates remain unbound;
+                # the publication gate must report that failure.
+            }
+        }
+    }
+    if (Test-Path -LiteralPath $bundlePath -PathType Leaf) {
+        $bundleJson = Get-Content -LiteralPath $bundlePath -Raw | ConvertFrom-Json
+        $bundleHash = Get-FileSha256Lower $bundlePath
+        $primary = @($bundleJson.runManifests | Where-Object { $_.relativePath -eq $bundleJson.primaryRunManifest }) | Select-Object -First 1
+        $binding = [ordered]@{
+            relativePath = [IO.Path]::GetRelativePath($evidenceDirectory, $bundlePath).Replace('\\', '/')
+            sha256 = $bundleHash
+            sourceCommitSha = [string]$bundleJson.sourceCommitSha
+            candidateSha256 = [string]$bundleJson.candidate.artifactSha256
+            primaryRunManifestSha256 = if ($null -ne $primary) { [string]$primary.sha256 } else { '' }
+            syntheticTopology = [bool]$bundleJson.syntheticTopology
+            replayOnly = [bool]$bundleJson.replayOnly
+            automatedOutcome = [string]$bundleJson.outcome.overall
+        }
+        if ($Evidence -is [System.Collections.IDictionary]) {
+            if (-not $Evidence.Contains('schemaVersion') -or [int]$Evidence['schemaVersion'] -eq 2) {
+                $Evidence['schemaVersion'] = 3
+            }
+            $Evidence['qualificationBundle'] = $binding
+            $physical = if ($Evidence.Contains('physicalMixedDpi')) { $Evidence['physicalMixedDpi'] } else { $null }
+            if ($null -ne $physical) {
+                $physical['qualificationBundleSha256'] = $bundleHash
+                $physical['runManifestSha256'] = $binding.primaryRunManifestSha256
+                $physical['candidateSha256'] = $binding.candidateSha256
+                $physical['observedTopology'] = [ordered]@{ syntheticTopology = $binding.syntheticTopology; replayOnly = $binding.replayOnly; monitorCount = 2; dpiValues = @(96, 144) }
+            }
+        }
+        else {
+            $Evidence | Add-Member -NotePropertyName qualificationBundle -NotePropertyValue $binding -Force
+            if (-not $Evidence.PSObject.Properties['schemaVersion'] -or [int]$Evidence.schemaVersion -eq 2) {
+                $Evidence.schemaVersion = 3
+            }
+            $physical = $Evidence.PSObject.Properties['physicalMixedDpi']
+            if ($null -ne $physical -and $null -ne $physical.Value) {
+                $physical.Value | Add-Member -NotePropertyName qualificationBundleSha256 -NotePropertyValue $bundleHash -Force
+                $physical.Value | Add-Member -NotePropertyName runManifestSha256 -NotePropertyValue $binding.primaryRunManifestSha256 -Force
+                $physical.Value | Add-Member -NotePropertyName candidateSha256 -NotePropertyValue $binding.candidateSha256 -Force
+                $physical.Value | Add-Member -NotePropertyName observedTopology -NotePropertyValue ([ordered]@{ syntheticTopology = $binding.syntheticTopology; replayOnly = $binding.replayOnly; monitorCount = 2; dpiValues = @(96, 144) }) -Force
+            }
+        }
+    }
     $Evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Path -Encoding utf8
 }
 
@@ -478,7 +602,185 @@ $script:stageBCandidateExecutionForbiddenPatterns = @(
     '--selftest'
 )
 
+function New-TestQualificationPackage {
+    <# Creates a small, strict, native-free bundle fixture. #>
+    param(
+        [string]$Name = 'qualification-bundle-valid',
+        [string]$SourceSha = ('a' * 40),
+        [bool]$SyntheticTopology = $false
+    )
+    $dir = Join-Path $testRoot $Name
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $artifact = New-SyntheticArtifactDir -Parent $dir -Name 'candidate' -SourceSha $SourceSha
+    $driver = Join-Path $dir 'ValidationDriver.exe'
+    New-DummyArtifact $driver 512
+    $runDir = Join-Path $dir 'qualification\direct-run'
+    New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+    $resultPath = Join-Path $runDir 'scenario-a.json'
+    $junitPath = Join-Path $runDir 'scenario-a.junit.xml'
+    $timelinePath = Join-Path $runDir 'scenario-a.timeline.json'
+    [IO.File]::WriteAllText($resultPath, (@{ scenario = 'scenario-a'; result = 'PASS'; syntheticTopology = $SyntheticTopology } | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($junitPath, '<testsuite tests="1" failures="0" skipped="0" />', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($timelinePath, (@{ schemaVersion = 1; syntheticTopology = $SyntheticTopology; events = @() } | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+    $started = [DateTimeOffset]::UtcNow.AddHours(-1)
+    $ended = $started.AddSeconds(1)
+    $codes = Get-QualificationOutcomeCodes
+    $aggregateCounts = [ordered]@{}
+    $attemptCounts = [ordered]@{}
+    foreach ($code in $codes) { $aggregateCounts[$code] = if ($code -eq 'PASS') { 1 } else { 0 }; $attemptCounts[$code] = $aggregateCounts[$code] }
+    $runManifest = [ordered]@{
+        schemaVersion = 2
+        runKind = 'direct'
+        runId = [Guid]::NewGuid().ToString('D')
+        parentRunId = $null
+        shard = $null
+        manifestRelativePath = 'run-manifest.json'
+        catalogGeneration = 'scenario-catalog-2026-08-24-v1'
+        candidateSha = $SourceSha
+        startedUtc = $started
+        endedUtc = $ended
+        outcome = 'PASS'
+        outcomeReason = $null
+        aggregateCounts = $aggregateCounts
+        attemptCounts = $attemptCounts
+        executableSha256 = [ordered]@{
+            candidate = $artifact.ArtifactSha256
+            test = Get-FileSha256Lower $driver
+        }
+        driverIdentity = [ordered]@{ fileName = 'ValidationDriver.exe'; sha256 = Get-FileSha256Lower $driver }
+        scenarios = @([ordered]@{
+                scenario = 'scenario-a'
+                attempt = 1
+                result = 'PASS'
+                reason = $null
+                jsonArtifact = 'scenario-a.json'
+                junitArtifact = 'scenario-a.junit.xml'
+                timelineArtifact = 'scenario-a.timeline.json'
+                startedUtc = $started
+                endedUtc = $ended
+            })
+        scenarioAggregates = @([ordered]@{
+                scenario = 'scenario-a'
+                first = 'PASS'
+                final = 'PASS'
+                finalReason = $null
+                attempts = @([ordered]@{ attempt = 1; result = 'PASS'; reason = $null })
+            })
+        artifactIndex = @(
+            [ordered]@{ relativePath = 'scenario-a.json'; kind = 'scenario-result'; sha256 = Get-FileSha256Lower $resultPath; exists = $true }
+            [ordered]@{ relativePath = 'scenario-a.junit.xml'; kind = 'junit'; sha256 = Get-FileSha256Lower $junitPath; exists = $true }
+            [ordered]@{ relativePath = 'scenario-a.timeline.json'; kind = 'timeline'; sha256 = Get-FileSha256Lower $timelinePath; exists = $true }
+        )
+    }
+    $runManifestPath = Join-Path $runDir 'run-manifest.json'
+    [IO.File]::WriteAllText($runManifestPath, ($runManifest | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    $bundlePath = Join-Path $dir 'qualification-bundle.json'
+    $bundle = New-QualificationBundle -BundleRoot $dir -OutputPath $bundlePath `
+        -SourceCommitSha $SourceSha -SemanticVersion '1.0.0' `
+        -CandidateArtifactPath $artifact.Exe -ReleaseManifestPath $artifact.ManifestPath `
+        -DriverPath $driver -QualificationManifestPaths @($runManifestPath) `
+        -PrimaryRunManifestPath $runManifestPath -StageARunId '123456789' `
+        -CandidateArtifactName (Get-CandidateArtifactName -SourceSha $SourceSha) `
+        -SyntheticTopology:$SyntheticTopology
+    return [pscustomobject]@{
+        Dir = $dir
+        ArtifactDir = $artifact.Dir
+        Exe = $artifact.Exe
+        ReleaseManifest = $artifact.ManifestPath
+        Driver = $driver
+        RunManifest = $runManifestPath
+        BundlePath = $bundle.BundlePath
+        BundleSha256 = $bundle.BundleSha256
+        CandidateSha256 = $bundle.CandidateSha256
+    }
+}
+
 try {
+    Write-Host '==> Qualification bundle: exact-byte, manifest, and privacy verification' -ForegroundColor Cyan
+
+    New-TestCase 'qualification-bundle-validates-offline' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-valid'
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath -ExpectedSourceSha ('a' * 40) -ExpectedArtifactSha $pkg.CandidateSha256
+        Assert-True $result.Valid ($result.Failures -join '; ')
+        Assert-True ($result.Bundle.schemaVersion -eq 1) 'bundle schema version must be current'
+        Assert-True ($result.Bundle.syntheticTopology -eq $false) 'normal bundle must not claim synthetic topology'
+    }
+
+    New-TestCase 'qualification-bundle-candidate-hash-substitution-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-candidate-substitution'
+        $bundle = Get-Content -LiteralPath $pkg.BundlePath -Raw | ConvertFrom-Json
+        $bundle.candidate.artifactSha256 = ('f' * 64)
+        $bundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $pkg.BundlePath -Encoding utf8
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True (-not $result.Valid) 'candidate hash substitution must fail offline verification'
+        Assert-True (($result.Failures -join ';') -match 'candidate') 'candidate mismatch must be diagnosed'
+    }
+
+    New-TestCase 'qualification-bundle-source-substitution-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-source-substitution'
+        $bundle = Get-Content -LiteralPath $pkg.BundlePath -Raw | ConvertFrom-Json
+        $bundle.sourceCommitSha = ('c' * 40)
+        $bundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $pkg.BundlePath -Encoding utf8
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath -ExpectedSourceSha ('a' * 40)
+        Assert-True (-not $result.Valid) 'source substitution must fail offline verification'
+    }
+
+    New-TestCase 'qualification-bundle-manifest-tamper-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-manifest-tamper'
+        $run = Get-Content -LiteralPath $pkg.RunManifest -Raw | ConvertFrom-Json
+        $run.outcome = 'FAIL_HARNESS'
+        $run | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $pkg.RunManifest -Encoding utf8
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True (-not $result.Valid) 'modified run manifest must fail offline verification'
+        Assert-True (($result.Failures -join ';') -match 'hash|outcome') 'manifest tamper must be diagnosed'
+    }
+
+    New-TestCase 'qualification-bundle-missing-timeline-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-missing-timeline'
+        Remove-Item -LiteralPath (Join-Path (Split-Path $pkg.RunManifest) 'scenario-a.timeline.json') -Force
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True (-not $result.Valid) 'missing timeline must fail offline verification'
+        Assert-True (($result.Failures -join ';') -match 'missing|hash') 'missing timeline must be diagnosed'
+    }
+
+    New-TestCase 'qualification-bundle-path-traversal-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-path-traversal'
+        $bundle = Get-Content -LiteralPath $pkg.BundlePath -Raw | ConvertFrom-Json
+        $bundle.artifactIndex[0].relativePath = '../escape.json'
+        $bundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $pkg.BundlePath -Encoding utf8
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True (-not $result.Valid) 'path traversal must fail offline verification'
+        Assert-True (($result.Failures -join ';') -match 'traversal|empty|absolute') 'path traversal must be diagnosed'
+    }
+
+    New-TestCase 'qualification-bundle-unsupported-schema-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-future-schema'
+        $bundle = Get-Content -LiteralPath $pkg.BundlePath -Raw | ConvertFrom-Json
+        $bundle.schemaVersion = 99
+        $bundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $pkg.BundlePath -Encoding utf8
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True (-not $result.Valid) 'future bundle schema must fail closed'
+        Assert-True (($result.Failures -join ';') -match 'schemaVersion') 'future schema must be diagnosed'
+    }
+
+    New-TestCase 'qualification-bundle-synthetic-topology-is-not-physical-pass' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-synthetic' -SyntheticTopology $true
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True $result.Valid ($result.Failures -join '; ')
+        $physical = Test-QualificationBundle -BundlePath $pkg.BundlePath -RequirePhysicalTopology
+        Assert-True (-not $physical.Valid) 'synthetic topology must be rejected by a physical gate'
+    }
+
+    New-TestCase 'qualification-bundle-outcome-count-substitution-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-count-substitution'
+        $bundle = Get-Content -LiteralPath $pkg.BundlePath -Raw | ConvertFrom-Json
+        $bundle.outcome.scenarioCounts.PASS = 0
+        $bundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $pkg.BundlePath -Encoding utf8
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True (-not $result.Valid) 'outcome count substitution must fail offline verification'
+        Assert-True (($result.Failures -join ';') -match 'scenarioCounts') 'outcome count mismatch must be diagnosed'
+    }
+
     Write-Host ''
     Write-Host '==> A. Unsigned path: checksums describe the final artifact' -ForegroundColor Cyan
 
