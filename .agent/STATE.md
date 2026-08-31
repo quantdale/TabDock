@@ -17,8 +17,10 @@ repair only a defect actually reproduced under that lease.
 
 **Status:** physical certification is honestly blocked before input; read-only
 environment evidence and deterministic gates are captured; a smallest test-only
-GuineaPig topmost switch and one stale self-test expectation were corrected;
-final candidate identity, push verification, and final reconciliation remain.
+GuineaPig topmost switch and one stale self-test expectation were corrected.
+Final candidate identity is captured at campaign commit
+`cac9316ed6a2f92bd8c67419c7a9876186fbe624`; push verification and final
+reconciliation remain.
 
 ### Current phase
 
@@ -39,7 +41,7 @@ final candidate identity, push verification, and final reconciliation remain.
   builds, catalog listing, and ValidationDriver selftests 143/143. The first
   selftest run was retained as `FAIL_HARNESS` because `CAT01` still expected
   127 instead of the catalog's 128; the test-only expectation was corrected.
-  Strict OpenSpec validation currently passes 37/37; rerun after final edits.
+- Strict OpenSpec validation currently passes 37/37; rerun after final edits.
 
 ### Deterministic gate evidence
 
@@ -51,11 +53,18 @@ final candidate identity, push verification, and final reconciliation remain.
 - ValidationDriver catalog: `scenario-catalog-2026-08-24-v1`, 128 dispatchable
   scenarios. No physical scenario was launched.
 
+- CI-safe Release pipeline passed NuGet audit, resource stability, native ABI,
+  recovery, support-bundle privacy, and publish smoke without a scenario
+  argument or desktop input.
+
 ### Verified environment facts
 
-- Candidate Release identity before campaign edits: TabDock 1.0.0,
-  `win-x64`, x64, embedded SHA
-  `4aaf3fcaa72edf48865030db43bccf7bd50e21b8`; executable hash
+- Final campaign candidate: commit
+  `cac9316ed6a2f92bd8c67419c7a9876186fbe624`; Release executable rebuilt after
+  commit; embedded SHA matches; executable SHA-256
+  `C4B27ED13FCADD66AFDF1AC1D031F91E8350351D833F1B91B9616986D7CCD175`.
+- Pre-commit starting candidate identity was
+  `4aaf3fcaa72edf48865030db43bccf7bd50e21b8` with executable hash
   `3C542DC37BE449923539AE169E646A741B781A510E811DA7CCE966BBBCF7D786`.
 - `--doctor`: Windows 11 family, raw product label Windows 10 Pro, 25H2,
   build 26200 revision 9278, .NET 8.0.30, standard-user, session 1.
@@ -92,7 +101,6 @@ final candidate identity, push verification, and final reconciliation remain.
 
 ### Next action
 
-Run the required Debug/Release builds and tests, ValidationDriver
-catalog/self-tests, and strict OpenSpec validation; update the campaign ledger
-and final matrix with those results, then commit/push only the campaign
-artifacts and qualification-only fixture changes if all gates pass.
+Rerun strict OpenSpec validation after these final evidence edits, commit the
+final candidate evidence update, push `main`, verify `HEAD == origin/main`,
+then mark this campaign complete only as a physically blocked certification.

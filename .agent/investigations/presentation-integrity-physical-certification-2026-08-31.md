@@ -16,15 +16,18 @@ that needs repair?
 
 ## Candidate identity
 
-- Candidate SHA: `4aaf3fcaa72edf48865030db43bccf7bd50e21b8`.
-- Release binary: `bin/Release/net8.0-windows/win-x64/TabDock.exe`.
-- `TabDock.exe --version`: TabDock 1.0.0, Release, `win-x64`, self-contained,
-  x64; embedded commit matches the candidate SHA.
-- Candidate executable SHA-256:
+- Starting implementation SHA: `4aaf3fcaa72edf48865030db43bccf7bd50e21b8`.
+- Final campaign commit/candidate SHA: `cac9316ed6a2f92bd8c67419c7a9876186fbe624`.
+- Final Release binary: `bin/Release/net8.0-windows/win-x64/TabDock.exe`.
+- Final `TabDock.exe --version`: TabDock 1.0.0, Release, `win-x64`,
+  self-contained, x64; embedded commit matches the final candidate SHA.
+- Final candidate executable SHA-256:
+  `C4B27ED13FCADD66AFDF1AC1D031F91E8350351D833F1B91B9616986D7CCD175`.
+- The pre-commit binary used for the read-only gate had embedded starting
+  candidate `4aaf3fc` and hash
   `3C542DC37BE449923539AE169E646A741B781A510E811DA7CCE966BBBCF7D786`.
-- The binary was rebuilt from the candidate before identity capture; the
-  pre-existing binary had carried an older commit and was not used as the
-  candidate.
+  It was not used as physical scenario evidence; no physical scenario was
+  launched before or after the campaign commit.
 
 ## Physical environment
 
@@ -85,24 +88,25 @@ mouse/keyboard input, capture, window mutation, or destructive setup.
 
 | Capability / report | Candidate | Attempts | First result | Final result | Physical or deterministic | Evidence | Notes |
 | --- | --- | ---: | --- | --- | --- | --- | --- |
-| Color/accent menu | `4aaf3fc` initial | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | No real input; deterministic coverage remains separate. |
-| Workspace/group rename | `4aaf3fc` initial | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Entry, commit/cancel, click-away, long-name, and repeat paths not exercised. |
-| Split menu/focus/resume | `4aaf3fc` initial | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Menu, partner focus, dismiss/end, dormant/resume paths not exercised. |
-| `+` inline capture panel | `4aaf3fc` initial | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Open/close/reopen/cancel/capture paths not exercised. |
-| Guest caption maximize/restore | `4aaf3fc` initial | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Synthetic maximize policy evidence is deterministic only. |
-| Win+Up/restore | `4aaf3fc` initial | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2 | Required physical shortcut input was not sent. |
-| Real F11 fullscreen | `4aaf3fc` initial | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2 | No browser scenario was started. |
-| Dual-monitor transfer | `4aaf3fc` initial | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Two monitors exist; no supervised move/restore input. |
-| Mixed DPI | `4aaf3fc` initial | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | 96/120 DPI topology exists; no UIA/physical measurement. |
-| `WS_EX_TOPMOST` guest | `4aaf3fc` initial | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E3, E4 | Qualification-only `--topmost` fixture now exists; it was not exercised. |
-| Unrelated foreground overlap | `4aaf3fc` initial | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | No unrelated foreground or owned-dialog interaction was started. |
-| `LOCATIONCHANGE` load | `4aaf3fc` initial | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Physical moving/resizing workload was not started; deterministic routing remains separate. |
-| Physical title centering | `4aaf3fc` initial | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | No UIA title-width/DPI measurement was possible without supervision. |
+| Color/accent menu | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | No real input; deterministic coverage remains separate. |
+| Workspace/group rename | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Entry, commit/cancel, click-away, long-name, and repeat paths not exercised. |
+| Split menu/focus/resume | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Menu, partner focus, dismiss/end, dormant/resume paths not exercised. |
+| `+` inline capture panel | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Open/close/reopen/cancel/capture paths not exercised. |
+| Guest caption maximize/restore | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Synthetic maximize policy evidence is deterministic only. |
+| Win+Up/restore | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2 | Required physical shortcut input was not sent. |
+| Real F11 fullscreen | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2 | No browser scenario was started. |
+| Dual-monitor transfer | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Two monitors exist; no supervised move/restore input. |
+| Mixed DPI | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | 96/120 DPI exists; no UIA/physical measurement. |
+| `WS_EX_TOPMOST` guest | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E3, E4 | Qualification-only `--topmost` fixture now exists; it was not exercised. |
+| Unrelated foreground overlap | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | No unrelated foreground or owned-dialog interaction was started. |
+| `LOCATIONCHANGE` load | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Physical moving/resizing workload was not started; deterministic routing remains separate. |
+| Physical title centering | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | No UIA title-width/DPI measurement was possible without supervision. |
 
 `E1` = read-only `dotnet run ... --plan physicalMixedDpi --configuration
 Release --rid none` and the summarized `--plan all` capability probe.  
-`E2` = rebuilt candidate `--version` and `--doctor` output plus native monitor
-work-area probe.  
+`E2` = starting-candidate and final-candidate `--version` output,
+`--doctor`, and native monitor work-area probe; the final candidate was
+rebuilt after commit before identity capture.
 `E3` = initial and post-change source inspection of `PigOptions`, GuineaPig
 argument parsing, form initialization, extra-window cloning, and
 ValidationDriver catalog searches for `topmost`/`WS_EX_TOPMOST`.  
@@ -170,16 +174,18 @@ version smoke.
    deterministic only; guest title-bar, F11, and monitor-transfer input is
    supervised-blocked.
 4. **Unreliable top layer:** not physically reproduced or physically verified
-   fixed; deterministic local-pairing evidence remains separate; topmost guest
-   coverage is additionally capability-skipped until a test-only topmost
-   fixture path exists, and all popup interaction remains supervised-blocked.
+   fixed; deterministic local-pairing evidence remains separate. GuineaPig now
+   has the smallest qualification-only `--topmost`/`Form.TopMost` fixture
+   path, but no physical popup interaction was attempted and all supervised
+   input remains blocked.
 
 ## Residual defects
 
 No valid physical `FAIL_PRODUCT` occurred. Therefore this campaign made no
 production repair and introduced no speculative z-order, geometry, polling,
-reparenting, restyling, or topmost behavior. The missing GuineaPig topmost
-fixture is a qualification gap, not evidence of a TabDock product defect.
+reparenting, restyling, or topmost behavior. The initial missing GuineaPig
+fixture capability was closed with a test-only switch; it was not evidence of
+a TabDock product defect.
 
 ## Future supervised rerun
 
