@@ -13,21 +13,25 @@ contains this text.
 
 **Plan:** `openspec/changes/2026-08-31-user-reported-presentation-integrity/` (proposal, design, tasks)
 
-**Status:** implementation and deterministic qualification complete; physical supervised qualification honestly blocked; ready to commit and push on `main`.
+**Status:** implementation, deterministic qualification, and mainline delivery complete; physical supervised qualification honestly blocked; handoff ready.
 
 ### Current phase
 
 - Orientation: complete — Git state dynamically resolved (`main` at `e4787c7769c333bd750582d74692da0a573c1727`, clean), `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/TESTING.md`, canonical specs, and active OpenSpec change read before editing.
 - Investigation: complete — durable record at `.agent/investigations/presentation-integrity-2026-08-31.md` with proven vs rejected hypotheses, report classification, and evidence plan. Static source analysis proved: (a) `BeginChromePopup` + `RaiseContainerForChrome(HWND_TOP)` on opaque container + broad `IsContainerChromeInteractionActive` suppression blanks guest; (b) `WinEventMonitor` omitted `EVENT_OBJECT_LOCATIONCHANGE` leaving no signal for guest geometry/zoom changes; (c) caption `Auto|*|Auto…` left-aligns title. No supervised SendInput issued (no lease) — physical reproduction honestly blocked.
-- Regression harness: complete — 18 new deterministic cases: `GuestPresentationDriftPolicyTests` (10), `CaptionCenteringTests` (2), `PresentationChromeIntegrityTests` (6); updated `WinEventMonitorTests` (8-hook cycle); harness adds `guest-maximize-contained` (`core-lifecycle`, 128 dispatchable total, generation unchanged) plus existing `group-dropdown-stability` etc. point-ownership/client-render guards.
+- Regression harness: complete — 18 new deterministic cases: `GuestPresentationDriftPolicyTests` (10), `CaptionCenteringTests` (2), `PresentationChromeIntegrityTests` (6); updated `WinEventMonitorTests` (8-hook cycle); harness adds `guest-maximize-contained` (`core-lifecycle`, 128 dispatchable total, generation unchanged, `crashkill-minimized-recovery` retained) plus existing `group-dropdown-stability` etc. point-ownership/client-render guards.
 - Implementation: complete — caption `* Auto *` true-center (`Views/ContainerWindow.xaml`); depth-scoped popup tracking (`_popupChromeDepth`, `CHROME[popup-open]`/`CHROME[popup-closed-restore-request]`) without opaque container raise; inline capture composes via shrunken `GetContentAreaScreenRect`; visual vs foreground predicates split (`PairZOrderBehindGuest` and layout now gate only on `_closePromptOpen`); filtered `EVENT_OBJECT_LOCATIONCHANGE` hook + per-HWND coalescing (`RepairKind.LocationDrift`) + pure `GuestPresentationDriftPolicy` → `ReconcilePresentationDrift` via existing Shepherd authority with refusal guard.
-- Validation: complete — `dotnet build TabDock.sln -c Release` 0 warnings; `dotnet test TabDock.UnitTests -c Release` **725/725 PASS** (prev 707 +18); `dotnet build ValidationDriver -c Release` PASS; `--list` 128 dispatchable, shards within budgets; `group-dropdown-stability`, `contextmenu-render-stability`, etc. deterministic gates still pass; physical `all` run honestly `BLOCKED_ENVIRONMENT` without supervised lease.
+- Validation: complete — `dotnet build TabDock.sln -c Release` 0 warnings; `dotnet build TabDock.sln -c Debug` 0 warnings; `dotnet test TabDock.UnitTests -c Release` **725/725 PASS**; `dotnet test -c Debug` **725/725 PASS**; `dotnet build ValidationDriver -c Release` PASS; `--list` 128 dispatchable, shards within budgets; physical `all` run honestly `BLOCKED_ENVIRONMENT` without supervised lease.
 - Reconciliation: complete — `docs/ARCHITECTURE.md` (GuestPresentationDriftPolicy, LOCATIONCHANGE coalescing, `* Auto *` caption), `docs/TESTING.md` (new deterministic suites + `guest-maximize-contained`), tasks file reconciled to actual depth+LOCATIONCHANGE+pure policy, investigation closed.
+- Delivery: complete — two commits on `main` pushed and verified identical to `origin/main`; worktree clean.
 
 ### Mainline checkpoint
 
 - Session start `origin/main` was `e4787c7769c333bd750582d74692da0a573c1727` (verified `git rev-parse HEAD` and `origin/main` identical).
-- Worktree was clean at start; final SHA to be resolved dynamically after commit and push.
+- First implementation commit `af987cceef0f9c8df3ee6d16d84aae1841110419` (chrome/title/drift/z-order + 128→127 catalog replacement).
+- Catalog correction commit `f3050f2ed8d8b2005b7e1304d2b6b3548980efec` (restore `crashkill-minimized-recovery`; now 128 dispatchable with both `guest-maximize-contained` and `crashkill-minimized-recovery`).
+- Final `HEAD` and `origin/main` are identical at the last pushed commit; resolve dynamically with `git rev-parse HEAD` / `origin/main` and `git status`.
+- Worktree clean after pushes (verified).
 - Previous campaign `resource-lifecycle-hardening` remains archived; this campaign is a direct `main` development (no permanent staging branch).
 - Strict OpenSpec validation currently 34/34 canonical specs (before sync of new delta); active change `2026-08-31-user-reported-presentation-integrity` holds 2 delta specs (`presentation-integrity`, `ui-ux-hardening` delta) to be synced after merge.
 
@@ -39,7 +43,7 @@ contains this text.
 - `Services/GuestLifecycleService.cs` — added `RepairKind.LocationDrift`, `WindowLocationChanged` subscription, `OnLocationChanged` → `QueueRepair(LocationDrift)`, `ProcessPendingRepair` handles it via `container.ReconcilePresentationDrift`.
 - `Services/GuestPresentationDriftPolicy.cs` — new pure decision (zoom / geometryMismatch / notVisibleButShouldBe) with 10 deterministic cases.
 - `tests/UnitTests/GuestPresentationDriftPolicyTests.cs` (10), `CaptionCenteringTests.cs` (2), `PresentationChromeIntegrityTests.cs` (6) — updated `WinEventMonitorTests` FakeApi to 8-hook cycle.
-- `tests/ValidationDriver/TabDock.ValidationDriver/ScenarioCatalog.cs` — added `guest-maximize-contained` (`core-lifecycle`, `includeInAll: true`).
+- `tests/ValidationDriver/TabDock.ValidationDriver/ScenarioCatalog.cs` — added `guest-maximize-contained` (`core-lifecycle`, `includeInAll: true`) and restored `crashkill-minimized-recovery` (128 dispatchable, generation unchanged).
 - `tests/ValidationDriver/TabDock.ValidationDriver/Scenarios.Split.cs` — implemented `GuestMaximizeContained` (synthetic `SW_SHOWMAXIMIZED` → `LOCATIONCHANGE` → `SHEPHERD[drift-reconcile]` check).
 - `docs/ARCHITECTURE.md` / `docs/TESTING.md` — presentation-integrity architecture and qualification notes.
 - `.agent/investigations/presentation-integrity-2026-08-31.md` — closed with proven/rejected verdicts, bounded evidence, remaining risks.
@@ -59,4 +63,4 @@ contains this text.
 
 ### Next action
 
-Commit the presentation-integrity implementation (detailed evidence summary), push `origin/main`, prove identical SHAs and clean worktree with `git rev-parse HEAD`, `git rev-parse origin/main`, `git status`, then hand off. Keep all supervised/hardware/signing gates honestly blocked. Do not create another commit merely to record the push.
+Handoff. No further code change required for this campaign unless review finds Critical/High issues. Keep all supervised/hardware/signing gates honestly blocked.
