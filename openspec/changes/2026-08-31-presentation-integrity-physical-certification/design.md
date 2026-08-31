@@ -255,3 +255,71 @@ dragreorder. Three fresh `split-exit` attempts remained
 `BLOCKED_ENVIRONMENT` because the foreground/point guard encountered a
 wrong-owned or unregistered point; the earlier accepted split-exit pass is
 retained. No adjacent raw block was relabeled as a product failure.
+
+## Historical continuation wave — capability completion and stable foreground qualification
+
+The first supervised rerun proved that the remaining gap is no longer a general
+desktop-supervision problem. Valid leases were accepted for multiple bounded
+runs. The continuation therefore targets two harness limitations:
+
+1. missing physical scenarios for the still-blocked matrix cells; and
+2. generic foreground setup that can fail before a scenario has a chance to use
+   its stronger point-ownership/clickability proof.
+
+### Foreground qualification
+
+The generic `StartScenario` foreground gate SHALL remain fail-closed, but its
+implementation must be reviewed so "foreground arrangement" and "foreground
+proof" are not conflated.
+
+A safe continuation MAY attempt a bounded, identity-checked foreground
+arrangement and then prove the result. If ordinary `SetForegroundWindow`
+cannot obtain foreground because of Windows foreground-lock behavior, a
+scenario MAY use a guarded activation click only when all of the following hold:
+
+- the target is a current test-owned/adopted TabDock surface;
+- `WindowFromPoint` + `GA_ROOT` resolves exactly to that target;
+- the desktop lease remains valid;
+- no foreign window covers the activation point;
+- the click itself is recorded as an explicit qualification action;
+- foreground is re-read and verified immediately afterward;
+- failure leaves the scenario blocked/fail-harness before destructive setup.
+
+This is not permission to bypass foreground checks, click blind, use
+`AttachThreadInput`, globally reorder foreign windows, or silently downgrade
+the lease. Prefer one shared foreground-qualification primitive with
+deterministic fake-probe tests over scenario-specific retries.
+
+### Missing physical scenario capabilities
+
+Add the smallest ValidationDriver/test-fixture support needed for:
+
+- **guest caption maximize/restore** — a guarded click on the captured guest's
+  real maximize/restore caption control, with same-identity/membership/geometry
+  assertions afterward;
+- **Win+Up/restore** — guarded system shortcut against the captured guest, with
+  current foreground/identity proof before input;
+- **F11 fullscreen** — isolated Chrome/Edge/Brave path that sends real F11,
+  records style/exstyle/placement/rect/monitor/membership where available, then
+  exits fullscreen and verifies recovery;
+- **dual-monitor transfer** — explicit guarded Win+Shift+Arrow or equivalent
+  system transfer attempt in both directions, including 125%↔100% topology;
+- **topmost guest** — dispatch GuineaPig's existing `--topmost` fixture and
+  exercise popup/rename/dialog/local-z-order interactions;
+- **LOCATIONCHANGE load** — controlled test-owned unrelated window churn plus
+  captured-guest churn, collecting callback/rejection/post/coalescing/native
+  repair counts and responsiveness;
+- **title centering** — UIA/native geometry measurement of title/editor midpoint
+  versus container client midpoint at narrow/default/wide widths, short/long
+  names, and both physically available DPI monitors.
+
+These are qualification features, not production features. Keep them isolated
+to ValidationDriver/GuineaPig and test evidence unless a valid physical
+`FAIL_PRODUCT` proves a product change is necessary.
+
+### Stop rule
+
+If two consecutive fresh attempts fail the same generic foreground
+qualification before scenario setup, stop physical execution and diagnose the
+shared harness primitive before adding more retries. Do not treat repeated
+setup failure as product evidence.

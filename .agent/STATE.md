@@ -100,6 +100,7 @@ Detailed evidence:
 - The active OpenSpec change is not safe to archive while major requested
   physical cells remain blocked.
 
+
 ### Next action
 Commit the authorized working-tree changes, push authoritative `main`, then
 rebuild and smoke the pushed candidate so its embedded SHA is current. Verify

@@ -1,76 +1,97 @@
 # Tasks — presentation-integrity physical certification
 
-## 0. Orientation
+## 0. Baseline and first blocked campaign
 
-- [x] 0.1 Resolve `HEAD`, `origin/main`, branch, and worktree dynamically.
-- [x] 0.2 Read repository guidance, architecture/testing references, both
-  presentation-integrity changes, and relevant canonical specs before editing.
-- [x] 0.3 Confirm the implementation candidate is `4aaf3fcaa72edf48865030db43bccf7bd50e21b8` and that the requested certification change was absent, then create this evidence-only change at the requested path.
+- [x] 0.1 Resolve Git authority and create the active physical-certification
+  OpenSpec change.
+- [x] 0.2 Record the initial no-input environment/capability matrix.
+- [x] 0.3 Preserve the first campaign as honestly blocked when exclusive
+  supervision was unavailable.
+- [x] 0.4 Add qualification-only GuineaPig `--topmost` support and correct the
+  stale 127→128 catalog self-test expectation without changing production code.
 
-## 1. Exclusive desktop safety gate
+## 1. Supervised rerun and lease proof
 
-- [x] 1.1 Run no-input capability and topology discovery. The session is
-  interactive/unlocked with two monitors and `SendInput` technically available.
-- [x] 1.2 Establish the supervised exclusive lease and prove no user is using
-  the desktop. **BLOCKED_SUPERVISED:** this agent session has no independent
-  operator confirmation or exclusive desktop lease; no mouse or keyboard input
-  was sent and no destructive scenario was started.
-- [x] 1.3 Preserve the existing `WindowFromPoint`, `GA_ROOT`, foreground,
-  process-start, HWND, and identity guards as the only physical-input boundary.
+- [x] 1.1 Accept the user's exclusive desktop supervision and establish valid
+  native leases only when runtime ownership/coverage/foreground checks pass.
+- [x] 1.2 Preserve candidate/process/HWND identity, adopted/owned provenance,
+  `WindowFromPoint`→`GA_ROOT`, foreground continuity, point ownership, and
+  cleanup identity for accepted runs.
+- [x] 1.3 Preserve all first raw failures and classify them only after source +
+  artifact analysis; no best-of-N promotion.
+- [x] 1.4 Stop after two consecutive generic `StartScenario` foreground setup
+  failures rather than weakening the guard.
 
-## 2. Durable evidence
+## 2. Harness false-negative corrections
 
-- [x] 2.1 Record candidate identity, binary hash, OS/build, monitor bounds and
-  work areas, DPI, application availability, lease state, and exact commands.
-- [x] 2.2 Preserve first-attempt authority. No valid physical product failure,
-  rerun, or best-of-N result exists because the safety gate blocked before
-  input.
-- [x] 2.3 Record that no guest, container, popup, or captured-member HWND was
-  created by this campaign; prior doctor observations are not this campaign's
-  scenario evidence.
+- [x] 2.1 Replace stale post-capture hard foreground assumptions in rename and
+  tab switching with guarded direct clickability proof.
+- [x] 2.2 Reacquire live UIA roots and boundedly wait for inline-capture rows;
+  guard checkbox/submit clicks.
+- [x] 2.3 Use guarded clickability before drag setup; keep obscured points
+  fail-closed.
+- [x] 2.4 Keep the generic `StartScenario` foreground gate unchanged during
+  this rerun; production TabDock code unchanged.
 
-## 3. Original Chrome-occlusion reports
+## 3. Physically supported cells completed
 
-- [x] 3.1 Color/accent menu cycles are **BLOCKED_SUPERVISED** before input;
-  physical first result is unavailable, not PASS.
-- [x] 3.2 Rename entry, commit/cancel/click-away, long-name, and repeat cycles
-  are **BLOCKED_SUPERVISED** before input.
-- [x] 3.3 Split menu, pair focus, dismiss, end, and dormant/resume cycles are
-  **BLOCKED_SUPERVISED** before input.
-- [x] 3.4 Inline `+` capture open/close/reopen/cancel/capture for single and
-  split presentation is **BLOCKED_SUPERVISED** before input.
+- [x] 3.1 Workspace/group rename — PASS for exercised supported paths,
+  including edge cases, persistence, geometry and guest liveness.
+- [x] 3.2 Split creation/focus/dismissal/exit — PASS for exercised supported
+  paths, including repeated enter/exit and bidirectional focus.
+- [x] 3.3 Inline `+` capture — PASS for exercised open/close/reopen/cancel/
+  capture/docking/cleanup paths.
+- [x] 3.4 Context-menu/chrome rendering and direct foreground/local pairing —
+  PASS for exercised paths with external foreground changes.
+- [x] 3.5 Split resize and supported synthetic/container maximize paths — PASS
+  where declared; synthetic maximize is not promoted to guest-caption proof.
+- [x] 3.6 Color/accent selector — `SKIP_CAPABILITY`: production has no
+  reachable selector; canonical group-color-picker behavior is deliberate no-op.
 
-## 4. Guest-native presentation transitions
+## 4. Raw failure disposition
 
-- [x] 4.1 Guest caption maximize and restore are **BLOCKED_SUPERVISED** before
-  the required physical guest-title-bar click.
-- [x] 4.2 Win+Up/restore is **BLOCKED_SUPERVISED** before input.
-- [x] 4.3 Real F11 fullscreen enter/exit, single and split where supported, is
-  **BLOCKED_SUPERVISED** before input.
-- [x] 4.4 Dual-monitor transfer and mixed-DPI transfer are **BLOCKED_SUPERVISED**
-  before input; topology exists but exclusive supervision is absent.
-- [x] 4.5 Determine the controlled fixture's topmost support. The initial
-  candidate lacked this capability; the smallest test-only `--topmost`/
-  `Form.TopMost` switch was added to GuineaPig and documented. Physical
-  topmost qualification remains **BLOCKED_SUPERVISED** before any input.
+- [x] 4.1 Preserve rename/tabswitch raw `FAIL_PRODUCT` manifests and classify
+  as `FAIL_HARNESS` after proving stale unconditional foreground gates fired
+  before scenario input.
+- [x] 4.2 Preserve inline-capture/add-window raw failures and classify as
+  `FAIL_HARNESS` after proving stale UIA/direct-click state.
+- [x] 4.3 Preserve dragreorder raw failures caused by old hard foreground setup
+  as `FAIL_HARNESS`.
+- [x] 4.4 Preserve Edge/Chrome-covered drag/maximize attempts as
+  `BLOCKED_ENVIRONMENT`; no blind input issued.
+- [x] 4.5 Preserve Windows Terminal monarch reuse as `BLOCKED_CAPABILITY`.
+- [x] 4.6 No valid physical `FAIL_PRODUCT` confirmed; no production repair
+  authorized.
 
-## 5. Z-order, load, and layout
+## 5. Deterministic verification after supervised rerun
 
-- [x] 5.1 Unrelated foreground overlap, owned dialog, and local z-order are
-  **BLOCKED_SUPERVISED** before input.
-- [x] 5.2 `EVENT_OBJECT_LOCATIONCHANGE` load cases are **BLOCKED_SUPERVISED**
-  before the required moving/resizing workload; deterministic coverage remains
-  separate.
-- [x] 5.3 Physical title-centering width/name/DPI matrix is
-  **BLOCKED_SUPERVISED** before UIA measurement; available DPIs are recorded.
+- [x] 5.1 Debug/Release solution builds PASS, 0 warnings/errors.
+- [x] 5.2 Debug/Release unit tests PASS, 725/725 each.
+- [x] 5.3 ValidationDriver + GuineaPig Release builds PASS.
+- [x] 5.4 Catalog remains 128 dispatchable scenarios.
+- [x] 5.5 ValidationDriver selftests PASS 143/143.
+- [x] 5.6 Strict OpenSpec validation PASS 37/37.
+- [x] 5.7 CI-safe Release validation/publish, NuGet audit, resource stability,
+  native ABI, recovery, privacy and publish smoke PASS.
+- [x] 5.8 Rerun investigation and state checkpoint committed/pushed at
+  `b0975b2a724f0cf9551c4e106dfc6449c8643002`.
 
-## 6. Existing high-risk scenarios
+## 6. Continuation — stable foreground qualification
 
-- [x] 6.1 The required rename, group-menu, dropdown, add-window, context-menu,
-  chrome-click, foreground-pairing, maximize, split, drag/reorder, torture,
-  and browser scenario reruns are **BLOCKED_SUPERVISED** before input.
-- [x] 6.2 Record exact fresh-state rerun commands and do not launch `all` from
-  this unsupervised session.
+- [x] 6.1 Audit the generic `StartScenario` foreground-admission path and
+  preserve the existing fail-closed behavior.
+- [x] 6.2 Separate foreground arrangement from foreground proof in a shared
+  fail-closed harness primitive; retain all lease, identity, point-ownership,
+  foreign-coverage and cleanup guards.
+- [x] 6.3 Add deterministic fake-probe tests for SetForeground success/failure,
+  guarded owned-point activation, foreign coverage, stale/recycled HWND,
+  foreground loss after activation, and no-input refusal.
+- [x] 6.4 Prove the revised primitive cannot send blind input, cannot
+  manipulate unrelated windows, and still stops before destructive setup when
+  foreground cannot be safely established.
+- [x] 6.5 Re-run the formerly blocked generic setup path from clean state;
+  accepted fresh runs and the retained blocked split-exit attempts are
+  recorded in the continuation investigation.
 
 ## 7. Initial unsupervised checkpoint (historical)
 
@@ -125,8 +146,9 @@
   originating report after the browser repair and record first-attempt
   outcomes. Nine fresh cells passed; `split-exit` remained
   `BLOCKED_ENVIRONMENT` after three fail-closed retries, while the earlier
-  accepted split-exit pass remains preserved.
-- [ ] 8.11 Run the complete deterministic, catalog, OpenSpec, and CI-safe
-  gates against the final working tree.
+- [x] 8.11 Run the complete deterministic, catalog, OpenSpec, and CI-safe
+  gates against the final working tree. Debug/Release builds and tests,
+  driver/fixture builds, 153/153 selftests, 135-entry catalog/plans, strict
+  OpenSpec, and CI-safe Release validation passed.
 - [ ] 8.12 Commit/push the authoritative main tree and verify clean
   `HEAD == origin/main`.

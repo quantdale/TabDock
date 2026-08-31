@@ -95,3 +95,32 @@ fresh cells passed; three `split-exit` attempts were retained as
 input, and the earlier accepted split-exit pass remains evidence. The final
 deterministic/CI gates and authoritative `main` push remain before closure;
 this change stays active until they are verified.
+
+## Historical partial supervised certification checkpoint — 2026-08-31
+
+A supervised rerun on candidate `dd5f819484498b1e74678710bde58d55fbdcf8fa`
+established valid native leases for bounded attempts and materially improved the
+physical evidence. Supported rename, split, inline-capture, context-menu/chrome,
+direct-foreground/local-pairing and adjacent presentation paths passed after
+harness-only false-negative corrections. No valid physical `FAIL_PRODUCT` was
+confirmed and production TabDock code remained unchanged.
+
+This is **partial**, not full, physical certification. The remaining uncertified
+cells are now primarily missing ValidationDriver capabilities rather than
+missing hardware or supervision:
+
+- physical guest-caption maximize/restore;
+- Win+Up/restore;
+- real Chrome/Edge/Brave F11 fullscreen/exit;
+- explicit dual-monitor transfer and mixed-DPI transition measurement;
+- controlled `WS_EX_TOPMOST` guest dispatch (fixture exists, scenario does not);
+- dedicated `EVENT_OBJECT_LOCATIONCHANGE` load/storm qualification;
+- physical/UIA title-centering measurement across width/name/DPI;
+- stable generic foreground qualification for scenarios that currently stop at
+  `StartScenario` before setup/input.
+
+The next wave SHALL build only the missing qualification capabilities and
+stabilize the harness foreground-admission path without weakening the existing
+ownership/coverage/foreground guards. Production code remains out of scope
+unless one of those newly executable physical cells produces a valid
+`FAIL_PRODUCT`.
