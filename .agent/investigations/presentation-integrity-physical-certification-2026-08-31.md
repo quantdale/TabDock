@@ -17,12 +17,12 @@ that needs repair?
 ## Candidate identity
 
 - Starting implementation SHA: `4aaf3fcaa72edf48865030db43bccf7bd50e21b8`.
-- Final campaign commit/candidate SHA: `cac9316ed6a2f92bd8c67419c7a9876186fbe624`.
+- Final campaign candidate SHA: `a131a9f8ec9810a4015db2bd935cdda749f9f278`.
 - Final Release binary: `bin/Release/net8.0-windows/win-x64/TabDock.exe`.
 - Final `TabDock.exe --version`: TabDock 1.0.0, Release, `win-x64`,
   self-contained, x64; embedded commit matches the final candidate SHA.
 - Final candidate executable SHA-256:
-  `C4B27ED13FCADD66AFDF1AC1D031F91E8350351D833F1B91B9616986D7CCD175`.
+  `4E5EF396EE585FC02C5C5632F854B78DA3BF37AACA4C8000F72EABC92F1B2103`.
 - The pre-commit binary used for the read-only gate had embedded starting
   candidate `4aaf3fc` and hash
   `3C542DC37BE449923539AE169E646A741B781A510E811DA7CCE966BBBCF7D786`.
@@ -88,19 +88,19 @@ mouse/keyboard input, capture, window mutation, or destructive setup.
 
 | Capability / report | Candidate | Attempts | First result | Final result | Physical or deterministic | Evidence | Notes |
 | --- | --- | ---: | --- | --- | --- | --- | --- |
-| Color/accent menu | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | No real input; deterministic coverage remains separate. |
-| Workspace/group rename | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Entry, commit/cancel, click-away, long-name, and repeat paths not exercised. |
-| Split menu/focus/resume | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Menu, partner focus, dismiss/end, dormant/resume paths not exercised. |
-| `+` inline capture panel | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Open/close/reopen/cancel/capture paths not exercised. |
-| Guest caption maximize/restore | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Synthetic maximize policy evidence is deterministic only. |
-| Win+Up/restore | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2 | Required physical shortcut input was not sent. |
-| Real F11 fullscreen | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2 | No browser scenario was started. |
-| Dual-monitor transfer | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Two monitors exist; no supervised move/restore input. |
-| Mixed DPI | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | 96/120 DPI exists; no UIA/physical measurement. |
-| `WS_EX_TOPMOST` guest | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E3, E4 | Qualification-only `--topmost` fixture now exists; it was not exercised. |
-| Unrelated foreground overlap | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | No unrelated foreground or owned-dialog interaction was started. |
-| `LOCATIONCHANGE` load | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Physical moving/resizing workload was not started; deterministic routing remains separate. |
-| Physical title centering | `cac9316` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | No UIA title-width/DPI measurement was possible without supervision. |
+| Color/accent menu | `a131a9f` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | No real input; deterministic coverage remains separate. |
+| Workspace/group rename | `a131a9f` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Entry, commit/cancel, click-away, long-name, and repeat paths not exercised. |
+| Split menu/focus/resume | `a131a9f` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Menu, partner focus, dismiss/end, dormant/resume paths not exercised. |
+| `+` inline capture panel | `a131a9f` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Open/close/reopen/cancel/capture paths not exercised. |
+| Guest caption maximize/restore | `a131a9f` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Synthetic maximize policy evidence is deterministic only. |
+| Win+Up/restore | `a131a9f` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2 | Required physical shortcut input was not sent. |
+| Real F11 fullscreen | `a131a9f` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2 | No browser scenario was started. |
+| Dual-monitor transfer | `a131a9f` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Two monitors exist; no supervised move/restore input. |
+| Mixed DPI | `a131a9f` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | 96/120 DPI exists; no UIA/physical measurement. |
+| `WS_EX_TOPMOST` guest | `a131a9f` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E3, E4 | Qualification-only `--topmost` fixture now exists; it was not exercised. |
+| Unrelated foreground overlap | `a131a9f` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | No unrelated foreground or owned-dialog interaction was started. |
+| `LOCATIONCHANGE` load | `a131a9f` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | Physical moving/resizing workload was not started; deterministic routing remains separate. |
+| Physical title centering | `a131a9f` final | 0 | `BLOCKED_SUPERVISED` | `BLOCKED_SUPERVISED` | Physical gate | E1, E2, E4 | No UIA title-width/DPI measurement was possible without supervision. |
 
 `E1` = read-only `dotnet run ... --plan physicalMixedDpi --configuration
 Release --rid none` and the summarized `--plan all` capability probe.  
