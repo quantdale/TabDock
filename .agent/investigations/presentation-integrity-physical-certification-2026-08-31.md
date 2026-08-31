@@ -1,8 +1,10 @@
 # Investigation: presentation-integrity physical certification
 
 **Date:** 2026-08-31  
-**Status:** concluded for this desktop session — physical campaign blocked before input  
-**Campaign:** `openspec/changes/2026-08-31-presentation-integrity-physical-certification/`  
+**Status:** historical initial session — physical campaign blocked before input;
+superseded by the later supervised rerun record
+**Campaign:** archived under
+`openspec/changes/archive/2026-08-31-2026-08-31-presentation-integrity-physical-certification/`
 **Starting HEAD:** `4aaf3fcaa72edf48865030db43bccf7bd50e21b8`  
 **Starting origin/main:** `4aaf3fcaa72edf48865030db43bccf7bd50e21b8`  
 **Branch:** `main`  

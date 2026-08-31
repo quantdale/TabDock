@@ -70,22 +70,31 @@ remain mandatory. No permanent always-on-top policy, arbitrary foreign-window
 reordering, guest restyling, or reparenting is authorized by this proposal.
 
 
-## Delivery and qualification status — 2026-08-31
+## Delivery and qualification status — 2026-09-01
 
-Implementation and deterministic qualification are complete on main through
-`4aaf3fcaa72edf48865030db43bccf7bd50e21b8`. The correct claim at this
-checkpoint is:
+Implementation and deterministic qualification are complete. The follow-up
+physical-certification campaign completed the exercised original-report
+matrix, including the repaired Chrome/Edge/Brave F11 paths, while retaining
+the earlier split-exit PASS and later fail-closed
+`BLOCKED_ENVIRONMENT` qualification attempts. The deliberate no-op color
+selector remains `SKIP_CAPABILITY`; no valid split-exit `FAIL_PRODUCT` is
+established.
 
-> Deterministic implementation and qualification standard met; physical
-> certification of the original field reports remains pending because the
-> required interactive/topology capabilities were unavailable.
+The exact current `main` tree
+`914a25923bd4bb1f5c08d925bfb210bb9208853f` passed the final deterministic and
+CI-safe gates. The follow-up record preserves the physical run identities and
+the Release executable identity. This implementation change and its physical
+follow-up have met their documented acceptance boundaries and are eligible
+for archival after canonical spec synchronization.
 
-Do **not** interpret the completed deterministic campaign as physical proof of
-real F11/browser fullscreen, dual-monitor transfer, WS_EX_TOPMOST popup
-interaction, mixed-DPI hardware, or repeated human-input workflows. Those
-remaining gates are tracked by the narrow follow-up change
-`openspec/changes/2026-08-31-presentation-integrity-physical-certification/`.
+The physical evidence remains distinct from deterministic, synthetic, and
+read-only evidence. Existing run artifacts stay bound to the exact candidate
+they exercised; later documentation or planning commits do not rewrite those
+bindings.
 
-This implementation change SHOULD NOT be archived as fully field-certified
-until that follow-up reaches its acceptance criteria or an explicit decision
-records why a remaining physical gate is permanently unavailable/non-blocking.
+## Historical pre-certification status — 2026-08-31
+
+At the earlier implementation checkpoint, physical certification remained
+pending because required interactive/topology capabilities were unavailable.
+That historical limitation is superseded by the completed follow-up campaign;
+its raw blocked and failed artifacts remain preserved.

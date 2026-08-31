@@ -1,18 +1,22 @@
 # Investigation: user-reported presentation integrity
 
 **Date:** 2026-08-31  
-**Status:** closed — implementation and deterministic qualification complete; supervised physical qualification honestly blocked  
+**Status:** historical source investigation — deterministic implementation
+complete; its initial physical phase was supervision-blocked and is
+superseded by the later physical-certification rerun record
 **Starting HEAD:** `e4787c7769c333bd750582d74692da0a573c1727`  
-**Final HEAD (implementation):** see session push SHA  
-**Branch:** `main`  
-**Worktree:** clean after push (verified)
+**Implementation continuation:** later commits and physical evidence are
+recorded in `.agent/investigations/presentation-integrity-physical-certification-rerun-2026-08-31.md`
+**Branch at investigation time:** `main`
+**Worktree at investigation time:** clean after the historical push
 
 ## Question
 Which observable invariant first fails when TabDock chrome interacts with a captured guest, when a captured guest changes native state, when local z-order changes, and when the workspace caption is laid out? Which fixes are justified by evidence rather than the active OpenSpec hypotheses?
 
 ## Starting state summary
 - Repository OpenSpec and source describe independent top-level Shepherd guests; no reparenting or guest restyling is permitted.
-- The active change is `openspec/changes/2026-08-31-user-reported-presentation-integrity/`.
+- The original implementation change is now archived under
+  `openspec/changes/archive/2026-08-31-2026-08-31-user-reported-presentation-integrity/`.
 - Physical reproduction requires a supervised desktop lease with real SendInput and multi-monitor/topmost capabilities. No supervised lease was available in this headless session, so no destructive native input was issued.
 - Static source evidence identified two concrete invariant risks: `BeginChromePopup` raises the full opaque container while `LayoutShepherdActiveWindow`/`LayoutSplitPanes` refuse reconciliation during chrome interaction; and `WinEventMonitor` does not admit `EVENT_OBJECT_LOCATIONCHANGE`, leaving no direct signal for guest geometry or maximize/fullscreen changes.
 - Static source also confirmed the title was measured in an asymmetric caption column (`Grid.Column=1`, left `Auto` chip vs right many `Auto` controls), so window-midpoint centering was not guaranteed.
@@ -83,7 +87,7 @@ Which observable invariant first fails when TabDock chrome interacts with a capt
 - The new `guest-maximize-contained` scenario uses synthetic `ShowWindow(SW_SHOWMAXIMIZED)` rather than a real click on the guest’s custom-drawn maximize button; the native `IsZoomed` + `LOCATIONCHANGE` sequence is identical, but the synthetic path does not prove the custom-drawn button HitTest path for Chromium.
 
 ## References
-- `openspec/changes/2026-08-31-user-reported-presentation-integrity/` (proposal, design, tasks)
+- `openspec/changes/archive/2026-08-31-2026-08-31-user-reported-presentation-integrity/` (archived proposal, design, tasks)
 - `Views/ContainerWindow.xaml` (caption `* Auto *`)
 - `Views/ContainerWindow.xaml.cs` (`_popupChromeDepth`, `ReconcilePresentationDrift`, narrowed pairing/layout guards, inline composition)
 - `Services/WindowShepherdService.cs` (`RestoreForMutation` already handles `IsZoomed`; `PairZOrderBehind`/`IsContainerBelowGuest` unchanged)
@@ -93,5 +97,5 @@ Which observable invariant first fails when TabDock chrome interacts with a capt
 - `Services/PaneContainmentPolicy.cs` / `Services/PaneContainmentCoordinator.cs` (bounded refusal)
 - `NativeMethods.cs` (`EVENT_OBJECT_LOCATIONCHANGE = 0x800B` already defined)
 - `tests/UnitTests/GuestPresentationDriftPolicyTests.cs`, `CaptionCenteringTests.cs`, `PresentationChromeIntegrityTests.cs`
-- `tests/ValidationDriver/TabDock.ValidationDriver/Scenarios.Split.cs` (`GuestMaximizeContained`), `ScenarioCatalog.cs` (128 dispatchable)
-- `docs/ARCHITECTURE.md`, `docs/TESTING.md` — to be reconciled in next commit (see OpenSpec tasks 6.5/6.6)
+- `tests/ValidationDriver/TabDock.ValidationDriver/Scenarios.Split.cs` (`GuestMaximizeContained`), `ScenarioCatalog.cs` (current catalog: 135 dispatchable scenarios)
+- `docs/ARCHITECTURE.md`, `docs/TESTING.md`, and the later physical-certification investigation contain the reconciled current documentation and evidence.

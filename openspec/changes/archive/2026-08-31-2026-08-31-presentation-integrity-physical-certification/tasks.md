@@ -150,5 +150,8 @@
   gates against the final working tree. Debug/Release builds and tests,
   driver/fixture builds, 153/153 selftests, 135-entry catalog/plans, strict
   OpenSpec, and CI-safe Release validation passed.
-- [ ] 8.12 Commit/push the authoritative main tree and verify clean
-  `HEAD == origin/main`.
+- [x] 8.12 Commit/push the authoritative main tree and verify clean
+  `HEAD == origin/main`. Exact current-main gate passed at
+  `914a25923bd4bb1f5c08d925bfb210bb9208853f`; Release executable SHA-256 is
+  `E3C830202F07C522B8B0A210B4181D96D92158D84F86576CF23DDEDEA9BBF06F` and
+  its embedded source identity matches that SHA.

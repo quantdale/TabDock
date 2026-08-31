@@ -92,9 +92,23 @@ registered role evidence.
 Adjacent physical requalification is complete for every requested cell: nine
 fresh cells passed; three `split-exit` attempts were retained as
 `BLOCKED_ENVIRONMENT` because the fail-closed foreground/point guard refused
-input, and the earlier accepted split-exit pass remains evidence. The final
-deterministic/CI gates and authoritative `main` push remain before closure;
-this change stays active until they are verified.
+input, and the earlier accepted split-exit pass remains evidence. No valid
+split-exit `FAIL_PRODUCT` is established.
+
+The exact current mainline gate then passed on `main`/
+`914a25923bd4bb1f5c08d925bfb210bb9208853f`: clean Debug and Release solution
+builds, `732/732` unit tests in each configuration, Release driver/GuineaPig
+builds, `153/153` ValidationDriver selftests, the 135-entry catalog and
+release/physical plans, strict OpenSpec validation `37/37`, CI-safe Release
+validation/publish, native ABI, and version/source-identity smoke. The
+Release `win-x64` self-contained executable hash was
+`E3C830202F07C522B8B0A210B4181D96D92158D84F86576CF23DDEDEA9BBF06F`; its
+embedded source identity was the exact current SHA.
+
+The physical evidence remains bound to the candidate/run that produced it and
+is not relabeled as having exercised the later documentation/integration
+commit. This change's acceptance boundary is satisfied and it is eligible for
+archive after canonical spec synchronization.
 
 ## Historical partial supervised certification checkpoint — 2026-08-31
 

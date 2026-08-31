@@ -293,6 +293,34 @@ through a foreign foreground window: record `BLOCKED_ENVIRONMENT` or
 replay/model coverage instead. A successful rerun after a valid-environment
 failure is `FLAKE_UNCLASSIFIED` until the cause is understood.
 
+#### Presentation-integrity campaign closure — 2026-09-01
+
+The presentation-integrity implementation and supervised physical
+qualification are complete for the exercised matrix. The first valid Chrome
+F11 containment run remains the only valid `FAIL_PRODUCT`
+(`7f5ba57f-af6e-491e-81aa-b33bd8229471`); the bounded Chromium repair passes
+for Chrome (`71656457-b555-42ce-a782-b4947f33f292`), Edge
+(`9cb2ad2a-a6bc-41a2-b196-2492702b9331`), and Brave
+(`01c74b6f-fb28-4ab6-acef-ab3c2f3ab4d6`) do not erase that first-attempt
+record. The accepted split-exit pass
+(`03c3aaa2-37d1-41bd-9382-98fcd2d470ad`) remains authoritative; later
+fail-closed attempts
+(`58f04b3a-ffbc-4b7b-aa56-b1ee5c32a9fd`,
+`de3a5cc7-e7b0-4e2c-ad2a-a7c6ce1aa33c`, and
+`f768ff27-2931-4705-8130-89b0bf23a95d`) are
+`BLOCKED_ENVIRONMENT`, not product failures.
+
+The detailed evidence and exact candidate/run binding remain in
+`.agent/investigations/presentation-integrity-physical-certification-rerun-2026-08-31.md`.
+The completed OpenSpec changes are archived under
+`openspec/changes/archive/2026-08-31-2026-08-31-user-reported-presentation-integrity/`
+and
+`openspec/changes/archive/2026-08-31-2026-08-31-presentation-integrity-physical-certification/`.
+The retained visual-evidence/AI-review plan is future qualification and
+diagnostic infrastructure only: visual artifacts may augment hard evidence,
+but cannot retroactively convert a blocked, skipped, or failed physical cell
+to `PASS`.
+
 Core scenarios (from `Program.cs` / `Scenarios.cs`):
 
 ```

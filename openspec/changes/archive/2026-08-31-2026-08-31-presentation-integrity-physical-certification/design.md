@@ -1,14 +1,26 @@
 # Design — presentation-integrity physical certification
 
-## Baseline and claim boundary
+## Current status — 2026-09-01
+
+The supervised physical matrix is complete for the exercised capabilities. The
+only valid physical `FAIL_PRODUCT` is the retained first Chrome F11 run; its
+identity-checked Chromium-only F11 exit repair was requalified on Chrome,
+Edge, and Brave. The accepted split-exit pass and later fail-closed
+`BLOCKED_ENVIRONMENT` attempts remain separately recorded.
+
+The exact current `main` tree (`914a25923bd4bb1f5c08d925bfb210bb9208853f`)
+passed the deterministic and CI-safe closure gate. Its Release
+`win-x64` self-contained executable embeds that SHA and has SHA-256
+`E3C830202F07C522B8B0A210B4181D96D92158D84F86576CF23DDEDEA9BBF06F`.
+Physical artifacts remain bound to the exact pre-integration candidate they
+actually exercised; no historical run is relabeled.
+
+## Historical baseline and first claim
 
 Baseline implementation checkpoint:
 `4aaf3fcaa72edf48865030db43bccf7bd50e21b8`.
 
-Before running, resolve current `HEAD`, `origin/main`, branch and worktree
-dynamically. Newer mainline commits supersede the embedded checkpoint.
-
-The starting claim is deliberately narrow:
+Before physical qualification, the starting claim was deliberately narrow:
 
 > Deterministic implementation and qualification standard met; physical
 > certification of the original field reports remains pending.

@@ -118,22 +118,25 @@
   `.agent/STATE.md`, and the investigation/decision records with the proven
   design and remaining limits. — **Done in this commit.**
 - [x] 6.6 Reconcile/adjust this OpenSpec change to the actual implementation,
-  with no speculative mechanism presented as fact. — **This tasks file and investigation record reconciled to depth-scoped popup, `LOCATIONCHANGE` filtered coalesced, `GuestPresentationDriftPolicy` pure, `* Auto *` caption.**
+  with no speculative mechanism presented as fact. — **Reconciled to the
+  implemented depth-scoped popup, filtered/coalesced `LOCATIONCHANGE`,
+  `GuestPresentationDriftPolicy`, and `* Auto *` caption.**
 - [x] 6.7 Commit with a detailed evidence summary and push the completed
-  implementation so the exact final SHA can be reviewed independently. — **Next commit + push.**
+  implementation so the exact final SHA can be reviewed independently. —
+  **Pushed on authoritative `main`; exact current-main gate passed at
+  `914a25923bd4bb1f5c08d925bfb210bb9208853f`.**
 
 
 ## Physical-certification handoff
 
 All tasks above describe the completed implementation/deterministic campaign.
-Their checked state MUST NOT be read as proof that the original user reports
-have been physically certified on an exclusive interactive desktop.
+The physical-certification follow-up has also completed its exercised matrix
+and records the accepted split-exit pass, later fail-closed environment blocks,
+the first valid Chrome F11 product failure, and its Chrome/Edge/Brave repair
+requalification. Deterministic, synthetic, read-only, and physical evidence
+remain separate; no physical result is inferred from the checked task state.
 
-The remaining supervised/hardware field-certification work is deliberately
-isolated in:
-
-`openspec/changes/2026-08-31-presentation-integrity-physical-certification/`
-
-Keep this change unarchived until the follow-up either completes its physical
-acceptance matrix or records an explicit disposition for every unavailable
-capability.
+The follow-up change is now eligible for archival after canonical spec
+synchronization, and this implementation change is eligible to archive with
+it. Durable investigations and raw evidence remain outside the change
+directories.

@@ -1,10 +1,11 @@
 # Investigation: presentation-integrity physical certification rerun
 
 **Date:** 2026-08-31  
-**Status:** concluded for this desktop session — partial physical evidence, full
-certification stopped after the environment could no longer establish a safe
-TabDock foreground target  
-**Campaign:** `openspec/changes/2026-08-31-presentation-integrity-physical-certification/`  
+**Status:** complete for the exercised physical matrix — one honest
+`split-exit` `BLOCKED_ENVIRONMENT` requalification remains; no valid
+split-exit `FAIL_PRODUCT` is established
+**Campaign:** archived under
+`openspec/changes/archive/2026-08-31-2026-08-31-presentation-integrity-physical-certification/`
 **Prior evidence:** preserved unchanged in
 `.agent/investigations/presentation-integrity-physical-certification-2026-08-31.md`
 
@@ -443,3 +444,36 @@ This matrix distinguishes a bounded supervised environment block from a
 product failure. The only valid `FAIL_PRODUCT` remains the frozen first Chrome
 F11 run; the production repair is limited to that demonstrated browser
 presentation defect.
+
+## Exact final-mainline qualification checkpoint — 2026-09-01
+
+Before branch consolidation, the exact authoritative `main` tree was
+`914a25923bd4bb1f5c08d925bfb210bb9208853f`, and `HEAD == origin/main` with a
+clean worktree. The current tree was rebuilt and smoked without desktop input:
+
+- clean Debug and Release `TabDock.sln` builds: PASS, 0 warnings/errors;
+- Debug and Release unit tests: PASS, `732/732` each;
+- Release ValidationDriver and GuineaPig builds: PASS, 0 warnings/errors;
+- ValidationDriver selftest run
+  `c100fc7c-3665-47a2-882d-821eca156a56`: `153/153` PASS;
+- catalog: `scenario-catalog-2026-08-24-v1`, 135 dispatchable scenarios;
+- `--plan release` and `--plan physicalMixedDpi`: PASS on the observed
+  two-monitor 96/120-DPI topology;
+- strict OpenSpec validation: `37/37` PASS;
+- CI-safe Release validation/publish: PASS, including restore audit with no
+  vulnerable packages, resource stability, native ABI, recovery, privacy,
+  publish, and version smokes.
+
+The final Release executable was built from that exact tree with configuration
+`Release`, RID `win-x64`, self-contained deployment. `TabDock.exe --version`
+reported embedded source identity
+`914a25923bd4bb1f5c08d925bfb210bb9208853f` and
+`1.0.0+914a25923bd4bb1f5c08d925bfb210bb9208853f`; executable SHA-256 was
+`E3C830202F07C522B8B0A210B4181D96D92158D84F86576CF23DDEDEA9BBF06F`.
+The native ABI smoke also passed.
+
+The physical run IDs in this investigation remain bound to their recorded
+pre-integration candidate identity, especially `b0975b2a724f0cf9551c4e106dfc6449c8643002`.
+This exact-mainline checkpoint proves the final source/build/tooling identity;
+it does not rewrite historical physical artifacts or claim that they ran
+against a different SHA.
