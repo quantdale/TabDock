@@ -7,7 +7,33 @@ Resolve them dynamically at every fresh session. This file never records a
 self-referential SHA or treats an old CI run as evidence for the commit that
 contains this text.
 
-## CURRENT CAMPAIGN — USER-REPORTED PRESENTATION INTEGRITY
+## CURRENT CAMPAIGN — PRESENTATION INTEGRITY PHYSICAL CERTIFICATION
+
+**Objective:** physically certify the user-reported presentation-integrity fixes on a real exclusive Windows desktop, exercise the residual high-risk topology/z-order/fullscreen cases that deterministic qualification could not prove, and repair only defects that are actually reproduced.
+
+**Plan:** `openspec/changes/2026-08-31-presentation-integrity-physical-certification/`
+
+**Baseline:** implementation/deterministic delivery is on main through `4aaf3fcaa72edf48865030db43bccf7bd50e21b8` (725/725 unit tests, 128 dispatchable scenarios, clean mainline at handoff). Resolve HEAD/origin/main dynamically before execution.
+
+**Status:** planned / physical qualification pending. This is a certification-and-residual-repair campaign, NOT a new architecture rewrite.
+
+### Current phase
+
+- Acquire/prove an exclusive interactive desktop lease before any SendInput.
+- Run the field-certification matrix from the active OpenSpec change.
+- Preserve first-attempt evidence and classify PASS/FAIL_PRODUCT/FAIL_HARNESS/BLOCKED_* honestly.
+- If a residual product defect reproduces, diagnose from first divergence, make the smallest bounded fix, add a non-vacuous regression, and rerun the affected matrix.
+- Do not change the working presentation architecture merely because a theoretical edge case exists; physical evidence is the gate.
+
+### Acceptance boundary
+
+The previous campaign's implementation is deterministically qualified, but the original field reports are not considered physically certified until the follow-up matrix covers or explicitly disposes: repeated color/rename/split/+ workflows, guest-native maximize, real F11/browser fullscreen, dual-monitor transfer when hardware exists, WS_EX_TOPMOST interaction, representative DPI/topology, unrelated foreground overlap, and location-change event-volume stress.
+
+### Next action
+
+Execute the physical-certification OpenSpec on an exclusive interactive Windows desktop. If the environment cannot prove the required lease/topology, record the correct BLOCKED_* result; never manufacture a physical PASS.
+
+## PREVIOUS CAMPAIGN — USER-REPORTED PRESENTATION INTEGRITY
 
 **Objective:** resolve the four user-reported presentation failures (chrome occlusion via accent/rename/split/+ panel, off-center title, guest maximize/fullscreen/monitor escape, unreliable top-layer) with an evidence-first, bounded, Shepherd-preserving implementation and demonstrable regression coverage.
 

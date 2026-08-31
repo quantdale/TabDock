@@ -121,3 +121,19 @@
   with no speculative mechanism presented as fact. — **This tasks file and investigation record reconciled to depth-scoped popup, `LOCATIONCHANGE` filtered coalesced, `GuestPresentationDriftPolicy` pure, `* Auto *` caption.**
 - [x] 6.7 Commit with a detailed evidence summary and push the completed
   implementation so the exact final SHA can be reviewed independently. — **Next commit + push.**
+
+
+## Physical-certification handoff
+
+All tasks above describe the completed implementation/deterministic campaign.
+Their checked state MUST NOT be read as proof that the original user reports
+have been physically certified on an exclusive interactive desktop.
+
+The remaining supervised/hardware field-certification work is deliberately
+isolated in:
+
+`openspec/changes/2026-08-31-presentation-integrity-physical-certification/`
+
+Keep this change unarchived until the follow-up either completes its physical
+acceptance matrix or records an explicit disposition for every unavailable
+capability.
