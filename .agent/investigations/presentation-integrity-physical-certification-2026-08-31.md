@@ -104,9 +104,9 @@ mouse/keyboard input, capture, window mutation, or destructive setup.
 
 `E1` = read-only `dotnet run ... --plan physicalMixedDpi --configuration
 Release --rid none` and the summarized `--plan all` capability probe.  
-`E2` = starting-candidate and final-candidate `--version` output,
-`--doctor`, and native monitor work-area probe; the final candidate was
-rebuilt after commit before identity capture.
+`E2` = starting-candidate `--version`/`--doctor` output, final-candidate
+`--version` output, and the native monitor work-area probe; the final
+candidate was rebuilt after its candidate commit before identity capture.
 `E3` = initial and post-change source inspection of `PigOptions`, GuineaPig
 argument parsing, form initialization, extra-window cloning, and
 ValidationDriver catalog searches for `topmost`/`WS_EX_TOPMOST`.  
