@@ -24,8 +24,6 @@ internal static partial class Scenarios
             return;
 
         NativeMethods.GetWindowRect(container, out NativeMethods.RECT rcBefore);
-        if (!Input.ForceForeground(container))
-            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
         // Retry with a clickability gate: ForceForeground succeeding does not
         // guarantee the caption point is unobstructed, and a covering top-level
         // window silently swallows both the double-click and the typed text
@@ -35,14 +33,13 @@ internal static partial class Scenarios
         bool renamed = false;
         for (int attempt = 0; attempt < 3 && !renamed; attempt++)
         {
-            if (attempt > 0)
-                if (!Input.ForceForeground(container))
-                    throw new InvalidOperationException("Could not bring the container to the foreground; refusing to retry rename.");
             AutomationElement? cap = Uia.FindDescendantByName(containerEl, ControlType.Text, "Group", null, out int cnt);
             if (cap == null || cnt != 1)
                 break;
             (int cx, int cy) = Uia.Center(cap);
             if (FindObstructingWindow(container, cx, cy) != IntPtr.Zero)
+                continue;
+            if (!EnsureClickable(container, cx, cy))
                 continue;
             Input.DoubleClickAt(cx, cy);
             Thread.Sleep(300);
@@ -237,8 +234,6 @@ internal static partial class Scenarios
 
         ctx.Check(TabCount(container) == 3, "3 tabs after capture");
 
-        if (!Input.ForceForeground(container))
-            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
         bool everyClickOk = true;
         int lastIdx = -1;
         for (int i = 0; i < 24; i++)
@@ -252,6 +247,12 @@ internal static partial class Scenarios
                 break;
             }
             (int tx, int ty) = Uia.Center(tab);
+            if (!EnsureClickable(container, tx, ty))
+            {
+                everyClickOk = false;
+                ctx.Check(false, $"click {i + 1}/24: container caption/tab strip was not directly clickable");
+                break;
+            }
             Input.ClickAt(tx, ty);
             Thread.Sleep(250);
 

@@ -19,9 +19,6 @@ internal static partial class Scenarios
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
         ctx.Check(TabCount(container) == 2, "2 tabs after capture");
 
-        if (!Input.ForceForeground(container))
-            throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
-
         // Reorder: drag the RIGHTMOST tab into the left half of the LEFTMOST tab
         // (capture order follows picker Z-order, so tab order is not guaranteed;
         // GetDropIndex uses item midpoints, so the target must be left of the
@@ -36,6 +33,8 @@ internal static partial class Scenarios
         GuestInfo movedPig = aIsRight ? pigA : pigB;
         Rect leftRect = aIsRight ? rB : rA;
         (int sx, int sy) = Uia.Center(aIsRight ? tabA : tabB);
+        if (!EnsureClickable(container, sx, sy))
+            throw new InvalidOperationException("Could not bring the container to the foreground and its tab strip is obscured — refusing to drag blind.");
         long dragOff = TabDockLog.RecordLogLength(); // scope reorder analysis to THIS drag only
         Input.DragFromTo(sx, sy, (int)(leftRect.X + 8), sy, 14);
         Thread.Sleep(600);

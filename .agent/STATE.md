@@ -10,99 +10,87 @@ contains this text.
 ## CURRENT CAMPAIGN — PRESENTATION-INTEGRITY PHYSICAL CERTIFICATION
 
 **Objective:** physically certify the original chrome-occlusion, title-centering,
-guest-escape, and z-order reports on an exclusive supervised Windows desktop;
-repair only a defect actually reproduced under that lease.
+guest-escape, and z-order reports on the user-granted exclusive supervised
+Windows desktop; repair only a defect actually reproduced under that lease.
 
 **Plan:** `openspec/changes/2026-08-31-presentation-integrity-physical-certification/`
 
-**Status:** complete for this desktop session as an honestly blocked physical
-certification. The native probes and deterministic gates passed; no exclusive
-supervised desktop lease was proven, so no physical input or scenario was
-started. The smallest test-only GuineaPig topmost switch and one stale
-self-test expectation were corrected. Evidence is committed and pushed; no
-production repair was justified.
+**Status:** partial physical certification concluded for this desktop session.
+The user supplied exclusive supervision and the driver accepted valid native
+leases for bounded runs. Several supported paths passed. The physical phase
+stopped after two consecutive generic foreground-setup failures; no valid
+physical `FAIL_PRODUCT` occurred and no production repair was justified.
+Detailed rerun evidence:
+`.agent/investigations/presentation-integrity-physical-certification-rerun-2026-08-31.md`.
 
 ### Current phase
 
-- Orientation: complete — current start `HEAD`/`origin/main` was
-  `4aaf3fcaa72edf48865030db43bccf7bd50e21b8` on `main` with a clean worktree;
-  required guidance, implementation change, canonical specs, and testing
-  procedures were read before edits.
-- Safety/evidence: complete — the native probes report an interactive unlocked
-  session, but this agent cannot prove human-exclusive desktop ownership or a
-  supervised operator lease. No `SendInput`, capture, window mutation, or
-  physical scenario was issued. Record:
-  `.agent/investigations/presentation-integrity-physical-certification-2026-08-31.md`.
-- Fixture: complete — `tests/ValidationDriver/TabDock.GuineaPig` now accepts
-  `--topmost`, maps it to `Form.TopMost`, carries it to extra windows, and logs
-  the setting. This is qualification-only; production behavior is unchanged.
-- Validation: complete — deterministic gates pass: Debug/Release solution
-  builds, 725/725 Debug and Release unit tests, Release
-  ValidationDriver/GuineaPig builds, catalog listing, ValidationDriver
-  selftests 143/143, CI-safe Release pipeline, and strict OpenSpec validation
-  37/37. The first selftest run remains recorded as `FAIL_HARNESS` because
-  `CAT01` expected 127 instead of the catalog's 128; the test-only expectation
-  was corrected.
+- Orientation: complete — campaign candidate at orientation was
+  `dd5f819484498b1e74678710bde58d55fbdcf8fa` on `main`; required guidance,
+  architecture/testing references, active OpenSpec artifacts, and prior
+  blocked evidence were read before edits.
+- Lease: complete for accepted runs — native probes reported interactive,
+  unlocked, `SendInput`-available desktop; accepted timelines proved candidate
+  process/HWND identity, owned/adopted provenance, `WindowFromPoint` →
+  `GA_ROOT`, foreground continuity, point ownership, and cleanup identity.
+  The user statement is the supervision evidence; no guard was bypassed.
+- Physical rerun: stopped safely — after valid runs, two fresh `dragreorder`
+  attempts (`93118e80-2faf-45ed-aa69-81d32847088a` and
+  `c31afe50-d5dd-4a26-b20f-336b71b96f64`) failed at the unchanged generic
+  `StartScenario` foreground gate before setup/input. The known
+  Windows/sandbox foreground-arrangement limitation applies. No further
+  physical input was sent.
+- Harness correction: complete — only ValidationDriver scenario guards/live
+  UIA reacquisition were changed in `Scenarios.Core.cs`, `Scenarios.Split.cs`,
+  and `Scenarios.Drag.cs`; production TabDock source is unchanged. Old raw
+  failure artifacts remain preserved and are analytically classified in the
+  rerun report.
+- Disposition: complete — supported rename, tabswitch, split, inline capture,
+  menu, Chrome-click, direct foreground, resize, and synthetic/container
+  maximize paths passed. Color selector, physical guest caption/Win+Up, F11,
+  transfer/mixed-DPI measurement, topmost, load, and title-centering cells
+  remain capability/environment blocked; synthetic evidence is not promoted.
 
-### Deterministic gate evidence
+### Verified environment
 
-- Corrected selftest runId:
-  `b9c42048-872a-4799-b8ae-442e9a57bb89`, 143/143, deterministic-all PASS,
-  run-manifest PASS.
-- Preserved first harness failure runId:
-  `e66a69b1-c5a8-4664-92c1-92a60f9ca2a3`, CAT01 failure, 142/143, exit 21.
-- ValidationDriver catalog: `scenario-catalog-2026-08-24-v1`, 128 dispatchable
-  scenarios. No physical scenario was launched.
+- Windows 11 Pro family, raw product label Windows 10 Pro, 25H2 build 26200
+  revision 9278; .NET 8.0.30; standard-user session 1.
+- Primary `(0,0)-(1920,1200)`, work `(0,0)-(1920,1140)`, 120 DPI/125%;
+  secondary `(1920,0)-(3840,1080)`, work `(1920,0)-(3840,1032)`, 96 DPI/100%;
+  no negative-coordinate monitor.
+- Chrome, Edge, Brave, Windows Terminal, and Notepad available; Firefox
+  unavailable. `stageBAvailable=false`; candidate signing not configured.
+- Candidate Release executable hash at orientation:
+  `D2BC99361705240FD1EAB14784D7AA3807AFB1F6F00F870B3C982EE2C3E106A9`.
 
-- CI-safe Release pipeline passed NuGet audit, resource stability, native ABI,
-  recovery, support-bundle privacy, and publish smoke without a scenario
-  argument or desktop input.
+### Deterministic validation
 
-### Verified environment facts
+- Debug/Release solution builds and Debug/Release unit tests passed;
+  unit tests were 725/725 in each configuration.
+- Release ValidationDriver/GuineaPig builds passed with zero warnings/errors.
+- Catalog is `scenario-catalog-2026-08-24-v1` with 128 dispatchable scenarios.
+- Latest recorded ValidationDriver selftest:
+  runId `e7b8e777-be37-4396-bdcd-67b79cd80639`, 143/143, deterministic-all
+  PASS and run manifest PASS.
+- CI-safe `scripts/validate.ps1 -Configuration Release -Ci -Publish` passed
+  NuGet audit, resource stability, native ABI, recovery, privacy, Release
+  tests/builds, OpenSpec validation 37/37, and publish version smoke without
+  scenario input.
 
-- Final campaign candidate: commit
-  `a131a9f8ec9810a4015db2bd935cdda749f9f278`; Release executable rebuilt after
-  commit; embedded SHA matches; executable SHA-256
-  `4E5EF396EE585FC02C5C5632F854B78DA3BF37AACA4C8000F72EABC92F1B2103`.
-- Pre-commit starting candidate identity was
-  `4aaf3fcaa72edf48865030db43bccf7bd50e21b8` with executable hash
-  `3C542DC37BE449923539AE169E646A741B781A510E811DA7CCE966BBBCF7D786`.
-- `--doctor`: Windows 11 family, raw product label Windows 10 Pro, 25H2,
-  build 26200 revision 9278, .NET 8.0.30, standard-user, session 1.
-- Two physical monitors: primary `(0,0)-(1920,1200)`, work
-  `(0,0)-(1920,1140)`, 120 DPI/125%; secondary
-  `(1920,0)-(3840,1080)`, work `(1920,0)-(3840,1032)`, 96 DPI/100%.
-- Chrome, Edge, Brave, Windows Terminal, and Notepad are available by
-  capability/path probes; Firefox is unavailable.
-- No campaign-owned guest/container/popup HWND exists. Prior doctor/log
-  observations are not physical scenario evidence.
+### Safety and evidence rules
 
-### Campaign disposition
-
-- Color menu, rename, split, inline `+`, guest caption maximize, Win+Up, real
-  F11, dual-monitor transfer, mixed DPI, unrelated foreground, LOCATIONCHANGE
-  load, and physical title centering are `BLOCKED_SUPERVISED` before input.
-- Topmost guest coverage is now fixture-capable but remains
-  `BLOCKED_SUPERVISED` before input.
-- No valid `FAIL_PRODUCT` occurred; no production repair was justified.
-- Deterministic and synthetic evidence remains separate from physical
-  certification. The original implementation change must not be described as
-  physically certified.
-
-### Validation and safety rules
-
-- No guarded `SendInput` or blind desktop automation without a proven
-  exclusive supervised lease.
-- Preserve `WindowFromPoint` → `GA_ROOT`, foreground, process-start, HWND
-  generation/identity, local z-order, and cleanup protections.
-- A valid first physical failure remains authoritative; a later pass cannot
-  become best-of-N PASS.
-- Keep generated artifacts, logs, caches, machine paths, credentials, and
-  secrets out of Git.
+- Preserve raw first failures; never best-of-N a valid failure into PASS.
+- Never weaken `WindowFromPoint`/`GA_ROOT`, foreground, process-start, HWND
+  generation, provenance, local z-order, or cleanup protections.
+- Generated artifacts, logs, caches, machine paths, credentials, and secrets
+  stay out of Git.
+- The active OpenSpec change is not safe to archive while major requested
+  physical cells remain blocked.
 
 ### Next action
 
-Handoff. Do not claim the original presentation-integrity implementation is
-physically certified: every physical matrix row is `BLOCKED_SUPERVISED` with
-zero attempts. A future session must resolve Git authority and establish an
-exclusive supervised desktop lease before any physical rerun.
+Commit and push the harness-only corrections plus this checkpoint and the
+rerun investigation. Verify final `git status`, `git rev-parse HEAD`, and
+`git rev-parse origin/main`. Do not claim full physical certification or a
+production defect fix; a future session must establish stable foreground
+arrangement before the remaining physical cells are attempted.

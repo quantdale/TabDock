@@ -1952,17 +1952,39 @@ internal static partial class Scenarios
         AutomationElement? root = Uia.FromHwnd(container);
         if (root == null)
             throw new InvalidOperationException("Container UIA root unavailable while inline capture is open.");
-        AutomationElement? targetText = Uia.FindDescendantByName(root, ControlType.Text, null, pigB.Title, out int textCount);
-        if (targetText == null || textCount != 1)
-            throw new InvalidOperationException($"Inline capture target '{pigB.Title}' not found uniquely (count={textCount}).");
-        AutomationElement? checkBox = Uia.NearestAncestorOfType(targetText, ControlType.CheckBox) ?? targetText;
+        AutomationElement? checkBox = null;
+        var rowWait = Stopwatch.StartNew();
+        while (checkBox == null && rowWait.ElapsedMilliseconds < 12000)
+        {
+            root = Uia.FromHwnd(container);
+            if (root == null)
+                break;
+            try
+            {
+                checkBox = ResolveInlineRowCheckBox(root, pigB);
+            }
+            catch (InvalidOperationException)
+            {
+                Thread.Sleep(300);
+            }
+        }
+        if (checkBox == null)
+            throw new InvalidOperationException($"Inline panel checkbox for '{pigB.Title}' was not found within 12s.");
         (int cx, int cy) = Uia.Center(checkBox);
+        if (!EnsureClickable(container, cx, cy))
+            throw new InvalidOperationException("Inline capture checkbox was obscured — refusing to click blind.");
         Input.ClickAt(cx, cy);
+        Thread.Sleep(350);
+        ctx.Check(Uia.GetToggleState(checkBox) == ToggleState.On, "inline capture checkbox toggled on");
 
+        root = Uia.FromHwnd(container)
+            ?? throw new InvalidOperationException("Container UIA root disappeared before inline submit.");
         AutomationElement? add = Uia.FindDescendantByName(root, ControlType.Button, "Add selected", null, out int addCount);
         if (add == null || addCount != 1)
             throw new InvalidOperationException($"Inline 'Add selected' button not found uniquely (count={addCount}).");
         (int ax, int ay) = Uia.Center(add);
+        if (!EnsureClickable(container, ax, ay))
+            throw new InvalidOperationException("Inline 'Add selected' button was obscured — refusing to click blind.");
         Input.ClickAt(ax, ay);
 
         ctx.Check(Util.WaitUntil(() => TabCount(container) == 2, 5000), "inline capture adds the selected guest as a second tab");
@@ -2134,7 +2156,12 @@ internal static partial class Scenarios
 
         AutomationElement? root = Uia.FromHwnd(container)
             ?? throw new InvalidOperationException("Container UIA root unavailable.");
-        bool PanelOpen() => Uia.FindDescendantByName(root, ControlType.Button, "Cancel", null, out _) != null;
+        bool PanelOpen()
+        {
+            AutomationElement? liveRoot = Uia.FromHwnd(container);
+            return liveRoot != null
+                && Uia.FindDescendantByName(liveRoot, ControlType.Button, "Cancel", null, out _) != null;
+        }
 
         ClickAddWindowButton(container);
         ctx.Check(Util.WaitUntil(PanelOpen, 3000), "click 1: inline capture surface open");
@@ -2163,21 +2190,8 @@ internal static partial class Scenarios
         ctx.Check(Util.WaitUntil(() => !PanelOpen(), 3000), "Cancel closes the surface");
         ctx.Check(TabCount(container) == 1, "no tab added by the open/cancel cycles");
 
-        // Reopen and complete a capture: the surface must close itself.
-        ClickAddWindowButton(container);
-        ctx.Check(Util.WaitUntil(PanelOpen, 3000), "capture surface reopened for the capture step");
-        AutomationElement? targetText = Uia.FindDescendantByName(root, ControlType.Text, null, pigB.Title, out int textCount);
-        if (targetText == null || textCount != 1)
-            throw new InvalidOperationException($"Inline capture target '{pigB.Title}' not found uniquely (count={textCount}).");
-        AutomationElement? checkBox = Uia.NearestAncestorOfType(targetText, ControlType.CheckBox) ?? targetText;
-        (int bx, int by) = Uia.Center(checkBox);
-        Input.ClickAt(bx, by);
-        AutomationElement? add = Uia.FindDescendantByName(root, ControlType.Button, "Add selected", null, out int addCount);
-        if (add == null || addCount != 1)
-            throw new InvalidOperationException($"Inline 'Add selected' button not found uniquely (count={addCount}).");
-        (int ax, int ay) = Uia.Center(add);
-        Input.ClickAt(ax, ay);
-        ctx.Check(Util.WaitUntil(() => TabCount(container) == 2, 5000), "capture adds a second tab");
+        CaptureIntoExistingGroupViaAddButton(ctx, container, host, pigB);
+        ctx.Check(TabCount(container) == 2, "capture adds a second tab");
         ctx.Check(Util.WaitUntil(() => !PanelOpen(), 3000), "surface auto-closes after a successful capture");
         ctx.Check(Util.WaitUntil(() => IsDocked(pigB.Hwnd, host), 5000), "inline-captured guest is docked");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines");
