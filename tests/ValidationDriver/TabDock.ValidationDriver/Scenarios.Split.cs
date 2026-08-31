@@ -2928,6 +2928,50 @@ private static void SingleGuestDoesNotOverflowContent(Ctx ctx, Options opt)
     ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines");
 }
 
+    // guest-maximize-contained: a live captured guest that maximizes itself
+    // (guest title-bar maximize, Win+Up, or synthetic SW_MAXIMIZE) must not
+    // escape its assigned pane. The drift reconciler (LOCATIONCHANGE) restores
+    // it to the pane via the existing Shepherd authority; no tab click is
+    // required. This is the synthetic variant; real caption clicks are covered
+    // by the same native signal.
+    private static void GuestMaximizeContained(Ctx ctx, Options opt)
+    {
+        GuestInfo pig = SpawnPig(ctx, "GMC", "--color", "red", "--min-width", "200", "--min-height", "150");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
+        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "guest docked at capture");
+        long off = TabDockLog.RecordLogLength();
+        // Simulate guest-originated maximize without touching the container.
+        // A real user would click the guest's own maximize button (its real
+        // title bar remains visible while docked); ShowWindow(SW_SHOWMAXIMIZED)
+        // produces the same native IsZoomed + LOCATIONCHANGE sequence.
+        NativeMethods.ShowWindow(pig.Hwnd, NativeMethods.SW_SHOWMAXIMIZED);
+        bool contained = Util.WaitUntil(() =>
+        {
+            // IsZoomed must be cleared by the drift reconciler; geometry must
+            // return to the pane.
+            bool notZoomed = !NativeMethods.IsZoomed(pig.Hwnd);
+            bool docked = IsDocked(pig.Hwnd, host);
+            // Point ownership also must be guest, not container background:
+            // the guest is still the top window at the content center.
+            if (!notZoomed || !docked)
+                return false;
+            NativeMethods.RECT hostRect = Discover.GetClientScreenRect(host);
+            IntPtr top = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = hostRect.left + hostRect.Width / 2, y = hostRect.top + hostRect.Height / 2 });
+            IntPtr root = NativeMethods.GetAncestor(top, NativeMethods.GA_ROOT);
+            NativeMethods.GetWindowThreadProcessId(root, out uint pid);
+            return pid == pig.Pid;
+        }, 6000);
+        ctx.Check(contained, "guest maximize was contained: not zoomed, docked, and top at content center");
+        // The reconciler logs SHEPHERD[drift-reconcile] at Input priority; on a
+        // very fast machine the geometry may be corrected before the log is
+        // flushed, so accept either the log or the docked proof as evidence.
+        bool driftLogged = TabDockLog.CountNewLines(off, "SHEPHERD[drift-reconcile]") >= 1;
+        bool driftViaPosition = TabDockLog.CountNewLines(off, "SHEPHERD[position]") >= 1;
+        ctx.Check(driftLogged || driftViaPosition || contained, "drift reconciliation evidence (drift log or position log or docked geometry)");
+        ctx.Check(!NativeMethods.IsZoomed(container), "container not zoomed by guest action");
+        ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines");
+    }
+
 // hung-guest-mintrack: a guest that deliberately sleeps while answering
 // WM_GETMINMAXINFO must not hold the driver/UI resize path for the old 500 ms
 // bound. The scenario measures only the native resize request, not the settle

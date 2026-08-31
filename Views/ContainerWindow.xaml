@@ -97,103 +97,107 @@
         </Grid.RowDefinitions>
 
         <!-- Custom caption. Accent is retained as workspace identity rather than
-             flooding the entire window background with a saturated color. -->
+             flooding the entire window background with a saturated color.
+             Layout uses a true-centered title layer (* Auto *) so the title's
+             visual center tracks the window midpoint, not the leftover star-column
+             remainder: left (*) and right (*) are equal share, middle Auto is
+             centered. The centered region trims at MaxWidth 220 and never covers
+             side controls because it lives in its own Auto column. -->
         <Border Grid.Row="0" Height="38" Background="#10161F"
                 BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="0,0,0,1">
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
 
-                <Button Grid.Column="0" Style="{StaticResource CaptionButtonStyle}"
+                <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
+                    <Button Style="{StaticResource CaptionButtonStyle}"
                         Width="18" Height="18" MinHeight="18" Margin="12,0,9,0"
                         Padding="0" Background="{Binding AccentBrush}"
                         BorderBrush="#DDE8FF" BorderThickness="1"
                         WindowChrome.IsHitTestVisibleInChrome="True"
                         ToolTip="Change workspace accent" Click="ColorChip_Click"
                         AutomationProperties.Name="Change workspace accent">
-                    <Button.ContextMenu>
-                        <ContextMenu x:Name="ColorContextMenu">
-                            <MenuItem Header="Blue" Click="ColorMenuItem_Click" Tag="#2196F3" />
-                            <MenuItem Header="Green" Click="ColorMenuItem_Click" Tag="#4CAF50" />
-                            <MenuItem Header="Red" Click="ColorMenuItem_Click" Tag="#F44336" />
-                            <MenuItem Header="Purple" Click="ColorMenuItem_Click" Tag="#9C27B0" />
-                            <MenuItem Header="Orange" Click="ColorMenuItem_Click" Tag="#FF9800" />
-                            <MenuItem Header="Teal" Click="ColorMenuItem_Click" Tag="#009688" />
-                            <MenuItem Header="Pink" Click="ColorMenuItem_Click" Tag="#E91E63" />
-                            <MenuItem Header="Gray" Click="ColorMenuItem_Click" Tag="#607D8B" />
-                        </ContextMenu>
-                    </Button.ContextMenu>
-                </Button>
+                        <Button.ContextMenu>
+                            <ContextMenu x:Name="ColorContextMenu">
+                                <MenuItem Header="Blue" Click="ColorMenuItem_Click" Tag="#2196F3" />
+                                <MenuItem Header="Green" Click="ColorMenuItem_Click" Tag="#4CAF50" />
+                                <MenuItem Header="Red" Click="ColorMenuItem_Click" Tag="#F44336" />
+                                <MenuItem Header="Purple" Click="ColorMenuItem_Click" Tag="#9C27B0" />
+                                <MenuItem Header="Orange" Click="ColorMenuItem_Click" Tag="#FF9800" />
+                                <MenuItem Header="Teal" Click="ColorMenuItem_Click" Tag="#009688" />
+                                <MenuItem Header="Pink" Click="ColorMenuItem_Click" Tag="#E91E63" />
+                                <MenuItem Header="Gray" Click="ColorMenuItem_Click" Tag="#607D8B" />
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                </StackPanel>
 
-                <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center"
+                <Grid Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
                            Foreground="{StaticResource TdTextBrush}" FontSize="12" FontWeight="SemiBold"
-                           MaxWidth="220" TextTrimming="CharacterEllipsis"
+                           MaxWidth="220" TextTrimming="CharacterEllipsis" HorizontalAlignment="Center" TextAlignment="Center"
                            WindowChrome.IsHitTestVisibleInChrome="True"
                            ToolTip="Double-click to rename"
                            MouseLeftButtonDown="TitleText_MouseLeftButtonDown">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="Visibility" Value="Visible" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsRenaming}" Value="True">
-                                    <Setter Property="Visibility" Value="Collapsed" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsRenaming}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
 
-                <TextBox Grid.Column="1" Text="{Binding Name, UpdateSourceTrigger=LostFocus}"
+                    <TextBox Text="{Binding Name, UpdateSourceTrigger=LostFocus}"
                          VerticalAlignment="Center" MinHeight="26" Height="28" Padding="7,3"
-                         MaxWidth="220" HorizontalAlignment="Stretch"
+                         MaxWidth="220" MinWidth="140" HorizontalAlignment="Center"
                          WindowChrome.IsHitTestVisibleInChrome="True"
                          x:Name="RenameBox"
                          AutomationProperties.Name="Rename workspace"
                          AutomationProperties.HelpText="Type a workspace name, then press Enter to save or Escape to cancel."
                          LostFocus="RenameBox_LostFocus"
                          KeyDown="RenameBox_KeyDown">
-                    <TextBox.Style>
-                        <Style TargetType="TextBox" BasedOn="{StaticResource TdTextBox}">
-                            <Setter Property="Visibility" Value="Collapsed" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsRenaming}" Value="True">
-                                    <Setter Property="Visibility" Value="Visible" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBox.Style>
-                </TextBox>
+                        <TextBox.Style>
+                            <Style TargetType="TextBox" BasedOn="{StaticResource TdTextBox}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsRenaming}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBox.Style>
+                    </TextBox>
+                </Grid>
 
-                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Left"
-                            VerticalAlignment="Center" Margin="10,0,0,0">
+                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,6,0">
                             <Button Style="{StaticResource ChromePillButtonStyle}"
                                     Content="Workspace ▾" Margin="0,0,2,0"
                                     AutomationProperties.AutomationId="GroupSelector"
                                     AutomationProperties.Name="Switch workspace"
                                     Click="GroupButton_Click" ToolTip="Switch workspace, create a new one, rename, or delete this workspace">
-                        <Button.ContextMenu>
-                            <ContextMenu x:Name="GroupContextMenu" Closed="GroupContextMenu_Closed" />
-                        </Button.ContextMenu>
-                    </Button>
-                    <Button Style="{StaticResource ChromePillButtonStyle}"
-                            Content="Split ▾" Margin="2,0,0,0"
-                            Click="SplitAffordance_Click"
-                            IsEnabled="{Binding CanUseSplitAffordance}"
-                            ToolTip="{Binding SplitAffordanceToolTip}"
-                            AutomationProperties.AutomationId="SplitAffordance"
-                            AutomationProperties.Name="Split tabs"
-                            AutomationProperties.HelpText="{Binding SplitAffordanceToolTip}" />
-                </StackPanel>
+                                <Button.ContextMenu>
+                                    <ContextMenu x:Name="GroupContextMenu" Closed="GroupContextMenu_Closed" />
+                                </Button.ContextMenu>
+                            </Button>
+                            <Button Style="{StaticResource ChromePillButtonStyle}"
+                                    Content="Split ▾" Margin="2,0,0,0"
+                                    Click="SplitAffordance_Click"
+                                    IsEnabled="{Binding CanUseSplitAffordance}"
+                                    ToolTip="{Binding SplitAffordanceToolTip}"
+                                    AutomationProperties.AutomationId="SplitAffordance"
+                                    AutomationProperties.Name="Split tabs"
+                                    AutomationProperties.HelpText="{Binding SplitAffordanceToolTip}" />
+                    </StackPanel>
 
-                <Button Grid.Column="3" Style="{StaticResource CaptionButtonStyle}"
+                    <Button Style="{StaticResource CaptionButtonStyle}"
                         Content="&#xE710;" Click="AddWindow_Click"
                         IsEnabled="{Binding CaptureAllowed}"
                         ToolTip="{Binding AddWindowToolTip}"
@@ -201,16 +205,17 @@
                         AutomationProperties.Name="Add window to workspace"
                         AutomationProperties.HelpText="{Binding AddWindowToolTip}" />
 
-                <Button Grid.Column="4" Style="{StaticResource CaptionButtonStyle}"
+                    <Button Style="{StaticResource CaptionButtonStyle}"
                         Content="&#xE949;" Click="Minimize_Click" ToolTip="Minimize"
                         AutomationProperties.Name="Minimize workspace" />
-                <Button Grid.Column="5" Style="{StaticResource CaptionButtonStyle}"
+                    <Button Style="{StaticResource CaptionButtonStyle}"
                         Content="&#xE739;" Click="Maximize_Click" ToolTip="Maximize" x:Name="MaximizeButton"
                         AutomationProperties.Name="Maximize or restore workspace" />
-                <Button Grid.Column="6" Style="{StaticResource CaptionButtonStyle}"
+                    <Button Style="{StaticResource CaptionButtonStyle}"
                         Content="&#xE106;" Click="Close_Click" ToolTip="Close"
                         AutomationProperties.Name="Close workspace" />
-                <Border Grid.Column="7" Width="4" Background="{Binding AccentBrush}" />
+                    <Border Width="4" Background="{Binding AccentBrush}" Margin="4,0,0,0" />
+                </StackPanel>
             </Grid>
         </Border>
 

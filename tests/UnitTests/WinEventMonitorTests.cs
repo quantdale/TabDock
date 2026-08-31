@@ -241,7 +241,7 @@ public class WinEventMonitorTests
         {
             SetCount++;
             _hookInAttempt++;
-            if (_hookInAttempt == 7)
+            if (_hookInAttempt == 8)
                 _hookInAttempt = 0;
             return _hookInAttempt == _failOnHookInAttempt
                 ? IntPtr.Zero

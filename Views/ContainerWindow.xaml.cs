@@ -114,7 +114,8 @@ public partial class ContainerWindow : Window
     private ContextMenu? _openTabContextMenu;
     private readonly HashSet<ContextMenu> _trackedTabContextMenus = new();
     private ContextMenu? _splitAffordanceContextMenu;
-    private bool _chromePopupActive;
+    private int _popupChromeDepth;
+    private bool IsPopupChromeActive => _popupChromeDepth > 0;
 
     // Coalesces the several per-frame reposition triggers (native
     // WM_WINDOWPOSCHANGED, LocationChanged, SizeChanged, LayoutUpdated) into a
@@ -1056,7 +1057,7 @@ public partial class ContainerWindow : Window
         foreach (ContextMenu menu in _trackedTabContextMenus)
             menu.Closed -= TabContextMenu_Closed;
         _trackedTabContextMenus.Clear();
-        _chromePopupActive = false;
+        _popupChromeDepth = 0;
 
         // Unregister the HWNDs cached at Loaded time — live reads return
         // IntPtr.Zero by now, which would no-op and leak the stale values.
@@ -1785,34 +1786,38 @@ public partial class ContainerWindow : Window
     private void GroupContextMenu_Closed(object? sender, RoutedEventArgs e) => EndChromePopup();
 
     /// <summary>
-    /// Context menus are separate WPF popup HWNDs. Bring the container above its
-    /// guests while one is being created so the popup is owned by the visible
-    /// TabDock surface; the guest is never hidden. The corresponding close path
-    /// always reconciles the guest stack, which prevents a guest remaining under
-    /// the container marker after the popup disappears.
+    /// Transient chrome popups (ContextMenu / Popup) are independent HWNDs owned
+    /// by the container. The popup HWND itself is responsible for being above the
+    /// guest; the opaque container must stay BELOW the guest so the guest's
+    /// content region remains visible around the popup. This replaces the prior
+    /// container-wide raise (which blanked the content area) with a scoped
+    /// popup-only elevation model. The depth counter handles nested/overlapping
+    /// chrome (e.g. a tab menu opening while the split menu is still closing)
+    /// without premature restore.
     /// </summary>
     private void BeginChromePopup()
     {
-        if (_chromePopupActive)
-            return;
-        _chromePopupActive = true;
-        _log.Log("CHROME[raise]");
-        IntPtr hwnd = _containerHwnd;
-        if (hwnd != IntPtr.Zero)
-            _shepherd.RaiseContainerForChrome(hwnd);
+        if (_popupChromeDepth == 0)
+            _log.Log("CHROME[popup-open]");
+        _popupChromeDepth++;
     }
 
     private void EndChromePopup()
     {
-        if (!_chromePopupActive)
+        if (_popupChromeDepth <= 0)
             return;
-        _chromePopupActive = false;
-        _log.Log("CHROME[restore-request]");
-        // Let WPF finish destroying/closing the popup HWND before restoring the
+        _popupChromeDepth--;
+        if (_popupChromeDepth != 0)
+            return;
+        _log.Log("CHROME[popup-closed-restore-request]");
+        // Let WPF finish destroying/closing the popup HWND before reconciling the
         // guest stack. This is one explicit transition, not a repair timer.
+        // The reconciliation keeps the guest above the opaque content host; the
+        // popup HWND itself (not the container) was the only surface that needed
+        // elevation, so no container topmost manipulation is required.
         Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
         {
-            if (_chromePopupActive || IsCapturePanelOpen || _containerHwnd == IntPtr.Zero)
+            if (_popupChromeDepth != 0 || _closePromptOpen || _containerHwnd == IntPtr.Zero)
                 return;
             if (IsSplitPresented)
                 LayoutSplitPanes();
@@ -1977,20 +1982,11 @@ public partial class ContainerWindow : Window
         e.Handled = true;
     }
 
-    /// <summary>
-    /// Opens capture inside the existing container chrome. The guest rect is
-    /// derived from the marker below this panel, so no popup HWND can cover the
-    /// panel and no temporary TabDock modal is required for routine capture.
-    /// </summary>
     public void OpenCapturePanel()
     {
         if (_capturePicker != null || !_manager.CaptureAllowed)
             return;
 
-        // Raise the container above its guests while the inline capture surface
-        // is open so the panel (sited between the tab strip and the content
-        // area) is never partially occluded by a guest whose z-order drifted.
-        BeginChromePopup();
         _capturePicker = new CapturePickerViewModel(_manager, _icons, _log);
         _capturePicker.SelectedGroupOption = _capturePicker.Groups
             .FirstOrDefault(g => g.Id == Group.Id) ?? _capturePicker.Groups.FirstOrDefault();
@@ -2057,10 +2053,6 @@ public partial class ContainerWindow : Window
         if (_capturePicker == null)
             return;
 
-        // Reconcile the guest stack now that the panel is gone (the container
-        // was raised above its guests while the panel was open so it could not
-        // be occluded; this restores the normal guest-over-container pairing).
-        EndChromePopup();
         _capturePicker.GroupingRequested -= InlineCapture_GroupingRequested;
         _capturePicker.Canceled -= InlineCapture_Canceled;
         _capturePicker.Dispose();
@@ -2602,12 +2594,13 @@ public partial class ContainerWindow : Window
                 // BELOW the container (the container's z-order raise at the
                 // end of a native drag can land after the last per-frame glue;
                 // the WM_EXITSIZEMOVE reconciliation and every later
-                // rest-time relayout land here). While chrome is intentionally
-                // raised above the guests (context menu, group/color menu,
-                // capture panel, rename box) the container being above the
-                // guest is BY DESIGN and the popup-close path reconciles the
-                // stack — skip the repair for the whole chrome-active window.
-                if (_chromePopupActive || IsContainerChromeInteractionActive())
+                // rest-time relayout land here). While the owned modal dialog
+                // (close-group confirmation) is intentionally above the guest,
+                // the container being above the guest is by design during that
+                // modal and is reconciled on close. Ordinary popups keep the
+                // guest above the opaque content host; the popup HWND itself
+                // provides the elevation, not the container.
+                if (_closePromptOpen)
                     return;
                 // Verify the local pairing invariant before declaring the
                 // guest glued: the container must sit BELOW the guest (the
@@ -2705,13 +2698,14 @@ public partial class ContainerWindow : Window
     /// </summary>
     public void PairZOrderBehindGuest(IntPtr foregroundHwnd)
     {
-        // Foreground/reorder WinEvents can arrive while an owned chrome dialog
-        // (notably the close-group confirmation) is open. Re-pairing here would
-        // raise a docked guest above that dialog and cover its buttons; the
-        // popup-close path performs the authoritative reconciliation instead.
-        if (IsContainerChromeInteractionActive())
+        // Foreground/reorder WinEvents can arrive while the owned close-group
+        // confirmation dialog is open. Re-pairing here would raise a docked guest
+        // above that dialog and cover its buttons; the popup-close path (which
+        // does not raise the opaque container) has no such conflict and ordinary
+        // ContextMenu popups are owned HWNDs above the guest without container
+        // elevation.
+        if (_closePromptOpen)
             return;
-
         if (IsSplitPresented)
         {
             // A split member became the system foreground (e.g. the user clicked
@@ -2840,10 +2834,11 @@ public partial class ContainerWindow : Window
             return;
         if (WindowState == WindowState.Minimized)
             return;
-        // While container chrome is raised, including the owned close-group
-        // confirmation dialog, leave the intentional popup z-order untouched.
-        // EndChromePopup/close-prompt teardown schedules the normal glue pass.
-        if (IsContainerChromeInteractionActive())
+        // The owned close-group confirmation dialog intentionally sits above the
+        // guests (it is topmost while open); do not re-glue underneath it.
+        // Ordinary ContextMenu popups are separate HWNDs above the guest and do
+        // not require container elevation, so split layout remains active.
+        if (_closePromptOpen)
             return;
 
         IntPtr containerHwnd = _containerHwnd;
@@ -3453,6 +3448,73 @@ public partial class ContainerWindow : Window
                 ["guestAfter"] = $"{after.left},{after.top},{after.Width}x{after.Height}",
                 ["reGlueRequested"] = moved.ToString(),
             });
+    }
+
+    /// <summary>
+    /// Reconciles a guest whose observed geometry/state has drifted outside its
+    /// assigned presentation contract (maximize, fullscreen, monitor move).
+    /// This is the bounded, identity-checked repair for LOCATIONCHANGE: it
+    /// restores a zoomed guest and re-glues a misplaced one via the existing
+    /// Shepherd authority. The pane-containment refusal guard prevents a resize
+    /// war, and the move-size coalescing prevents storms.
+    /// </summary>
+    public void ReconcilePresentationDrift(CapturedWindow window)
+    {
+        if (!_shepherd.IsCurrentCapturedWindow(window))
+            return;
+        if (_guestMoveSizeActive || _closePromptOpen)
+            return;
+        if (WindowState == WindowState.Minimized)
+            return;
+        if (!NativeMethods.IsWindow(window.Hwnd) || !NativeMethods.IsWindowVisible(window.Hwnd))
+            return;
+        // Iconic is owned by the minimize timer path; do not fight it here.
+        if (NativeMethods.IsIconic(window.Hwnd))
+            return;
+        bool isSplitMember = IsSplitMember(window);
+        bool shouldBeVisible;
+        if (IsSplitPresented)
+        {
+            if (!isSplitMember)
+                return;
+            shouldBeVisible = true;
+        }
+        else
+        {
+            shouldBeVisible = ReferenceEquals(ShepherdActiveWindow, window);
+            if (!shouldBeVisible)
+                return;
+        }
+
+        // Build assigned vs observed for the pure drift policy.
+        NativeMethods.RECT assigned;
+        if (IsSplitPresented)
+            assigned = SplitPaneRect(window);
+        else if (!TryGetContentAreaScreenRect(out assigned) || assigned.Width == 0 || assigned.Height == 0)
+            return;
+        NativeMethods.GetWindowRect(window.Hwnd, out NativeMethods.RECT observed);
+        bool isZoomed = NativeMethods.IsZoomed(window.Hwnd);
+        bool isVisible = NativeMethods.IsWindowVisible(window.Hwnd);
+        var eval = GuestPresentationDriftPolicy.EvaluateSingle(assigned, observed, isZoomed, isIconic: false, isVisible, shouldBeVisible);
+        if (!eval.NeedsReconciliation)
+            return;
+
+        _log.Log($"SHEPHERD[drift-reconcile] guest=0x{window.Hwnd.ToInt64():X} kind={eval.Kind} assigned={assigned.left},{assigned.top},{assigned.Width}x{assigned.Height} observed={observed.left},{observed.top},{observed.Width}x{observed.Height} zoomed={isZoomed}");
+        DiagnosticRuntime.Record("guest.drift", _containerHwnd, window.Hwnd,
+            group: Group.Id.ToString("N"), action: "reconcile", result: eval.Kind.ToString(),
+            data: new Dictionary<string, string>
+            {
+                ["assigned"] = $"{assigned.left},{assigned.top},{assigned.Width}x{assigned.Height}",
+                ["observed"] = $"{observed.left},{observed.top},{observed.Width}x{observed.Height}",
+                ["zoomed"] = isZoomed.ToString(),
+            });
+
+        _constraintDirty = true;
+        _paneContainment.InvalidateAll();
+        if (IsSplitPresented)
+            LayoutSplitPanes();
+        else
+            LayoutShepherdActiveWindow(forceZOrder: true);
     }
 
     /// <summary>

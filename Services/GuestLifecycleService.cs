@@ -42,6 +42,7 @@ public sealed class GuestLifecycleService
     {
         Pair = 1,
         MoveSizeEnd = 2,
+        LocationDrift = 4,
     }
 
     private readonly Dictionary<IntPtr, RepairKind> _pendingRepair = new();
@@ -78,6 +79,7 @@ public sealed class GuestLifecycleService
         monitor.WindowForegroundChanged += OnForegroundChanged;
         monitor.WindowZOrderChanged += OnZOrderChanged;
         monitor.WindowNameChanged += (_, args) => DebounceNameChanged(args.Hwnd);
+        monitor.WindowLocationChanged += (_, args) => OnLocationChanged(args.Hwnd);
     }
 
     private void OnWindowDestroyed(IntPtr hwnd)
@@ -257,6 +259,15 @@ public sealed class GuestLifecycleService
         QueueRepair(foregroundHwnd, RepairKind.Pair);
     }
 
+    private void OnLocationChanged(IntPtr hwnd)
+    {
+        // LOCATIONCHANGE is the minimal native signal for maximize/fullscreen/
+        // monitor-transfer drift. Filter immediately to captured members and
+        // coalesce per HWND/turn — the desktop-wide storm for an unrelated
+        // window is killed by the membership probe before any dispatcher work.
+        QueueRepair(hwnd, RepairKind.LocationDrift);
+    }
+
     // A guest entered/left its interactive move/size modal loop (e.g. the
     // user dragged it by its own real title bar — a shepherded guest keeps
     // one). The container re-glues it on MOVESIZEEND; explicit tab Pop out is
@@ -319,6 +330,8 @@ public sealed class GuestLifecycleService
                 container.PairZOrderBehindGuest(hwnd);
             if ((kind & RepairKind.MoveSizeEnd) != 0 && match != null)
                 container.NoteGuestMoveSize(match, started: false);
+            if ((kind & RepairKind.LocationDrift) != 0 && match != null)
+                container.ReconcilePresentationDrift(match);
         }
 
         _pendingRepair.Clear();

@@ -148,6 +148,14 @@ The reusable headless profiles cover:
 - isolated persistence temp/primary/backup cleanup; and
 - process-generation/restart residue.
 
+Presentation-integrity deterministic coverage (no supervised desktop required):
+
+```powershell
+dotnet test tests/UnitTests/TabDock.UnitTests.csproj -c Release -k "GuestPresentationDriftPolicyTests or CaptionCenteringTests or PresentationChromeIntegrityTests"
+```
+
+New suites: `GuestPresentationDriftPolicyTests` (10 cases for zoom/geometry/visibility/bounded refusal), `CaptionCenteringTests` (2, `* Auto *` structural), `PresentationChromeIntegrityTests` (6, `WinEventRoutingPolicy.Decide` for `LOCATIONCHANGE` and drift purity). The harness adds `guest-maximize-contained` (`core-lifecycle`, synthetic `SW_SHOWMAXIMIZED` → `LOCATIONCHANGE` → `SHEPHERD[drift-reconcile]`) — it is `includeInAll` and requires a supervised lease like the other `SendInput` scenarios; without a lease it reports `BLOCKED_ENVIRONMENT` honestly rather than vacuously passing.
+
 Run the CI-safe gate directly:
 
 ```powershell

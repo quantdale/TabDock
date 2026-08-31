@@ -28,6 +28,7 @@ public sealed class WinEventMonitor : IDisposable
     private IntPtr _hookMinimize;
     private IntPtr _hookHide;
     private IntPtr _hookMoveSize;
+    private IntPtr _hookLocationChange;
     private bool _running;
     private bool _disposed;
     private long _callbacksReceived;
@@ -67,6 +68,15 @@ public sealed class WinEventMonitor : IDisposable
     /// and release hides.
     /// </summary>
     public event EventHandler<WindowEventArgs>? WindowHidden;
+
+    /// <summary>
+    /// Raised when a captured top-level window's location/size changes outside an
+    /// interactive move/size loop (e.g. maximize, fullscreen, monitor transfer).
+    /// Filtered to captured members and coalesced per HWND/turn with other
+    /// presentation repairs. Low-volume for drifting guests; the desktop-wide
+    /// LOCATIONCHANGE storm is bounded by immediate membership filtering.
+    /// </summary>
+    public event EventHandler<WindowEventArgs>? WindowLocationChanged;
 
     /// <summary>True only when the complete hook set is installed and dispatching.</summary>
     public bool IsRunning => _running && HasAllHooks;
@@ -161,13 +171,17 @@ public sealed class WinEventMonitor : IDisposable
             _hookMinimize = _api.Set(NativeMethods.EVENT_SYSTEM_MINIMIZESTART, NativeMethods.EVENT_SYSTEM_MINIMIZESTART, _callback, flags);
             _hookHide = _api.Set(NativeMethods.EVENT_OBJECT_HIDE, NativeMethods.EVENT_OBJECT_HIDE, _callback, flags);
             // One ranged hook covers MOVESIZESTART (0x000A) and MOVESIZEEND (0x000B).
-            // These fire once per interactive drag start/end system-wide — low volume,
-            // unlike EVENT_OBJECT_LOCATIONCHANGE, which is deliberately not hooked.
+            // These fire once per interactive drag start/end system-wide — low volume.
             _hookMoveSize = _api.Set(NativeMethods.EVENT_SYSTEM_MOVESIZESTART, NativeMethods.EVENT_SYSTEM_MOVESIZEEND, _callback, flags);
-
+            // LOCATIONCHANGE is the minimal native signal for guest-originated
+            // maximize/fullscreen/monitor-transfer geometry drift. It is desktop-wide
+            // and high-frequency, but we filter immediately to captured HWNDs and
+            // coalesce per HWND/turn in GuestLifecycleService, so desktop storms
+            // remain bounded and no per-frame geometry war is created.
+            _hookLocationChange = _api.Set(NativeMethods.EVENT_OBJECT_LOCATIONCHANGE, NativeMethods.EVENT_OBJECT_LOCATIONCHANGE, _callback, flags);
             if (HasAllHooks)
             {
-                _log.Log($"WinEventMonitor started (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookReorder.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X})");
+                _log.Log($"WinEventMonitor started (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookReorder.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X}, {_hookLocationChange.ToInt64():X})");
                 LastStartFailure = null;
                 return true;
             }
@@ -175,7 +189,7 @@ public sealed class WinEventMonitor : IDisposable
             // A partial hook set silently drops whole event classes (e.g. no
             // destroy hook means dead tabs never tear down). Unwind whatever
             // did install and retry only if every handle was released.
-            _log.Log($"WinEventMonitor.Start attempt {attempt}/{MaxInstallAttempts}: incomplete hook installation (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookReorder.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X}); unwinding.");
+            _log.Log($"WinEventMonitor.Start attempt {attempt}/{MaxInstallAttempts}: incomplete hook installation (hooks: {_hookDestroy.ToInt64():X}, {_hookForeground.ToInt64():X}, {_hookReorder.ToInt64():X}, {_hookNameChange.ToInt64():X}, {_hookMinimize.ToInt64():X}, {_hookHide.ToInt64():X}, {_hookMoveSize.ToInt64():X}, {_hookLocationChange.ToInt64():X}); unwinding.");
             Stop();
             if (HasInstalledHooks)
             {
@@ -213,18 +227,20 @@ public sealed class WinEventMonitor : IDisposable
         Unhook(ref _hookMinimize, "minimize");
         Unhook(ref _hookHide, "hide");
         Unhook(ref _hookMoveSize, "movesize");
+        Unhook(ref _hookLocationChange, "locationchange");
         _log.Log("WinEventMonitor stopped.");
     }
 
     private bool HasInstalledHooks => _hookDestroy != IntPtr.Zero || _hookForeground != IntPtr.Zero
         || _hookReorder != IntPtr.Zero || _hookNameChange != IntPtr.Zero
         || _hookMinimize != IntPtr.Zero || _hookHide != IntPtr.Zero
-        || _hookMoveSize != IntPtr.Zero;
+        || _hookMoveSize != IntPtr.Zero || _hookLocationChange != IntPtr.Zero;
 
     private bool HasAllHooks => _hookDestroy != IntPtr.Zero && _hookForeground != IntPtr.Zero
         && _hookReorder != IntPtr.Zero && _hookNameChange != IntPtr.Zero
         && _hookMinimize != IntPtr.Zero && _hookHide != IntPtr.Zero
-        && _hookMoveSize != IntPtr.Zero;
+        && _hookMoveSize != IntPtr.Zero && _hookLocationChange != IntPtr.Zero;
+
 
     /// <summary>
     /// Unhooks one WinEvent hook, zeroing the field only on success — a failed
@@ -446,6 +462,10 @@ public sealed class WinEventMonitor : IDisposable
                 Interlocked.Increment(ref _lifecycleCallbacks);
                 WindowMoveSizeEnded?.Invoke(this, args);
                 break;
+            case NativeMethods.EVENT_OBJECT_LOCATIONCHANGE:
+                Interlocked.Increment(ref _lifecycleCallbacks);
+                WindowLocationChanged?.Invoke(this, args);
+                break;
         }
     }
 
@@ -471,7 +491,8 @@ public sealed class WinEventMonitor : IDisposable
             || eventType == NativeMethods.EVENT_SYSTEM_MOVESIZEEND
             || eventType == NativeMethods.EVENT_SYSTEM_MINIMIZESTART
             || eventType == NativeMethods.EVENT_OBJECT_DESTROY
-            || eventType == NativeMethods.EVENT_OBJECT_HIDE;
+            || eventType == NativeMethods.EVENT_OBJECT_HIDE
+            || eventType == NativeMethods.EVENT_OBJECT_LOCATIONCHANGE;
 
     private static string EventName(uint eventType)
         => eventType switch
@@ -483,6 +504,7 @@ public sealed class WinEventMonitor : IDisposable
             NativeMethods.EVENT_SYSTEM_MINIMIZESTART => "EVENT_SYSTEM_MINIMIZESTART",
             NativeMethods.EVENT_OBJECT_DESTROY => "EVENT_OBJECT_DESTROY",
             NativeMethods.EVENT_OBJECT_HIDE => "EVENT_OBJECT_HIDE",
+            NativeMethods.EVENT_OBJECT_LOCATIONCHANGE => "EVENT_OBJECT_LOCATIONCHANGE",
             _ => $"EVENT_0x{eventType:X}",
         };
 }

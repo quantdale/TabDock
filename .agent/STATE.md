@@ -7,164 +7,56 @@ Resolve them dynamically at every fresh session. This file never records a
 self-referential SHA or treats an old CI run as evidence for the commit that
 contains this text.
 
-## CURRENT CAMPAIGN — MAINLINE LONG-RUN RESOURCE LIFECYCLE HARDENING
+## CURRENT CAMPAIGN — USER-REPORTED PRESENTATION INTEGRITY
 
-**Objective:** instrument and qualify sustained TabDock lifecycle churn for
-native/UI/process resource stability, fix concrete ownership defects found by
-measurement, and deliver the complete result on `main` with a bounded
-headless gate and opt-in safe extended soak.
+**Objective:** resolve the four user-reported presentation failures (chrome occlusion via accent/rename/split/+ panel, off-center title, guest maximize/fullscreen/monitor escape, unreliable top-layer) with an evidence-first, bounded, Shepherd-preserving implementation and demonstrable regression coverage.
 
-**Plan:** `.agent/plans/resource-lifecycle-hardening-2026-08-24.md`
+**Plan:** `openspec/changes/2026-08-31-user-reported-presentation-integrity/` (proposal, design, tasks)
 
-**Status:** implementation and validation complete; Wave 0 mainline normalization, integrated baseline, source
-ownership audit, resource model/analyzer, lifecycle profiles, artifact writer,
-headless gate, CI wiring, OpenSpec planning, and documentation are complete.
-The completed OpenSpec change is archived; the final state/archive checkpoint
-must be committed and pushed before handoff.
+**Status:** implementation and deterministic qualification complete; physical supervised qualification honestly blocked; ready to commit and push on `main`.
 
 ### Current phase
 
-- Wave 0: complete.
-- Baseline and final revalidation: complete after integration; Debug/Release
-  builds were 0 warnings/0 errors, Debug/Release unit suites were 707/707,
-  release tooling was 177/177, canonical Release CI/publish validation passed,
-  and strict OpenSpec was 35/35.
-- Ownership audit: complete in
-  `.agent/investigations/resource-ownership-audit-2026-08-24.md`; no concrete
-  production resource leak has been reproduced or asserted.
-- Measurement/analyzer: implemented with Windows driver-side snapshots,
-  strict native-count/byte budgets, fail-closed unavailable/error/generation
-  handling, and 19 unit tests plus 16 deterministic self-tests.
-- Lifecycle profiles/evidence: implemented for eight complementary profiles;
-  headless 128-cycle repeats and a 256-cycle run passed, and a run-owned
-  process sample passed with flat observed counters.
-- CI/docs/OpenSpec: bounded `validate.ps1 -Ci` gate, retained workflow
-  evidence, documentation, and archived canonical capability
-  `resource-lifecycle-qualification` are complete.
+- Orientation: complete — Git state dynamically resolved (`main` at `e4787c7769c333bd750582d74692da0a573c1727`, clean), `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/TESTING.md`, canonical specs, and active OpenSpec change read before editing.
+- Investigation: complete — durable record at `.agent/investigations/presentation-integrity-2026-08-31.md` with proven vs rejected hypotheses, report classification, and evidence plan. Static source analysis proved: (a) `BeginChromePopup` + `RaiseContainerForChrome(HWND_TOP)` on opaque container + broad `IsContainerChromeInteractionActive` suppression blanks guest; (b) `WinEventMonitor` omitted `EVENT_OBJECT_LOCATIONCHANGE` leaving no signal for guest geometry/zoom changes; (c) caption `Auto|*|Auto…` left-aligns title. No supervised SendInput issued (no lease) — physical reproduction honestly blocked.
+- Regression harness: complete — 18 new deterministic cases: `GuestPresentationDriftPolicyTests` (10), `CaptionCenteringTests` (2), `PresentationChromeIntegrityTests` (6); updated `WinEventMonitorTests` (8-hook cycle); harness adds `guest-maximize-contained` (`core-lifecycle`, 128 dispatchable total, generation unchanged) plus existing `group-dropdown-stability` etc. point-ownership/client-render guards.
+- Implementation: complete — caption `* Auto *` true-center (`Views/ContainerWindow.xaml`); depth-scoped popup tracking (`_popupChromeDepth`, `CHROME[popup-open]`/`CHROME[popup-closed-restore-request]`) without opaque container raise; inline capture composes via shrunken `GetContentAreaScreenRect`; visual vs foreground predicates split (`PairZOrderBehindGuest` and layout now gate only on `_closePromptOpen`); filtered `EVENT_OBJECT_LOCATIONCHANGE` hook + per-HWND coalescing (`RepairKind.LocationDrift`) + pure `GuestPresentationDriftPolicy` → `ReconcilePresentationDrift` via existing Shepherd authority with refusal guard.
+- Validation: complete — `dotnet build TabDock.sln -c Release` 0 warnings; `dotnet test TabDock.UnitTests -c Release` **725/725 PASS** (prev 707 +18); `dotnet build ValidationDriver -c Release` PASS; `--list` 128 dispatchable, shards within budgets; `group-dropdown-stability`, `contextmenu-render-stability`, etc. deterministic gates still pass; physical `all` run honestly `BLOCKED_ENVIRONMENT` without supervised lease.
+- Reconciliation: complete — `docs/ARCHITECTURE.md` (GuestPresentationDriftPolicy, LOCATIONCHANGE coalescing, `* Auto *` caption), `docs/TESTING.md` (new deterministic suites + `guest-maximize-contained`), tasks file reconciled to actual depth+LOCATIONCHANGE+pure policy, investigation closed.
 
 ### Mainline checkpoint
 
-- Session start `origin/main` was
-  `c2c480707f9e9fdfa753b4885f53bca270c775bc`.
-- The common base of main and the campaign stack was
-  `ba3115a138eed81e4a56c023aa3381f2c14a20cd`.
-- The normal history-preserving merge checkpoint was `7ed8769` (main plus
-  `origin/codex/qualification-control-plane-20260824`); resolve the current
-  `HEAD` dynamically after the reconciliation commit.
-- The campaign stack remains historically traceable through
-  ship-readiness `eca8670...`, native determinism `09a204d...`, and
-  qualification control `b0101a3...`. No historical campaign branch was
-  rebased, force-pushed, rewritten, or merged into `main`.
-- The qualified head `df89d15467ea854a685dc0417c3708e32b183497` was
-  fast-forwarded onto local `main`; immediately after normalization local
-  `main` and `origin/main` were identical at that SHA. All further work is
-  directly on `main`. The last pushed implementation checkpoint is
-  `5f46fd005e1329778b8b5e07ea056d3bcc2b1739`; the final delivery SHA must be
-  resolved dynamically after the state/archive commit and push.
+- Session start `origin/main` was `e4787c7769c333bd750582d74692da0a573c1727` (verified `git rev-parse HEAD` and `origin/main` identical).
+- Worktree was clean at start; final SHA to be resolved dynamically after commit and push.
+- Previous campaign `resource-lifecycle-hardening` remains archived; this campaign is a direct `main` development (no permanent staging branch).
+- Strict OpenSpec validation currently 34/34 canonical specs (before sync of new delta); active change `2026-08-31-user-reported-presentation-integrity` holds 2 delta specs (`presentation-integrity`, `ui-ux-hardening` delta) to be synced after merge.
 
-### Completed reconciliation
+### Completed work (this campaign)
 
-- `main` is documented as the sole integration/release authority. Temporary
-  topic/development/draft-review branches are allowed as finite provenance and
-  review surfaces; no permanent staging hierarchy or promotion workflow is
-  allowed.
-- Canonical specs now contain the final hardening, native-interaction,
-  qualification-control-plane, topology, and release-evidence behavior.
-  Completed changes were archived under
-  `openspec/changes/archive/2026-08-24-*`; `openspec list` has no active
-  changes.
-- Strict OpenSpec validation is green at 34/34 canonical specs after archive.
+- `Views/ContainerWindow.xaml` — `* Auto *` caption true-center, title/rename `HorizontalAlignment Center` `MaxWidth 220` trimming without covering side controls.
+- `Views/ContainerWindow.xaml.cs` — removed container raise from `BeginChromePopup`, added `_popupChromeDepth` depth counter, narrowed `PairZOrderBehindGuest`/`LayoutSplitPanes`/`LayoutShepherdActiveWindow` visual guards to `_closePromptOpen` only, made inline capture compose without raise, added `ReconcilePresentationDrift`.
+- `Services/WinEventMonitor.cs` — added `_hookLocationChange`, `WindowLocationChanged`, `EVENT_OBJECT_LOCATIONCHANGE` install/unhook, `HasInstalledHooks`/`HasAllHooks` include it, `Raise` dispatch, `IsDiagnosticEvent`/`EventName` include it.
+- `Services/GuestLifecycleService.cs` — added `RepairKind.LocationDrift`, `WindowLocationChanged` subscription, `OnLocationChanged` → `QueueRepair(LocationDrift)`, `ProcessPendingRepair` handles it via `container.ReconcilePresentationDrift`.
+- `Services/GuestPresentationDriftPolicy.cs` — new pure decision (zoom / geometryMismatch / notVisibleButShouldBe) with 10 deterministic cases.
+- `tests/UnitTests/GuestPresentationDriftPolicyTests.cs` (10), `CaptionCenteringTests.cs` (2), `PresentationChromeIntegrityTests.cs` (6) — updated `WinEventMonitorTests` FakeApi to 8-hook cycle.
+- `tests/ValidationDriver/TabDock.ValidationDriver/ScenarioCatalog.cs` — added `guest-maximize-contained` (`core-lifecycle`, `includeInAll: true`).
+- `tests/ValidationDriver/TabDock.ValidationDriver/Scenarios.Split.cs` — implemented `GuestMaximizeContained` (synthetic `SW_SHOWMAXIMIZED` → `LOCATIONCHANGE` → `SHEPHERD[drift-reconcile]` check).
+- `docs/ARCHITECTURE.md` / `docs/TESTING.md` — presentation-integrity architecture and qualification notes.
+- `.agent/investigations/presentation-integrity-2026-08-31.md` — closed with proven/rejected verdicts, bounded evidence, remaining risks.
+- `openspec/changes/2026-08-31-user-reported-presentation-integrity/tasks.md` — all 0.x–6.x checked with evidence.
 
-### Prior integration and evidence checkpoint
+### Validation and evidence rules (retained)
 
-- The integration branch was pushed without rewriting any historical campaign
-  branch. Its remote head matches the local final head; resolve both
-  dynamically with Git.
-- The prior fresh qualification-only candidate was bound to the then-final
-  committed source SHA, semantic version 1.0.0, release manifest,
-  ValidationDriver, primary run manifest, qualification bundle schema 1, and
-  portable package schema 1. It is invalidated as final evidence by the
-  foreground-transition harness fix. A new candidate must be generated from
-  the final committed tree before handoff.
-- Candidate bundle verification, portable-package verification, deterministic
-  returned bundle verification, and data-only returned-report import all
-  passed with zero failures. The returned evidence is synthetic-deterministic
-  and does not establish physical qualification.
-- No candidate binary, returned executable, or returned script was executed by
-  the report importer; imported evidence was hash-verified as data only.
-- The final qualification-only artifact, bundle, portable package, deterministic
-  returned bundle, and data-only report import all bind the same final source
-  identity and candidate bytes; their exact paths and hashes are in the session
-  handoff. They remain qualification-only and unsigned.
+- Build + unit-test gates must be 0 warnings / 0 errors and fully passing before commit.
+- Synthetic/headless PASS cannot satisfy supervised physical input, mixed-DPI, Windows-version, signing, or human smoke gates.
+- No guarded `SendInput` or blind desktop automation without a proven exclusive supervised lease. Autonomous runs use pure seams or test-owned processes/windows and clean up in `finally`.
+- Keep generated artifacts, logs, caches, machine paths, credentials, and secrets out of Git.
 
-### Historical pre-campaign validation checkpoint
+### Known external blockers retained (honestly)
 
-- Debug/Release solution builds: 0 warnings / 0 errors.
-- Debug/Release unit suites: 686 / 686.
-- ValidationDriver Debug/Release deterministic self-tests: 127 / 127 after
-  the foreground-transition lease regressions.
-- Release-tooling regression suite: 177 / 177.
-- Canonical `scripts/validate.ps1 -Configuration Release -Ci -Publish`: PASS,
-  including audited restore, native ABI, diagnostics/recovery/privacy,
-  strict OpenSpec 34/34, single-file publish, and version smoke carrying the
-  committed foreground-transition fix identity.
-- No integration conflict or evidence-backed Critical/High regression was
-  found. No guarded physical `SendInput` was issued.
-
-### External gates and known classifications
-
-- Physical qualification remains `BLOCKED_SUPERVISED` /
-  `BLOCKED_ENVIRONMENT`: this host has no proven exclusive supervised desktop
-  lease. The three known repeats (`dragreorder` H2 flip-back,
-  `split-drag-release` zero-delta polyline, and `capture-inline-ui` second-tab
-  assertion) have an explicit safe-session classification of
-  `BLOCKED_SUPERVISED`/`BLOCKED_ENVIRONMENT`; their scenario-specific
-  product-versus-harness verdicts remain pending authoritative exact-candidate
-  runs. Synthetic replay does not close them.
-- Mixed-DPI hardware, real Windows 10 x64 evidence, independent Windows 11
-  evidence, approved production signing credentials, and final human smoke
-  remain blocked external gates. Synthetic topology remains synthetic-only.
-- GitHub CLI remains unauthenticated, but the existing PR #12 was updated by
-  an ordinary fast-forward push; public PR metadata confirms it is open/draft,
-  mergeable, targets `main`, and hosted `build` plus `native-abi-evidence`
-  checks passed for the pushed head. This campaign is now authorized to develop
-  directly on `main`; do not publish or weaken release-integrity gates.
-
-### Validation and evidence rules
-
-- Resource evidence must be immutable, privacy-safe, source/run-bound, and
-  machine-readable. Missing or inaccessible measurements never become PASS.
-- Synthetic/headless resource PASS is resource-only and cannot satisfy
-  supervised physical input, mixed-DPI, Windows-version, signing, or human
-  smoke gates.
-- No guarded `SendInput` or blind desktop automation is authorized without a
-  proven exclusive supervised lease. Autonomous runs use pure seams or
-  test-owned processes/windows and clean up in `finally`.
-- Keep generated artifacts, logs, caches, machine paths, credentials, and
-  secrets out of Git.
-
-### Current campaign measurements
-
-- Headless synthetic resource gate: 32-cycle CI profile PASS; five consecutive
-  128-cycle runs PASS; 256-cycle all-profile run PASS.
-- Run-owned Debug TabDock process sample: 16 samples, synthetic=false,
-  PASS. Handles 956→956, USER 24→24, GDI 18→18, threads 13→13, top-level
-  windows 9→9, private bytes 68,186,112→68,186,112, working set
-  124,657,664→124,657,664; all trends Flat.
-- No actual production leak was found. No production ownership fix was
-  justified; the only cleanup correction was in the validation runner's
-  process-wrapper handling.
-
-### Known external blockers retained
-
-Supervised physical repetitions, `dragreorder` H2 flip-back,
-`split-drag-release` zero-delta, `capture-inline-ui` second-tab, mixed-DPI
-hardware, real Windows 10 x64, independent Windows 11, approved production
-signing, and final human smoke remain blocked unless real evidence is
-obtained. Do not convert these gates to synthetic PASS.
+- Supervised physical real-input repetitions for `rename`, `group-rename-menu`, `group-dropdown-stability` (20 cycles), `contextmenu-render-stability` (20), `chrome-click-render-stability` (8), `capture-inline-ui`, `guest-maximize-contained` real title-bar click, `guest-fullscreen` (F11), `guest-monitor-transfer` (2 monitors, Win+Shift+Arrow), `topmost-guest-chrome-integrity` (WS_EX_TOPMOST), mixed-DPI hardware, real Windows 10 x64, independent Windows 11, approved production signing, final human smoke — all remain `BLOCKED_SUPERVISED`/`BLOCKED_ENVIRONMENT`/`SKIP_CAPABILITY` without lease/hardware. Deterministic policy tests + synthetic maximize scenario provide strongest controlled evidence.
+- No candidate binary executed by report importer; imported evidence hash-verified as data only.
 
 ### Next action
 
-Commit the final state/archive record on `main`, push `origin/main`, prove
-identical SHAs and a clean worktree, then hand off. Keep all supervised,
-hardware, OS, signing, and human-smoke gates honestly blocked.
+Commit the presentation-integrity implementation (detailed evidence summary), push `origin/main`, prove identical SHAs and clean worktree with `git rev-parse HEAD`, `git rev-parse origin/main`, `git status`, then hand off. Keep all supervised/hardware/signing gates honestly blocked. Do not create another commit merely to record the push.

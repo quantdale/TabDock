@@ -287,6 +287,25 @@ stale-identity hits are correctly filtered). Native transition outcomes are
 asserted through the controller's recording presentation-operations seam
 (`IPresentationOperations`) in unit tests; the former CI-only budget-counter
 scaffolding was removed as dead (Wave 1).
+`GuestPresentationDriftPolicy` is the pure, centralized classifier for guest-
+originated presentation drift: maximize/fullscreen/monitor-transfer geometry
+or `IsZoomed` changes that escape the assigned pane. Callers (currently
+`WinEventMonitor` → `GuestLifecycleService` → `ContainerWindow`) only own the
+filtered native subscription, per-HWND coalescing, and the bounded Shepherd
+re-glue — the “does this need work?” decision is one place, tested headlessly
+(10 cases). `WinEventMonitor` now admits `EVENT_OBJECT_LOCATIONCHANGE` as the
+minimal native signal for such drift, filtered immediately to captured members
+and coalesced per `HWND`/dispatcher turn (the desktop-wide storm is killed by
+one dictionary probe). `ContainerWindow.ReconcilePresentationDrift` restores a
+zoomed guest and re-glues a misplaced one via the existing Shepherd authority,
+respecting the pane-containment refusal guard so a persistently refusing guest
+does not create a resize war. `ContainerWindow`’s caption is now `* Auto *`:
+left `*` (accent), middle `Auto` (title `TextBlock` + `RenameBox` both
+`HorizontalAlignment Center`, `TextAlignment Center`, `MaxWidth 220`), right `*`
+(workspace/split/add/min/max/close). The outer `*` share equally, so the
+middle `Auto` is truly centered to the window, and the title never covers side
+controls because it lives in its own column.
+
 
 The container caption's Workspace menu switches to an already-open group or creates
 one in the existing shell. The launcher is hidden while a container is open and
