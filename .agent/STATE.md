@@ -15,12 +15,12 @@ repair only a defect actually reproduced under that lease.
 
 **Plan:** `openspec/changes/2026-08-31-presentation-integrity-physical-certification/`
 
-**Status:** physical certification is honestly blocked before input; read-only
-environment evidence and deterministic gates are captured; a smallest test-only
-GuineaPig topmost switch and one stale self-test expectation were corrected.
-Final candidate identity is captured at the last substantive campaign commit
-`a131a9f8ec9810a4015db2bd935cdda749f9f278`; push verification and final
-reconciliation remain.
+**Status:** complete for this desktop session as an honestly blocked physical
+certification. The native probes and deterministic gates passed; no exclusive
+supervised desktop lease was proven, so no physical input or scenario was
+started. The smallest test-only GuineaPig topmost switch and one stale
+self-test expectation were corrected. Evidence is committed and pushed; no
+production repair was justified.
 
 ### Current phase
 
@@ -36,12 +36,13 @@ reconciliation remain.
 - Fixture: complete — `tests/ValidationDriver/TabDock.GuineaPig` now accepts
   `--topmost`, maps it to `Form.TopMost`, carries it to extra windows, and logs
   the setting. This is qualification-only; production behavior is unchanged.
-- Validation: deterministic gates currently pass — Debug/Release solution builds,
-  725/725 Debug and Release unit tests, Release ValidationDriver/GuineaPig
-  builds, catalog listing, and ValidationDriver selftests 143/143. The first
-  selftest run was retained as `FAIL_HARNESS` because `CAT01` still expected
-  127 instead of the catalog's 128; the test-only expectation was corrected.
-- Strict OpenSpec validation currently passes 37/37; rerun after final edits.
+- Validation: complete — deterministic gates pass: Debug/Release solution
+  builds, 725/725 Debug and Release unit tests, Release
+  ValidationDriver/GuineaPig builds, catalog listing, ValidationDriver
+  selftests 143/143, CI-safe Release pipeline, and strict OpenSpec validation
+  37/37. The first selftest run remains recorded as `FAIL_HARNESS` because
+  `CAT01` expected 127 instead of the catalog's 128; the test-only expectation
+  was corrected.
 
 ### Deterministic gate evidence
 
@@ -101,6 +102,7 @@ reconciliation remain.
 
 ### Next action
 
-Rerun strict OpenSpec validation after these final evidence edits, commit the
-final candidate evidence update, push `main`, verify `HEAD == origin/main`,
-then mark this campaign complete only as a physically blocked certification.
+Handoff. Do not claim the original presentation-integrity implementation is
+physically certified: every physical matrix row is `BLOCKED_SUPERVISED` with
+zero attempts. A future session must resolve Git authority and establish an
+exclusive supervised desktop lease before any physical rerun.
