@@ -365,6 +365,7 @@ internal static class ScenarioCatalog
         Add("hung-guest-mintrack", "HungGuestMinTrack", "dpi-multi-monitor", includeInAll: true);
         Add("guest-maximize-contained", "GuestMaximizeContained", "core-lifecycle", includeInAll: true);
         Add("crashkill-maximized-recovery", "CrashKillMaximizedRecovery", "crash-recovery", includeInAll: true, destructiveState: ScenarioDestructiveState.CrashRecovery);
+        Add("crashkill-minimized-recovery", "CrashKillMinimizedRecovery", "crash-recovery", includeInAll: true, destructiveState: ScenarioDestructiveState.CrashRecovery);
         Add("crashkill-split-rescue", "CrashKillSplitRescue", "crash-recovery", includeInAll: true, destructiveState: ScenarioDestructiveState.CrashRecovery);
         Add("startup-local-stack-above-unrelated-when-guest-present", "StartupLocalStackAboveUnrelatedWhenGuestPresent", "startup", includeInAll: true);
         Add("torture-tabswitch-rapid", "TortureTabSwitchRapid", "keyboard-input", includeInAll: true, expectedRuntimeSeconds: 180);
