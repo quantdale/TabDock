@@ -84,6 +84,11 @@ Historical scenarios/runs that do not declare visual evidence SHALL remain
 valid under their existing contracts and SHALL not be required to fabricate
 visual artifacts.
 
+#### Scenario: Synthetic pass does not satisfy a physical field cell
+
+- **WHEN** a headless or synthetic presentation-integrity scenario passes but the matching requirement calls for real guarded input/topology
+- **THEN** deterministic coverage is recorded separately and the physical cell remains pending or blocked until physically qualified
+
 #### Scenario: Release artifacts run without source edits
 
 - **WHEN** the driver is invoked with `--configuration Release` against Release
