@@ -87,6 +87,9 @@ internal static class Program
                 case "--color":
                     opts.Color = Require(args, ref i);
                     break;
+                case "--topmost":
+                    opts.Topmost = true;
+                    break;
                 case "--pulse":
                     opts.Pulse = true;
                     break;
@@ -161,6 +164,7 @@ internal static class Program
             Title = $"{src.Title}-W{windowNumber}",
             RunId = src.RunId,
             Color = src.Color,
+            Topmost = src.Topmost,
             Pulse = src.Pulse,
             HideOnClose = src.HideOnClose,
             MinimizeThenHideOnClose = src.MinimizeThenHideOnClose,

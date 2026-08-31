@@ -56,3 +56,20 @@ surface needed and must update this OpenSpec with the proven cause and fix.
 
 No reparenting, permanent topmost policy, global unrelated-window z-order
 fight, unbounded polling, or speculative rewrite is authorized.
+
+## Evidence scope and acceptance
+
+- Bind every attempt to the exact candidate Git SHA and executable hash.
+- Prove supervised desktop lease, target/point ownership, and cleanup boundary
+  before physical input.
+- Exercise title centering across short/long names, narrow/default/wide
+  containers, and physically available DPI scales.
+- Preserve first-attempt outcomes and bounded artifacts; classify unavailable
+  hardware, supervision, applications, signing, or fixture support honestly.
+- A matrix cell is valid only as a physical PASS, an exact BLOCKED/SKIP
+  classification with the missing capability named, or a diagnosed,
+  regression-covered failure that is requalified.
+
+Deterministic, synthetic, and read-only evidence must remain explicitly
+separate from physical certification. Major original-report paths remain
+uncertified when their exclusive supervised run is unavailable.

@@ -159,3 +159,47 @@ This campaign is complete only when every matrix cell is one of:
 
 A release/handoff summary must explicitly list which original user reports are
 now physically reproduced-and-passed versus only deterministically covered.
+
+
+## Evidence boundary
+
+The candidate is the exact committed tree under test. Release identity is read
+from `TabDock.exe --version`; the executable SHA-256 is recorded beside it.
+Read-only discovery may inspect the desktop, processes, monitors, DPI, work
+areas, and application availability. It must not mutate product state or send
+input.
+
+A physical attempt is admissible only when all of the following are proven in
+one uninterrupted run:
+
+1. the Windows interactive session is unlocked and `SendInput` is available;
+2. a supervised operator has exclusive control of the desktop for the run;
+3. the ValidationDriver desktop lease is active;
+4. every TabDock, guest, popup, and adopted target is bound to a current
+   process-start/HWND identity;
+5. `WindowFromPoint` → `GA_ROOT` and foreground checks pass immediately before
+   each guarded action and assertion; and
+6. no foreign window covers a target or invalidates the lease.
+
+If item 2 cannot be established, no physical input is issued even when the
+native preflight reports an unlocked interactive session.
+
+## Scenario evidence
+
+Each scenario retains its first attempt, rerun lineage, outcome code, and
+artifact references. Evidence records both sides of a presentation claim:
+TabDock chrome must be visible and actionable, and representative guest points
+must resolve to the expected guest root with live/client-render evidence.
+Geometry equality alone is not a pass. Guest/container/popup HWNDs, process
+identities, visibility, zoom/iconic state, `WINDOWPLACEMENT`, monitor, DPI,
+foreground, local z-order, and logical membership are recorded where the
+scenario exposes them.
+
+The matrix uses the existing bounded ValidationDriver scenarios and adds no
+production behavior. If the GuineaPig fixture lacks topmost support, only the
+smallest test-fixture switch is added; no production z-order change is allowed.
+
+If a cell cannot run, the record names the exact missing supervision,
+application, topology, OS, signing, or fixture capability and gives the rerun
+command. Synthetic policy coverage remains separate from physical
+qualification.

@@ -98,3 +98,38 @@ until the failure is understood and dispositioned.
   rerun later passes
 - **THEN** both attempts remain in the evidence and the aggregate is not promoted
   directly to release PASS
+
+### Requirement: Guarded physical actions SHALL retain current root and identity continuity
+
+Every guarded action and authoritative assertion SHALL revalidate the target
+process-start/HWND identity, `WindowFromPoint` → `GA_ROOT`, foreground, and
+ownership conditions. A foreign or recycled root SHALL invalidate the lease and
+prevent the action or mutation.
+
+#### Scenario: A foreign covering root invalidates a step
+
+- **WHEN** a foreign or recycled root is observed at a target point or as the
+  required foreground immediately before a guarded action
+- **THEN** the lease is invalidated, no input or mutation is issued, and the
+  evidence retains the identity mismatch
+
+### Requirement: Physical certification evidence SHALL separate deterministic coverage
+
+Each presentation-integrity capability SHALL retain a candidate SHA and binary
+identity, environment/topology snapshot, attempt count, first result, final
+disposition, and bounded evidence reference. Deterministic tests, synthetic
+transitions, and read-only probes SHALL be labeled separately and SHALL NOT be
+promoted to physical PASS.
+
+#### Scenario: A blocked first attempt remains visible
+
+- **WHEN** a required physical scenario is blocked before input and a later
+  attempt has different availability
+- **THEN** the evidence retains the original blocked result and the later result
+  separately rather than replacing the first attempt
+
+#### Scenario: Geometry-only evidence cannot pass presentation
+
+- **WHEN** a guest rectangle matches the content host but point ownership or
+  client-render evidence shows an opaque container cover
+- **THEN** the physical presentation cell is not a PASS

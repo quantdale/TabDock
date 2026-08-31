@@ -129,6 +129,7 @@ public sealed class PigOptions
     public string RunId = string.Empty;
     public string? Color;
     public bool Pulse;
+    public bool Topmost;
     public bool HideOnClose;
     public bool MinimizeThenHideOnClose;
     public int SelfCloseAfterSeconds = -1;
@@ -228,6 +229,7 @@ public sealed class PigForm : Form
         _baseColor = ParseColor(opts.Color);
         _pulseColor = ShiftBrightness(_baseColor, 25);
         BackColor = _baseColor;
+        TopMost = opts.Topmost;
 
         if (opts.Pulse)
         {
@@ -362,7 +364,7 @@ public sealed class PigForm : Form
         };
 
         Log($"LIFECYCLE Created title='{opts.Title}' pid={Environment.ProcessId} runId={opts.RunId} color={_baseColor} " +
-            $"pulse={opts.Pulse} hideOnClose={opts.HideOnClose} minThenHide={opts.MinimizeThenHideOnClose} " +
+            $"pulse={opts.Pulse} topmost={opts.Topmost} hideOnClose={opts.HideOnClose} minThenHide={opts.MinimizeThenHideOnClose} " +
             $"selfClose={opts.SelfCloseAfterSeconds} selfMin={opts.SelfMinimizeAfterSeconds} closeButton={opts.CloseButton} textBox={opts.TextBox} " +
             $"resizeProbe={opts.ResizeProbe} " +
             $"dpiMode={opts.DpiMode} minTrack={_opts.MinWidth}x{_opts.MinHeight}");

@@ -396,7 +396,7 @@ internal static class DeterministicSelfTests
     {
         yield return ("CAT01-catalog-generation-is-stable", () =>
             ScenarioCatalog.Generation == "scenario-catalog-2026-08-24-v1"
-            && ScenarioCatalog.All.Count == 127);
+            && ScenarioCatalog.All.Count == 128);
 
         yield return ("CAT02-catalog-validates-without-errors", () =>
         {
