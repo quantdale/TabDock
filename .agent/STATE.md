@@ -87,10 +87,25 @@ Detailed rerun evidence:
 - The active OpenSpec change is not safe to archive while major requested
   physical cells remain blocked.
 
+### Continuation checkpoint
+
+- Supervised physical evidence through `b0975b2a724f0cf9551c4e106dfc6449c8643002`
+  is retained as partial certification; supported rename/split/inline-capture/
+  context-menu/direct-foreground paths passed.
+- No valid physical `FAIL_PRODUCT` exists and production TabDock remains
+  unchanged.
+- Remaining work is qualification capability completion, not architecture
+  redesign: stable generic foreground qualification, guest-caption maximize,
+  Win+Up, real F11, dual-monitor/mixed-DPI transfer, topmost dispatch,
+  LOCATIONCHANGE load and title-centering measurement.
+- The active OpenSpec task ledger now tracks those cells as unchecked
+  continuation work rather than incorrectly treating the initial blocked
+  campaign as the final state.
+
 ### Next action
 
-Commit and push the harness-only corrections plus this checkpoint and the
-rerun investigation. Verify final `git status`, `git rev-parse HEAD`, and
-`git rev-parse origin/main`. Do not claim full physical certification or a
-production defect fix; a future session must establish stable foreground
-arrangement before the remaining physical cells are attempted.
+Continue the active physical-certification OpenSpec from the latest mainline.
+First stabilize the shared fail-closed foreground qualification path using
+deterministic harness tests; then add and run the missing physical scenarios.
+Do not change production code unless a newly executable physical cell yields a
+valid, retained `FAIL_PRODUCT`.
