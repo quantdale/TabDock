@@ -69,4 +69,29 @@ internal static class TabStripDragProjection
         }
         return tabsCount;
     }
+
+    /// <summary>
+    /// Converts a visible boundary anchor into the final index accepted by
+    /// <c>ObservableCollection.Move</c> after removing the dragged item.
+    /// Without this adjustment, moving B before A changes A's live index from
+    /// 0 to 1 and the next stationary MouseMove moves B back before A.
+    /// </summary>
+    internal static int? AdjustForDraggedItem(
+        int? boundaryIndex,
+        int draggedIndex,
+        int tabsCount)
+    {
+        if (!boundaryIndex.HasValue
+            || draggedIndex < 0
+            || draggedIndex >= tabsCount
+            || tabsCount <= 0)
+        {
+            return null;
+        }
+
+        int targetIndex = Math.Clamp(boundaryIndex.Value, 0, tabsCount);
+        if (targetIndex > draggedIndex)
+            targetIndex--;
+        return targetIndex;
+    }
 }

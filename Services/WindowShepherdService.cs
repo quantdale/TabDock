@@ -183,6 +183,10 @@ public sealed class WindowShepherdService
     // forget a known-safe minimum or freeze for 100 ms per guest.
     internal const uint MinTrackProbeTimeoutMilliseconds = 100;
     private readonly Dictionary<CapturedWindow, (int Width, int Height)> _minTrackCache = new();
+    // A browser fullscreen exit is posted asynchronously. Suppress duplicate
+    // F11 requests while its native LOCATIONCHANGE/style transition is still
+    // pending; otherwise two queued toggles could re-enter fullscreen.
+    private readonly HashSet<CapturedWindow> _pendingBrowserFullscreenExits = new();
     private readonly IWindowIdentityNativeApi _identityApi;
     private readonly IWindowReleaseNativeApi _releaseApi;
     private readonly IWindowCaptureNativeApi _captureApi;
@@ -1017,13 +1021,120 @@ public sealed class WindowShepherdService
     }
 
     /// <summary>
+    /// Detects a non-zoomed borderless fullscreen presentation before the
+    /// pane-containment minimum-size probe. F11 browsers can report a native
+    /// minimum equal to the full monitor while in that mode; the caller posts
+    /// the browser's own F11 accelerator before attempting exact pane layout.
+    /// </summary>
+    private static bool NeedsNativePresentationRestore(
+        CapturedWindow window,
+        NativeMethods.RECT assigned,
+        out bool bypassNativeMinimum)
+    {
+        bypassNativeMinimum = false;
+        bool iconic = NativeMethods.IsIconic(window.Hwnd);
+        bool zoomed = NativeMethods.IsZoomed(window.Hwnd);
+        if (iconic || zoomed)
+            return true;
+        if (!NativeMethods.GetWindowRect(window.Hwnd, out NativeMethods.RECT observed))
+            return false;
+
+        uint style = unchecked((uint)NativeMethods.GetWindowLongPtr(
+            window.Hwnd,
+            NativeMethods.GWL_STYLE).ToInt64());
+        bool borderlessMismatch = NativePresentationRestorePolicy.IsBorderlessGeometryMismatch(
+            observed,
+            assigned,
+            style);
+        bypassNativeMinimum = IsKnownFullscreenBrowser(window) && borderlessMismatch;
+        return bypassNativeMinimum;
+    }
+
+    /// <summary>
+    /// Requests the known Chromium browser to leave its application-level F11
+    /// mode. ShowWindow(SW_RESTORE) changes the USER32 show state but does not
+    /// toggle a browser's borderless fullscreen accelerator. The request is
+    /// posted only after the same strong identity and mutation-generation
+    /// gates used by every captured-window mutation; no activation or style
+    /// change is performed.
+    /// </summary>
+    private bool RequestBrowserFullscreenExit(CapturedWindow window)
+    {
+        if (!IsKnownFullscreenBrowser(window)
+            || !IsCurrentCapturedWindow(window, "fullscreen-exit", verifyExecutable: true, verifyProcessInstance: true)
+            || !IsCurrentMutationGeneration(window, "fullscreen-exit-boundary"))
+        {
+            return false;
+        }
+        if (_pendingBrowserFullscreenExits.Contains(window))
+            return true;
+
+        const long keyDownLParam = 1L | (0x57L << 16);
+        const long keyUpLParam = keyDownLParam | (1L << 30) | (1L << 31);
+        bool postedDown = NativeMethods.PostMessage(
+            window.Hwnd,
+            NativeMethods.WM_KEYDOWN,
+            new IntPtr(NativeMethods.VK_F11),
+            new IntPtr(keyDownLParam));
+        bool postedUp = postedDown && NativeMethods.PostMessage(
+            window.Hwnd,
+            NativeMethods.WM_KEYUP,
+            new IntPtr(NativeMethods.VK_F11),
+            new IntPtr(keyUpLParam));
+        if (!postedUp)
+        {
+            LogPositioningFailureOnce(window.Hwnd, "PostMessage(F11 fullscreen exit)");
+            return false;
+        }
+        _pendingBrowserFullscreenExits.Add(window);
+
+        _log.Log($"SHEPHERD[presentation-restore-request] guest=0x{window.Hwnd.ToInt64():X} method=browser-f11");
+        return true;
+    }
+
+    private static bool IsKnownFullscreenBrowser(CapturedWindow window)
+    {
+        string executable = Path.GetFileName(window.ExePath);
+        return executable.Equals("chrome.exe", StringComparison.OrdinalIgnoreCase)
+            || executable.Equals("msedge.exe", StringComparison.OrdinalIgnoreCase)
+            || executable.Equals("brave.exe", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Clears an asynchronous browser-exit request after a native event shows
+    /// that the browser has returned to its framed presentation. This keeps a
+    /// later, independent F11 action from being mistaken for the prior request.
+    /// </summary>
+    internal void ObserveNativePresentation(CapturedWindow window)
+    {
+        if (!_pendingBrowserFullscreenExits.Contains(window))
+            return;
+        if (!NativeMethods.IsWindow(window.Hwnd))
+        {
+            _pendingBrowserFullscreenExits.Remove(window);
+            return;
+        }
+
+        uint style = unchecked((uint)NativeMethods.GetWindowLongPtr(
+            window.Hwnd,
+            NativeMethods.GWL_STYLE).ToInt64());
+        if ((style & NativeMethods.WS_CAPTION) == NativeMethods.WS_CAPTION
+            || (style & NativeMethods.WS_THICKFRAME) != 0)
+        {
+            _pendingBrowserFullscreenExits.Remove(window);
+        }
+    }
+
+    /// <summary>
     /// Positions the guest to exactly cover <paramref name="screenRect"/> and
     /// places it immediately above <paramref name="containerHwnd"/> in
-    /// z-order, then shows it. Restores the guest first if it is iconic or
-    /// zoomed, since either state would otherwise fight the exact-fit resize.
-    /// The capture-session journal remains until Release completes; an active
-    /// guest can still be left at TabDock-controlled presentation state by a
-    /// hard kill.
+    /// z-order, then shows it. Restores the guest first if iconic or zoomed.
+    /// A known Chromium guest in borderless F11 presentation receives its own
+    /// identity-checked F11 accelerator and waits for the resulting
+    /// LOCATIONCHANGE before exact pane layout; USER32 restore alone cannot
+    /// leave browser-owned fullscreen. The capture-session journal remains
+    /// until Release completes; an active guest can still be left at
+    /// TabDock-controlled presentation state by a hard kill.
     /// </summary>
     public void PositionAndShow(CapturedWindow window, IntPtr containerHwnd, NativeMethods.RECT screenRect)
         => PositionAndShowCore(window, containerHwnd, screenRect, verifyProcessInstance: false);
@@ -1039,19 +1150,26 @@ public sealed class WindowShepherdService
             || !IsCurrentCapturedWindow(window, "position", verifyExecutable: false, verifyProcessInstance: verifyProcessInstance))
             return;
 
-        if ((NativeMethods.IsIconic(window.Hwnd) || NativeMethods.IsZoomed(window.Hwnd))
+        bool restorePresentation = NeedsNativePresentationRestore(
+            window,
+            screenRect,
+            out bool bypassNativeMinimum);
+        if (bypassNativeMinimum)
+        {
+            if (!RequestBrowserFullscreenExit(window))
+                return;
+            // The posted accelerator is asynchronous. Leave the native
+            // rectangle untouched; Chromium's resulting LOCATIONCHANGE
+            // re-enters this bounded Shepherd path after F11 has exited.
+            return;
+        }
+        _pendingBrowserFullscreenExits.Remove(window);
+        if (restorePresentation
             && !RestoreForMutation(window, "position"))
         {
             return;
         }
 
-        if (!IsCurrentMutationGeneration(window, "position-before-set-window-pos"))
-            return;
-
-        // SetWindowPos's hWndInsertAfter PRECEDES (sits above) hWnd in z-order,
-        // so passing containerHwnd here would put the guest BEHIND its own
-        // container. Bring the guest to the true top instead, then pin the
-        // container immediately behind it so nothing else can slot between.
         bool positioned = NativeMethods.SetWindowPos(
             window.Hwnd,
             NativeMethods.HWND_TOP,
@@ -1085,21 +1203,36 @@ public sealed class WindowShepherdService
     /// once, so the caller establishes their relative order via
     /// <paramref name="insertAfter"/>; pass <see cref="NativeMethods.HWND_TOP"/>
     /// to raise a guest to the top. Restores the guest first if iconic or
-    /// zoomed, since either state would fight the exact-fit resize. Clears the
-    /// capture-session journal entry: an actively-shown window can still need
-    /// full-state rescue after a hard kill.
+    /// zoomed. A known Chromium guest in borderless F11 presentation receives
+    /// its own identity-checked F11 accelerator and waits for the resulting
+    /// LOCATIONCHANGE before exact pane layout. Clears the capture-session
+    /// journal entry: an actively-shown window can still need full-state rescue
+    /// after a hard kill.
     /// </summary>
     public void PositionGuest(CapturedWindow window, NativeMethods.RECT screenRect, IntPtr insertAfter)
     {
         if (!IsCurrentCapturedWindow(window, "position-split", verifyExecutable: false, verifyProcessInstance: false))
             return;
 
-        if (NativeMethods.IsIconic(window.Hwnd) || NativeMethods.IsZoomed(window.Hwnd))
-            if (!RestoreForMutation(window, "position-split"))
+        bool restorePresentation = NeedsNativePresentationRestore(
+            window,
+            screenRect,
+            out bool bypassNativeMinimum);
+        if (bypassNativeMinimum)
+        {
+            if (!RequestBrowserFullscreenExit(window))
                 return;
-
-        if (!IsCurrentMutationGeneration(window, "position-split-before-set-window-pos"))
+            // Wait for the browser's resulting LOCATIONCHANGE before applying
+            // the pane rectangle; F11 changes are asynchronous.
             return;
+        }
+        _pendingBrowserFullscreenExits.Remove(window);
+        if (restorePresentation
+            && !RestoreForMutation(window, "position-split"))
+        {
+            return;
+        }
+
 
         if (!NativeMethods.SetWindowPos(
             window.Hwnd,
@@ -1259,12 +1392,33 @@ public sealed class WindowShepherdService
             || !NativeMethods.IsWindow(containerHwnd))
             return;
 
-        if (NativeMethods.IsIconic(top.Hwnd) || NativeMethods.IsZoomed(top.Hwnd))
-            if (!RestoreForMutation(top, "position-split"))
+        bool topRestore = NeedsNativePresentationRestore(
+            top,
+            topRect,
+            out bool topBypassNativeMinimum);
+        if (topBypassNativeMinimum)
+        {
+            if (!RequestBrowserFullscreenExit(top))
                 return;
-        if (NativeMethods.IsIconic(bottom.Hwnd) || NativeMethods.IsZoomed(bottom.Hwnd))
-            if (!RestoreForMutation(bottom, "position-split"))
+            return;
+        }
+        _pendingBrowserFullscreenExits.Remove(top);
+        if (topRestore && !RestoreForMutation(top, "position-split"))
+            return;
+
+        bool bottomRestore = NeedsNativePresentationRestore(
+            bottom,
+            bottomRect,
+            out bool bottomBypassNativeMinimum);
+        if (bottomBypassNativeMinimum)
+        {
+            if (!RequestBrowserFullscreenExit(bottom))
                 return;
+            return;
+        }
+        _pendingBrowserFullscreenExits.Remove(bottom);
+        if (bottomRestore && !RestoreForMutation(bottom, "position-split"))
+            return;
 
         // The restore calls above are native operations and can block while a
         // guest tears down. Revalidate both cheap generations immediately
@@ -1722,6 +1876,7 @@ public sealed class WindowShepherdService
     /// </summary>
     public WindowReleaseOutcome Release(CapturedWindow window, bool show = true)
     {
+        _pendingBrowserFullscreenExits.Remove(window);
         WindowIdentityResult identityResult = EvaluateCurrentCapturedWindow(
             window,
             "release",

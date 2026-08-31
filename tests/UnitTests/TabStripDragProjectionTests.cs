@@ -166,4 +166,50 @@ public class TabStripDragProjectionTests
         Assert.Equal(4, tabs.Count);
         Assert.Equal(3, display.Count);
     }
+
+    [Fact]
+    public void AdjustForDraggedItem_ConvertsBoundaryToStableFinalIndex()
+    {
+        Assert.Equal(0, TabStripDragProjection.AdjustForDraggedItem(0, 1, 2)); // B before A
+        Assert.Equal(0, TabStripDragProjection.AdjustForDraggedItem(1, 0, 2)); // A before B
+        Assert.Equal(1, TabStripDragProjection.AdjustForDraggedItem(2, 0, 2)); // A to end
+        Assert.Equal(1, TabStripDragProjection.AdjustForDraggedItem(1, 1, 2)); // same item
+        Assert.Null(TabStripDragProjection.AdjustForDraggedItem(null, 0, 2));
+        Assert.Null(TabStripDragProjection.AdjustForDraggedItem(0, -1, 2));
+    }
+
+    [Fact]
+    public void FrozenBoundary_DoesNotFlipBackAfterFirstMove()
+    {
+        var a = Tab("A");
+        var b = Tab("B");
+        var strip = new Strip { TabsList = { a, b } };
+        var slots = new[] { Slot(50, a), Slot(150, b) };
+
+        int? firstBoundary = TabStripDragProjection.ResolveDropTargetIndex(
+            slots,
+            10,
+            strip.AnchorOf,
+            strip.TabsList.Count);
+        int firstTarget = TabStripDragProjection.AdjustForDraggedItem(
+            firstBoundary,
+            draggedIndex: 1,
+            tabsCount: strip.TabsList.Count)!.Value;
+        strip.TabsList.RemoveAt(1);
+        strip.TabsList.Insert(firstTarget, b);
+
+        int? secondBoundary = TabStripDragProjection.ResolveDropTargetIndex(
+            slots,
+            10,
+            strip.AnchorOf,
+            strip.TabsList.Count);
+        int? secondTarget = TabStripDragProjection.AdjustForDraggedItem(
+            secondBoundary,
+            draggedIndex: 0,
+            tabsCount: strip.TabsList.Count);
+
+        Assert.Equal(new[] { b, a }, strip.TabsList);
+        Assert.Equal(0, secondTarget);
+        Assert.Equal(0, secondTarget!.Value); // no second MoveTab call
+    }
 }

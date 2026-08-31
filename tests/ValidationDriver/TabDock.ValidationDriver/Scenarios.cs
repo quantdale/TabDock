@@ -312,9 +312,10 @@ internal static partial class Scenarios
         if (!capabilityResolution.Runnable)
         {
             // Capability outcomes are written without starting TabDock or
-            // clearing persisted user state. A missing browser, locked
-            // workstation, or absent topology is a preflight result, not a
-            // product assertion and must not run destructive setup.
+            // touching the workstation, or absent topology is a preflight
+            // result, not a product assertion and must not run destructive
+            // setup.
+            Input.SetDesktopLease(null);
             Input.ResetIdentityScope(name);
             var preflight = new Ctx
             {
@@ -351,6 +352,7 @@ internal static partial class Scenarios
         if (!lease.IsValid)
         {
             Input.ResetIdentityScope(name);
+            Input.SetDesktopLease(null);
             var blocked = new Ctx
             {
                 Name = name,
@@ -366,7 +368,7 @@ internal static partial class Scenarios
             GuardedProc.Log($"SCENARIO {name}: {blocked.Outcome.Code} ({blocked.Outcome.Reason})");
             return false;
         }
-
+        Input.SetDesktopLease(lease);
         GuardedProc.Log($"=== SCENARIO {name} ===");
         Ctx? ctx = null;
         string? setupFailureReason = null;
@@ -378,11 +380,11 @@ internal static partial class Scenarios
             ctx.Timeline = timeline;
             ctx.Capabilities = capabilities;
             ctx.DesktopLease = lease;
-            Input.SetDesktopLease(lease);
             if (ctx.MainIdentity.HasValue)
                 lease.RegisterTarget(ctx.MainIdentity.Value, "TabDockMainWindow");
             body!(ctx, opt);
         }
+
         catch (OperationCanceledException)
         {
             if (ctx != null)
@@ -401,7 +403,6 @@ internal static partial class Scenarios
         {
             try
             {
-                Input.SetDesktopLease(null);
                 if (ctx != null)
                 {
                     QualificationResultWriter.CaptureLiveEvidence(ctx);
@@ -438,6 +439,10 @@ internal static partial class Scenarios
             }
             finally
             {
+                // Cleanup may need real input for an identity-proven close
+                // prompt. Keep the live lease through Cleanup, then clear it
+                // even when cleanup or artifact writing throws.
+                Input.SetDesktopLease(null);
                 GuardedProc.SetTimeline(null);
             }
         }
@@ -1651,49 +1656,38 @@ internal static partial class Scenarios
         return Uia.FindDescendantByAutomationId(list, "SplitCompositeItem", out count);
     }
 
-    /// <summary>Right-clicks a tab (by guest title) and real-clicks the named context-menu item.</summary>
     /// <summary>
-    /// Best-effort foreground acquisition before a blind click. Tries
-    /// <see cref="Input.ForceForeground"/> first; if that fails (observed
-    /// deterministically right after a "Pop out" release, where
-    /// WindowShepherdService.Release explicitly foregrounds the just-released
-    /// guest and Windows' foreground-lock heuristic then blocks THIS
-    /// background process from immediately reclaiming it via
-    /// SetForegroundWindow), fall back to confirming the intended click point
-    /// is not obscured by another window. A real click there lands correctly
-    /// and grants the target window foreground as a side effect purely via
-    /// normal click-to-activate — exactly what a human user gets for free
-    /// without ever calling SetForegroundWindow — so it is safe to proceed.
+    /// Qualifies the shared foreground target, then proves the actionable
+    /// point is still owned by the exact requested root. Foreground arrangement
+    /// and activation fallback are centralized in Input.ForceForeground; this
+    /// helper never clicks the actionable point as an activation workaround.
     /// </summary>
     private static bool EnsureClickable(IntPtr target, int x, int y)
     {
         bool foreground = Input.ForceForeground(target);
-
-        IntPtr atPoint = NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = x, y = y });
-        IntPtr rootAtPoint = NativeMethods.GetAncestor(atPoint, NativeMethods.GA_ROOT);
-        bool clickable = rootAtPoint == target;
-        if (!clickable)
+        bool pointOwned = foreground && Input.VerifyClickPoint(target, x, y);
+        IntPtr atPoint = NativeMethods.WindowFromPoint(
+            new NativeMethods.POINT { x = x, y = y });
+        IntPtr rootAtPoint = atPoint == IntPtr.Zero
+            ? IntPtr.Zero
+            : NativeMethods.GetAncestor(atPoint, NativeMethods.GA_ROOT);
+        if (!pointOwned)
         {
-            // Preserve the guard's refusal as a structured artifact before a
-            // retry can let the covering window disappear. This is deliberately
-            // diagnostic-only: the caller still sends no input until the live
-            // point resolves to the verified test HWND.
             IdentityDiagnostics.RecordPointFailure(
                 x,
                 y,
                 target,
                 rootAtPoint == IntPtr.Zero
                     ? "point-has-no-window"
-                    : "point-obscured-by-unrelated-window");
+                    : rootAtPoint == target
+                        ? "foreground-qualification-failed"
+                        : "point-obscured-by-unrelated-window");
         }
-        GuardedProc.Log(clickable
-            ? foreground
-                ? $"  EnsureClickable: 0x{target.ToInt64():X} is foreground and ({x},{y}) resolves to the verified target."
-                : $"  EnsureClickable: ForceForeground failed for 0x{target.ToInt64():X}, but ({x},{y}) resolves to it directly (no obscuring window) — proceeding with a real click, as a human user would."
-            : foreground
-                ? $"  EnsureClickable: 0x{target.ToInt64():X} reported foreground, but ({x},{y}) resolves to 0x{rootAtPoint.ToInt64():X} instead — refusing to click blind."
-                : $"  EnsureClickable: ForceForeground failed for 0x{target.ToInt64():X} and ({x},{y}) resolves to 0x{rootAtPoint.ToInt64():X} instead — refusing to click blind.");
-        return clickable;
+
+        GuardedProc.Log(pointOwned
+            ? $"  EnsureClickable: 0x{target.ToInt64():X} is foreground-qualified and ({x},{y}) resolves to the exact target."
+            : $"  EnsureClickable: refusing ({x},{y}) for 0x{target.ToInt64():X}; foreground={foreground} pointRoot=0x{rootAtPoint.ToInt64():X}.");
+        return pointOwned;
     }
 
     /// <summary>

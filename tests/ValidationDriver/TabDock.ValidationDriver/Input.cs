@@ -15,9 +15,12 @@ internal static class Input
     public const ushort VK_CONTROL = 0x11;
     public const ushort VK_SHIFT = 0x10;
     public const ushort VK_MENU = 0x12;
+    public const ushort VK_LWIN = 0x5B;
     public const ushort VK_TAB = 0x09;
     public const ushort VK_LEFT = 0x25;
+    public const ushort VK_UP = 0x26;
     public const ushort VK_RIGHT = 0x27;
+    public const ushort VK_DOWN = 0x28;
     public const ushort VK_DELETE = 0x2E;
     public const ushort VK_A = 0x41;
     public const ushort VK_D = 0x44;
@@ -27,6 +30,7 @@ internal static class Input
     public const ushort VK_ESCAPE = 0x1B;
     public const ushort VK_PRIOR = 0x21;
     public const ushort VK_NEXT = 0x22;
+    public const ushort VK_F11 = 0x7A;
 
     private const uint MOUSEEVENTF_WHEEL = 0x0800;
     private const int WHEEL_DELTA = 120;
@@ -85,13 +89,10 @@ internal static class Input
     }
 
     /// <summary>
-    /// Brings a window verifiably to the foreground before real-input targeting.
-    /// The driver usually runs from a terminal/IDE that owns the foreground, so
-    /// freshly spawned TabDock windows open BEHIND it and plain
-    /// SetForegroundWindow is denied — real clicks at UIA-read coordinates would
-    /// then land in whatever covers the target (observed: clicks landing in the
-    /// IDE). A benign key-up via SendInput makes this process the last input
-    /// source, which grants foreground rights; a TOPMOST pulse is the fallback.
+    /// Qualifies a target for real input. SetForegroundWindow is only an
+    /// arrangement attempt; if it does not establish foreground, the shared
+    /// primitive may perform one click on the target's separately proven frame
+    /// activation point. It never uses AttachThreadInput or a TOPMOST pulse.
     /// Callers must treat false as "do NOT click".
     /// </summary>
     public static bool ForceForeground(IntPtr hwnd)
@@ -99,124 +100,22 @@ internal static class Input
         IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
         if (root == IntPtr.Zero)
             root = hwnd;
-        string scopeReason = string.Empty;
-        WindowIdentity target = default;
-        bool identityCaptured = false;
-        bool targetValid = false;
-        int identityAttempt = 0;
-        // Foreground transitions can briefly make one of the independent
-        // identity reads incomplete even though this HWND was already
-        // registered for the run. Re-read the complete proof for a bounded
-        // interval; this only retries evidence collection and never broadens
-        // the scope or permits an unverified operation.
-        for (; identityAttempt < 4 && !targetValid; identityAttempt++)
+
+        if (!Discover.TryCaptureIdentity(root, out WindowIdentity target))
         {
-            identityCaptured = Discover.TryCaptureIdentity(root, out target);
-            targetValid = identityCaptured
-                && IsScoped(target, out scopeReason);
-            if (!targetValid && identityAttempt < 3)
-                Thread.Sleep(3);
-        }
-        if (!targetValid)
-        {
-            string reason = identityCaptured
-                ? (string.IsNullOrEmpty(scopeReason) ? "identity-scope-rejected" : scopeReason)
-                : "identity-unavailable";
-            GuardedProc.Log($"WARNING: refusing foreground operation for unverified HWND 0x{root.ToInt64():X}: {reason}.");
-            IdentityDiagnostics.RecordPointFailure(_hasLastPoint ? _lastX : 0, _hasLastPoint ? _lastY : 0, root, reason);
+            GuardedProc.Log($"WARNING: refusing foreground qualification for HWND 0x{root.ToInt64():X}: identity-unavailable.");
+            IdentityDiagnostics.RecordPointFailure(_hasLastPoint ? _lastX : 0, _hasLastPoint ? _lastY : 0, root, "identity-unavailable");
             return false;
         }
-        // Foreground arrangement is a two-phase operation. The window we want
-        // to activate is not expected to be foreground yet; requiring that
-        // here rejects safe transitions from one already-registered test
-        // window to another. First prove that the current foreground belongs
-        // to an allowed, identity-current run target. The exact target is
-        // checked again after SetForegroundWindow, immediately before the
-        // caller sends any real interaction.
-        if (_desktopLease != null
-            && !_desktopLease.Checkpoint(
-                "foreground-source-before-switch",
-                requireForeground: true).IsValid)
-        {
-            GuardedProc.Log($"WARNING: refusing foreground operation for HWND 0x{target.Hwnd.ToInt64():X} because the current foreground is not an allowed run target.");
-            return false;
-        }
-        if (identityAttempt > 1)
-            GuardedProc.Log($"  Foreground identity proof settled after bounded retry for HWND 0x{target.Hwnd.ToInt64():X}.");
-        _activeTarget = target;
 
-        for (int attempt = 0; attempt < 4; attempt++)
-        {
-            if (!MatchesStableIdentity(target.Hwnd, target))
-                return false;
-            if (NativeMethods.GetForegroundWindow() == target.Hwnd)
-                return true;
-
-            // This isolated key-up is deliberately non-targeting and carries
-            // no character or button transition. It grants this process the
-            // foreground-change right on Windows versions that deny a direct
-            // SetForegroundWindow call from a background test console.
-            SendRawVk(VK_MENU, up: true);
-            NativeMethods.AllowSetForegroundWindow(NativeMethods.ASFW_ANY);
-            Thread.Sleep(30);
-            if (!MatchesStableIdentity(target.Hwnd, target))
-                return false;
-            _desktopLease?.RecordInteraction(
-                "foreground-set-attempt",
-                TestRunProvenance.WindowRole(target.Hwnd),
-                target.Hwnd,
-                new Dictionary<string, string> { ["method"] = "SetForegroundWindow" });
-            NativeMethods.SetForegroundWindow(target.Hwnd);
-            Thread.Sleep(150);
-            bool foregroundMatch = NativeMethods.GetForegroundWindow() == target.Hwnd
-                && MatchesStableIdentity(target.Hwnd, target);
-            _desktopLease?.RecordInteraction(
-                "foreground-set-result",
-                TestRunProvenance.WindowRole(target.Hwnd),
-                target.Hwnd,
-                new Dictionary<string, string> { ["matched"] = foregroundMatch.ToString() });
-            if (foregroundMatch)
-            {
-                if (_desktopLease == null
-                    || _desktopLease.Checkpoint(
-                        "foreground-target-after-switch",
-                        target,
-                        requireForeground: true).IsValid)
-                    return true;
-
-                GuardedProc.Log($"WARNING: refusing foreground operation because HWND 0x{target.Hwnd.ToInt64():X} lost its exact post-switch lease proof.");
-                return false;
-            }
-
-            // Fallback: pulse TOPMOST to rise above the covering window, then drop
-            // back to the normal band and try again.
-            if (!MatchesStableIdentity(target.Hwnd, target))
-                return false;
-            _desktopLease?.RecordInteraction(
-                "foreground-topmost-pulse",
-                TestRunProvenance.WindowRole(target.Hwnd),
-                target.Hwnd);
-            NativeMethods.SetWindowPos(target.Hwnd, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
-                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
-            if (!MatchesStableIdentity(target.Hwnd, target))
-                return false;
-            NativeMethods.SetWindowPos(target.Hwnd, NativeMethods.HWND_NOTOPMOST, 0, 0, 0, 0,
-                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
-            if (!MatchesStableIdentity(target.Hwnd, target))
-                return false;
-            NativeMethods.SetForegroundWindow(target.Hwnd);
-            Thread.Sleep(150);
-        }
-        bool ok = NativeMethods.GetForegroundWindow() == target.Hwnd
-            && MatchesStableIdentity(target.Hwnd, target);
-        if (ok && _desktopLease != null)
-            ok = _desktopLease.Checkpoint(
-                "foreground-target-after-switch",
-                target,
-                requireForeground: true).IsValid;
-        if (!ok)
-            GuardedProc.Log($"WARNING: could not bring 0x{target.Hwnd.ToInt64():X} to the foreground.");
-        return ok;
+        var qualification = new ForegroundQualification(new NativeForegroundQualificationRuntime());
+        ForegroundQualificationResult result = qualification.Qualify(target);
+        GuardedProc.Log(result.IsValid
+            ? $"  Foreground qualification succeeded for 0x{target.Hwnd.ToInt64():X}: {result.Kind} ({result.Reason})."
+            : $"WARNING: foreground qualification refused for 0x{target.Hwnd.ToInt64():X}: {result.Reason}.");
+        if (result.IsValid)
+            _activeTarget = target;
+        return result.IsValid;
     }
 
     /// <summary>ForceForeground on the top-level root of (possibly child) <paramref name="hwnd"/>.</summary>
@@ -230,6 +129,219 @@ internal static class Input
     {
         bool result = TestRunProvenance.TryValidateWindow(current, out reason);
         return result;
+    }
+
+    private sealed class NativeForegroundQualificationRuntime : IForegroundQualificationRuntime
+    {
+        public bool LeaseIsActive => _desktopLease != null && _desktopLease.IsValid;
+
+        public bool IsTargetCurrent(WindowIdentity expected)
+            => MatchesStableIdentity(expected.Hwnd, expected);
+
+        public bool TryArrangeForeground(WindowIdentity expected)
+        {
+            if (!MatchesStableIdentity(expected.Hwnd, expected))
+                return false;
+
+            _desktopLease?.RecordInteraction(
+                "foreground-arrangement-attempt",
+                TestRunProvenance.WindowRole(expected.Hwnd),
+                expected.Hwnd,
+                new Dictionary<string, string>
+                {
+                    ["method"] = "SetForegroundWindow;SetWindowPos(HWND_TOP)",
+                });
+            bool arranged = NativeMethods.SetForegroundWindow(expected.Hwnd);
+            Thread.Sleep(150);
+            bool raised = false;
+            if (!IsTargetForeground(expected))
+            {
+                // Raise only the known test-owned window in ordinary,
+                // non-activating z-order. This is not TOPMOST and does not
+                // touch, minimize, or otherwise manipulate a foreign window.
+                raised = NativeMethods.SetWindowPos(
+                    expected.Hwnd,
+                    NativeMethods.HWND_TOP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    NativeMethods.SWP_NOMOVE
+                        | NativeMethods.SWP_NOSIZE
+                        | NativeMethods.SWP_NOACTIVATE);
+                GuardedProc.Log($"  Foreground qualification ordinary z-order raise returned={raised} error={Marshal.GetLastWin32Error()} foreground=0x{NativeMethods.GetForegroundWindow().ToInt64():X}.");
+                if (!IsTargetForeground(expected)
+                    && !TryGetSafeActivationPoint(expected, out _))
+                {
+                    bool movedToExposedMonitor = TryMoveToExposedMonitor(expected);
+                    raised |= movedToExposedMonitor;
+                }
+            }
+            _desktopLease?.RecordInteraction(
+                "foreground-arrangement-result",
+                TestRunProvenance.WindowRole(expected.Hwnd),
+                expected.Hwnd,
+                new Dictionary<string, string>
+                {
+                    ["returned"] = arranged.ToString(),
+                    ["raised"] = raised.ToString(),
+                    ["foreground"] = IsTargetForeground(expected).ToString(),
+                });
+            return arranged || raised;
+        }
+        private bool TryMoveToExposedMonitor(WindowIdentity expected)
+        {
+            if (!NativeMethods.GetWindowRect(expected.Hwnd, out NativeMethods.RECT current))
+                return false;
+
+            int width = Math.Max(100, current.Width);
+            int height = Math.Max(100, current.Height);
+            bool exposed = false;
+            try
+            {
+                NativeMethods.EnumDisplayMonitors(
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    (IntPtr monitor, IntPtr _, ref NativeMethods.RECT _, IntPtr _) =>
+                    {
+                        if (exposed)
+                            return false;
+
+                        var info = new NativeMethods.MONITORINFO
+                        {
+                            cbSize = (uint)Marshal.SizeOf<NativeMethods.MONITORINFO>(),
+                        };
+                        if (!NativeMethods.GetMonitorInfo(monitor, ref info))
+                            return true;
+
+                        int monitorWidth = Math.Max(100, info.rcWork.Width - 80);
+                        int monitorHeight = Math.Max(100, info.rcWork.Height - 80);
+                        int targetWidth = Math.Min(width, monitorWidth);
+                        int targetHeight = Math.Min(height, monitorHeight);
+                        int x = info.rcWork.left + 40;
+                        int y = info.rcWork.top + 40;
+                        bool moved = NativeMethods.SetWindowPos(
+                            expected.Hwnd,
+                            NativeMethods.HWND_TOP,
+                            x,
+                            y,
+                            targetWidth,
+                            targetHeight,
+                            NativeMethods.SWP_NOACTIVATE);
+                        GuardedProc.Log($"  Foreground qualification monitor arrangement monitor={monitor} moved={moved} rect={x},{y},{targetWidth},{targetHeight}.");
+                        if (!moved)
+                            return true;
+
+                        Thread.Sleep(100);
+                        exposed = TryGetSafeActivationPoint(expected, out _);
+                        return !exposed;
+                    },
+                    IntPtr.Zero);
+            }
+            catch (Exception ex)
+            {
+                GuardedProc.Log($"  Foreground qualification monitor arrangement failed: {ex.GetType().Name}.");
+                return false;
+            }
+
+            return exposed;
+        }
+
+        public bool IsTargetForeground(WindowIdentity expected)
+        {
+            IntPtr foreground = NativeMethods.GetForegroundWindow();
+            IntPtr root = foreground == IntPtr.Zero
+                ? IntPtr.Zero
+                : NativeMethods.GetAncestor(foreground, NativeMethods.GA_ROOT);
+            if (root == IntPtr.Zero)
+                root = foreground;
+            return root == expected.Hwnd && MatchesStableIdentity(expected.Hwnd, expected);
+        }
+
+        public bool TryGetSafeActivationPoint(
+            WindowIdentity expected,
+            out ForegroundActivationPoint point)
+        {
+            point = default;
+            if (!MatchesStableIdentity(expected.Hwnd, expected)
+                || !NativeMethods.IsWindowVisible(expected.Hwnd)
+                || !NativeMethods.IsWindowEnabled(expected.Hwnd)
+                || !NativeMethods.GetWindowRect(expected.Hwnd, out NativeMethods.RECT rect)
+                || rect.Width < 4
+                || rect.Height < 4)
+            {
+                return false;
+            }
+
+            uint style = unchecked((uint)NativeMethods.GetWindowLongPtr(
+                expected.Hwnd,
+                NativeMethods.GWL_STYLE).ToInt64());
+            bool hasFrame = (style & (NativeMethods.WS_CAPTION
+                | NativeMethods.WS_THICKFRAME
+                | NativeMethods.WS_BORDER)) != 0;
+            if (!hasFrame)
+            {
+                GuardedProc.Log($"  Foreground qualification: target 0x{expected.Hwnd.ToInt64():X} has no native frame style 0x{style:X}; no safe activation point.");
+                return false;
+            }
+            // Probe only fixed points on the native frame. A covered top edge
+            // does not justify clicking through it; another frame edge may be
+            // exposed and is equally non-actionable.
+            var candidates = new[]
+            {
+                new NativeMethods.POINT { x = rect.left + rect.Width / 2, y = rect.top + 1 },
+                new NativeMethods.POINT { x = rect.left + rect.Width / 2, y = rect.bottom - 2 },
+                new NativeMethods.POINT { x = rect.left + 1, y = rect.top + rect.Height / 2 },
+                new NativeMethods.POINT { x = rect.right - 2, y = rect.top + rect.Height / 2 },
+            };
+            foreach (NativeMethods.POINT candidate in candidates)
+            {
+                IntPtr atPoint = NativeMethods.WindowFromPoint(candidate);
+                IntPtr root = atPoint == IntPtr.Zero
+                    ? IntPtr.Zero
+                    : NativeMethods.GetAncestor(atPoint, NativeMethods.GA_ROOT);
+                if (root == IntPtr.Zero)
+                    root = atPoint;
+                if (root == expected.Hwnd)
+                {
+                    point = new ForegroundActivationPoint(candidate.x, candidate.y);
+                    GuardedProc.Log($"  Foreground qualification found safe frame activation point ({candidate.x},{candidate.y}) for 0x{expected.Hwnd.ToInt64():X}.");
+                    return true;
+                }
+
+                string coverage = Discover.TryCaptureIdentity(root, out WindowIdentity covered)
+                    ? $" pid={covered.ProcessId} title={covered.Title} exstyle=0x{NativeMethods.GetWindowLongPtr(root, NativeMethods.GWL_EXSTYLE).ToInt64():X}"
+                    : string.Empty;
+                GuardedProc.Log($"  Foreground qualification frame candidate ({candidate.x},{candidate.y}) resolves to 0x{root.ToInt64():X}, expected 0x{expected.Hwnd.ToInt64():X}.{coverage}");
+            }
+
+            GuardedProc.Log($"  Foreground qualification: no exposed frame point for 0x{expected.Hwnd.ToInt64():X}; rect={rect.left},{rect.top},{rect.right},{rect.bottom} style=0x{style:X}.");
+            return false;
+        }
+
+        public bool VerifyActivationPoint(
+            WindowIdentity expected,
+            ForegroundActivationPoint point)
+            => VerifyPointTargetForExpected(expected, point.X, point.Y);
+
+        public bool ClickActivationPoint(
+            WindowIdentity expected,
+            ForegroundActivationPoint point)
+        {
+            _activeTarget = expected;
+            return ClickAtVerified(expected, point.X, point.Y);
+        }
+
+        public bool VerifyForegroundAfterActivation(WindowIdentity expected)
+        {
+            bool exactForeground = IsTargetForeground(expected);
+            DesktopLeaseCheckpoint checkpoint = _desktopLease?.Checkpoint(
+                "foreground-after-activation",
+                expected,
+                requireForeground: true)
+                ?? default;
+            return exactForeground && checkpoint.IsValid;
+        }
     }
 
     private static bool MatchesStableIdentity(IntPtr hwnd, WindowIdentity expected)
@@ -320,7 +432,7 @@ internal static class Input
         return true;
     }
 
-    private static bool VerifyPointTarget(int x, int y)
+    private static bool VerifyPointTarget(int x, int y, WindowIdentity? expectedTarget = null)
     {
         if (!_activeTarget.HasValue)
         {
@@ -373,6 +485,18 @@ internal static class Input
             return false;
         }
 
+        if (expectedTarget.HasValue && !SameStableIdentity(current, expectedTarget.Value))
+        {
+            _desktopLease?.Checkpoint(
+                "point-before-input",
+                expectedTarget.Value,
+                x,
+                y);
+            GuardedProc.Log($"WARNING: refusing coordinate input at ({x},{y}); root 0x{root.ToInt64():X} is not the exact expected target 0x{expectedTarget.Value.Hwnd.ToInt64():X}.");
+            IdentityDiagnostics.RecordPointFailure(x, y, expectedTarget.Value.Hwnd, "point-target-mismatch");
+            return false;
+        }
+
         if (_desktopLease != null
             && !_desktopLease.Checkpoint("point-before-input", current, x, y).IsValid)
         {
@@ -395,6 +519,69 @@ internal static class Input
         // click actually targeted.
         _activeTarget = current;
         return true;
+    }
+
+    private static bool SameStableIdentity(WindowIdentity actual, WindowIdentity expected)
+        => actual.Hwnd == expected.Hwnd
+            && actual.ProcessId == expected.ProcessId
+            && actual.WindowThreadId == expected.WindowThreadId
+            && actual.ProcessStartTimeUtcTicks == expected.ProcessStartTimeUtcTicks
+            && string.Equals(actual.ClassName, expected.ClassName, StringComparison.Ordinal)
+            && string.Equals(actual.ExePath, expected.ExePath, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Verifies that a point is currently owned by one exact target root.</summary>
+    public static bool VerifyClickPoint(IntPtr hwnd, int x, int y)
+    {
+        IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
+        if (root == IntPtr.Zero)
+            root = hwnd;
+        return Discover.TryCaptureIdentity(root, out WindowIdentity expected)
+            && expected.Hwnd == root
+            && VerifyPointTarget(x, y, expected);
+    }
+
+    private static bool ClickAtVerified(WindowIdentity expected, int x, int y)
+    {
+        if (!VerifyPointTargetForExpected(expected, x, y))
+            return false;
+
+        _activeTarget = expected;
+        _lastX = x;
+        _lastY = y;
+        _hasLastPoint = true;
+        _desktopLease?.RecordInteraction(
+            "expected-input-target",
+            TestRunProvenance.WindowRole(expected.Hwnd),
+            expected.Hwnd,
+            new Dictionary<string, string>
+            {
+                ["kind"] = "foreground-activation-point",
+                ["x"] = x.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["y"] = y.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            });
+        if (!NativeMethods.SetCursorPos(x, y))
+            return false;
+        SendMouse(
+            NativeMethods.MOUSEEVENTF_MOVE,
+            verifyPoint: true,
+            expectedPointTarget: expected);
+        Thread.Sleep(40);
+        SendButtonClick(
+            NativeMethods.MOUSEEVENTF_LEFTDOWN,
+            NativeMethods.MOUSEEVENTF_LEFTUP,
+            40,
+            expected);
+        Thread.Sleep(60);
+        return true;
+    }
+
+    private static bool VerifyPointTargetForExpected(
+        WindowIdentity expected,
+        int x,
+        int y)
+    {
+        _activeTarget = expected;
+        return VerifyPointTarget(x, y, expected);
     }
 
     private static NativeMethods.POINT _savedCursor;
@@ -644,6 +831,207 @@ internal static class Input
     }
 
     /// <summary>
+    /// Sends a real Windows-logo plus arrow chord to one exact captured root.
+    /// The chord is atomic after the foreground/lease proof so a guest cannot
+    /// be replaced by a recycled HWND or a foreground transition between the
+    /// modifier and arrow events.
+    /// </summary>
+    public static bool SendWinArrowTo(IntPtr hwnd, bool up)
+    {
+        IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
+        if (root == IntPtr.Zero)
+            root = hwnd;
+        if (!Discover.TryCaptureIdentity(root, out WindowIdentity expected)
+            || !ForceForeground(root)
+            || !VerifyForegroundTarget()
+            || !IsExactForeground(expected))
+        {
+            GuardedProc.Log($"WARNING: refusing Win+{(up ? "Up" : "Down")} because exact foreground could not be proven for 0x{root.ToInt64():X}.");
+            return false;
+        }
+
+        ushort arrow = up ? VK_UP : VK_DOWN;
+        var inputs = new[]
+        {
+            KeyboardInput(VK_LWIN, up: false),
+            KeyboardInput(arrow, up: false),
+            KeyboardInput(arrow, up: true),
+            KeyboardInput(VK_LWIN, up: true),
+        };
+        uint sent = NativeMethods.SendInput(
+            (uint)inputs.Length,
+            inputs,
+            Marshal.SizeOf<NativeMethods.INPUT>());
+        _desktopLease?.RecordInteraction(
+            "input-dispatch-batch",
+            TestRunProvenance.WindowRole(root),
+            root,
+            new Dictionary<string, string>
+            {
+                ["inputType"] = "keyboard",
+                ["chord"] = $"Win+{(up ? "Up" : "Down")}",
+                ["sent"] = sent.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            });
+        if (sent != inputs.Length)
+        {
+            // Do not leave a modifier physically down after a partial native
+            // dispatch. This is global input cleanup, not a second action.
+            if (sent > 0)
+            {
+                var cleanup = new[]
+                {
+                    KeyboardInput(arrow, up: true),
+                    KeyboardInput(VK_LWIN, up: true),
+                };
+                NativeMethods.SendInput(
+                    (uint)cleanup.Length,
+                    cleanup,
+                    Marshal.SizeOf<NativeMethods.INPUT>());
+            }
+            GuardedProc.Log($"WARNING: Win+{(up ? "Up" : "Down")} SendInput batch failed: sent={sent}/{inputs.Length}; {NativeMethods.FormatLastError()}");
+            return false;
+        }
+        Thread.Sleep(80);
+        return true;
+    }
+
+    /// <summary>
+    /// Sends a real Windows-logo plus Shift plus arrow monitor-transfer chord
+    /// to one exact captured root. The full chord is dispatched atomically only
+    /// after the foreground and desktop-lease proof, so a guest HWND cannot be
+    /// replaced between modifier and arrow events.
+    /// </summary>
+    public static bool SendWinShiftArrowTo(IntPtr hwnd, bool right)
+    {
+        IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
+        if (root == IntPtr.Zero)
+            root = hwnd;
+        if (!Discover.TryCaptureIdentity(root, out WindowIdentity expected)
+            || !ForceForeground(root)
+            || !VerifyForegroundTarget()
+            || !IsExactForeground(expected))
+        {
+            GuardedProc.Log($"WARNING: refusing Win+Shift+{(right ? "Right" : "Left")} because exact foreground could not be proven for 0x{root.ToInt64():X}.");
+            return false;
+        }
+
+        ushort arrow = right ? VK_RIGHT : VK_LEFT;
+        var inputs = new[]
+        {
+            KeyboardInput(VK_LWIN, up: false),
+            KeyboardInput(VK_SHIFT, up: false),
+            KeyboardInput(arrow, up: false),
+            KeyboardInput(arrow, up: true),
+            KeyboardInput(VK_SHIFT, up: true),
+            KeyboardInput(VK_LWIN, up: true),
+        };
+        uint sent = NativeMethods.SendInput(
+            (uint)inputs.Length,
+            inputs,
+            Marshal.SizeOf<NativeMethods.INPUT>());
+        _desktopLease?.RecordInteraction(
+            "input-dispatch-batch",
+            TestRunProvenance.WindowRole(root),
+            root,
+            new Dictionary<string, string>
+            {
+                ["inputType"] = "keyboard",
+                ["chord"] = $"Win+Shift+{(right ? "Right" : "Left")}",
+                ["sent"] = sent.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            });
+        if (sent != inputs.Length)
+        {
+            // Release every modifier/key that could have been pressed before
+            // the partial dispatch. This cleanup is not a second user action.
+            var cleanup = new[]
+            {
+                KeyboardInput(arrow, up: true),
+                KeyboardInput(VK_SHIFT, up: true),
+                KeyboardInput(VK_LWIN, up: true),
+            };
+            NativeMethods.SendInput(
+                (uint)cleanup.Length,
+                cleanup,
+                Marshal.SizeOf<NativeMethods.INPUT>());
+            GuardedProc.Log($"WARNING: Win+Shift+{(right ? "Right" : "Left")} SendInput batch failed: sent={sent}/{inputs.Length}; {NativeMethods.FormatLastError()}");
+            return false;
+        }
+        Thread.Sleep(80);
+        return true;
+    }
+
+    public static bool SendWinShiftRightTo(IntPtr hwnd) => SendWinShiftArrowTo(hwnd, right: true);
+
+    public static bool SendWinShiftLeftTo(IntPtr hwnd) => SendWinShiftArrowTo(hwnd, right: false);
+
+    public static bool SendWinUpTo(IntPtr hwnd) => SendWinArrowTo(hwnd, up: true);
+
+    public static bool SendWinDownTo(IntPtr hwnd) => SendWinArrowTo(hwnd, up: false);
+
+    private static bool IsExactForeground(WindowIdentity expected)
+    {
+        IntPtr foreground = NativeMethods.GetForegroundWindow();
+        IntPtr root = foreground == IntPtr.Zero
+            ? IntPtr.Zero
+            : NativeMethods.GetAncestor(foreground, NativeMethods.GA_ROOT);
+        if (root == IntPtr.Zero)
+            root = foreground;
+        return root == expected.Hwnd
+            && MatchesStableIdentity(expected.Hwnd, expected);
+    }
+
+
+    /// <summary>
+    /// Sends one real key press to an exact top-level root after a fresh
+    /// foreground and desktop-lease checkpoint. Used for browser F11, where
+    /// the browser—not TabDock—must receive the native shortcut.
+    /// </summary>
+    public static bool SendKeyTo(IntPtr hwnd, ushort vk, string label)
+    {
+        IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
+        if (root == IntPtr.Zero)
+            root = hwnd;
+        if (!Discover.TryCaptureIdentity(root, out WindowIdentity expected)
+            || !ForceForeground(root)
+            || !VerifyForegroundTarget()
+            || !IsExactForeground(expected))
+        {
+            GuardedProc.Log($"WARNING: refusing {label} because exact foreground could not be proven for 0x{root.ToInt64():X}.");
+            return false;
+        }
+
+        var inputs = new[]
+        {
+            KeyboardInput(vk, up: false),
+            KeyboardInput(vk, up: true),
+        };
+        uint sent = NativeMethods.SendInput(
+            (uint)inputs.Length,
+            inputs,
+            Marshal.SizeOf<NativeMethods.INPUT>());
+        _desktopLease?.RecordInteraction(
+            "input-dispatch-batch",
+            TestRunProvenance.WindowRole(root),
+            root,
+            new Dictionary<string, string>
+            {
+                ["inputType"] = "keyboard",
+                ["key"] = label,
+                ["sent"] = sent.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            });
+        if (sent != inputs.Length)
+        {
+            if (sent > 0)
+                NativeMethods.SendInput(1, new[] { KeyboardInput(vk, up: true) }, Marshal.SizeOf<NativeMethods.INPUT>());
+            GuardedProc.Log($"WARNING: {label} SendInput batch failed: sent={sent}/{inputs.Length}; {NativeMethods.FormatLastError()}");
+            return false;
+        }
+        Thread.Sleep(80);
+        return true;
+    }
+
+    public static bool SendF11To(IntPtr hwnd) => SendKeyTo(hwnd, VK_F11, "F11");
+    /// <summary>
     /// Sends Ctrl+Tab as one real-input batch after proving that the exact
     /// requested top-level window is foreground. Split activation deliberately
     /// reasserts the focused guest shortly after container activation; sending
@@ -665,17 +1053,11 @@ internal static class Input
             return false;
         }
 
-        // ForceForeground intentionally waits for ordinary windows to settle,
-        // but this product has a legitimate delayed guest reassert on container
-        // activation. Reassert the exact container immediately before the
-        // atomic key batch so the reassert timer cannot win the handoff between
-        // the foreground check and SendInput.
-        NativeMethods.AllowSetForegroundWindow(NativeMethods.ASFW_ANY);
-        SendRawVk(VK_MENU, up: true);
-        NativeMethods.SetForegroundWindow(root);
-        if (NativeMethods.GetForegroundWindow() != root
-            || !MatchesStableIdentity(root, _activeTarget.Value)
-            || !VerifyForegroundTarget())
+        // The shared qualification primitive is the only foreground
+        // arrangement path. Re-read the exact target immediately before the
+        // atomic key batch; a delayed guest reassert is a refusal, not a reason
+        // to nudge the input queue or pulse window z-order.
+        if (!VerifyForegroundTarget())
         {
             GuardedProc.Log($"WARNING: refusing Ctrl+Tab because exact container foreground was lost at dispatch for 0x{root.ToInt64():X}.");
             return false;
@@ -818,12 +1200,19 @@ internal static class Input
         Thread.Sleep(80);
     }
 
-    private static void SendButtonClick(uint downFlags, uint upFlags, int downDurationMs)
+    private static void SendButtonClick(
+        uint downFlags,
+        uint upFlags,
+        int downDurationMs,
+        WindowIdentity? expectedPointTarget = null)
     {
         bool sentDown = false;
         try
         {
-            SendMouse(downFlags, verifyPoint: true);
+            SendMouse(
+                downFlags,
+                verifyPoint: true,
+                expectedPointTarget: expectedPointTarget);
             sentDown = true;
             Thread.Sleep(downDurationMs);
         }
@@ -833,20 +1222,31 @@ internal static class Input
                 // A button-up is global input cleanup. Requiring the original
                 // window to remain alive here can strand a physical button-down
                 // when the click itself closes or releases that window.
-                SendMouse(upFlags, verifyPoint: false, allowUnverifiedCleanup: true);
+                SendMouse(
+                    upFlags,
+                    verifyPoint: false,
+                    allowUnverifiedCleanup: true);
         }
     }
 
-    private static void SendMouse(uint flags, bool verifyPoint, bool allowUnverifiedCleanup = false)
+    private static void SendMouse(
+        uint flags,
+        bool verifyPoint,
+        bool allowUnverifiedCleanup = false,
+        WindowIdentity? expectedPointTarget = null)
     {
-        if (verifyPoint && (!_hasLastPoint || !VerifyPointTarget(_lastX, _lastY)))
+        if (verifyPoint && (!_hasLastPoint
+            || !VerifyPointTarget(_lastX, _lastY, expectedPointTarget)))
+        {
             throw new InvalidOperationException("Refusing mouse input because the live point failed identity verification.");
+        }
         if (!verifyPoint && !VerifyForegroundTarget(_leftButtonHeld) && !allowUnverifiedCleanup)
             throw new InvalidOperationException("Refusing mouse input because the verified target is no longer foreground.");
         var input = new NativeMethods.INPUT { type = NativeMethods.INPUT_MOUSE };
         input.u.mi = new NativeMethods.MOUSEINPUT { dwFlags = flags };
         SendRaw(input);
     }
+
 
     private static void SendVk(ushort vk, bool up, bool allowUnverifiedCleanup = false)
     {
@@ -877,16 +1277,6 @@ internal static class Input
         Send(input, verifyPoint: false, allowUnverifiedCleanup);
     }
 
-    private static void SendRawVk(ushort vk, bool up)
-    {
-        var input = new NativeMethods.INPUT { type = NativeMethods.INPUT_KEYBOARD };
-        input.u.ki = new NativeMethods.KEYBDINPUT
-        {
-            wVk = vk,
-            dwFlags = up ? NativeMethods.KEYEVENTF_KEYUP : 0,
-        };
-        SendRaw(input);
-    }
 
     private static void Send(NativeMethods.INPUT input, bool verifyPoint, bool allowUnverifiedCleanup)
     {

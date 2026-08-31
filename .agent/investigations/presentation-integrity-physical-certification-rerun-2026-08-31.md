@@ -147,7 +147,7 @@ the corrected passes demonstrate the guard fixes without altering production
 behavior. Foreign-window failures remain blocked because the driver correctly
 refused to click an obscured point.
 
-## Acceptance matrix
+## Initial acceptance matrix (historical unsupervised checkpoint)
 
 | Requested physical cell | Final disposition | Physical evidence and boundary |
 | --- | --- | --- |
@@ -165,7 +165,7 @@ refused to click an obscured point.
 | `EVENT_OBJECT_LOCATIONCHANGE` load/storm | `BLOCKED_CAPABILITY` | No dedicated comprehensive physical load matrix was dispatched. Synthetic and bounded drag evidence is not substituted for it. |
 | Physical title centering | `BLOCKED_CAPABILITY` | No physical title-width/name/DPI measurement scenario exists. Rename geometry stayed unchanged, but that is not title-centering certification. |
 
-## Original-report disposition
+## Initial original-report disposition (historical)
 
 1. **Chrome occlusion:** exercised rename, tabs, split, inline capture, menu,
    Chrome-click, and direct foreground paths did not reproduce a product defect
@@ -218,3 +218,228 @@ transfer, mixed-DPI measurement, topmost, load, and title centering. Retain the
 active change and this rerun report. A future session should use a fresh
 candidate and run only after the generic foreground lease is stable; a valid
 first failure must remain authoritative and cannot be erased by a later pass.
+
+## Continuation — valid browser F11 product failure
+
+The next continuation obtained a stable native lease after the target-only
+foreground arrangement fallback moved the test-owned target away from a
+foreign window that covered every probe point. The first real browser F11
+attempt was therefore actionable and is retained as a valid product failure.
+
+- Run: `7f5ba57f-af6e-491e-81aa-b33bd8229471`
+- Scenario: `browser-fullscreen-contained`
+- Guest: isolated `chrome-normal`
+- Candidate at action time: `b0975b2a724f0cf9551c4e106dfc6449c8643002`
+- Raw artifact:
+  `C:\Users\palac\AppData\Local\Temp\TabDock-Validation\runs\7f5ba57faf6e491e81aab33bd8229471\browser-fullscreen-contained.json`
+- Raw result: `FAIL_PRODUCT`
+- Qualification: exact browser HWND/PID/start identity, active lease,
+  `WindowFromPoint` → `GA_ROOT`, exact foreground, real F11 `SendInput`, and
+  test-owned cleanup all passed. No harness or capability refusal occurred.
+
+Before F11, Chrome was captioned and contained at
+`(96,196)-(1321,896)`, with style `0x16CF0000`, exstyle `0x200100`,
+`zoomed=false`, and `showCmd=1`. After the real F11 action, the same browser
+identity reported borderless fullscreen at `(0,0)-(1920,1200)`, style
+`0x160B0000`, exstyle `0x200000`, `zoomed=false`, `showCmd=1`, primary monitor
+120 DPI, parent `0`, and the host-center point still resolved to the browser
+root. The transition also produced one
+`SHEPHERD[drift-reconcile]` event.
+
+The product then attempted to restore the assigned
+`(96,196,1225x700)` rectangle, but `SHEPHERD[size-constraint]` refused it
+because the fullscreen browser reported a native minimum equal to the full
+monitor. The artifact stopped at
+`chrome-normal F11 cycle 1/2 after-enter-reconcile: guest remains assigned to
+host content rect`; the guest remained full-screen. Product log lines
+4957–4963 preserve the repeated drift-reconcile, position, and native-minimum
+refusal sequence. This is the first invariant failure: Shepherd attempted
+ordinary pane containment while the browser was still in borderless F11
+presentation, so the native minimum guard prevented the repair.
+
+The raw artifact and log are frozen. It is not relabeled after subsequent
+repair runs.
+
+## Continuation — browser repair and requalification
+
+The first valid Chrome failure was followed by a minimal production repair,
+not a driver-only relabel:
+
+- `Services/NativePresentationRestorePolicy.cs` isolates the restore decision:
+  iconic/zoomed windows use the ordinary restore path, while a known
+  Chromium guest that is borderless and outside its assigned rectangle may
+  use the browser's own F11 exit path.
+- `WindowShepherdService.RequestBrowserFullscreenExit` requires the current
+  captured HWND, process-start identity, executable identity, and mutation
+  generation. It posts one `WM_KEYDOWN`/`WM_KEYUP` F11 pair to that exact
+  browser HWND and suppresses duplicate requests until the resulting
+  `LOCATIONCHANGE` returns a captioned window. The normal pane
+  `SetWindowPos` path then runs. No guest is reparented or restyled, and no
+  unrelated window is touched.
+- `ContainerWindow.ReconcilePresentationDrift` observes the browser's returned
+  native style before the next repair. A pending browser exit is removed when
+  the caption/thick-frame state is visible.
+- The focused policy unit contract passed 5/5 after the Release build.
+
+The first repair experiment, `9a655af7-2a2f-4641-a0a1-fda9d67f996e`, tried
+`SWP_NOSENDCHANGING`; Chrome reasserted fullscreen and remained outside its
+assigned pane. That experiment was not retained as the fix. The first posted
+F11 repair run, `713da0e7-146e-440e-86bb-6597b6342d5d`, reached the normal
+pane but the driver asserted before the asynchronous dock settled. Its raw
+timing evidence led to the bounded `IsDocked` wait and pending-request guard.
+The fresh Chrome requalification
+`71656457-b555-42ce-a782-b4947f33f292` passed two real F11 cycles: each
+physical F11 entered browser-owned borderless fullscreen, one repair request
+exited that mode, and the same identity returned to the assigned pane with
+parent `0`, unchanged membership, exact point ownership, and live pixels.
+
+Edge exposed a browser-specific point qualification boundary. The first run
+`0e559627-46f5-463c-9560-ec64913fb3d0` was raw `FAIL_PRODUCT` only because
+the host-center `WindowFromPoint` root was Edge's same-process registered
+`Chrome_WidgetWin_1` dynamic surface (`0x5481ED0`), not the captured guest
+root (`0xB01EBC`). PID, process start, executable, and owned provenance all
+matched; this was not foreign occlusion. The driver now accepts this
+browser-owned surface only when its registered `.DynamicSurface` role and all
+identity fields match. The raw artifact is preserved. The next Edge run
+`443624df-51bb-4801-a8ad-249b498302b5` reached the repair request but remained
+fullscreen at the assertion boundary and is preserved as intermediate timing
+evidence. The fresh Edge run
+`9cb2ad2a-a6bc-41a2-b196-2492702b9331` passed two cycles after the bounded
+settle/duplicate guard. Brave passed two cycles in
+`01c74b6f-fb28-4ab6-acef-ab3c2f3ab4d6`.
+
+Raw browser artifacts:
+
+- Chrome failure:
+  `C:\Users\palac\AppData\Local\Temp\TabDock-Validation\runs\7f5ba57faf6e491e81aab33bd8229471\browser-fullscreen-contained.json`
+- Chrome requalification:
+  `C:\Users\palac\AppData\Local\Temp\TabDock-Validation\runs\71656457b55542cea782b4947f33f292\browser-fullscreen-contained.json`
+- Edge qualifier failure:
+  `C:\Users\palac\AppData\Local\Temp\TabDock-Validation\runs\0e55962746f5463c9560ec64913fb3d0\browser-fullscreen-contained.json`
+- Edge intermediate failure:
+  `C:\Users\palac\AppData\Local\Temp\TabDock-Validation\runs\443624df51bb4801a8ad249b498302b5\browser-fullscreen-contained.json`
+
+## Continuation — remaining physical matrix cells
+
+The following fresh supervised runs passed after the browser repair:
+
+| Run ID | Scenario | Evidence |
+| --- | --- | --- |
+| `01d148a1-f381-4023-87f4-a6c2e6e2371f` | `guest-caption-maximize-contained` | Two real GuineaPig caption maximize/restore cycles; native `SC_MAXIMIZE`, same HWND/process identity, parentless guest, assigned monitor/point, tab, and live render. |
+| `708fafaa-5da3-48ca-87c1-4daa0d4d77e5` | `guest-win-up-contained` | Two real Win+Up cycles; native `zoomed=True`, `showCmd=3`, same identity, monitor, point, tab, and render. |
+| `f423509e-f869-4097-b938-964355bd9101` | `dual-monitor-mixed-dpi-transfer` | Primary `(0,0)-(1920,1200)` at 120 DPI and secondary `(1920,0)-(3840,1080)` at 96 DPI; identity-checked container placement crossed both monitors; real Win+Shift+Arrow directions were recontained without guest roam; 120/96 container DPI observed. |
+| `f3ee2adb-2d4b-46ce-973f-ccbf789e5aca` | `topmost-guest-interaction` | Captured GuineaPig was identity-pinned into `WS_EX_TOPMOST`; direct text input, group popup, rename editor, unrelated foreground steal, reactivation, parentless docking, and normal-band container checks passed. |
+| `345e33f8-8086-4819-9e5f-72acbdec45ed` | `locationchange-controlled-load` | Unrelated 18-iteration native move load produced zero Shepherd repairs; captured 12-iteration load produced 20 bounded repair lines (10 drift reconciles, 10 positions). Metrics delta: callbacks 58, rejected 33, membership 49, dispatch 25, posts 25, lifecycle 25; UIA response 859 ms and no exception. |
+| `1fbc4b0c-f8a8-4dd5-adf4-f547509d9b19` | `title-centering-physical-measurement` | Short and long names measured at primary 120 DPI and secondary 96 DPI. UIA title midpoint error was 0.50/0.00/0.00/0.50 px; all monitor and docking checks passed. |
+
+Each scenario also had an earlier raw harness/timing failure while its
+settle or setup guard was being finalized:
+`0d6d7805-a350-4c90-8fba-04315f5a461e` (dual monitor),
+`fea6d7ec-3b8e-4034-86cd-f9442214fe24` (topmost before capture),
+`0cff0057-6b70-4f5d-8932-5f2c0c5c6a93` (metrics assertion and responsiveness
+threshold), and `a6df7abf-c993-4205-a937-213b2275a910` (post-move docking
+settle). Their raw artifacts remain under the same Temp run root and are not
+promoted to product failures.
+
+## Continuation — residual repair boundary
+
+The only analytically valid product failure in this continuation is the first
+Chrome F11 run. The repair is intentionally limited to known Chromium
+executables and a pending identity-checked F11 request. GuineaPig,
+Notepad, Windows Terminal, unknown executables, foreign point roots, stale
+HWNDs, and invalid leases continue through the existing fail-closed paths.
+The driver-side `GW_ENABLEDPOPUP`/dynamic-surface diagnostics document Edge's
+registered same-process surface; they do not broaden acceptance of foreign
+windows.
+
+## Continuation — adjacent qualification subset
+
+Fresh Release runs against the repaired tree passed the adjacent cells:
+
+| Run ID | Scenario | Raw result | Evidence |
+| --- | --- | --- | --- |
+| `557d013b-9b2f-41b9-aba1-14adb5dc0e4c` | `rename` | `PASS` | Rename input, persistence, unchanged geometry, and cleanup passed. |
+| `cce9dd41-589a-483b-a4f9-eb331a5c0276` | `group-rename-menu` | `PASS` | Menu rename, whitespace rejection, persistence, and cleanup passed. |
+| `b75e8f44-206e-4eac-9b0b-354ab8ae8a09` | `add-window-toggle` | `PASS` | Twenty toggle cycles, Cancel, reattach, second-tab capture, docking, and cleanup passed. |
+| `e00a0d66-8cbb-40ab-b895-6356f3943a54` | `capture-inline-ui` | `PASS` | Inline surface, guarded checkbox, second-tab capture, docking, and no picker passed. |
+| `20c6ac8c-9ee8-41d3-b9c3-6e226a851cd9` | `split-focus-bidirectional` | `PASS` | Four real left/right focus cycles retained both panes and one composite item. |
+| `c3499c7b-c432-4986-842a-452478542f95` | `contextmenu-render-stability` | `PASS` | Twenty context-menu cycles retained visibility and docking. |
+| `fe0b31c6-17ac-4237-983f-79a4222a5a6b` | `chrome-click-render-stability` | `PASS` | Eight Chrome/tab render cycles retained the same docked guest. |
+| `2bece2cf-1aa6-406d-901a-314b7527e9a0` | `directclick-foreground-pairing` | `PASS` | Real Notepad foreground steal, one direct guest click, text input, z-order repair, and cleanup passed. |
+| `7e98b408-539d-44fd-a7e8-60690e858e40` | `dragreorder` | `PASS` | Reorder applied once, zero immediate flip-back pairs, bounded reorder count, drag-out release, and cleanup passed. |
+
+`split-exit` was attempted twice from fresh state:
+`58f04b3a-ffbc-4b7b-aa56-b1ee5c32a9fd` and
+`de3a5cc7-e7b0-4e2c-ad2a-a7c6ce1aa33c`. Both raw results were
+`BLOCKED_ENVIRONMENT`: the target point resolved to the exact owned container,
+but the foreground remained on the other owned guest after the guarded frame
+activation, so the driver refused the split-exit click. No blind input or
+product failure occurred. The earlier accepted split-exit run
+`03c3aaa2-37d1-41bd-9382-98fcd2d470ad` remains preserved as adjacent
+behavioral evidence; the two fresh blocks are reported rather than converted
+to PASS.
+
+The adjacent subset therefore has nine fresh PASS cells and one supervised
+foreground-environment block. All raw manifests remain under the external
+ValidationDriver Temp run root; no run was edited or best-of-N substituted.
+
+The `split-exit` retry
+`f768ff27-2931-4705-8130-89b0bf23a95d` completed thirteen split
+enter/exit cycles with all split, membership, tab-count, and cleanup assertions
+passing before a later test point resolved to an unregistered foreign root
+(`unregistered-window-not-owned-by-test-run`). The guard refused that input;
+the raw result is `BLOCKED_ENVIRONMENT`, not `FAIL_PRODUCT`.
+
+## Final deterministic and CI-safe gates before integration
+
+The final working tree passed the non-input gates after the catalog expectation
+was updated from the stale 128-entry count to the observed 135-entry catalog:
+
+- Debug and Release `dotnet build TabDock.sln`: PASS, 0 warnings, 0 errors.
+- Debug and Release unit tests: PASS, `732/732` in each configuration.
+- Release ValidationDriver and GuineaPig builds: PASS, 0 warnings, 0 errors.
+- ValidationDriver selftest run
+  `4588e75b-f822-45b3-b300-31ac6abb1100`: `153/153`, including all
+  foreground seam and catalog tests; deterministic-all and run manifest PASS.
+- `--list`: catalog generation
+  `scenario-catalog-2026-08-24-v1`, `135` dispatchable scenarios.
+- `--plan release` and `--plan physicalMixedDpi`: PASS; the live topology
+  reported two monitors at 96/120 DPI and the four new physical cells were
+  runnable under the supervised lease.
+- `openspec validate --all --strict --json`: PASS, `37/37`.
+- `scripts/validate.ps1 -Configuration Release -Ci -Publish`: PASS. Restore
+  audit reported no vulnerable packages; Release build, driver/fixture,
+  performance compile, 732/732 tests, 32-cycle headless resource stability,
+  native ABI, version/doctor/pending-recovery, recovery-process,
+  support-bundle privacy, OpenSpec, publish, and published `--version` smoke
+  all passed. The gate used no desktop input.
+
+The CI-safe executable and physical artifacts above were produced before the
+integration commit, so their embedded pre-commit source identity is
+`b0975b2a724f0cf9551c4e106dfc6449c8643002`. The post-push source identity and
+fresh version smoke are recorded in the session delivery after integration;
+the pre-commit physical run IDs remain bound to the candidate they actually
+exercised.
+
+## Final acceptance matrix after supervised continuation
+
+| Requested physical cell | Final disposition | Evidence and boundary |
+| --- | --- | --- |
+| Color/accent selector cycles | `SKIP_CAPABILITY` | `PickColorCommand` is a documented deliberate no-op; no reachable selector exists and no cycles were fabricated. |
+| Workspace/group rename | `PASS` for exercised paths | Fresh `557d013b-9b2f-41b9-aba1-14adb5dc0e4c` and prior edge-case passes covered input, persistence, geometry, and cleanup. |
+| Split creation, focus, dismissal, exit, resume | `PASS` for exercised paths; `BLOCKED_ENVIRONMENT` on final split-exit requalification | Fresh bidirectional focus `20c6ac8c-9ee8-41d3-b9c3-6e226a851cd9` passed. `split-exit` had accepted pass `03c3aaa2-37d1-41bd-9382-98fcd2d470ad`; three later attempts failed closed only on foreground/foreign-point qualification. |
+| Inline `+` open/close/reopen/cancel/capture | `PASS` for exercised paths | Fresh `e00a0d66-8cbb-40ab-b895-6356f3943a54` and `b75e8f44-206e-4eac-9b0b-354ab8ae8a09` passed guarded live-root interactions, Cancel, second-tab capture, docking, and cleanup. |
+| Guest caption maximize/restore | `PASS` | GuineaPig physical caption scenario `01d148a1-f381-4023-87f4-a6c2e6e2371f` passed native maximize/restore and containment checks. |
+| Win+Up/restore | `PASS` | GuineaPig `708fafaa-5da3-48ca-87c1-4daa0d4d77e5` passed two real Win+Up cycles with native zoom/show-command evidence. |
+| Real F11 fullscreen on Chrome/Edge/Brave | `PASS after repair; first Chrome failure retained` | Chrome `71656457-b555-42ce-a782-b4947f33f292`, Edge `9cb2ad2a-a6bc-41a2-b196-2492702b9331`, and Brave `01c74b6f-fb28-4ab6-acef-ab3c2f3ab4d6` passed. Firefox was unavailable. |
+| Dual-monitor transfer | `PASS` | `f423509e-f869-4097-b938-964355bd9101` passed both physical Win+Shift+Arrow directions and same-monitor guest containment. |
+| Mixed-DPI transition/measurement | `PASS` for available topology | `f423509e-f869-4097-b938-964355bd9101` observed 120/96 DPI transfer; `1fbc4b0c-f8a8-4dd5-adf4-f547509d9b19` measured titles on both monitors. |
+| `WS_EX_TOPMOST` guest | `PASS` for controlled fixture | `f3ee2adb-2d4b-46ce-973f-ccbf789e5aca` pinned the captured guest topmost and passed direct input, popup, rename, foreground recovery, and normal-band container checks. |
+| Unrelated foreground overlap and local z-order | `PASS` for exercised paths | Fresh `2bece2cf-1aa6-406d-901a-314b7527e9a0` passed Notepad steal/direct guest click and z-order pairing; foreign covered points remained fail-closed. |
+| `EVENT_OBJECT_LOCATIONCHANGE` load/storm | `PASS` for controlled load | `345e33f8-8086-4819-9e5f-72acbdec45ed` passed unrelated-load zero repairs, captured-load bounded repairs, metrics, and 859 ms UIA response. |
+| Physical title centering | `PASS` for exercised width/DPI matrix | `1fbc4b0c-f8a8-4dd5-adf4-f547509d9b19` passed short/long names on primary 120 DPI and secondary 96 DPI, with midpoint error ≤0.50 px. |
+
+This matrix distinguishes a bounded supervised environment block from a
+product failure. The only valid `FAIL_PRODUCT` remains the frozen first Chrome
+F11 run; the production repair is limited to that demonstrated browser
+presentation defect.

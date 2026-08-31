@@ -43,11 +43,13 @@ internal static class DeterministicSelfTests
             tests.AddRange(TopologyTests());
         if (normalized is "all" or "stress" or "deterministic")
             tests.AddRange(StressTests());
+        if (normalized is "all" or "foreground" or "deterministic")
+            tests.AddRange(ForegroundTests());
         if (normalized is "all" or "resource" or "deterministic")
             tests.AddRange(ResourceTests());
         if (tests.Count == 0)
         {
-            Console.WriteLine($"Unknown self-test suite '{suite}'. Use split, identity, manifest, resource, or all.");
+            Console.WriteLine($"Unknown self-test suite '{suite}'. Use split, identity, foreground, manifest, resource, or all.");
             return 2;
         }
 
@@ -344,6 +346,139 @@ internal static class DeterministicSelfTests
     private static WindowIdentity Window(IntPtr hwnd, uint pid, uint tid, string exe, long start)
         => new(hwnd, pid, tid, "TestWindowClass", "TDTEST:fixture", exe, start);
 
+    private static IEnumerable<(string Id, Func<bool> Test)> ForegroundTests()
+    {
+        WindowIdentity target = Window(new IntPtr(0x710), 710, 71, @"C:\TabDock.ValidationDriver.exe", 7100);
+
+        yield return ("FG01-setforeground-success-no-click", () =>
+        {
+            var runtime = new ForegroundTestRuntime
+            {
+                ArrangeResult = true,
+                TargetForeground = true,
+            };
+            ForegroundQualificationResult result = new ForegroundQualification(runtime).Qualify(target);
+            return result.IsValid
+                && result.Kind == ForegroundQualificationKind.AlreadyForeground
+                && runtime.ArrangeCount == 1
+                && runtime.ClickCount == 0;
+        });
+
+        yield return ("FG02-arrangement-fails-owned-point-clicks-once", () =>
+        {
+            var runtime = new ForegroundTestRuntime
+            {
+                ArrangeResult = false,
+                ClickSetsForeground = true,
+            };
+            ForegroundQualificationResult result = new ForegroundQualification(runtime).Qualify(target);
+            return result.IsValid
+                && result.UsedActivationClick
+                && runtime.ArrangeCount == 1
+                && runtime.PointVerificationCount == 1
+                && runtime.ClickCount == 1
+                && runtime.ForegroundProofCount == 1;
+        });
+
+        yield return ("FG03-foreign-activation-point-zero-click", () =>
+        {
+            var runtime = new ForegroundTestRuntime
+            {
+                ArrangeResult = false,
+                PointVerified = false,
+            };
+            ForegroundQualificationResult result = new ForegroundQualification(runtime).Qualify(target);
+            return !result.IsValid && runtime.ClickCount == 0;
+        });
+
+        yield return ("FG04-stale-target-zero-input", () =>
+        {
+            var runtime = new ForegroundTestRuntime
+            {
+                TargetCurrent = false,
+            };
+            ForegroundQualificationResult result = new ForegroundQualification(runtime).Qualify(target);
+            return !result.IsValid
+                && runtime.ArrangeCount == 0
+                && runtime.ClickCount == 0;
+        });
+
+        yield return ("FG05-activation-click-wrong-foreground", () =>
+        {
+            var runtime = new ForegroundTestRuntime
+            {
+                ArrangeResult = false,
+                ClickSetsForeground = false,
+            };
+            ForegroundQualificationResult result = new ForegroundQualification(runtime).Qualify(target);
+            return !result.IsValid
+                && runtime.ClickCount == 1
+                && runtime.ForegroundProofCount == 1;
+        });
+
+        yield return ("FG06-lease-invalidates-preactivation", () =>
+        {
+            var runtime = new ForegroundTestRuntime
+            {
+                ArrangeResult = false,
+                InvalidateLeaseOnPointVerification = true,
+            };
+            ForegroundQualificationResult result = new ForegroundQualification(runtime).Qualify(target);
+            return !result.IsValid
+                && !runtime.LeaseIsActive
+                && runtime.ClickCount == 0;
+        });
+
+        yield return ("FG07-target-disappears-before-arrangement", () =>
+        {
+            var runtime = new ForegroundTestRuntime
+            {
+                TargetCurrent = false,
+            };
+            ForegroundQualificationResult result = new ForegroundQualification(runtime).Qualify(target);
+            return result.Reason == "target-identity-not-current"
+                && runtime.ClickCount == 0;
+        });
+
+        yield return ("FG08-no-safe-point-zero-input", () =>
+        {
+            var runtime = new ForegroundTestRuntime
+            {
+                ArrangeResult = false,
+                SafePointAvailable = false,
+            };
+            ForegroundQualificationResult result = new ForegroundQualification(runtime).Qualify(target);
+            return !result.IsValid
+                && result.Reason == "no-safe-activation-point"
+                && runtime.ClickCount == 0;
+        });
+
+        yield return ("FG09-success-bounded-arrangement-and-input", () =>
+        {
+            var runtime = new ForegroundTestRuntime
+            {
+                ArrangeResult = false,
+                ClickSetsForeground = true,
+            };
+            ForegroundQualificationResult result = new ForegroundQualification(runtime).Qualify(target);
+            return result.IsValid
+                && runtime.ArrangeCount <= 1
+                && runtime.ClickCount <= 1
+                && runtime.PointVerificationCount == 1;
+        });
+
+        yield return ("FG10-failure-zero-input", () =>
+        {
+            var runtime = new ForegroundTestRuntime
+            {
+                ArrangeResult = false,
+                SafePointAvailable = false,
+            };
+            ForegroundQualificationResult result = new ForegroundQualification(runtime).Qualify(target);
+            return !result.IsValid && runtime.ClickCount == 0;
+        });
+    }
+
     private static IEnumerable<(string Id, Func<bool> Test)> WaitTests()
     {
         yield return ("W01-success-has-monotonic-observation", () =>
@@ -396,7 +531,7 @@ internal static class DeterministicSelfTests
     {
         yield return ("CAT01-catalog-generation-is-stable", () =>
             ScenarioCatalog.Generation == "scenario-catalog-2026-08-24-v1"
-            && ScenarioCatalog.All.Count == 128);
+            && ScenarioCatalog.All.Count == 135);
 
         yield return ("CAT02-catalog-validates-without-errors", () =>
         {
@@ -1352,6 +1487,70 @@ internal static class DeterministicSelfTests
                 windows));
         }
         return snapshots;
+    }
+
+    private sealed class ForegroundTestRuntime : IForegroundQualificationRuntime
+    {
+        public bool LeaseIsActive { get; set; } = true;
+        public bool TargetCurrent { get; set; } = true;
+        public bool ArrangeResult { get; set; }
+        public bool TargetForeground { get; set; }
+        public bool SafePointAvailable { get; set; } = true;
+        public bool PointVerified { get; set; } = true;
+        public bool ClickResult { get; set; } = true;
+        public bool ClickSetsForeground { get; set; }
+        public bool ForegroundProof { get; set; } = true;
+        public bool InvalidateLeaseOnPointVerification { get; set; }
+        public int ArrangeCount { get; private set; }
+        public int PointVerificationCount { get; private set; }
+        public int ClickCount { get; private set; }
+        public int ForegroundProofCount { get; private set; }
+
+        public bool IsTargetCurrent(WindowIdentity expected) => TargetCurrent;
+
+        public bool TryArrangeForeground(WindowIdentity expected)
+        {
+            ArrangeCount++;
+            if (ArrangeResult)
+                TargetForeground = true;
+            return ArrangeResult;
+        }
+
+        public bool IsTargetForeground(WindowIdentity expected) => TargetForeground;
+
+        public bool TryGetSafeActivationPoint(
+            WindowIdentity expected,
+            out ForegroundActivationPoint point)
+        {
+            point = new ForegroundActivationPoint(500, 1);
+            return SafePointAvailable;
+        }
+
+        public bool VerifyActivationPoint(
+            WindowIdentity expected,
+            ForegroundActivationPoint point)
+        {
+            PointVerificationCount++;
+            if (InvalidateLeaseOnPointVerification)
+                LeaseIsActive = false;
+            return PointVerified && LeaseIsActive;
+        }
+
+        public bool ClickActivationPoint(
+            WindowIdentity expected,
+            ForegroundActivationPoint point)
+        {
+            ClickCount++;
+            if (ClickResult && ClickSetsForeground)
+                TargetForeground = true;
+            return ClickResult;
+        }
+
+        public bool VerifyForegroundAfterActivation(WindowIdentity expected)
+        {
+            ForegroundProofCount++;
+            return ForegroundProof && TargetForeground;
+        }
     }
 
     private sealed class FakeDesktopProbe : IDesktopQualificationProbe

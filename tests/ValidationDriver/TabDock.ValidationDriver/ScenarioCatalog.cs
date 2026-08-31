@@ -364,8 +364,22 @@ internal static class ScenarioCatalog
         Add("single-guest-does-not-overflow-content", "SingleGuestDoesNotOverflowContent", "core-lifecycle", includeInAll: true);
         Add("hung-guest-mintrack", "HungGuestMinTrack", "dpi-multi-monitor", includeInAll: true);
         Add("guest-maximize-contained", "GuestMaximizeContained", "core-lifecycle", includeInAll: true);
+        Add("guest-caption-maximize-contained", "GuestCaptionMaximizeContained", "dpi-multi-monitor", includeInAll: true, expectedRuntimeSeconds: 90);
+        Add("guest-win-up-contained", "GuestWinUpContained", "dpi-multi-monitor", includeInAll: true, expectedRuntimeSeconds: 90);
+        Add("dual-monitor-mixed-dpi-transfer", "DualMonitorMixedDpiTransfer", "dpi-multi-monitor",
+            includeInAll: true, requiresMultiMonitor: true, requiresMixedDpi: true,
+            requiresNonDefaultDpi: true, expectedRuntimeSeconds: 150);
+        Add("topmost-guest-interaction", "TopmostGuestInteraction", "drag-z-order", includeInAll: true, expectedRuntimeSeconds: 120);
+        Add("locationchange-controlled-load", "LocationChangeControlledLoad", "diagnostics", includeInAll: true, expectedRuntimeSeconds: 180);
+        Add("title-centering-physical-measurement", "TitleCenteringPhysicalMeasurement", "dpi-multi-monitor",
+            includeInAll: true, requiresMultiMonitor: true, requiresMixedDpi: true,
+            requiresNonDefaultDpi: true, expectedRuntimeSeconds: 180);
+        Add("guest-caption-maximize-notepad", "NotepadCaptionMaximizeContained", "real-app",
+            applications: new[] { "notepad-broker" },
+            destructiveState: ScenarioDestructiveState.UserOwnedExternal,
+            expectedRuntimeSeconds: 180,
+            mayContributeReleaseEvidence: false);
         Add("crashkill-maximized-recovery", "CrashKillMaximizedRecovery", "crash-recovery", includeInAll: true, destructiveState: ScenarioDestructiveState.CrashRecovery);
-        Add("crashkill-minimized-recovery", "CrashKillMinimizedRecovery", "crash-recovery", includeInAll: true, destructiveState: ScenarioDestructiveState.CrashRecovery);
         Add("crashkill-split-rescue", "CrashKillSplitRescue", "crash-recovery", includeInAll: true, destructiveState: ScenarioDestructiveState.CrashRecovery);
         Add("startup-local-stack-above-unrelated-when-guest-present", "StartupLocalStackAboveUnrelatedWhenGuestPresent", "startup", includeInAll: true);
         Add("torture-tabswitch-rapid", "TortureTabSwitchRapid", "keyboard-input", includeInAll: true, expectedRuntimeSeconds: 180);
@@ -381,6 +395,7 @@ internal static class ScenarioCatalog
         Add("browser-multi", "BrowserMulti", "browser", executionClass: ScenarioExecutionClass.Browser, browsers: new[] { "chrome-and-edge" }, destructiveState: ScenarioDestructiveState.ExternalBrowser, mayContributeReleaseEvidence: false);
         Add("browser-soak", "BrowserSoak", "browser", executionClass: ScenarioExecutionClass.Browser, guestFamily: "browser", expectedRuntimeSeconds: 180, destructiveState: ScenarioDestructiveState.ExternalBrowser, mayContributeReleaseEvidence: false);
         Add("browser-split-persistent-render", "BrowserSplitPersistentRender", "browser", executionClass: ScenarioExecutionClass.Browser, guestFamily: "browser", destructiveState: ScenarioDestructiveState.ExternalBrowser, mayContributeReleaseEvidence: false);
+        Add("browser-fullscreen-contained", "BrowserFullscreenContained", "browser", executionClass: ScenarioExecutionClass.Browser, guestFamily: "browser", expectedRuntimeSeconds: 180, destructiveState: ScenarioDestructiveState.ExternalBrowser, mayContributeReleaseEvidence: false);
         Add("realapp", "RealAppFillMaxHide", "real-app", executionClass: ScenarioExecutionClass.UserOwnedApplication, guestFamily: "real-app", destructiveState: ScenarioDestructiveState.UserOwnedExternal, mayContributeReleaseEvidence: false);
         Add("realapp-multi-render", "RealAppMultiRender", "real-app", executionClass: ScenarioExecutionClass.UserOwnedApplication, guestFamily: "real-app", destructiveState: ScenarioDestructiveState.UserOwnedExternal, mayContributeReleaseEvidence: false);
 

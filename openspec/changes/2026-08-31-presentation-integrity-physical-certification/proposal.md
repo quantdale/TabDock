@@ -47,12 +47,11 @@ run proves a product defect.
 
 ## Impact
 
-The expected default outcome is **validation/evidence only**. Production code
-changes are authorized only if a valid physical run reproduces a product
-failure. Likely test/evidence surfaces are `tests/ValidationDriver/`,
-`.agent/investigations/`, `docs/TESTING.md`, and `.agent/STATE.md`.
-If a residual defect is proven, the agent may touch the minimum production
-surface needed and must update this OpenSpec with the proven cause and fix.
+The initial phase produced validation/evidence-only changes because it was
+blocked before physical input. During the supervised continuation, a valid
+physical Chrome F11 failure authorized the minimum production repair described
+in the design continuation. No other speculative production behavior was
+introduced.
 
 No reparenting, permanent topmost policy, global unrelated-window z-order
 fight, unbounded polling, or speculative rewrite is authorized.
@@ -73,3 +72,26 @@ fight, unbounded polling, or speculative rewrite is authorized.
 Deterministic, synthetic, and read-only evidence must remain explicitly
 separate from physical certification. Major original-report paths remain
 uncertified when their exclusive supervised run is unavailable.
+
+## Continuation outcome
+
+The shared foreground qualification gate now fails closed before any unsafe
+input and has deterministic coverage for successful activation, stale/foreign
+targets, unsafe points, lease invalidation, target disappearance, and bounded
+failure cleanup. The physical continuation added real GuineaPig guest
+caption-maximize, Win+Up, mixed-DPI transfer, topmost interaction,
+`LOCATIONCHANGE` load, and title-centering scenarios.
+
+The first valid Chrome F11 product failure was frozen before repair. The
+identity-checked browser-F11 restore path then passed fresh Chrome, Edge, and
+Brave physical runs. Edge's initial point mismatch was a same-process
+registered Chromium dynamic surface, not foreign occlusion; the browser
+qualifier accepts that surface only with matching process-start/executable and
+registered role evidence.
+
+Adjacent physical requalification is complete for every requested cell: nine
+fresh cells passed; three `split-exit` attempts were retained as
+`BLOCKED_ENVIRONMENT` because the fail-closed foreground/point guard refused
+input, and the earlier accepted split-exit pass remains evidence. The final
+deterministic/CI gates and authoritative `main` push remain before closure;
+this change stays active until they are verified.

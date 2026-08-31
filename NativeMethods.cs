@@ -505,6 +505,7 @@ public static partial class NativeMethods
     public const uint GW_HWNDNEXT = 2;
     public const uint GW_HWNDPREV = 3;
     public const uint GW_OWNER = 4;
+    public const uint GW_ENABLEDPOPUP = 6;
 
     public const uint WM_NULL = 0x0000;
     public const uint WM_CREATE = 0x0001;
@@ -517,13 +518,12 @@ public static partial class NativeMethods
     public const uint WM_SHOWWINDOW = 0x0018;
     public const uint WM_ACTIVATEAPP = 0x001C;
     public const uint WM_SETFOCUS = 0x0007;
-    public const uint WM_KILLFOCUS = 0x0008;
-    public const uint WM_ENABLE = 0x000A;
-    public const uint WM_SETREDRAW = 0x000B;
+    public const uint WM_KEYDOWN = 0x0100;
+    public const uint WM_KEYUP = 0x0101;
     public const uint WM_SYSCOMMAND = 0x0112;
     public const uint SC_MAXIMIZE = 0xF030;
     public const uint SC_RESTORE = 0xF120;
-    public const uint WA_INACTIVE = 0;
+    public const uint VK_F11 = 0x7A;
     public const uint WA_ACTIVE = 1;
     public const uint WA_CLICKACTIVE = 2;
     public const uint WM_NCHITTEST = 0x0084;
@@ -643,6 +643,9 @@ public static partial class NativeMethods
 
     public const int SM_CXSCREEN = 0;
     public const int SM_CYSCREEN = 1;
+    public const int SM_CYCAPTION = 4;
+    public const int SM_CXSIZE = 30;
+    public const int SM_CYSIZE = 31;
     public const int SM_XVIRTUALSCREEN = 76;
     public const int SM_YVIRTUALSCREEN = 77;
     public const int SM_CXVIRTUALSCREEN = 78;

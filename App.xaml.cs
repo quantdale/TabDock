@@ -253,6 +253,8 @@ _shepherd.HideProvenance = hideProvenance;
     {
         try
         {
+            WinEventMetrics metrics = _events.Metrics;
+            _log.Log($"WINEVENT[metrics] callbacks={metrics.CallbacksReceived} rejected={metrics.IrrelevantRejected} membership={metrics.MembershipProbes} dispatch={metrics.DispatchMembershipProbes} posts={metrics.Posts} stale={metrics.StaleDispatches} lifecycle={metrics.LifecycleCallbacks}");
             string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
             if (string.IsNullOrWhiteSpace(desktop) || !Directory.Exists(desktop))
                 desktop = Environment.CurrentDirectory;

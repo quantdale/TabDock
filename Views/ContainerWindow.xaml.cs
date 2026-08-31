@@ -3493,6 +3493,7 @@ public partial class ContainerWindow : Window
         else if (!TryGetContentAreaScreenRect(out assigned) || assigned.Width == 0 || assigned.Height == 0)
             return;
         NativeMethods.GetWindowRect(window.Hwnd, out NativeMethods.RECT observed);
+        _shepherd.ObserveNativePresentation(window);
         bool isZoomed = NativeMethods.IsZoomed(window.Hwnd);
         bool isVisible = NativeMethods.IsWindowVisible(window.Hwnd);
         var eval = GuestPresentationDriftPolicy.EvaluateSingle(assigned, observed, isZoomed, isIconic: false, isVisible, shouldBeVisible);
@@ -3636,15 +3637,20 @@ public partial class ContainerWindow : Window
             return;
         }
 
-        // Reorder within the strip.
-        int? targetIndex = GetDropIndex(pos);
-        if (targetIndex.HasValue)
+        // Resolve the frozen boundary, then translate it to the final move
+        // index after the dragged item is removed. This keeps a stationary
+        // pointer on one side of a neighbor from toggling A->B->A as live
+        // authoritative indexes change after the first move.
+        int? boundaryIndex = GetDropIndex(pos);
+        if (boundaryIndex.HasValue)
         {
             int currentIndex = _viewModel.Tabs.IndexOf(_draggedTab);
-            if (currentIndex >= 0 && targetIndex.Value != currentIndex)
-            {
+            int? targetIndex = TabStripDragProjection.AdjustForDraggedItem(
+                boundaryIndex,
+                currentIndex,
+                _viewModel.Tabs.Count);
+            if (targetIndex.HasValue && targetIndex.Value != currentIndex)
                 _viewModel.ReorderTabs(currentIndex, targetIndex.Value);
-            }
         }
     }
 

@@ -195,11 +195,63 @@ identities, visibility, zoom/iconic state, `WINDOWPLACEMENT`, monitor, DPI,
 foreground, local z-order, and logical membership are recorded where the
 scenario exposes them.
 
-The matrix uses the existing bounded ValidationDriver scenarios and adds no
-production behavior. If the GuineaPig fixture lacks topmost support, only the
-smallest test-fixture switch is added; no production z-order change is allowed.
+The initial plan called for bounded ValidationDriver scenarios and no
+production behavior. The continuation below records the evidence-driven
+production repair that became necessary after a valid physical failure.
+Topmost support used only the smallest fixture/setup capability; no permanent
+topmost policy or reparenting was added.
 
 If a cell cannot run, the record names the exact missing supervision,
 application, topology, OS, signing, or fixture capability and gives the rerun
 command. Synthetic policy coverage remains separate from physical
 qualification.
+
+## Continuation — browser F11 repair and physical evidence
+
+The supervised continuation ran against the dynamically verified `main`
+candidate `b0975b2a724f0cf9551c4e106dfc6449c8643002` plus uncommitted,
+evidence-driven changes. The first Chrome F11 run was valid
+`FAIL_PRODUCT`: Chromium entered borderless monitor-wide F11, and the
+existing `SetWindowPos` restore was refused by Chromium's native minimum
+size. The raw run, log excerpt, and artifact remain frozen in the campaign
+investigation.
+
+The minimal repair preserves Shepherd's independent top-level-window model:
+when a strongly identified Chrome/Edge/Brave guest is borderless and outside
+its assigned pane, Shepherd posts exactly one identity-checked F11
+key-down/key-up pair to that same browser HWND, suppresses duplicate requests
+until the resulting `LOCATIONCHANGE`, then applies the ordinary assigned
+rectangle. It does not reparent the guest, change its style, manipulate an
+unrelated window, or make TabDock permanently topmost. The
+`NativePresentationRestorePolicy` unit contract covers iconic/zoomed restore
+and borderless geometry mismatch.
+
+Fresh physical browser requalification passed for Chrome
+(`71656457-b555-42ce-a782-b4947f33f292`), Edge
+(`9cb2ad2a-a6bc-41a2-b196-2492702b9331`), and Brave
+(`01c74b6f-fb28-4ab6-acef-ab3c2f3ab4d6`). Edge's first physical artifact
+exposed a same-process registered Chromium dynamic surface under
+`WindowFromPoint`; the qualifier now accepts only that surface when its
+PID, process start, executable, and registered `.DynamicSurface` role match
+the captured browser. Foreign roots still block the scenario.
+
+The continuation also adds physical evidence scenarios for mixed-DPI
+dual-monitor transfer, captured topmost interaction,
+controlled `LOCATIONCHANGE` load, and title centering. All four passed:
+`f423509e-f869-4097-b938-964355bd9101`,
+`f3ee2adb-2d4b-46ce-973f-ccbf789e5aca`,
+`345e33f8-8086-4819-9e5f-72acbdec45ed`, and
+`1fbc4b0c-f8a8-4dd5-adf4-f547509d9b19`. Monitor placement uses only
+identity-checked test-owned arrangement; the Win+Shift+Arrow actions and
+all guest/menu/input actions remain real guarded input.
+
+## Continuation — adjacent qualification outcome
+
+After the browser repair, fresh Release runs passed rename,
+group-rename-menu, add-window-toggle, capture-inline-ui,
+split-focus-bidirectional, contextmenu-render-stability,
+chrome-click-render-stability, directclick-foreground-pairing, and
+dragreorder. Three fresh `split-exit` attempts remained
+`BLOCKED_ENVIRONMENT` because the foreground/point guard encountered a
+wrong-owned or unregistered point; the earlier accepted split-exit pass is
+retained. No adjacent raw block was relabeled as a product failure.
