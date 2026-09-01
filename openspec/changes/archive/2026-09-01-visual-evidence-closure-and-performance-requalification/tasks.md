@@ -42,6 +42,7 @@
 - [x] 5.4 Extend resource-lifecycle qualification to compare visual-disabled and visual-enabled cells and fail/block on handle/GDI/file/timer/worker leaks, unbounded memory/artifact growth, or unexplained baseline regression.
 - [x] 5.5 Exercise success, required/optional capture failure, encode/contact/packet failure, cancellation, timeout, abort, healthy discard, and failure flush; prove recorder stop, native cleanup, temp-file cleanup, and first-attempt evidence preservation.
 ## 6. Milestone E — exact Release v1.1 closure
+- [x] 6.1 Integrate visual manifests, review packet/result bindings, performance reports, selected budget provenance, and historical compatibility into the qualification hierarchy and offline bundle index. **Ledger correction (2026-09-01): this row was completed before archival and was accidentally omitted during archive settlement. Completion is evidenced by the committed QualificationResultWriter/resource-artifact/bundle-index integration, historical compatibility checks, and final 179/179 release-tooling gate. Restoring this row changes no implementation or candidate evidence.**
 > **Final-source closure (2026-09-01).** The final source candidate is
 > `6bb8ecc80b103ec9e2e1bc12cebe241b1ab9519f`. The earlier `ef9fe35` hashes
 > remain historical pre-final evidence only; `7f4b9df` has no exact binary

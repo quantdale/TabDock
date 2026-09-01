@@ -7,15 +7,24 @@ Resolve them dynamically at every fresh session. This file never records a
 self-referential SHA or treats an old CI run as evidence for the commit that
 contains this text.
 
-# CURRENT CAMPAIGN — VISUAL EVIDENCE AND AI REVIEW
+# CURRENT CAMPAIGN — DPI / TOPOLOGY HARDENING
 
-**Objective:** complete and qualify the active
-`visual-evidence-closure-and-performance-requalification` OpenSpec change as
-bounded ValidationDriver evidence infrastructure. Preserve native identity,
-lease, timeline, cleanup, and release-gate semantics; do not change production
-TabDock behavior.
+**Objective:** extend TabDock's deterministic and supervised qualification across
+negative-coordinate/above-origin monitor layouts, 150%–200% DPI, mixed-DPI
+transitions, title-centering, transfer, containment, and controlled topmost
+interactions while preserving Shepherd/no-reparent semantics and the closed
+v1.1 candidate boundary.
 
-**Status:** the predecessor `2026-08-31-visual-evidence-ai-review` campaign
+**Status:** planning-only OpenSpec change
+`openspec/changes/dpi-topology-hardening/` is active. No production or test
+implementation has started in this campaign. The visual-evidence/v1.1
+qualification is closed and archived; its exact `6bb8ecc...` candidate remains
+`QUALIFICATION_ONLY`, with signing `NOT_CONFIGURED` and production eligibility
+`BLOCKED_EXTERNAL`. The new campaign does not retag that binary or its packets.
+
+### Closed visual-evidence / v1.1 qualification
+
+The predecessor `2026-08-31-visual-evidence-ai-review` campaign
 has been dispositioned and archived at
 `openspec/changes/archive/2026-09-01-2026-08-31-visual-evidence-ai-review/`.
 Its canonical ledger contained **178** unique rows: **93** direct evidence
@@ -113,9 +122,9 @@ recorded in
 The repository-local add-ons plan is preserved on `main` as planning-only
 content. Existing Repowise MCP, harness adapters, skills, CI, and onboarding
 surfaces remain protected; Microsoft Learn and Context7 were not installed.
-The active visual-evidence plan is being implemented as supplemental
-qualification/diagnostic infrastructure. It never retroactively justifies or
-relabels physical results and never replaces hard native evidence.
+The visual-evidence plan and its closure/performance successor are archived as
+supplemental qualification/diagnostic infrastructure. They never retroactively
+justify or relabel physical results and never replace hard native evidence.
 
 ### Verified environment
 
@@ -279,42 +288,49 @@ under `VISUAL_OK`; required defect/unavailable remained non-pass.
 Final candidate evidence is complete for the exact source boundary. Evidence
 record `de306d39722b9b67548b8e4878f228a97ef4e706` was pushed and matched
 `origin/main` before the current-change archive. Archive/spec commit
-`496b0c1e498c06b5d86211c9e24ec1ae62349eef` is now created; final E6.6 task
-closure and final parity proof remain open.
+`496b0c1e498c06b5d86211c9e24ec1ae62349eef` was created, successor E6.6 was
+closed, and the later parity record verified `HEAD == origin/main` with a clean
+worktree. The archived successor ledger is 34/34 after restoration of the
+historical 6.1 row that was accidentally dropped during archive settlement.
 
 
 
-## Chosen next campaign — visual evidence closure and performance requalification
+## Active campaign — DPI / topology hardening
 
-**Status:** A and B evidence are complete, both the predecessor and successor
-changes are dispositioned and archived, and final E 6.2–6.5 evidence is
-recorded against source candidate
-`6bb8ecc80b103ec9e2e1bc12cebe241b1ab9519f`. The final self-contained Release
-v1.1 artifact is
-`cf442e369c56c7c06c23b33c25b3434b079398b479e188c47e03f2d76dfbc291`.
-The candidate is `QUALIFICATION_ONLY`; signing is `NOT_CONFIGURED` and
-production eligibility is `BLOCKED_EXTERNAL`. Physical mixed-DPI, external
-Windows-human, real-app, and any unavailable capability gates remain blocked
-and are not relabeled as PASS.
+**Change:** `openspec/changes/dpi-topology-hardening/`.
 
-Final E evidence includes Debug/Release solution builds with 0 warnings/errors,
-`795/795` Debug/Release unit tests, ValidationDriver selftests `153/153`,
-catalog `scenario-catalog-2026-08-24-v1` with 135 scenarios, `179/179`
-release-tooling tests, canonical Release validation/publish PASS, strict
-OpenSpec `38/38` before archive and `38/38` after archive, resource stability
-PASS with 900 samples/30 cells/720 pairs and flat counters, native ABI PASS,
-and recovery/support/privacy/version smoke PASS. The final visual packets
-preserve healthy PASS, first-attempt seeded defect, successful rerun, flight
-flush, unavailable review, packet tamper rejection, and native/visual
-precedence.
+**Status:** planning-only. This campaign absorbs the four predecessor rows
+explicitly migrated to DPI/topology work: visual scope/topology acceptance
+(4.8), physical title-centering evidence (18.6), dual-monitor transfer (19.2),
+and mixed-DPI before/after visual evidence (19.3). It also expands the existing
+virtual-topology laboratory and supervised ValidationDriver matrix to cover
+negative-left and above-origin monitor coordinates, 150%/175%/200% effective
+DPI, staggered work areas, bidirectional transfer, exact monitor/DPI
+observation, and controlled topmost interactions.
 
-Successor E6.6 is complete in the archived task ledger: predecessor and
-successor changes are synchronized/archived, archive/spec commit
-`496b0c1e498c06b5d86211c9e24ec1ae62349eef` is recorded, and the final closure
-record was pushed through `main`. The final binary candidate boundary remains
-the exact source SHA above; later evidence/archive records do not retag its
-packet or executable hash. Post-push `HEAD == origin/main` and clean-tree
-status were independently verified.
+The deterministic topology laboratory remains synthetic and can never satisfy a
+physical release gate. Physical cells require an exact candidate, an exclusive
+supervised desktop, real guarded input, actual monitor/DPI observations, and
+fail-closed lease/identity/point-ownership checks. Display layout/scale changes
+are operator-controlled and must be snapshotted/restored; the campaign does not
+authorize registry hacks, blind display reconfiguration, destructive hot-unplug
+automation, or weakening of existing input-safety gates.
 
-Final branch deletion, push identity, clean worktree, and remote topology must
-always be re-proven dynamically rather than inferred from this file.
+Production code is out of scope by default. A source repair is authorized only
+after a valid retained `FAIL_PRODUCT` or deterministic policy defect identifies
+a violated invariant; first-attempt authority applies and the smallest
+Shepherd-preserving repair must be requalified across adjacent topology cells.
+
+**Deferred next:** real-app hardening remains a separate campaign for the two
+rows migrated there (browser F11 restricted visual evidence and adopted
+real-app crop/minimization), broader Chromium fullscreen, Notepad broker, and
+Windows Terminal hosting. Do not absorb it into DPI/topology work.
+
+**Next action:** implement deterministic boundary-matrix and capability
+instrumentation first, then run the supervised physical matrix only where the
+host topology is explicitly available. Archive only after every physical cell
+has a truthful PASS/BLOCKED/SKIP disposition and all migrated rows are closed or
+moved with a row-level handoff.
+
+Final branch, push identity, clean worktree, and remote topology must always be
+re-proven dynamically rather than inferred from this file.
