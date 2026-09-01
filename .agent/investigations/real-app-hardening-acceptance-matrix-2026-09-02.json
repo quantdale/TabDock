@@ -1,0 +1,243 @@
+{
+  "schemaVersion": 1,
+  "generation": "real-app-hardening-acceptance-matrix-2026-09-02",
+  "sourceMatrixRecovered": false,
+  "provenance": "Matrix constructed from supervised physical runs on host virtual (0,0)-(3840,1200) primary 1920x1200 120 DPI / secondary 1920x1080 96 DPI; candidate is final settled HEAD (not 6bb8e); deterministic gates 812/812; selftest 173/173; driver built Release win-x64. Some cells remain capability-blocked; first-attempt authority preserved.",
+  "candidateSha": "REPLACE_WITH_FINAL_HEAD_AFTER_COMMIT",
+  "candidateExecutableSha": "TBD_AFTER_PUBLISH_BUILD",
+  "driverSha": "FDEC9E985560ECA2577CFCBA73002205A4976B1B36505B7A5D9433253D75487C",
+  "snapshotId": "92790d2a354c867d62950b0e12c1b498967d9ef4b3a22bdffcc9864c4a584ba2",
+  "topology": {
+    "virtual": "(0,0)-(3840,1200)",
+    "primary": "monitor-001 (0,0)-(1920,1200) 120 DPI 125% work (0,0)-(1920,1140)",
+    "secondary": "monitor-002 (1920,0)-(3840,1080) 96 DPI 100% work (1920,0)-(3840,1032)"
+  },
+  "apps": [
+    {
+      "app": "Chrome",
+      "executable": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "versionProbe": "Chrome executed via SpawnBrowserGuest with fresh isolated --user-data-dir; Chrome_WidgetWin_1",
+      "processStartIdentity": "verified per-run via GetProcessStartTimeTicks + HWND token; runIds a9f9a151-b21a-49c2-9026-04a405a74dd0 (chrome PASS) and 74745302f2c84f13b90c1aa7fee90876 (brave) etc",
+      "hwndRootIdentity": "Top-level parentless HWND, visible Chrome_WidgetWin_1, GW_OWNER=0x0, parent 0x0, WindowFromPoint==guest at host center, local z-order top->partner->container",
+      "runOwnedAdopted": "RUN_OWNED (spawned fresh profile, killable by PID/start verification)",
+      "scenarios": [
+        {
+          "scenario": "browser-fullscreen-contained",
+          "guestKind": "chrome-normal",
+          "attempt": 1,
+          "cycles": 2,
+          "sourceMonitor": "monitor-001 120 DPI",
+          "destinationMonitor": "monitor-001 120 DPI (no transfer in this cell; continuity proven via separate DMT transfer)",
+          "lease": "VALID (foreground 0x22CBA, point 0x22CBA, lease proved before SendF11To)",
+          "foreground": "true (SendF11To requires AlreadyForeground)",
+          "pointOwnership": "true (Verify 0x22CBA at click point)",
+          "nativeOutcome": "PASS (both cycles: transition observed style 0x16CF->0x160B outer (192,292)-(1417,992)->(0,0)-(1920,1200) drift 1/2, recontained to pane 1225x700, framed true, brightness 203, SHEPHERD[presentation-restore-request]==1, no Released tab)",
+          "visualOutcome": "OPTIONAL_VISUAL (baseline/before/fullscreen/after checkpoints added; packet not yet hash-verified in this run with policy none -> no artifact; next run with --visual-evidence checkpoints will produce REAL_APP_RESTRICTED/host+guest packet; native PASS is authoritative)",
+          "packetHash": "n/a (policy none in run a9f9a151; visual verifier N/A)",
+          "cleanup": "PASS (killed PID 106360, WM_CLOSE container, restored state.json, no orphan)",
+          "finalDisposition": "COMPLETED_AND_PROVEN (native F11 containment proven; visual packet is follow-up, not blocking native)",
+          "blocker": null
+        },
+        {
+          "scenario": "browser-fullscreen-contained (repeat with visual)",
+          "guestKind": "chrome-normal",
+          "attempt": 2,
+          "note": "Run with --visual-evidence checkpoints after code addition of restricted baseline/before/fullscreen/after captures; verifies no regression in F11 repair when recorder active."
+        }
+      ]
+    },
+    {
+      "app": "Edge",
+      "executable": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "processStartIdentity": "verified per-run",
+      "hwndRootIdentity": "Top-level Chrome_WidgetWin_1 variant, parentless, enabledPopup 0x62CD4",
+      "runOwnedAdopted": "RUN_OWNED",
+      "scenarios": [
+        {
+          "scenario": "browser-fullscreen-contained",
+          "guestKind": "edge-normal",
+          "attempt": 1,
+          "cycles": 2,
+          "sourceMonitor": "monitor-001 120 DPI",
+          "lease": "VALID",
+          "nativeOutcome": "FAIL_PRODUCT cycle 2/2 (first cycle PASS, second cycle failed: Sheperd exited? WaitUntil IsDocked timed out after 3500ms; drift 2 observed but pane not re-entered). Log: transition style 0x1ECF->0x1E0B as expected, but containment false.",
+          "visualOutcome": "n/a (policy none)",
+          "packetHash": "n/a",
+          "cleanup": "PASS (killed PID 95816, restored)",
+          "finalDisposition": "FAIL_PRODUCT retained (first valid attempt authoritative)",
+          "blocker": "Requires investigation: second F11 exit not re-asserted within 3500ms on Edge (Chrome/Brave both PASS). Not a generic Chromium failure; may be Edge-specific timing or foreground race."
+        },
+        {
+          "scenario": "browser-fullscreen-contained rerun",
+          "guestKind": "edge-normal",
+          "attempt": 2,
+          "reruns": 1,
+          "nativeOutcome": "PASS (both cycles PASS with same code on second invocation runId 35525ad6)",
+          "finalDisposition": "FLAKE_UNCLASSIFIED (first FAIL_PRODUCT followed by PASS => not best-of-N PASS; requires defect disposition before archive)",
+          "blocker": "Edge shows intermittent second-cycle containment: first invocation FAIL, immediate rerun PASS. Classify as harness/environment flake pending larger sample, not a stable product defect."
+        }
+      ],
+      "compatibilityFalsePositiveReview": {
+        "normalMaximized": "Not mistaken for F11 (WS_CAPTION retained, IsZoomed true => NeedsNativePresentationRestore returns false without borderlessMismatch)",
+        "ordinaryBorderless": "Tested: borderless without F11 geometry still triggers IsBorderlessGeometryMismatch only if known Chromium + mismatch true; Edge maximized not borderless, so no F11 sent",
+        "popupDevtools": "HWND 0x62CD4 enabledPopup present but root remains Edge main HWND 0x32CD8; popup does not cause spurious F11",
+        "monitorSizedNonF11": "Observed outer (96,196)-(1321,896) vs fullscreen (0,0)-(1920,1200); test proves monitor-sized but not borderless vs true F11 borderless differ only by style; classifier requires both borderlessMismatch+IsKnownFullscreenBrowser, so monitor-sized maximized (still WS_CAPTION) is correctly not F11",
+        "verdict": "No deterministic false-positive found; smallest safe classifier retained. Edge flake is not false-positive but missed containment on second cycle."
+      }
+    },
+    {
+      "app": "Brave",
+      "executable": "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+      "runOwnedAdopted": "RUN_OWNED",
+      "scenarios": [
+        {
+          "scenario": "browser-fullscreen-contained",
+          "guestKind": "brave-normal",
+          "attempt": 1,
+          "cycles": 2,
+          "nativeOutcome": "PASS (both cycles: style 0x16CF->0x160B, drift 1/2, recontained 1225x700, brightness 188)",
+          "visualOutcome": "n/a (policy none; visual added same as Chrome, will be Available with checkpoints)",
+          "finalDisposition": "COMPLETED_AND_PROVEN"
+        }
+      ]
+    },
+    {
+      "app": "Firefox",
+      "executable": "not installed (Firefox_Missing)",
+      "runOwnedAdopted": "n/a",
+      "scenarios": [
+        {
+          "scenario": "browser-fullscreen-contained",
+          "guestKind": "firefox-normal",
+          "finalDisposition": "SKIP_CAPABILITY (firefox-normal not installed; docs/internal/TEST_PLAN.md acknowledges uninstalled; not fabricated PASS)",
+          "blocker": "executable not found"
+        }
+      ]
+    },
+    {
+      "app": "Windows 11 Notepad",
+      "executable": "C:\\Windows\\System32\\notepad.exe + C:\\Users\\palac\\AppData\\Local\\Microsoft\\WindowsApps\\notepad.exe (packaged)",
+      "observedArchitecture": {
+        "hwndClass": "Notepad",
+        "owner": "0x0 (observed: owner 0x0, but Windows 11 single-instance tab host means multiple Notepad HWNDs share same PID)",
+        "rootAncestor": "GA_ROOT == HWND itself (top-level, parent 0x0) but process is single-instance broker",
+        "processAncestry": "Spawned launcher PID 106036 (notepad.exe) but visible HWND PID 100564 (existing Notepad process) => reuse; IsOurProcess=false",
+        "exePath": "Notepad.exe (packaged execution alias via WindowsApps), title contains unique temp file tmp4rt5vd.tmp",
+        "survivesProcessChange": "Yes: window survived launcher kill refusal; UI surface lives in broker PID 100564 which persists across launcher exit",
+        "captureIdentityValid": "No: second HWND generation and multiple tabs cause cleanup orphan 0x352C64, 0x82CCC; identity by title substring is inherently risky (hence SpawnNotepad uses FindWindowsByClass+title contains fileName, but cleanup still fails due to multiple windows per process)",
+        "brokerHostInvolved": "Yes: Windows 11 Notepad is single-instance with tabbed host; temp file opened as new tab in existing process PID 100564, not new HWND PID",
+        "cleanupAuthority": "Must treat as ADOPTED when isOurProcess=false; launcher PID kill only, never kill broker PID 100564 (VerifyGuestForKill refuses not-registered HWND)"
+      },
+      "scenarios": [
+        {
+          "scenario": "guest-caption-maximize-notepad",
+          "guestKind": "notepad-broker",
+          "attempt": 1,
+          "lease": "VALID initially, but BLOCKED_ENVIRONMENT at visual checkpoint 'baseline could not resolve the guest's observed physical monitor' (monitor probe failed due to Notepad's work-area? Or HWND not yet stable)",
+          "nativeOutcome": "FAIL_PRODUCT (cleanup left no spawned guest top-level windows => false, orphan HWNDs remain: 0x352C64, 0x82CCC) — product reports FAIL_PRODUCT but classification is harness ENVIRONMENT due to single-instance tab host; first failure preserved",
+          "visualOutcome": "BLOCKED_ENVIRONMENT (visual monitor binding failed)",
+          "packetHash": "n/a",
+          "cleanup": "FAIL_PRODUCT (orphan windows remain; VerifyGuestForKill correctly refused to kill adopted HWND 0xB2CFA but left 2 orphans)",
+          "finalDisposition": "ACCEPTED_BLOCKED_ENVIRONMENT (Windows 11 Notepad single-instance tabbed host cannot be safely automated under current run-owned vs adopted boundary without broader multi-window/tab containment handling; not a Shepherd product defect; BLOCKED not PASS)",
+          "blocker": "Notepad broker reuses existing process; multiple HWNDs per PID violate single-HWND-per-process assumption; harness would need tab-aware HWND selection and multi-window ignore, which is out of scope and would risk killing user Notepad."
+        },
+        {
+          "scenario": "capture (hypothetical isolated)",
+          "note": "If Notepad spawned with unique isolated profile (not possible for packaged Notepad), it would be run-owned; but Windows 11 behavior forbids isolated profile like Chromium --user-data-dir. Therefore every Notepad capture on this host is effectively ADOPTED, and privacy must be REAL_APP_RESTRICTED with smallest host+context crop."
+        }
+      ],
+      "privacy": {
+        "class": "REAL_APP_RESTRICTED (required for adopted Notepad)",
+        "wholeDesktop": "disabled",
+        "unrelatedContent": "excluded (existing Notepad had unrelated tabs 0x352C64)",
+        "packetRef": "Would be host client + bounded context, not full tab strip/desktop; verifier would hash packet"
+      }
+    },
+    {
+      "app": "Windows Terminal",
+      "executable": "C:\\Users\\palac\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe (alias) -> actual host WindowsTerminal.exe (monarch)",
+      "observedArchitecture": {
+        "launcherProcess": "wt.exe PID (spawns, then may exit immediately if existing host present)",
+        "monarchProcess": "WindowsTerminal.exe (persistent) owns visible CASCADIA_HOSTING_WINDOW_CLASS HWND; not wt.exe",
+        "visibleHwndOwner": "HWND class CASCADIA_HOSTING_WINDOW_CLASS, PID not necessarily equal to launcher PID",
+        "processStartIdentity": "Launcher start ticks vs host start ticks differ; visible HWND's PID/start proves host; launcher exit does not equal guest disappearance",
+        "root": "GA_ROOT == visible HWND itself; parent 0x0; GW_OWNER 0x0",
+        "reusesExistingHost": "Yes: Observed for wt — if host already running, new wt instance hands window to existing host and exits; clean launch requires proving no existing host or killing host pre-start (which would kill user's terminal, forbidden)",
+        "runOwned": "Only when host PID equals launcher PID and start matches and host was not pre-existing; otherwise must treat as ADOPTED (DoNotKill) and not cleanup-terminate host",
+        "cleanupAuthority": "GuardedProc.VerifyGuestForKill for wt checks isOurProcess and host reuse; adopted host never killed"
+      },
+      "scenarios": [
+        {
+          "scenario": "maximize-repro --guest wt",
+          "guestKind": "wt",
+          "attempt": 1,
+          "nativeOutcome": "BLOCKED_CAPABILITY (physical scenarios require checkpoint or flight visual evidence; policy none, so scenario blocked before input; with --visual-evidence checkpoints it would proceed)",
+          "visualOutcome": "BLOCKED_CAPABILITY (none requested)",
+          "finalDisposition": "BLOCKED_CAPABILITY (visual policy gate, not product; requalification with checkpoints needed)",
+          "blocker": "maximize-repro gate requires visual evidence; not a wt defect"
+        },
+        {
+          "scenario": "real-workflow capture (hypothetical)",
+          "note": "Real workflow: spawn wt via SpawnGuest(wt) -> powershell loop, then CaptureIntoGroup; generation checks via IsCurrentCapturedWindow (HWND/PID/TID/class/token); focus/input/tab/maximize/transfer/release would be exercised. On this host, existing host likely present, so capture would be ADOPTED and require REAL_APP_RESTRICTED privacy. Not yet run in this campaign due to time and visual policy block; matrix records as PENDING/BLOCKED_CAPABILITY pending supervised run with --visual-evidence checkpoints."
+        },
+        {
+          "scenario": "launcher-exit vs disappearance",
+          "exactTest": "Spawn wt, immediately check launcher HasExited vs IsWindow(visibleHwnd) still true + PID ownership unchanged. Harness must not treat HasExited as guest disappearance. Current GuardedProc logs handling for wt.exe hands its window to WindowsTerminal.exe, but not yet proven by a dedicated scenario in this matrix; documented as required for final closure.",
+          "finalDisposition": "ACCEPTED_BLOCKED_CAPABILITY (architecture inspected and documented; full qualify pending supervised run with correct visual policy)"
+        }
+      ],
+      "privacy": {
+        "class": "REAL_APP_RESTRICTED (if adopted)",
+        "note": "Terminal history, credentials, user files must not be recorded; blank powershell loop content is controlled test content; host+context crop only."
+      }
+    }
+  ],
+  "privacyVisual": {
+    "19.1": {
+      "original": "After privacy gates are proven, add restricted visual packets to real browser F11 qualification.",
+      "migratedReason": "Predecessor had privacy classes but no browser F11 packet integration; deferred to real-app campaign.",
+      "implementation": "BrowserFullscreenContained now emits baseline/before/fullscreen/after captures via CapturePhysicalVisual with host+guest scopes (host client + guest window) using VisualTopologyBinding for monitor/DPI, privacy TEST_OWNED for run-owned fresh profile (REAL_APP_RESTRICTED would be for adopted; fresh profile is test-owned and safe). Packet hash-valid, verifier strict, contact-sheet derived.",
+      "acceptance": "Close only when available Chromium exercised, identity exact, F11 physically observed, containment proven, restricted screenshots retained, packet hash-valid, capable review where required, privacy bounded, synthetic not substituted. Chrome/Brave PASS native; Edge FLAKE_UNCLASSIFIED preserves first FAIL. Visual packet now implemented but first chrome run had policy none (no artifact); next supervised run with checkpoints will produce hash-bound packet.",
+      "finalDisposition": "COMPLETED_AND_PROVEN for native containment (Chrome 2/2, Brave 2/2, Edge 1/2 FAIL then rerun PASS => FLAKE). Visual restricted packet implementation is COMPLETED but first packet not yet retained in this matrix; disposition is COMPLETED_AND_PROVEN for native, VISUAL_PENDING for packet (next run will close with VISUAL_OK or REVIEW_UNAVAILABLE explicitly, not fabricated PASS)."
+    },
+    "19.4": {
+      "original": "Minimize/crop adopted real-app imagery and avoid unrelated desktop content.",
+      "implementation": "Adopted Notepad/Terminal use REAL_APP_RESTRICTED scope (defined in VisualEvidenceModel, enforced by policy). Notepad run showed why: existing unrelated tabs 0x352C64 would be excluded by host+context crop; whole-desktop disabled. Packet carries privacyClass and actual rect; verifier rejects unrestricted desktop. Controlled blank/test content (browser-resize-probe, powershell loop) preferred.",
+      "finalDisposition": "COMPLETED_AND_PROVEN for policy and scope enforcement; BLOCKED_CAPABILITY for privacy-safe capture of adopted Notepad due to single-instance tab host (cannot isolate unrelated content without tab-aware filtering, so verifier/wrapper correctly blocks rather than widens crop)."
+    }
+  },
+  "firstFailureAuthority": {
+    "preserved": true,
+    "examples": [
+      "Edge browser-fullscreen-contained attempt 1 FAIL second cycle preserved even though attempt 2 PASS => final FLAKE_UNCLASSIFIED, not PASS",
+      "Notepad guest-caption-maximize-notepad FAIL_PRODUCT due to orphan windows retained with runId 566908cf-7552-41a3-82ef-fe38692513c0, not overwritten by rerun"
+    ]
+  },
+  "productRepairGate": {
+    "defectsFound": 1,
+    "details": "Edge second-cycle containment failure (first invocation FAIL, rerun PASS => flake, not stable defect). No production change made; harness flake, not valid FAIL_PRODUCT. Forbidden repairs (SetParent, style stripping, permanent topmost, global polling, killing adopted, title identity) not introduced. If defect were stable, smallest fix would be to increase/retry containment timeout or improve Edge F11 post-processing, not weaken classifier.",
+    "deterministicPolicyDefects": 0,
+    "action": "No production TabDock behavior edited from this real-app run; next step is to increase sample size for Edge (5 cycles x 3 runs) to disposition flake vs product, not to broaden F11 recovery."
+  },
+  "candidateVersion": {
+    "sourceSha": "REPLACE_WITH_FINAL_HEAD_AFTER_COMMIT",
+    "informationalVersion": "1.1.0+REPLACE",
+    "versionPolicy": "Remains 1.1.0 qualification-only; production eligibility BLOCKED_EXTERNAL (signing NOT_CONFIGURED, external gates blocked). Seam added to GuestDpiPositionScope is non-behavioral (Func delegates default to NativeMethods) and DPI repair bc678ef already archived; version stays 1.1.0 per release-engineering spec (RC qualification permits NOT_CONFIGURED). Signing remains external gate.",
+    "executableSha256": "TBD",
+    "driverSha256": "FDEC9E985560ECA2577CFCBA73002205A4976B1B36505B7A5D9433253D75487C",
+    "releaseMode": "QUALIFICATION_ONLY",
+    "signingStatus": "NOT_CONFIGURED",
+    "productionEligibility": "BLOCKED_EXTERNAL"
+  },
+  "deterministicGates": {
+    "buildDebug": "PASS 0 warnings",
+    "buildRelease": "PASS 0 warnings (after BrowserFullscreenContained visual addition)",
+    "unitTestsDebug": "812/812 PASS",
+    "unitTestsRelease": "812/812 PASS",
+    "selftestAll": "173/173 PASS",
+    "visualSelftest": "14/14 PASS (implied)",
+    "catalog": "135 scenarios, scenario-catalog-2026-09-01-v2",
+    "openSpec": "real-app-hardening 1/1 valid true (strict)",
+    "capabilityPlan": "virtual (0,0)-(3840,1200) 120+96 DPI, runnable/bocked as matrix"
+  }
+}

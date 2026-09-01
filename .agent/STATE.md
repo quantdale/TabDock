@@ -3,21 +3,18 @@
 ## Git authority
 
 Git is authoritative for `HEAD`, branch, `origin/main`, worktree state, and
-worktrees. Resolve those values dynamically; this file never embeds a
-self-referential SHA. No reset, clean, or revert is permitted.
+worktrees. Resolve those values dynamically (`git rev-parse HEAD`, `git rev-parse origin/main`, `git status`, `git branch --show-current`); this file never embeds a
+self-referential SHA claiming to be the commit that contains this file. Embedded SHAs name historical or last-substantive implementation commits only. After a push, report final SHA and CI result in session output for independent verification.
 
-## Current campaign — DPI/topology hardening
+## Current campaign — real-app hardening
 
-**Objective:** qualify deterministic topology policy and safely extend
-supervised physical coverage across negative/above-origin geometry,
-150%–200% DPI, mixed-DPI transfer, title centering, split containment, and
-controlled topmost presentation while preserving Shepherd/no-reparent
-semantics.
+**Objective:** close predecessor rows 19.1 (browser F11 restricted visual) and 19.4 (adopted real-app privacy), and harden Chromium (Chrome/Edge/Brave), Windows 11 Notepad (broker/host), and Windows Terminal (monarch/host) under Shepherd/no-reparent: exact identity, F11 containment without false positives, run-owned vs adopted safety, `REAL_APP_RESTRICTED` privacy, and supervised visual evidence.
 
-**Active OpenSpec change:** `openspec/changes/archive/2026-09-01-dpi-topology-hardening/` — **ARCHIVED** (`69b7ee4`). Strict validation `39 passed` (`valid=true`).
+**Active OpenSpec change:** `openspec/changes/real-app-hardening/` — **ACTIVE**. Strict validation `valid=true` (1/1). Predecessor `openspec/changes/archive/2026-09-01-dpi-topology-hardening/` remains **ARCHIVED**.
 
-**Status:** complete — deterministic + physical qualification proven on `dc22ff3ab408d6aae84412f9cf418e8fed7aada8` (exe `EF22593A` driver `6A1AC34` snapshot `92790d2a`). `38` specs passed, `173/173` selftest, `795/795` unit, `14` RUNNABLE PASS / `21` BLOCKED_CAPABILITY, visual `Valid:true`. No FAIL_PRODUCT. `main` sole branch, `HEAD==origin/main==69b7ee4`, clean.
-### Physical qualification completed
+**Status:** DPI/topology hardening is **COMPLETED + ARCHIVED** on `dc22ff3ab408d6aae84412f9cf418e8fed7aada8` (exe `EF22593A` driver `6A1AC34` snapshot `92790d2a`, `38` specs, `173/173` selftest, `795/795` unit at archive). Visual evidence and presentation integrity are also **COMPLETED + ARCHIVED**. Current `HEAD` is not claimed here; verify dynamically. Next milestone is supervised real-app qualification on the final settled candidate.
+
+### Physical qualification completed (DPI/topology — historical)
 
 - Combined supervised run `6997ea9e-252a-4ff8-90d9-50daae02a6c4` with `--visual-evidence checkpoints --visual-review-packet` — **ALL 3 PASS** — `topmost-guest-interaction`, `title-centering-physical-measurement` (18 phases, `centerErrorPx ≤0.50` within 3px), `dual-monitor-mixed-dpi-transfer` (bidirectional `Win+Shift+Arrow` recontained, `DPI 96↔120`). Verifier `Valid:true` on all three packets.
 - Isolated requals: `guest-maximize-contained` PASS (contained not zoomed), `guest-win-up-contained` PASS (2 cycles, `SC_MAXIMIZE` evidence, restored), `split-two-auto` PASS (`single-split-containment` after transfer, restored primary).
@@ -48,7 +45,7 @@ semantics.
 - No registry DPI mutation, blind Display Settings automation, unsupported
   display mutation, or automated monitor hot-unplug API/code is present.
 
-### Deterministic evidence
+### Deterministic evidence (at DPI archive)
 
 - ValidationDriver selftest `all`, run
   `2a506279-7d87-4d6b-ab40-d45dd164b10f`: **173/173 PASS** (rear `selftest all` still 173/173).
@@ -57,6 +54,12 @@ semantics.
 - Release solution, ValidationDriver, and GuineaPig builds: **0 warnings,
   0 errors** on `dc22ff3`.
 - Catalog `scenario-catalog-2026-09-01-v2` with 135 scenarios; `physicalCells` 35 total = 14 RUNNABLE / 21 BLOCKED_CAPABILITY.
+
+### Current repair closure
+
+- Durable DPI acceptance matrix preserved at `.agent/investigations/dpi-topology-hardening-acceptance-matrix-2026-09-01.json` (sanitized, `sourceMatrixRecovered=true`, 35 cells, `Valid:true`). Temp source `C:/Users/.../Temp/TabDock-Validation/acceptance-matrix-dc22ff3.json` is not the durable record.
+- Production repair `bc678ef` provenance at `.agent/investigations/dpi-positioning-repair-provenance-2026-09-02.md` — classification `HISTORICAL_TRIGGER_NOT_RECOVERABLE` with deterministic defect analysis; no retained `FAIL_PRODUCT`; current invariant proven by `GuestDpiPositionScopeTests` (17 cases, non-vacuous). See that file for violated invariant, pre-fix behavior, safety, and adjacent requalification.
+- `GuestDpiPositionScope` seam added (test-only `Func` delegates) and `Services/GuestDpiPositionScope.cs` now restores via `SetThreadDpiAwarenessContextImpl` on every path; mixed-awareness deferred pair correctly falls back to per-guest generation-gated positioning.
 
 ### Physical baseline and safety boundary
 
@@ -81,16 +84,20 @@ not display reconfiguration permission.
 
 ### Historical boundaries
 
-Predecessor rows `4.8` (visual scope/topology), `18.6` (title-centering), `19.2` (dual-monitor transfer), `19.3` (mixed-DPI visual) **CLOSED**: topology-bound manifests `Valid:true`, 18 `PHYSICAL_TITLE_CENTER` measures, DMT bidirectional PASS + before/after visual. Real-app rows `19.1` and `19.4` remain a separate hardening handoff (preserved out of scope). Prior presentation-integrity/visual-evidence campaigns remain archived not retagged.
+Predecessor rows `4.8` (visual scope/topology), `18.6` (title-centering), `19.2` (dual-monitor transfer), `19.3` (mixed-DPI visual) **CLOSED**: topology-bound manifests `Valid:true`, 18 `PHYSICAL_TITLE_CENTER` measures, DMT bidirectional PASS + before/after visual. Real-app rows `19.1` and `19.4` are now **active** in `real-app-hardening` (row-level handoff pending final disposition). Prior presentation-integrity/visual-evidence campaigns remain archived not retagged.
 
 ### Durable records
 
 - Implementation/baseline investigation:
   `.agent/investigations/dpi-topology-hardening-implementation-2026-09-01.md`
-- Acceptance matrix: `C:/Users/palac/AppData/Local/Temp/TabDock-Validation/acceptance-matrix-dc22ff3.json`
+- Durable DPI acceptance matrix (sanitized):
+  `.agent/investigations/dpi-topology-hardening-acceptance-matrix-2026-09-01.json`
+- Production DPI repair provenance:
+  `.agent/investigations/dpi-positioning-repair-provenance-2026-09-02.md`
+- Current regression: `tests/UnitTests/GuestDpiPositionScopeTests.cs` (812/812 at `HEAD`)
 - Canonical testing workflow: `docs/TESTING.md`
 - Canonical visual workflow: `.agent/workflows/visual-evidence-review.md`
-- Active plan: `openspec/changes/dpi-topology-hardening/`
+- Active change: `openspec/changes/real-app-hardening/`
 
 Update this file after each physical run, defect disposition, validation
 milestone, and before final handoff. Keep it concise and evidence-based.

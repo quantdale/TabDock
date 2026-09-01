@@ -13,6 +13,12 @@ namespace TabDock.Services;
 /// </summary>
 internal readonly struct GuestDpiPositionScope : IDisposable
 {
+    // Test seam: replaceable native delegates for deterministic unit tests.
+    // Production defaults to NativeMethods; tests may substitute fakes and must restore.
+    internal static Func<IntPtr, IntPtr> GetWindowDpiAwarenessContextImpl { get; set; } = NativeMethods.GetWindowDpiAwarenessContext;
+    internal static Func<IntPtr, int> GetAwarenessFromDpiAwarenessContextImpl { get; set; } = NativeMethods.GetAwarenessFromDpiAwarenessContext;
+    internal static Func<IntPtr, IntPtr> SetThreadDpiAwarenessContextImpl { get; set; } = NativeMethods.SetThreadDpiAwarenessContext;
+
     private readonly IntPtr _previousContext;
     private readonly bool _restore;
 
@@ -55,6 +61,9 @@ internal readonly struct GuestDpiPositionScope : IDisposable
         return EnterForAwareness(firstAwareness);
     }
 
+    internal static GuestDpiPositionScope EnterForAwarenessForTest(int awareness)
+        => EnterForAwareness(awareness);
+
     private static GuestDpiPositionScope EnterForAwareness(int awareness)
     {
         if (!DpiCapturePolicy.IsKnownAwareness(awareness))
@@ -66,7 +75,7 @@ internal readonly struct GuestDpiPositionScope : IDisposable
             return new GuestDpiPositionScope(IntPtr.Zero, restore: false, available: true);
         }
 
-        IntPtr previousContext = NativeMethods.SetThreadDpiAwarenessContext(
+        IntPtr previousContext = SetThreadDpiAwarenessContextImpl(
             NativeMethods.DpiAwarenessContextUnaware);
         return previousContext == IntPtr.Zero
             ? Unavailable()
@@ -79,11 +88,11 @@ internal readonly struct GuestDpiPositionScope : IDisposable
         if (hwnd == IntPtr.Zero)
             return false;
 
-        IntPtr guestContext = NativeMethods.GetWindowDpiAwarenessContext(hwnd);
+        IntPtr guestContext = GetWindowDpiAwarenessContextImpl(hwnd);
         if (guestContext == IntPtr.Zero)
             return false;
 
-        awareness = NativeMethods.GetAwarenessFromDpiAwarenessContext(guestContext);
+        awareness = GetAwarenessFromDpiAwarenessContextImpl(guestContext);
         return DpiCapturePolicy.IsKnownAwareness(awareness);
     }
 
@@ -95,7 +104,7 @@ internal readonly struct GuestDpiPositionScope : IDisposable
         if (!_restore)
             return;
 
-        if (NativeMethods.SetThreadDpiAwarenessContext(_previousContext) == IntPtr.Zero)
+        if (SetThreadDpiAwarenessContextImpl(_previousContext) == IntPtr.Zero)
         {
             Debug.WriteLine("TabDock could not restore the caller's DPI awareness context after guest positioning.");
         }

@@ -1,0 +1,3 @@
+schema: spec-driven
+created: 2026-09-02
+goal: Harden TabDock against real Chromium, Windows 11 Notepad, and Windows Terminal guests, closing predecessor rows 19.1/19.4 with exact identity, F11 containment, ownership, privacy, and supervised visual evidence.

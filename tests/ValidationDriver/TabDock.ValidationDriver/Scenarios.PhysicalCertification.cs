@@ -1498,12 +1498,29 @@ internal static partial class Scenarios
         if (!AssertGuestPresentation(ctx, browser, container, host, $"{opt.Guest} F11 baseline", allowBrowserOwnedSurface: true))
             return;
 
+        // Restricted visual baseline for 19.1 — run-owned isolated profile, so TEST_OWNED host+guest scope is privacy-safe.
+        // Visual is best-effort for this cycle; native containment remains the authoritative outcome.
+        VisualTopologyBinding? baselineBinding = null;
+        bool hasBaselineBinding = TryGetVisualMonitorBinding(ctx, container, out baselineBinding);
+        if (hasBaselineBinding && baselineBinding != null)
+        {
+            CapturePhysicalVisual(ctx, $"{opt.Guest}-f11-baseline", VisualCheckpointPhase.BASELINE,
+                $"Restricted baseline before F11 on isolated {opt.Guest}.",
+                new[] { ctx.VisualGuestScope(browser), ctx.VisualContainerScope(container) }, baselineBinding);
+        }
+
         int cycles = Math.Min(Math.Max(opt.Cycles ?? 2, 2), 3);
         for (int cycle = 1; cycle <= cycles; cycle++)
         {
             string phase = $"{opt.Guest} F11 cycle {cycle}/{cycles}";
             NativeGuestSnapshot before = ReadNativeGuestSnapshot(browser, host, phase + " before");
             AppendObservedState(ctx, phase + " before: " + DescribeNativeGuestSnapshot(before));
+            if (hasBaselineBinding && baselineBinding != null)
+            {
+                CapturePhysicalVisual(ctx, $"{opt.Guest}-f11-{cycle}-before", VisualCheckpointPhase.BEFORE_ACTION,
+                    $"Restricted {phase} before F11.",
+                    new[] { ctx.VisualGuestScope(browser), ctx.VisualContainerScope(container) }, baselineBinding);
+            }
             long actionOff = TabDockLog.RecordLogLength();
             if (!Input.SendF11To(browser.Hwnd))
             {
@@ -1525,6 +1542,13 @@ internal static partial class Scenarios
             if (!transitionObserved)
                 return;
 
+            if (hasBaselineBinding && baselineBinding != null)
+            {
+                CapturePhysicalVisual(ctx, $"{opt.Guest}-f11-{cycle}-fullscreen", VisualCheckpointPhase.AFTER_ACTION_IMMEDIATE,
+                    $"Restricted {phase} browser borderless fullscreen (style 0x{transitioned.Style:X}, outer {Util.FormatRect(transitioned.Outer)}).",
+                    new[] { ctx.VisualGuestScope(browser), ctx.VisualContainerScope(container) }, baselineBinding);
+            }
+
             bool contained = Util.WaitUntil(() => IsDocked(browser.Hwnd, host), 3500);
             ctx.Check(contained, $"{phase}: Shepherd exited browser F11 through its identity-checked repair and returned the same browser to its assigned pane");
             if (!contained)
@@ -1536,6 +1560,12 @@ internal static partial class Scenarios
             if (!AssertGuestPresentation(ctx, browser, container, host, phase + " after-reconcile", allowBrowserOwnedSurface: true))
                 return;
             AssertBrowserRender(ctx, browser, host, phase + " after-reconcile");
+            if (hasBaselineBinding && baselineBinding != null)
+            {
+                CapturePhysicalVisual(ctx, $"{opt.Guest}-f11-{cycle}-after", VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                    $"Restricted {phase} after Shepherd recontained the browser.",
+                    new[] { ctx.VisualGuestScope(browser), ctx.VisualContainerScope(container) }, baselineBinding);
+            }
             ctx.Check(TabCount(container) == 1, $"{phase}: no tab click was needed and the captured tab count remained one");
             ctx.Check(TabDockLog.CountNewLines(actionOff, "SHEPHERD[presentation-restore-request]") == 1,
                 $"{phase}: one identity-checked browser F11 repair request coalesced the native presentation drift");
