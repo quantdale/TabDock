@@ -473,12 +473,11 @@ internal static partial class Scenarios
             {
                 if (ctx != null)
                 {
-                    ctx.Visual?.StopFlightRecorder();
                     QualificationResultWriter.CaptureLiveEvidence(ctx);
+                    ctx.DesktopLeaseValidAtCompletion = lease.IsValid;
                     Cleanup(ctx);
                     ctx.Check(NoSpawnedGuestWindowsRemain(ctx), "cleanup left no spawned guest top-level windows");
                     ctx.FinishedUtc = DateTimeOffset.UtcNow;
-                    ctx.DesktopLeaseValidAtCompletion = lease.IsValid;
                     lease.Close();
                     QualificationResultWriter.WriteScenario(ctx);
                 }
