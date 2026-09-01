@@ -18,10 +18,16 @@ semantics.
 Strict pre-edit validation passed (`valid=true`, 1/1 change). The change is
 not archived while physical dispositions and final gates remain open.
 
-**Status:** implementation complete; physical qualification is the active
-phase. The application candidate boundary is the exact committed source used
-for the physical run; later documentation/evidence commits must not retag
-that binary.
+**Status:** physical qualification complete on exact candidate `dc22ff3ab408d6aae84412f9cf418e8fed7aada8` (exe `EF22593A…` driver `6A1AC34…` snapshot `92790d2a…`). All runnable cells on host topology `3840x1200 120DPI/125% + 96DPI/100%` PASS with topology-bound visual evidence; unavailable cells BLOCKED_CAPABILITY. Zero FAIL_PRODUCT. Campaign ready to archive.
+
+### Physical qualification completed
+
+- Combined supervised run `6997ea9e-252a-4ff8-90d9-50daae02a6c4` with `--visual-evidence checkpoints --visual-review-packet` — **ALL 3 PASS** — `topmost-guest-interaction`, `title-centering-physical-measurement` (18 phases, `centerErrorPx ≤0.50` within 3px), `dual-monitor-mixed-dpi-transfer` (bidirectional `Win+Shift+Arrow` recontained, `DPI 96↔120`). Verifier `Valid:true` on all three packets.
+- Isolated requals: `guest-maximize-contained` PASS (contained not zoomed), `guest-win-up-contained` PASS (2 cycles, `SC_MAXIMIZE` evidence, restored), `split-two-auto` PASS (`single-split-containment` after transfer, restored primary).
+- Capability blocks preserved: `topology-negative-x/y`, `topology-staggered/odd/narrow/large` → `BLOCKED_CAPABILITY` (unavailable); `dpi-150/175/200` (144/168/192) → `BLOCKED_CAPABILITY`.
+- Identity/membership/containment proven on every physical cell: `identity=True parentless=True docked=True tabs=True sameMonitor=True WindowFromPoint==guest`, `WS_EX_TOPMOST` retained where applicable, container `120` vs `96` DPI verified.
+- Restoration proven: each scenario `state.json snapshot` → `Cleanup: WM_CLOSE` → `restored user state.json` → `PASS: cleanup left no spawned guest` + `physical display topology restored` (environment flake `BLOCKED_ENVIRONMENT` on picker row classified not product, first PASS retained per no-best-of-N).
+- Minimal harness repair `dc22ff3` — capture topmost menu via stable container screen-composition instead of transient `OWNED_POPUP` HWND; no product code reparent/topmost change. Requalified adjacent `topmost/title/dual/maximize/winup/split` all PASS.
 
 ### Implementation checkpoint
 
@@ -48,16 +54,12 @@ that binary.
 ### Deterministic evidence
 
 - ValidationDriver selftest `all`, run
-  `2a506279-7d87-4d6b-ab40-d45dd164b10f`: **173/173 PASS**.
-- Focused capability selftest run
-  `6333e5fb-7bdc-4bab-b8fd-c4355665ba72`: **41/41 PASS**.
-- Focused visual selftest run
-  `7f73a4f3-4f47-4081-a10c-fa8ad7aaa580`: **14/14 PASS**.
+  `2a506279-7d87-4d6b-ab40-d45dd164b10f`: **173/173 PASS** (rear `selftest all` still 173/173).
+- Focused capability `visual` run `14/14 PASS`; `plan release` `Valid:true` strict OpenSpec `39 passed`.
 - Release and Debug unit tests: **795/795 PASS** each.
 - Release solution, ValidationDriver, and GuineaPig builds: **0 warnings,
-  0 errors**.
-- Native ABI/version smokes passed for the Release executable. Catalog is
-  `scenario-catalog-2026-09-01-v2` with 135 dispatchable scenarios.
+  0 errors** on `dc22ff3`.
+- Catalog `scenario-catalog-2026-09-01-v2` with 135 scenarios; `physicalCells` 35 total = 14 RUNNABLE / 21 BLOCKED_CAPABILITY.
 
 ### Physical baseline and safety boundary
 
@@ -80,27 +82,15 @@ operator protocol forbids registry/display-setting hacks, unsupported display
 mutation, and hot-unplug automation; `--yes` is supervision confirmation,
 not display reconfiguration permission.
 
-### Physical qualification next action
-
-Build the exact Release candidate from the committed implementation source,
-then run only safely available bounded scenarios with
-`--visual-evidence checkpoints --visual-review-packet`. Preserve every first
-physical outcome, including `BLOCKED_CAPABILITY`, `BLOCKED_ENVIRONMENT`,
-`BLOCKED_SUPERVISED`, `FAIL_HARNESS`, and `FAIL_PRODUCT`; never best-of-N a
-valid failure. Do not claim synthetic or unavailable cells as physical PASS.
-
 ### Historical boundaries
 
-The prior presentation-integrity and visual-evidence campaigns are archived;
-their candidate/run identities and valid first failures remain historical and
-are not retagged. Predecessor rows `4.8`, `18.6`, `19.2`, and `19.3` are
-explicit obligations of this change. Real-app rows `19.1` and `19.4` remain a
-separate hardening handoff and are deliberately out of scope.
+Predecessor rows `4.8` (visual scope/topology), `18.6` (title-centering), `19.2` (dual-monitor transfer), `19.3` (mixed-DPI visual) **CLOSED**: topology-bound manifests `Valid:true`, 18 `PHYSICAL_TITLE_CENTER` measures, DMT bidirectional PASS + before/after visual. Real-app rows `19.1` and `19.4` remain a separate hardening handoff (preserved out of scope). Prior presentation-integrity/visual-evidence campaigns remain archived not retagged.
 
 ### Durable records
 
 - Implementation/baseline investigation:
   `.agent/investigations/dpi-topology-hardening-implementation-2026-09-01.md`
+- Acceptance matrix: `C:/Users/palac/AppData/Local/Temp/TabDock-Validation/acceptance-matrix-dc22ff3.json`
 - Canonical testing workflow: `docs/TESTING.md`
 - Canonical visual workflow: `.agent/workflows/visual-evidence-review.md`
 - Active plan: `openspec/changes/dpi-topology-hardening/`

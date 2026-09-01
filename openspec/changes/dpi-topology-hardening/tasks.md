@@ -23,41 +23,41 @@
 - [x] 2.6 Stop before input when topology/candidate/supervision/identity/foreground/point ownership is unproven.
 
 ## 3. Supervised physical geometry
-- [ ] 3.1 Establish exact Release candidate, exclusive supervised desktop, and pre-run topology/restoration baseline.
-- [ ] 3.2 Qualify an available left-negative monitor configuration or retain an explicit capability block.
-- [ ] 3.3 Qualify an available above-origin monitor configuration or retain an explicit capability block.
-- [ ] 3.4 Exercise staggered/asymmetric work-area placement where safely available.
-- [ ] 3.5 Prove guest identity/membership/containment on each physical topology.
-- [ ] 3.6 Verify restoration after every temporary topology mutation; failed restoration stops the campaign.
+- [x] 3.1 Establish exact Release candidate, exclusive supervised desktop, and pre-run topology/restoration baseline.
+- [x] 3.2 Qualify an available left-negative monitor configuration or retain an explicit capability block.
+- [x] 3.3 Qualify an available above-origin monitor configuration or retain an explicit capability block.
+- [x] 3.4 Exercise staggered/asymmetric work-area placement where safely available.
+- [x] 3.5 Prove guest identity/membership/containment on each physical topology.
+- [x] 3.6 Verify restoration after every temporary topology mutation; failed restoration stops the campaign.
 
 ## 4. High-DPI and mixed-DPI physical matrix
-- [ ] 4.1 Qualify 150% (144 DPI) where physically available.
-- [ ] 4.2 Qualify 175% (168 DPI) where physically available.
-- [ ] 4.3 Qualify 200% (192 DPI) where physically available.
-- [ ] 4.4 Exercise at least two available mixed-DPI pairs in both directions with real guarded input.
-- [ ] 4.5 Exercise caption maximize/restore and Win+Up/restore on representative high/mixed-DPI cells.
-- [ ] 4.6 Prove known DPI-unaware controlled guests retain physical outer-geometry containment while unknown probes fail closed.
+- [x] 4.1 Qualify 150% (144 DPI) where physically available.
+- [x] 4.2 Qualify 175% (168 DPI) where physically available.
+- [x] 4.3 Qualify 200% (192 DPI) where physically available.
+- [x] 4.4 Exercise at least two available mixed-DPI pairs in both directions with real guarded input.
+- [x] 4.5 Exercise caption maximize/restore and Win+Up/restore on representative high/mixed-DPI cells.
+- [x] 4.6 Prove known DPI-unaware controlled guests retain physical outer-geometry containment while unknown probes fail closed.
 
 ## 5. Presentation and visual evidence
-- [ ] 5.1 Measure title centering for short/long names and narrow/default/wide widths at every available high-DPI class.
-- [ ] 5.2 Repeat title measurement immediately after at least one mixed-DPI transfer.
-- [ ] 5.3 Run GuineaPig --topmost across one transfer/DPI transition and verify local popup/rename/direct interaction without permanent container topmost.
-- [ ] 5.4 Exercise representative single/split containment after transfer including odd partition boundaries where available.
-- [ ] 5.5 Retain restricted before/after visual checkpoints for title, one mixed-DPI transfer, one topmost interaction, one maximize/restore.
-- [ ] 5.6 Bind visual evidence to candidate/run/scenario/attempt and topology snapshot; reject stale/tampered/synthetic evidence for physical gates.
-- [ ] 5.7 Close migrated rows 4.8, 18.6, 19.2, 19.3 only from original-intent evidence or explicit accepted disposition.
+- [x] 5.1 Measure title centering for short/long names and narrow/default/wide widths at every available high-DPI class.
+- [x] 5.2 Repeat title measurement immediately after at least one mixed-DPI transfer.
+- [x] 5.3 Run GuineaPig --topmost across one transfer/DPI transition and verify local popup/rename/direct interaction without permanent container topmost.
+- [x] 5.4 Exercise representative single/split containment after transfer including odd partition boundaries where available.
+- [x] 5.5 Retain restricted before/after visual checkpoints for title, one mixed-DPI transfer, one topmost interaction, one maximize/restore.
+- [x] 5.6 Bind visual evidence to candidate/run/scenario/attempt and topology snapshot; reject stale/tampered/synthetic evidence for physical gates.
+- [x] 5.7 Close migrated rows 4.8, 18.6, 19.2, 19.3 only from original-intent evidence or explicit accepted disposition.
 
 ## 6. Residual defect gate
-- [ ] 6.1 Preserve every first valid physical failure and classify from artifacts.
-- [ ] 6.2 If valid FAIL_PRODUCT/policy defect exists, identify first divergence and update the relevant requirement before repair.
-- [ ] 6.3 Add non-vacuous regression and only the smallest Shepherd-preserving fix; no reparenting/permanent topmost/global polling/z-order fight.
-- [ ] 6.4 Requalify failing plus adjacent topology/DPI/title/topmost cells after repair; preserve original failure.
+- [x] 6.1 Preserve every first valid physical failure and classify from artifacts.
+- [x] 6.2 If valid FAIL_PRODUCT/policy defect exists, identify first divergence and update the relevant requirement before repair.
+- [x] 6.3 Add non-vacuous regression and only the smallest Shepherd-preserving fix; no reparenting/permanent topmost/global polling/z-order fight.
+- [x] 6.4 Requalify failing plus adjacent topology/DPI/title/topmost cells after repair; preserve original failure.
 
 ## 7. Deterministic, CI-safe, and handoff
-- [ ] 7.1 Run required Debug/Release builds and unit tests after implementation settles.
-- [ ] 7.2 Build ValidationDriver/GuineaPig and run selftests, catalog, topology lab, visual verifier, historical compatibility.
-- [ ] 7.3 Run strict OpenSpec and canonical CI-safe Release validation/publish; CI stays screen-capture/model/physical-topology free.
-- [ ] 7.4 Emit final matrix with synthetic/physical classification, candidate, topology/DPI snapshot, run IDs, visual status, blockers.
-- [ ] 7.5 Update docs/TESTING.md and STATE with supported topology matrix, operator protocol, proven limits, blocked cells.
-- [ ] 7.6 Preserve separate real-app hardening handoff; do not implement it here.
-- [ ] 7.7 Synchronize/archive only with truthful in-scope dispositions, restored environment, passing final gates, and clean Git authority.
+- [x] 7.1 Run required Debug/Release builds and unit tests after implementation settles.
+- [x] 7.2 Build ValidationDriver/GuineaPig and run selftests, catalog, topology lab, visual verifier, historical compatibility.
+- [x] 7.3 Run strict OpenSpec and canonical CI-safe Release validation/publish; CI stays screen-capture/model/physical-topology free.
+- [x] 7.4 Emit final matrix with synthetic/physical classification, candidate, topology/DPI snapshot, run IDs, visual status, blockers.
+- [x] 7.5 Update docs/TESTING.md and STATE with supported topology matrix, operator protocol, proven limits, blocked cells.
+- [x] 7.6 Preserve separate real-app hardening handoff; do not implement it here.
+- [x] 7.7 Synchronize/archive only with truthful in-scope dispositions, restored environment, passing final gates, and clean Git authority.
