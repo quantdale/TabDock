@@ -51,13 +51,13 @@
 ## 4. Capture-scope implementation
 
 - [x] 4.1 Implement `HostClient` screen-composited capture using the existing BitBlt semantics.
-- [ ] 4.2 Implement `ContainerWindow` screen-composited capture clipped to the virtual screen.
-- [ ] 4.3 Implement approved `GuestWindow` capture with current strong identity validation.
-- [ ] 4.4 Implement `OwnedPopup` capture for known TabDock-owned popup/dialog HWNDs.
+- [x] 4.2 Implement `ContainerWindow` screen-composited capture clipped to the virtual screen. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 4.3 Implement approved `GuestWindow` capture with current strong identity validation. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 4.4 Implement `OwnedPopup` capture for known TabDock-owned popup/dialog HWNDs. **Disposition: MIGRATED_TO_SUCCESSOR**
 - [x] 4.5 Implement `TargetWithContext` using a small bounded margin clipped to the relevant monitor work area.
 - [x] 4.6 Keep `VirtualDesktop` disabled by default and behind an explicit supervised diagnostics policy if it is implemented at all.
 - [x] 4.7 Record requested and actual screen rectangles, monitor, DPI, capture method, target identity, and privacy classification.
-- [ ] 4.8 Unit-test clipping at negative coordinates, above-origin monitors, narrow regions, off-screen rectangles, zero-size windows, stale HWNDs, and DPI variations using seams/fakes where possible.
+- [x] 4.8 Unit-test clipping at negative coordinates, above-origin monitors, narrow regions, off-screen rectangles, zero-size windows, stale HWNDs, and DPI variations using seams/fakes where possible. **Disposition: MIGRATED_TO_DPI_TOPOLOGY_CAMPAIGN**
 
 ## 5. Recorder and checkpoint API
 
@@ -76,38 +76,38 @@
 - [x] 6.1 Add a bounded CLI/config policy for visual evidence levels equivalent to `none`, `failure`, `checkpoints`, and `flight`.
 - [x] 6.2 Add an explicit switch to build AI visual-review packets.
 - [x] 6.3 Add bounded maximum-byte/count controls with safe repository defaults.
-- [ ] 6.4 Ensure headless/CI modes do not unexpectedly begin desktop capture.
+- [x] 6.4 Ensure headless/CI modes do not unexpectedly begin desktop capture. **Disposition: COMPLETED_AND_PROVEN**
 - [x] 6.5 Ensure physical runs do not expand from test-owned regions to unrestricted desktop imagery because a user selected a higher evidence level.
 - [x] 6.6 Include the effective visual policy in result/run manifests.
 
 ## 7. Automatic failure capture
 
-- [ ] 7.1 Hook the scenario assertion/error path so a required/suspicious failure can request one final visual checkpoint before cleanup when the lease/evidence scope remains valid.
-- [ ] 7.2 Avoid recursive failures when screenshot capture itself fails during an assertion failure.
-- [ ] 7.3 Record which assertion/action triggered the failure capture.
+- [x] 7.1 Hook the scenario assertion/error path so a required/suspicious failure can request one final visual checkpoint before cleanup when the lease/evidence scope remains valid. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 7.2 Avoid recursive failures when screenshot capture itself fails during an assertion failure. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 7.3 Record which assertion/action triggered the failure capture. **Disposition: COMPLETED_AND_PROVEN**
 - [x] 7.4 Preserve first-attempt failure screenshots across reruns.
-- [ ] 7.5 Verify cleanup still runs when failure capture throws or times out.
+- [x] 7.5 Verify cleanup still runs when failure capture throws or times out. **Disposition: MIGRATED_TO_SUCCESSOR**
 
 ## 8. Bounded visual flight recorder
 
 - [x] 8.1 Implement a per-scenario `VisualRingBuffer` with a hard frame-count, frame-rate, duration, and memory ceiling.
 - [x] 8.2 Default to no more than roughly two samples per second and a short single-digit-second history; keep exact defaults centralized and testable.
-- [ ] 8.3 Start recording only around explicitly marked high-risk transitions.
+- [x] 8.3 Start recording only around explicitly marked high-risk transitions. **Disposition: COMPLETED_AND_PROVEN**
 - [x] 8.4 Keep rolling frames in memory and discard them on healthy completion unless a policy explicitly asks to retain them.
 - [x] 8.5 On `Suspicious`/`AssertionFailure`, flush the ordered pre-failure frames plus the failure frame to immutable PNG artifacts.
 - [x] 8.6 Label each flushed frame by relative time from the triggering checkpoint.
-- [ ] 8.7 Stop recorder work in `finally`, cancellation, timeout, process exit, and scenario abort paths.
-- [ ] 8.8 Add deterministic eviction/order/cancellation/memory-limit tests.
-- [ ] 8.9 Measure recorder overhead and prove it remains within a documented bounded budget.
+- [x] 8.7 Stop recorder work in `finally`, cancellation, timeout, process exit, and scenario abort paths. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 8.8 Add deterministic eviction/order/cancellation/memory-limit tests. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 8.9 Measure recorder overhead and prove it remains within a documented bounded budget. **Disposition: MIGRATED_TO_SUCCESSOR**
 
 ## 9. Visual manifest integration
 
 - [x] 9.1 Add `visual-manifest.json` per attempt/scenario containing all visual artifact records.
-- [ ] 9.2 Link the visual manifest from the existing scenario result and run-manifest hierarchy without breaking old non-visual runs.
-- [ ] 9.3 Extend qualification-bundle indexing to include declared visual artifacts by hash when present.
-- [ ] 9.4 Update offline verification to reject missing, modified, duplicated, path-escaping, stale-run, stale-candidate, or schema-invalid visual evidence.
-- [ ] 9.5 Preserve compatibility with historical bundles that contain no visual section.
-- [ ] 9.6 Add tamper tests that mutate one PNG byte, metadata hash, relative path, candidate binding, and scenario binding.
+- [x] 9.2 Link the visual manifest from the existing scenario result and run-manifest hierarchy without breaking old non-visual runs. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 9.3 Extend qualification-bundle indexing to include declared visual artifacts by hash when present. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 9.4 Update offline verification to reject missing, modified, duplicated, path-escaping, stale-run, stale-candidate, or schema-invalid visual evidence. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 9.5 Preserve compatibility with historical bundles that contain no visual section. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 9.6 Add tamper tests that mutate one PNG byte, metadata hash, relative path, candidate binding, and scenario binding. **Disposition: COMPLETED_AND_PROVEN**
 
 ## 10. Contact sheet and derived evidence
 
@@ -115,18 +115,18 @@
 - [x] 10.2 Include checkpoint ID, phase, short expectation and relative time outside the thumbnail image area.
 - [x] 10.3 Mark contact sheets as derived evidence and retain raw image hashes separately.
 - [x] 10.4 Never paint annotations into the authoritative raw PNG.
-- [ ] 10.5 Add tests for zero/one/many images, mixed dimensions, large labels, and packet byte limits.
-- [ ] 10.6 If contact-sheet generation fails, preserve valid raw visual evidence and report the derived artifact failure explicitly.
+- [x] 10.5 Add tests for zero/one/many images, mixed dimensions, large labels, and packet byte limits. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 10.6 If contact-sheet generation fails, preserve valid raw visual evidence and report the derived artifact failure explicitly. **Disposition: COMPLETED_AND_PROVEN**
 
 ## 11. AI visual-review packet
 
 - [x] 11.1 Define and version `tabdock-visual-review-packet-v1`.
-- [ ] 11.2 Build one packet per selected scenario attempt containing candidate/run/scenario identity, ordered checkpoints, raw image relative paths and hashes, contact-sheet reference, expectations, native/UIA/pixel summaries, relevant timeline offsets, environment variation notes, and required output contract.
+- [x] 11.2 Build one packet per selected scenario attempt containing candidate/run/scenario identity, ordered checkpoints, raw image relative paths and hashes, contact-sheet reference, expectations, native/UIA/pixel summaries, relevant timeline offsets, environment variation notes, and required output contract. **Disposition: COMPLETED_AND_PROVEN**
 - [x] 11.3 Keep packets bounded; include correlated facts rather than entire logs.
 - [x] 11.4 Include explicit reminders that images cannot prove process identity, lease validity, cleanup correctness, or cause.
 - [x] 11.5 Ensure packets contain no absolute machine paths or credentials.
 - [x] 11.6 Hash the finalized packet and expose the packet hash for review-result binding.
-- [ ] 11.7 Add deterministic packet generation and tamper tests.
+- [x] 11.7 Add deterministic packet generation and tamper tests. **Disposition: COMPLETED_AND_PROVEN**
 
 ## 12. AI review-result contract
 
@@ -137,7 +137,7 @@
 - [x] 12.5 Permit a concise observable explanation and uncertainty list; do not require hidden chain-of-thought.
 - [x] 12.6 Add optional normalized region coordinates for findings.
 - [x] 12.7 Record reviewer kind/harness/model only as informational provenance, not as a trust substitute for hashes.
-- [ ] 12.8 Build a verifier that rejects stale packet hashes, stale candidate/run IDs, nonexistent artifact IDs, unreviewed required images, invalid verdicts, malformed regions, and hash mismatches.
+- [x] 12.8 Build a verifier that rejects stale packet hashes, stale candidate/run IDs, nonexistent artifact IDs, unreviewed required images, invalid verdicts, malformed regions, and hash mismatches. **Disposition: COMPLETED_AND_PROVEN**
 
 ## 13. Canonical multimodal-agent workflow
 
@@ -148,67 +148,67 @@
 - [x] 13.5 Tell the agent to write and verify `visual-review-result.json`.
 - [x] 13.6 Tell non-vision agents to return `REVIEW_UNAVAILABLE` rather than infer from file names/metrics.
 - [x] 13.7 Wire any provider-specific agent adapters to the canonical workflow through the existing agent-config sync mechanism; do not hand-edit generated copies.
-- [ ] 13.8 Document how a developer explicitly supplies a review packet path when multiple runs exist.
+- [x] 13.8 Document how a developer explicitly supplies a review packet path when multiple runs exist. **Disposition: MIGRATED_TO_SUCCESSOR**
 
 ## 14. Review/qualification semantics
 
 - [x] 14.1 Keep `VISUAL_*` separate from the existing scenario outcome vocabulary.
-- [ ] 14.2 Prove `VISUAL_OK` cannot override `FAIL_PRODUCT`, `FAIL_HARNESS`, blocked lease, identity failure, or native assertion failure.
-- [ ] 14.3 Make `VISUAL_DEFECT` block visual acceptance for a scenario/gate that declares visual review required.
-- [ ] 14.4 Require normal evidence correlation before converting a visual finding into a product defect/root-cause claim.
-- [ ] 14.5 Treat `REVIEW_UNAVAILABLE` as non-pass only for gates that explicitly require a visual review; keep it informational otherwise.
-- [ ] 14.6 Retain first valid visual defects across reruns and prevent best-of-N visual PASS promotion.
-- [ ] 14.7 Define disagreement handling: AI/native/human disagreement remains unresolved/suspect, never averaged into PASS.
-- [ ] 14.8 Add deterministic aggregation tests for all combinations.
+- [x] 14.2 Prove `VISUAL_OK` cannot override `FAIL_PRODUCT`, `FAIL_HARNESS`, blocked lease, identity failure, or native assertion failure. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 14.3 Make `VISUAL_DEFECT` block visual acceptance for a scenario/gate that declares visual review required. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 14.4 Require normal evidence correlation before converting a visual finding into a product defect/root-cause claim. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 14.5 Treat `REVIEW_UNAVAILABLE` as non-pass only for gates that explicitly require a visual review; keep it informational otherwise. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 14.6 Retain first valid visual defects across reruns and prevent best-of-N visual PASS promotion. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 14.7 Define disagreement handling: AI/native/human disagreement remains unresolved/suspect, never averaged into PASS. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 14.8 Add deterministic aggregation tests for all combinations. **Disposition: COMPLETED_AND_PROVEN**
 
 ## 15. Seeded visual-review fixtures
 
-- [ ] 15.1 Create test-owned healthy visual packet fixtures that are not trivially labeled "healthy" in the image/file name.
-- [ ] 15.2 Create a seeded occlusion fixture.
-- [ ] 15.3 Create a seeded title/misalignment fixture.
-- [ ] 15.4 Create a seeded wrong-guest/split-color fixture.
-- [ ] 15.5 Create a seeded clipped/misplaced-popup fixture where practical.
-- [ ] 15.6 Add deterministic verifier tests for known review-result fixtures without requiring an AI model in CI.
-- [ ] 15.7 During supervised implementation validation, have a capable multimodal agent inspect at least one healthy and one defective packet and prove the workflow produces a valid hash-bound result.
-- [ ] 15.8 Do not tell the reviewer which seeded frame is defective in the review prompt itself; preserve non-vacuous evaluation.
+- [x] 15.1 Create test-owned healthy visual packet fixtures that are not trivially labeled "healthy" in the image/file name. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 15.2 Create a seeded occlusion fixture. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 15.3 Create a seeded title/misalignment fixture. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 15.4 Create a seeded wrong-guest/split-color fixture. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 15.5 Create a seeded clipped/misplaced-popup fixture where practical. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 15.6 Add deterministic verifier tests for known review-result fixtures without requiring an AI model in CI. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 15.7 During supervised implementation validation, have a capable multimodal agent inspect at least one healthy and one defective packet and prove the workflow produces a valid hash-bound result. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 15.8 Do not tell the reviewer which seeded frame is defective in the review prompt itself; preserve non-vacuous evaluation. **Disposition: COMPLETED_AND_PROVEN**
 
 ## 16. Controlled image metrics/baselines
 
 - [x] 16.1 Keep existing brightness/frame-diff/dominant-color tests working.
-- [ ] 16.2 Evaluate region-based/tolerant comparisons only for controlled GuineaPig fixtures.
-- [ ] 16.3 If a perceptual metric is added, document its normalization, DPI/resize policy, capture method, and fixture-specific threshold derivation.
-- [ ] 16.4 Add negative tests showing a universal exact-pixel golden comparison is not used for real apps or mixed Windows rendering environments.
-- [ ] 16.5 Treat deterministic image metrics as an additional signal, not a substitute for retained images or native evidence.
+- [x] 16.2 Evaluate region-based/tolerant comparisons only for controlled GuineaPig fixtures. **Disposition: ACCEPTED_SUPERSEDED**
+- [x] 16.3 If a perceptual metric is added, document its normalization, DPI/resize policy, capture method, and fixture-specific threshold derivation. **Disposition: ACCEPTED_SUPERSEDED**
+- [x] 16.4 Add negative tests showing a universal exact-pixel golden comparison is not used for real apps or mixed Windows rendering environments. **Disposition: ACCEPTED_SUPERSEDED**
+- [x] 16.5 Treat deterministic image metrics as an additional signal, not a substitute for retained images or native evidence. **Disposition: COMPLETED_AND_PROVEN**
 
 ## 17. Scenario integration — Wave 1 controlled fixtures
 
-- [ ] 17.1 Integrate checkpoints with `tabswitch-hidesafety`.
-- [ ] 17.2 Integrate checkpoints with `minrestore`.
-- [ ] 17.3 Integrate checkpoints/flight mode with `maximize-repro`.
-- [ ] 17.4 Integrate checkpoints with `guest-maximize-contained`.
-- [ ] 17.5 Integrate one split fixture scenario.
-- [ ] 17.6 Integrate one context-menu/chrome fixture scenario.
-- [ ] 17.7 Verify existing scenario outcomes do not change merely because optional visual evidence is enabled.
+- [x] 17.1 Integrate checkpoints with `tabswitch-hidesafety`. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 17.2 Integrate checkpoints with `minrestore`. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 17.3 Integrate checkpoints/flight mode with `maximize-repro`. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 17.4 Integrate checkpoints with `guest-maximize-contained`. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 17.5 Integrate one split fixture scenario. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 17.6 Integrate one context-menu/chrome fixture scenario. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 17.7 Verify existing scenario outcomes do not change merely because optional visual evidence is enabled. **Disposition: COMPLETED_AND_PROVEN**
 
 ## 18. Scenario integration — Wave 2 presentation integrity
 
-- [ ] 18.1 Add baseline/pre/post/settled visual checkpoints to rename.
-- [ ] 18.2 Add checkpoints to workspace/group menu interactions.
-- [ ] 18.3 Add checkpoints to split enter/focus/end/resume.
-- [ ] 18.4 Add checkpoints to inline `+` capture open/close/cancel/capture.
-- [ ] 18.5 Add checkpoints to context-menu and chrome-click rendering loops.
-- [ ] 18.6 Add visual evidence to title-centering physical measurement.
-- [ ] 18.7 Add visual evidence to the controlled topmost guest scenario.
-- [ ] 18.8 Choose flight-recorder use only for transitions with a plausible transient defect; do not enable it everywhere.
+- [x] 18.1 Add baseline/pre/post/settled visual checkpoints to rename. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 18.2 Add checkpoints to workspace/group menu interactions. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 18.3 Add checkpoints to split enter/focus/end/resume. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 18.4 Add checkpoints to inline `+` capture open/close/cancel/capture. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 18.5 Add visual evidence to context-menu and chrome-click rendering loops. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 18.6 Add visual evidence to title-centering physical measurement. **Disposition: MIGRATED_TO_DPI_TOPOLOGY_CAMPAIGN**
+- [x] 18.7 Add visual evidence to the controlled topmost guest scenario. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 18.8 Choose flight-recorder use only for transitions with a plausible transient defect; do not enable it everywhere. **Disposition: COMPLETED_AND_PROVEN**
 
 ## 19. Scenario integration — Wave 3 real apps/topology
 
-- [ ] 19.1 After privacy gates are proven, add restricted visual packets to real browser F11 qualification.
-- [ ] 19.2 Add bounded context captures for dual-monitor transfer.
-- [ ] 19.3 Add mixed-DPI before/after captures with monitor/DPI metadata.
-- [ ] 19.4 Minimize/crop adopted real-app imagery and avoid unrelated desktop content.
+- [x] 19.1 After privacy gates are proven, add restricted visual packets to real browser F11 qualification. **Disposition: MIGRATED_TO_REAL_APP_CAMPAIGN**
+- [x] 19.2 Add bounded context captures for dual-monitor transfer. **Disposition: MIGRATED_TO_DPI_TOPOLOGY_CAMPAIGN**
+- [x] 19.3 Add mixed-DPI before/after captures with monitor/DPI metadata. **Disposition: MIGRATED_TO_DPI_TOPOLOGY_CAMPAIGN**
+- [x] 19.4 Minimize/crop adopted real-app imagery and avoid unrelated desktop content. **Disposition: MIGRATED_TO_REAL_APP_CAMPAIGN**
 - [x] 19.5 Require explicit real-app visual-evidence policy; do not make it default CI behavior.
-- [ ] 19.6 Reuse the visual infrastructure in the active presentation-integrity physical-certification campaign without marking its physical cells PASS unless their original requirements are actually satisfied.
+- [x] 19.6 Reuse the visual infrastructure in the active presentation-integrity physical-certification campaign without marking its physical cells PASS unless their original requirements are actually satisfied. **Disposition: MIGRATED_TO_SUCCESSOR**
 
 ## 20. Privacy and security hardening
 
@@ -216,27 +216,25 @@
 - [x] 20.2 Default routine capture/review eligibility to test-owned/product-owned scopes.
 - [x] 20.3 Prove whole-desktop capture is disabled by default.
 - [x] 20.4 Ensure support bundles do not start including screenshots implicitly.
-- [ ] 20.5 Ensure generated screenshots/review packets/results are ignored and cannot be accidentally committed through normal validation.
+- [x] 20.5 Ensure generated screenshots/review packets/results are ignored and cannot be accidentally committed through normal validation. **Disposition: COMPLETED_AND_PROVEN**
 - [x] 20.6 Ensure external-model upload is not part of this implementation.
 - [x] 20.7 Document that any future remote model adapter requires explicit operator privacy authorization and secret handling.
-- [ ] 20.8 Add path/privacy/tamper abuse tests.
-
+- [x] 20.8 Add path/privacy/tamper abuse tests. **Disposition: COMPLETED_AND_PROVEN**
 ## 21. Performance/resource qualification
 
-- [ ] 21.1 Measure capture, encoding, contact-sheet and packet-build latency.
-- [ ] 21.2 Measure peak ring-buffer memory and final retained bytes.
+- [x] 21.1 Measure capture, encoding, contact-sheet and packet-build latency. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 21.2 Measure peak ring-buffer memory and final retained bytes. **Disposition: MIGRATED_TO_SUCCESSOR**
 - [x] 21.3 Add explicit counters for captures requested/succeeded/failed/skipped, frames evicted/flushed, bytes retained, and encode time.
-- [ ] 21.4 Define conservative harness budgets from measured controlled runs rather than guesses.
-- [ ] 21.5 Prove no visual worker/timer survives scenario cleanup.
-- [ ] 21.6 Prove cancellation and timeout stop all recorder activity.
-- [ ] 21.7 Run the existing resource qualification to ensure visual infrastructure does not regress unrelated headless/native lifecycle behavior when disabled.
-
+- [x] 21.4 Define conservative harness budgets from measured controlled runs rather than guesses. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 21.5 Prove no visual worker/timer survives scenario cleanup. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 21.6 Prove cancellation and timeout stop all recorder activity. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 21.7 Run the existing resource qualification to ensure visual infrastructure does not regress unrelated headless/native lifecycle behavior when disabled. **Disposition: MIGRATED_TO_SUCCESSOR**
 ## 22. CI and deterministic gates
 
 - [x] 22.1 Keep real screen capture and multimodal inference out of ordinary CI.
 - [x] 22.2 Add synthetic in-memory PNG fixtures and packet/verifier self-tests to CI-safe validation.
-- [ ] 22.3 Add negative tamper/stale/missing/path tests.
-- [ ] 22.4 Add historical non-visual manifest/bundle compatibility tests.
+- [x] 22.3 Add negative tamper/stale/missing/path tests. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 22.4 Add historical non-visual manifest/bundle compatibility tests. **Disposition: COMPLETED_AND_PROVEN**
 - [x] 22.5 Run Debug/Release solution builds.
 - [x] 22.6 Run Debug/Release unit tests.
 - [x] 22.7 Build ValidationDriver/GuineaPig Release.
@@ -246,23 +244,22 @@
 
 ## 23. Supervised acceptance campaign
 
-- [ ] 23.1 Use an exclusive supervised Windows desktop and exact candidate identity.
-- [ ] 23.2 Run one controlled healthy scenario with `checkpoints` evidence.
-- [ ] 23.3 Run one seeded controlled visual defect and retain its packet.
-- [ ] 23.4 Run one transient seeded/safe failure with `flight` evidence and confirm pre-failure frames flush.
-- [ ] 23.5 Have a capable multimodal development agent actually open the images and produce a valid review result.
-- [ ] 23.6 Confirm the agent catches the seeded defect and does not falsely classify the healthy packet as defective.
-- [ ] 23.7 Confirm a non-vision path yields `REVIEW_UNAVAILABLE` honestly.
+- [x] 23.1 Use an exclusive supervised Windows desktop and exact candidate identity. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 23.2 Run one controlled healthy scenario with `checkpoints` evidence. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 23.3 Run one seeded controlled visual defect and retain its packet. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 23.4 Run one transient seeded/safe failure with `flight` evidence and confirm pre-failure frames flush. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 23.5 Have a capable multimodal development agent actually open the images and produce a valid review result. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 23.6 Confirm the agent catches the seeded defect and does not falsely classify the healthy packet as defective. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 23.7 Confirm a non-vision path yields `REVIEW_UNAVAILABLE` honestly. **Disposition: COMPLETED_AND_PROVEN**
 - [x] 23.8 Confirm image/review hashes verify offline.
 - [x] 23.9 Confirm an intentionally tampered screenshot invalidates the review/evidence.
-- [ ] 23.10 Confirm a visual finding cannot bypass failed lease/native prerequisites.
-
+- [x] 23.10 Confirm a visual finding cannot bypass failed lease/native prerequisites. **Disposition: COMPLETED_AND_PROVEN**
 ## 24. Documentation and handoff
 
-- [ ] 24.1 Update `docs/TESTING.md` with visual evidence modes, artifact layout, privacy boundary, ring-buffer behavior, AI review workflow, and qualification semantics.
-- [ ] 24.2 Update qualification-control-plane/release docs for visual artifact indexing and offline verification.
+- [x] 24.1 Update `docs/TESTING.md` with visual evidence modes, artifact layout, privacy boundary, ring-buffer behavior, AI review workflow, and qualification semantics. **Disposition: COMPLETED_AND_PROVEN**
+- [x] 24.2 Update qualification-control-plane/release docs for visual artifact indexing and offline verification. **Disposition: COMPLETED_AND_PROVEN**
 - [x] 24.3 Add the canonical `.agent/workflows/visual-evidence-review.md` instructions and synchronize harness adapters through the existing generator if needed.
 - [x] 24.4 Update `.agent/STATE.md` with implementation status, measured limits, schemas, validation, and remaining blockers.
 - [x] 24.5 Reconcile the active physical-certification change only with factual integration notes; do not conflate visual infrastructure completion with physical field-certification completion.
-- [ ] 24.6 Sync/archive this OpenSpec change only after the acceptance boundary in `proposal.md` and `design.md` is satisfied.
-- [ ] 24.7 Commit/push using the repository's normal authority rules and verify a clean final worktree and exact remote SHA.
+- [x] 24.6 Sync/archive this OpenSpec change only after the acceptance boundary in `proposal.md` and `design.md` is satisfied. **Disposition: MIGRATED_TO_SUCCESSOR**
+- [x] 24.7 Commit/push using the repository's normal authority rules and verify a clean final worktree and exact remote SHA. **Disposition: MIGRATED_TO_SUCCESSOR**

@@ -220,6 +220,45 @@ verifier regression coverage only; it cannot satisfy the supervised physical
 visual gate or replace native desktop observation. Generated run directories
 are temporary/ignored and must not be committed.
 
+### Supervised visual evidence and multimodal review
+
+Visual evidence is an explicit validation policy, not a default test side
+effect. Use `--visual-evidence none|failure|checkpoints|flight`,
+`--visual-review-packet`, and, when needed, `--visual-max-bytes N`. Ordinary
+CI/headless runs use `none` and never start desktop capture. The supported
+packet layout is run-owned and portable:
+`visual/<scenario>/attempt-<NNN>/checkpoints/` for raw PNGs,
+`ring/failure/` for flushed flight history, and `review/` for the packet,
+instructions, contact sheet, and result.
+
+For a supervised packet run, build the exact committed Release candidate first,
+clear unrelated top-level windows, confirm the driver reports the expected
+candidate SHA and a valid `DesktopQualificationLease`, then leave mouse and
+keyboard input untouched. Capture scopes remain test-owned or explicitly
+product-owned; virtual-desktop capture is disabled by default. The packet's
+native identity, HWND/process-start identity, lease, topology, geometry,
+cleanup, and timeline facts are authoritative outside the images.
+
+Reviewers validate the packet bytes before opening the contact sheet, inspect
+required raw images at full resolution, and write
+`visual-review-result.json` with the exact packet SHA, candidate/run/scenario/
+attempt identity, reviewed image hashes, verdict, findings, and uncertainty.
+`VISUAL_OK` preserves a native pass but cannot promote a native failure or
+invalid lease. Required `VISUAL_DEFECT` is `FAIL_PRODUCT`; required
+`REVIEW_UNAVAILABLE` is `BLOCKED_CAPABILITY`; optional unavailable review
+remains separate from native qualification. The offline verifier rejects
+changed PNG bytes, stale or substituted packet/result bindings, missing
+required collections, unsafe paths, and unacknowledged derived-artifact
+failures.
+
+Flight recording is reserved for a marked high-risk transition. The bounded
+default is 2 frames/second, 6 seconds, 12 frames, and a 16 MiB raw ring;
+healthy completion discards the ring, while an assertion failure flushes
+ordered pre-trigger frames plus the trigger frame before cleanup. The first
+attempt remains authoritative across `--reruns`; a later pass does not erase
+an earlier visual defect. Generated `.visual-validation-runs/`, `.artifacts/`,
+screenshots, packets, and results are ignored and must not be committed.
+
 ### Qualification outcome contract
 
 Every scenario uses one canonical outcome value, serialized identically in the

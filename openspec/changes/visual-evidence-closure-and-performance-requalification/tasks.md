@@ -17,12 +17,12 @@
 
 ## 3. Milestone A — supervised visual acceptance
 
-- [ ] 3.1 Build one exact clean candidate and run a healthy controlled visual checkpoint packet on an exclusive supervised desktop with lease, identity, topology, and candidate evidence.
-- [ ] 3.2 Produce one test-owned seeded visual-defect packet without defect-disclosing filenames/prompts; retain the first-attempt raw images and have a capable multimodal agent identify the defect.
-- [ ] 3.3 Produce one transient/flight-recorder failure packet; verify ordered pre-failure frames, trigger-frame retention, bounded history, and cleanup after flush.
-- [ ] 3.4 Have the capable reviewer emit valid hash-bound results for the healthy, defective, and flight packets; prove healthy imagery is not falsely flagged and the seeded defect is detected.
-- [ ] 3.5 Run the non-vision path and record `REVIEW_UNAVAILABLE`; verify required-review gates remain non-pass while optional native qualification stays independently classified.
-- [ ] 3.6 Mutate screenshot bytes, packet/result hashes, paths, candidate/scenario bindings, and native lease evidence; prove offline verification rejects each mutation and visual evidence cannot override native failure.
+- [x] 3.1 Build one exact clean candidate and run a healthy controlled visual checkpoint packet on an exclusive supervised desktop with lease, identity, topology, and candidate evidence. **Proven by b19e33e exact candidate, run `96000be6-32c5-4fd4-860f-fc31bca5cae6`, native `PASS`, lease `true`, packet SHA `daf8a966725e0fdd429d13e495fcb9d26c0139b8d9f2ec1430fb0901dea75633`.**
+- [x] 3.2 Produce one test-owned seeded visual-defect packet without defect-disclosing filenames/prompts; retain the first-attempt raw images and have a capable multimodal agent identify the defect. **Proven by run `c41e4302-b336-40f3-9006-9b500da8d010`; attempt 1 retained the red seeded guest and was reviewed `VISUAL_DEFECT`.**
+- [x] 3.3 Produce one transient/flight-recorder failure packet; verify ordered pre-failure frames, trigger-frame retention, bounded history, and cleanup after flush. **Proven by run `3071f78b-7988-4c35-95e0-b4c96dd23a52`; three failure artifacts, two pre-trigger frames, ring count zero, native/lease `PASS`/`true`.**
+- [x] 3.4 Have the capable reviewer emit valid hash-bound results for the healthy, defective, and flight packets; prove healthy imagery is not falsely flagged and the seeded defect is detected. **Proven by strict verifier: healthy `VISUAL_OK`, defect attempt 1 `VISUAL_DEFECT`, rerun `VISUAL_OK`, flight `VISUAL_OK`; all exact b19 packet/result bindings validate.**
+- [x] 3.5 Run the non-vision path and record `REVIEW_UNAVAILABLE`; verify required-review gates remain non-pass while optional native qualification stays independently classified. **Proven by run `d07e2795-9f05-4cbd-91ca-b8dd9d628e1b`, required gate `BLOCKED_CAPABILITY`, empty review collections, and native packet `PASS`/lease `true`.**
+- [x] 3.6 Mutate screenshot bytes, packet/result hashes, paths, candidate/scenario bindings, and native lease evidence; prove offline verification rejects each mutation and visual evidence cannot override native failure. **Exact b19 screenshot tamper was rejected with hash mismatches; gate reflection preserved `FAIL_HARNESS`/`BLOCKED_SUPERVISED` under `VISUAL_OK` and rejected required defect/unavailable.**
 - [ ] 3.7 Execute the predecessor change's remaining acceptance tasks, preserve first-attempt visual defects across reruns, reconcile intended files into Git, synchronize canonical specs, and archive the predecessor only after its acceptance boundary is satisfied.
 
 ## 4. Milestone B — measurement harness and data collection

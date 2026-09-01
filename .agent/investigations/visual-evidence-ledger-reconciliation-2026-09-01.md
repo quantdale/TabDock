@@ -359,18 +359,22 @@ not implementation files and must not be used as proof of visual acceptance.
 | 24.6 | BLOCKED_SUPERVISED | Archival is prohibited until the remaining implementation/acceptance obligations and exact provenance boundary are satisfied. |
 | 24.7 | BLOCKED_SUPERVISED | The required clean commit/push cannot occur while the intended visual implementation and generated evidence remain dirty and supervised acceptance is absent; no staging or commit was performed. |
 
-## Reconciled count
+## Pre-disposition snapshot
+
+The following counts and IDs are the historical state recorded before the
+Milestone A disposition pass; they are retained for auditability and are not
+the final status of the predecessor ledger.
 
 - Canonical predecessor task total: **178**.
-- `COMPLETED_AND_PROVEN` / checked after reconciliation: **93**.
-- Unchecked: **85**.
+- `COMPLETED_AND_PROVEN` / checked before disposition: **93**.
+- Unchecked before disposition: **85**.
   - `IMPLEMENTED_BUT_NOT_ACCEPTED`: 35.
   - `NOT_IMPLEMENTED`: 38.
   - `SUPERSEDED`: 3.
   - `BLOCKED_SUPERVISED`: 7.
   - `BLOCKED_CAPABILITY`: 2.
 
-The exact unchecked task IDs are:
+The exact unchecked task IDs before disposition were:
 
 - Implemented but not accepted: `4.2`, `4.3`, `4.8`, `6.4`, `7.3`, `7.5`, `8.7`, `8.8`, `9.2`, `9.3`, `9.4`, `9.5`, `9.6`, `10.5`, `10.6`, `11.2`, `11.7`, `12.8`, `13.8`, `14.2`, `14.3`, `14.4`, `14.5`, `14.6`, `14.7`, `15.6`, `16.5`, `20.8`, `21.2`, `21.5`, `21.6`, `22.3`, `22.4`, `23.7`, `23.10`.
 - Not implemented: `4.4`, `7.1`, `7.2`, `8.3`, `8.9`, `14.8`, `15.1`–`15.5`, `15.8`, `17.1`–`17.7`, `18.1`–`18.8`, `19.1`–`19.4`, `19.6`, `20.5`, `21.1`, `21.4`, `21.7`, `24.1`, `24.2`.
@@ -390,5 +394,165 @@ mapping artifact exists that identifies which 84 of 89 rows correspond to the
 178 canonical rows. The denominator therefore excluded or collapsed the
 orientation, integration, privacy, acceptance, documentation, archive, and
 push obligations. It must not be translated into a canonical checkbox count;
-this reconciliation checks only the 93 rows with direct current evidence and
-leaves the other 85 rows visibly unchecked.
+this reconciliation originally checked only the 93 rows with direct current
+evidence and left the other 85 rows visibly unchecked; the final disposition
+table below records the explicit treatment of every one of those 85 rows.
+
+## Final row-level dispositions
+
+The following table is the disposition ledger for all 85 rows that were
+unchecked in the snapshot above. A disposition closes the predecessor row as
+an auditable planning obligation; it does not turn a migrated or superseded
+obligation into current product evidence.
+
+Evidence keys:
+
+- `A-run`: exact Milestone A Release qualification from candidate
+  `b19e33e926d751c5be26a4684265a5cd368cef34`, executable SHA-256
+  `b6418a949c08ac3d50e6460aaeb6ce3d01df545b95553efc4d98ca1a9cb031c7`,
+  native ABI PASS, and a valid supervised desktop lease.
+- `A-healthy`: exact run
+  `96000be6-32c5-4fd4-860f-fc31bca5cae6`, packet SHA
+  `daf8a966725e0fdd429d13e495fcb9d26c0139b8d9f2ec1430fb0901dea75633`,
+  with five reviewed guest-window images.
+- `A-defect`: exact run
+  `c41e4302-b336-40f3-9006-9b500da8d010`; attempt 1 packet SHA
+  `f76ea3a8382bb23d792ac0065e48c094cd23a3a54d45502c0540417ca8a4d964`
+  reviewed as `VISUAL_DEFECT`, and rerun packet SHA
+  `688f052e1523fde529e632dd170c4e2fc5ac5e9d53ddeb32654be63785741958`
+  reviewed as `VISUAL_OK`.
+- `A-flight`: exact run
+  `3071f78b-7988-4c35-95e0-b4c96dd23a52`, packet SHA
+  `2b54a390acd9d2b621f2a9f4ef7c2c2de42d89e53100d15f9264fc13d871681c`,
+  with the explicit failure checkpoint, two pre-trigger frames, three flushed
+  failure artifacts, and an empty stopped ring.
+- `A-unavailable`: exact run
+  `d07e2795-9f05-4cbd-91ca-b8dd9d628e1b`, packet SHA
+  `442ebd7e626500fd68bbf85bd35cc549a2b37d78eb8a51803fcc1ab4ba6f43f2`,
+  with an explicit `REVIEW_UNAVAILABLE` result, empty image/finding
+  collections, and a non-empty capability note.
+- `A-review`: the healthy, seeded-defect, and flight contact sheets plus all
+  required raw PNGs were opened at full resolution; the reviewer wrote exact
+  hash-bound results and did not infer identity, lease, cleanup, or cause from
+  pixels.
+- `A-tamper`: a byte-mutated exact-candidate PNG was rejected by offline
+  verification with visual evidence hash mismatches.
+- `A-gate`: 35/35 focused visual unit tests pass, including packet/verifier,
+  tamper, review-unavailable, first-defect, and native/lease precedence cases;
+  the reflection gate kept native failures unchanged and mapped required
+  visual defect/unavailable outcomes to non-pass.
+- `A-packet`: exact scenario/run/visual-manifest/result hierarchy and packet
+  identity/hash bindings were verified for the supervised packets.
+- `A-ci`: ordinary CI policy remains visual-disabled, and the exact candidate
+  qualification run passed strict OpenSpec validation 38/38.
+- `DOC`: `docs/TESTING.md` and
+  `docs/release/qualification-control-plane.md` now document the visual
+  modes, packet/index layout, privacy boundary, flight behavior, review
+  contract, and offline hash verification.
+- `SUCCESSOR`: the active
+  `visual-evidence-closure-and-performance-requalification` change owns the
+  explicitly remaining integration, measured-budget, cleanup, and final
+  closure work; this is a destination, not evidence that those tasks are
+  complete.
+- `DPI`: the future DPI/topology campaign owns mixed-DPI, negative-coordinate,
+  above-origin, and multi-monitor acceptance that Milestone A did not run.
+- `REAL`: the future real-app campaign owns restricted browser/adopted-app
+  imagery and privacy qualification.
+- `SUPERSEDED`: the design intentionally excludes universal perceptual/golden
+  image metrics; retained images and native facts remain authoritative.
+
+| Row | Prior classification | Final disposition | Evidence / owner |
+| --- | --- | --- | --- |
+| 4.2 | IMPLEMENTED_BUT_NOT_ACCEPTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: container end-to-end capture remains outside A. |
+| 4.3 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-healthy`, `A-defect`: exact guest packets carry strong identity metadata. |
+| 4.4 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: dedicated owned-popup admission remains open. |
+| 4.8 | IMPLEMENTED_BUT_NOT_ACCEPTED | MIGRATED_TO_DPI_TOPOLOGY_CAMPAIGN | `DPI`: full geometry/DPI matrix remains unrun. |
+| 6.4 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-ci`: ordinary CI uses disabled visual policy; strict qualification passed. |
+| 7.1 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: automatic assertion-hook capture remains open. |
+| 7.2 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: recursive assertion-capture guard remains open. |
+| 7.3 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-flight`: failure checkpoint and trigger timeline are retained. |
+| 7.5 | IMPLEMENTED_BUT_NOT_ACCEPTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: thrown/timeout automatic-capture cleanup remains open. |
+| 8.3 | NOT_IMPLEMENTED | COMPLETED_AND_PROVEN | `A-flight`: recording is marked only around `maximize-repro` high-risk transition. |
+| 8.7 | IMPLEMENTED_BUT_NOT_ACCEPTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: cancellation/timeout/process-exit/abort proof remains open. |
+| 8.8 | IMPLEMENTED_BUT_NOT_ACCEPTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: full cancellation and memory-limit matrix remains open. |
+| 8.9 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: measured overhead budget remains an active qualification task. |
+| 9.2 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-packet`: exact visual links are present in the scenario/run hierarchy. |
+| 9.3 | IMPLEMENTED_BUT_NOT_ACCEPTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: final bundle-index qualification remains in successor closure. |
+| 9.4 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-packet`, `A-tamper`, `A-gate`: offline binding and mutation failures are exercised. |
+| 9.5 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-ci`: historical no-visual compatibility remains a separate accepted path. |
+| 9.6 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-tamper`, `A-gate`: image, metadata, path, candidate, and scenario binding checks are covered. |
+| 10.5 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-gate`: deterministic contact-sheet/packet boundary tests pass. |
+| 10.6 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-gate`: raw evidence survives derived contact-sheet failure with explicit failure data. |
+| 11.2 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-packet`: exact packets include identity, checkpoints, images, expectations, facts, timeline, notes, and contract. |
+| 11.7 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-packet`, `A-tamper`: deterministic packet and tamper verification passes. |
+| 12.8 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-gate`, `A-tamper`: stale identity, required review, artifact, verdict, and byte checks reject invalid evidence. |
+| 13.8 | IMPLEMENTED_BUT_NOT_ACCEPTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: operational multi-run packet selection remains open. |
+| 14.2 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-gate`: visual OK never promotes native product/harness/environment/lease failures. |
+| 14.3 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-gate`, `A-defect`: required visual defect maps to non-pass. |
+| 14.4 | IMPLEMENTED_BUT_NOT_ACCEPTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: correlation-before-root-cause remains a workflow/process obligation. |
+| 14.5 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-gate`, `A-unavailable`: required and optional unavailable semantics are distinct. |
+| 14.6 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-defect`, `A-gate`: first visual defect is retained across rerun and cannot be best-of-N promoted. |
+| 14.7 | IMPLEMENTED_BUT_NOT_ACCEPTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: explicit AI/native/human disagreement state remains open. |
+| 14.8 | NOT_IMPLEMENTED | COMPLETED_AND_PROVEN | `A-gate`: deterministic aggregation combinations pass. |
+| 15.1 | NOT_IMPLEMENTED | COMPLETED_AND_PROVEN | `A-healthy`: test-owned healthy images use neutral artifact names. |
+| 15.2 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: seeded occlusion fixture remains open. |
+| 15.3 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: seeded title/misalignment fixture remains open. |
+| 15.4 | NOT_IMPLEMENTED | COMPLETED_AND_PROVEN | `A-defect`: controlled wrong-guest/split-color seed is detected. |
+| 15.5 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: seeded clipped/misplaced-popup fixture remains open. |
+| 15.6 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-gate`: known-result verifier tests run without model inference. |
+| 15.7 | BLOCKED_SUPERVISED | COMPLETED_AND_PROVEN | `A-review`: capable multimodal review produced valid healthy/defect results. |
+| 15.8 | NOT_IMPLEMENTED | COMPLETED_AND_PROVEN | `A-review`: review instructions state expectations but do not identify a defective frame. |
+| 16.2 | SUPERSEDED | ACCEPTED_SUPERSEDED | `SUPERSEDED`: no tolerant region metric is part of the accepted design. |
+| 16.3 | SUPERSEDED | ACCEPTED_SUPERSEDED | `SUPERSEDED`: no perceptual metric or guessed threshold was added. |
+| 16.4 | SUPERSEDED | ACCEPTED_SUPERSEDED | `SUPERSEDED`: universal exact-pixel golden comparison remains excluded. |
+| 16.5 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-gate`, `A-packet`: image metrics remain supplemental to retained/native evidence. |
+| 17.1 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: `tabswitch-hidesafety` integration remains open. |
+| 17.2 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: `minrestore` integration remains open. |
+| 17.3 | NOT_IMPLEMENTED | COMPLETED_AND_PROVEN | `A-flight`: `maximize-repro` uses checkpoints and bounded flight evidence. |
+| 17.4 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: `guest-maximize-contained` integration remains open. |
+| 17.5 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: split fixture integration remains open. |
+| 17.6 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: context-menu/chrome fixture integration remains open. |
+| 17.7 | NOT_IMPLEMENTED | COMPLETED_AND_PROVEN | `A-gate`: optional visual outcomes preserve native qualification. |
+| 18.1 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: rename checkpoints remain open. |
+| 18.2 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: workspace/group menu checkpoints remain open. |
+| 18.3 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: split lifecycle checkpoints remain open. |
+| 18.4 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: inline capture checkpoints remain open. |
+| 18.5 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: context-menu/chrome rendering checkpoints remain open. |
+| 18.6 | NOT_IMPLEMENTED | MIGRATED_TO_DPI_TOPOLOGY_CAMPAIGN | `DPI`: title-centering evidence requires physical topology coverage. |
+| 18.7 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: controlled topmost guest integration remains open. |
+| 18.8 | NOT_IMPLEMENTED | COMPLETED_AND_PROVEN | `A-flight`: flight mode is limited to the plausible transient maximize transition. |
+| 19.1 | NOT_IMPLEMENTED | MIGRATED_TO_REAL_APP_CAMPAIGN | `REAL`: restricted browser F11 evidence requires a separate privacy campaign. |
+| 19.2 | NOT_IMPLEMENTED | MIGRATED_TO_DPI_TOPOLOGY_CAMPAIGN | `DPI`: dual-monitor transfer remains unrun. |
+| 19.3 | NOT_IMPLEMENTED | MIGRATED_TO_DPI_TOPOLOGY_CAMPAIGN | `DPI`: mixed-DPI before/after capture remains unrun. |
+| 19.4 | NOT_IMPLEMENTED | MIGRATED_TO_REAL_APP_CAMPAIGN | `REAL`: adopted real-app crop/minimization remains unrun. |
+| 19.6 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: integration with physical certification remains a separate factual handoff. |
+| 20.5 | NOT_IMPLEMENTED | COMPLETED_AND_PROVEN | `DOC`, `A-ci`: generated visual roots are ignored and check-ignore confirms the rules. |
+| 20.8 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-tamper`, `A-gate`: path/privacy/hash abuse checks pass. |
+| 21.1 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: combined measured latency report remains open. |
+| 21.2 | IMPLEMENTED_BUT_NOT_ACCEPTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: repeated peak-memory/resource qualification remains open. |
+| 21.4 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: measured conservative budgets remain open. |
+| 21.5 | IMPLEMENTED_BUT_NOT_ACCEPTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: no-worker-after-cleanup proof remains open. |
+| 21.6 | IMPLEMENTED_BUT_NOT_ACCEPTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: cancellation/timeout lifecycle proof remains open. |
+| 21.7 | NOT_IMPLEMENTED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: disabled visual resource qualification remains open. |
+| 22.3 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-tamper`, `A-gate`: deterministic negative tamper/stale/missing/path tests pass. |
+| 22.4 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-ci`, `A-gate`: historical non-visual compatibility is retained and tested. |
+| 23.1 | BLOCKED_SUPERVISED | COMPLETED_AND_PROVEN | `A-run`: exact b19 candidate ran on an exclusive cleared desktop with a valid lease. |
+| 23.2 | BLOCKED_SUPERVISED | COMPLETED_AND_PROVEN | `A-healthy`: exact checkpoint packet was reviewed and verified. |
+| 23.3 | BLOCKED_SUPERVISED | COMPLETED_AND_PROVEN | `A-defect`: exact seeded defect packet is retained and hash-bound. |
+| 23.4 | BLOCKED_SUPERVISED | COMPLETED_AND_PROVEN | `A-flight`: exact transient failure flush retained ordered pre-trigger history. |
+| 23.5 | BLOCKED_CAPABILITY | COMPLETED_AND_PROVEN | `A-review`: capable multimodal inspection produced valid hash-bound results. |
+| 23.6 | BLOCKED_CAPABILITY | COMPLETED_AND_PROVEN | `A-review`, `A-defect`: seeded defect caught and healthy packet remained accepted. |
+| 23.7 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-unavailable`: non-vision result is explicit, empty, and capability-noted. |
+| 23.10 | IMPLEMENTED_BUT_NOT_ACCEPTED | COMPLETED_AND_PROVEN | `A-gate`: native/lease precedence reflection cases remain non-pass under visual OK. |
+| 24.1 | NOT_IMPLEMENTED | COMPLETED_AND_PROVEN | `DOC`: testing guide now covers the complete visual packet/review contract. |
+| 24.2 | NOT_IMPLEMENTED | COMPLETED_AND_PROVEN | `DOC`: release control-plane guide now covers visual indexing/offline verification. |
+| 24.6 | BLOCKED_SUPERVISED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: successor task 3.7/E6.6 owns sync/archive after this disposition boundary. |
+| 24.7 | BLOCKED_SUPERVISED | MIGRATED_TO_SUCCESSOR | `SUCCESSOR`: final metadata, push, and origin-parity proof remain final closure work. |
+
+Disposition totals: **85/85 rows explicitly dispositioned**, with
+**41 `COMPLETED_AND_PROVEN`**, **3 `ACCEPTED_SUPERSEDED`**, **35
+`MIGRATED_TO_SUCCESSOR`**, **4 `MIGRATED_TO_DPI_TOPOLOGY_CAMPAIGN`**, and
+**2 `MIGRATED_TO_REAL_APP_CAMPAIGN`**. No predecessor row remains without one
+of the seven allowed dispositions. The active successor remains open for its
+own remaining tasks; this table is not a claim that those migrated tasks are
+complete.

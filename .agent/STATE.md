@@ -16,25 +16,28 @@ timeline, cleanup, and release-gate semantics; do not change production
 TabDock behavior.
 
 **Status:** the predecessor `2026-08-31-visual-evidence-ai-review` campaign
-remains active and unarchived. Its canonical ledger contains **178** rows:
-**93** are checked as `COMPLETED_AND_PROVEN` after the 2026-09-01
-reconciliation, and **85** remain unchecked with one explicit classification
-each. The complete row-level evidence is in
+remains active and unarchived at this boundary. Its canonical ledger contains
+**178** unique rows: **93** were already directly proven, and the remaining
+**85** now each have one explicit final disposition recorded in
 `.agent/investigations/visual-evidence-ledger-reconciliation-2026-09-01.md`.
-Those 85 classifications are not yet the required final dispositions; every
-row still needs exactly one allowed disposition before predecessor archive.
-The historical 84/89 implementation roll-up was not a mapping to the
-canonical rows and is not a valid checkbox count. Remaining implementation,
-acceptance, supervised, capability, documentation, archive, and provenance
-obligations remain open; the prior presentation-integrity physical
-qualification remains historical evidence and is not relabeled.
-Foundation inventory, implementation status, and the Release candidate
-correction are recorded in
+The predecessor task file has no unchecked or undispositioned row. Final
+disposition totals are **41 `COMPLETED_AND_PROVEN`**, **3
+`ACCEPTED_SUPERSEDED`**, **35 `MIGRATED_TO_SUCCESSOR`**, **4
+`MIGRATED_TO_DPI_TOPOLOGY_CAMPAIGN`**, and **2
+`MIGRATED_TO_REAL_APP_CAMPAIGN`**. Migrated rows remain obligations of their
+named destination; they are not represented as completed implementation.
+The predecessor archive boundary is still pending the OpenSpec sync/archive
+operation. The historical 84/89 implementation roll-up was not a mapping to
+the canonical rows and is not a valid checkbox count. The prior
+presentation-integrity physical qualification remains historical evidence and
+is not relabeled.
+Foundation inventory, implementation status, exact pre-final candidate
+correction, and the row-level disposition map are recorded in
 `.agent/investigations/visual-evidence-implementation-2026-09-01.md`,
 `.agent/investigations/visual-evidence-ledger-reconciliation-2026-09-01.md`,
 and `.agent/investigations/release-semantics-correction-2026-09-01.md`.
-No archive, final v1.1 candidate, final hash, push, or clean-tree claim is
-made by this status update.
+No predecessor archive, final v1.1 candidate, final hash, push, or clean-tree
+claim is made by this status update.
 
 ### Prior campaign evidence
 
@@ -129,33 +132,33 @@ recorded candidate identities.
 
 The visual-evidence and multimodal AI-review change is active under
 `openspec/changes/2026-08-31-visual-evidence-ai-review/`. Its canonical source
-checklist is the reconciled 178-row ledger: 93 proven rows are checked and 85
-remain explicitly classified and unchecked pending final row-level
-disposition. The implementation checkpoint, reconciliation matrix, and
-Release-semantics correction are in
+checklist has **178/178** checked rows: 93 direct evidence rows plus 85 rows
+closed by the explicit disposition ledger. The implementation checkpoint,
+reconciliation matrix, Release-semantics correction, and exact Milestone A
+record are in
 `.agent/investigations/visual-evidence-implementation-2026-09-01.md`,
 `.agent/investigations/visual-evidence-ledger-reconciliation-2026-09-01.md`,
-and `.agent/investigations/release-semantics-correction-2026-09-01.md`.
-Current deterministic evidence includes 57/57 visual-filter unit tests,
-789/789 total unit tests, 179/179 PowerShell 7 release-tooling tests, and
-successful Debug/Release solution builds and ValidationDriver deterministic
-self-tests (153/153). This is retained pre-final qualification evidence, not
-final v1.1 closure. The successor Milestone A deterministic closure is
-implemented: exact packet-byte hashing, strict current collections,
-derived-failure propagation, scenario/run hierarchy links, and offline bundle
-verification. Milestone B is implemented: paired
-disabled/checkpoints/flight measurement harness, portable report with
-per-cell median/p95/max, conservative budget derivation (25% margin,
-provenance), disabled/enabled/paired resource gates, and healthy-discard/flush
-lifecycle proof. Milestone E visual-manifest/packet/budget integration into
-the qualification hierarchy and bundle index is implemented with historical
-non-visual compatibility. Successor E tasks 6.2–6.5 retain the `ef9fe35`
-execution evidence only as pre-final evidence; their final rerun is pending.
-In particular, 6.3 requires a fresh exact-candidate build after supervised A,
-all 85 predecessor dispositions, predecessor archive if justified, and every
-final metadata/spec commit. Supervised healthy/defect/flight visual acceptance
-(A §3) and predecessor disposition are still open. The canonical workflow is
-`.agent/workflows/visual-evidence-review.md`.
+`.agent/investigations/release-semantics-correction-2026-09-01.md`, and this
+state file.
+Earlier deterministic records include 57/57 visual-filter tests, 789/789
+total unit tests, 179/179 PowerShell release-tooling tests, and successful
+Debug/Release solution builds and ValidationDriver deterministic self-tests
+(153/153). Those are retained pre-final qualification evidence. The exact
+b19 Milestone A candidate adds a current focused visual suite of 35/35, exact
+healthy/defect/flight/unavailable packets, capable multimodal review, tamper
+rejection, and native/lease precedence proof. No A packet is claimed for a
+later SHA.
+The successor deterministic closure is implemented: exact packet-byte hashing,
+strict current collections, derived-failure propagation, scenario/run hierarchy
+links, offline bundle verification, and the paired visual measurement/resource
+gates are present. Successor tasks 3.1–3.6 are checked from exact b19 evidence;
+3.7 remains the owner of predecessor sync/archive and final handoff. Successor
+E tasks 6.2–6.5 retain the `ef9fe35` execution evidence only as pre-final
+evidence. Their final rerun remains pending until the predecessor archive and
+all final metadata/spec commits settle. Task 6.3 MUST use a fresh final
+v1.1 build from the resulting committed SHA; neither `ef9fe35` nor
+`7f4b9df` is the final binary claim.
+The canonical workflow is `.agent/workflows/visual-evidence-review.md`.
 
 ### Milestone A attempt — supervised desktop preflight
 
@@ -177,27 +180,81 @@ defect, flight, or review claim is made from this attempt. A rerun requires the
 operator to clear/minimize unrelated desktop windows and leave the desktop
 untouched during each supervised scenario.
 
+### Milestone A — exact supervised qualification
+
+Milestone A was completed on the exact current pre-final candidate
+`b19e33e926d751c5be26a4684265a5cd368cef34`. The Release qualification build
+passed with project version `1.0.0`, embedded source identity matching that
+SHA, and executable SHA-256
+`b6418a949c08ac3d50e6460aaeb6ce3d01df545b95553efc4d98ca1a9cb031c7`.
+Signing remains `NOT_CONFIGURED`; this is qualification evidence, not a
+production-release authorization.
+
+After supervised desktop clearing, the exact healthy packet passed: run
+`96000be6-32c5-4fd4-860f-fc31bca5cae6`, packet
+`visual-a8-healthy/.../visual-review-manifest.json`, packet SHA-256
+`daf8a966725e0fdd429d13e495fcb9d26c0139b8d9f2ec1430fb0901dea75633`.
+Its native outcome was `PASS`, desktop lease was `true`, and the capable
+multimodal review returned `VISUAL_OK` after inspecting the contact sheet and
+all five raw checkpoint images.
+
+The seeded first-attempt defect and rerun were preserved in one exact run
+`c41e4302-b336-40f3-9006-9b500da8d010`. Attempt 1 packet SHA-256
+`f76ea3a8382bb23d792ac0065e48c094cd23a3a54d45502c0540417ca8a4d964` was
+native `PASS`, lease `true`, and visually `VISUAL_DEFECT` because every
+retained frame showed the deliberate red GuineaPig instead of the expected
+white guest. Attempt 2 packet SHA-256
+`688f052e1523fde529e632dd170c4e2fc5ac5e9d53ddeb32654be63785741958` was
+native `PASS`, lease `true`, and `VISUAL_OK`; its five raw frames were
+inspected. Both result files passed strict packet/result verification.
+
+The exact flight packet passed with run
+`3071f78b-7988-4c35-95e0-b4c96dd23a52`, packet SHA-256
+`2b54a390acd9d2b621f2a9f4ef7c2c2de42d89e53100d15f9264fc13d871681c`.
+Native outcome and lease were `PASS`/`true`; the driver retained three
+failure artifacts, flushed two pre-trigger frames, stopped with ring count
+zero, and the capable multimodal review inspected all eight raw images and
+returned `VISUAL_OK`.
+
+The exact unavailable-capability packet passed native qualification with run
+`d07e2795-9f05-4cbd-91ca-b8dd9d628e1b`, packet SHA-256
+`442ebd7e626500fd68bbf85bd35cc549a2b37d78eb8a51803fcc1ab4ba6f43f2`. Its
+result is explicitly `REVIEW_UNAVAILABLE` with empty review collections and
+passed strict verification; the gate reflection check maps required review
+to `BLOCKED_CAPABILITY`. A copied packet with one PNG byte tampered was
+rejected by the verifier with visual evidence hash mismatches.
+
+The native/visual precedence checks were exercised against the Release
+driver: native `FAIL_HARNESS` and `BLOCKED_SUPERVISED` remained effective
+under `VISUAL_OK`; required `VISUAL_DEFECT` mapped `PASS` to `FAIL_PRODUCT`;
+required `REVIEW_UNAVAILABLE` mapped `PASS` to `BLOCKED_CAPABILITY`; optional
+defect left native `PASS` effective while `visualPass=false`; and required
+`VISUAL_OK` produced release `PASS`. Focused visual unit tests passed `35/35`
+after the flight-ring capacity correction.
+
+This closes the supervised A evidence only for the b19 pre-final candidate.
+The 85 predecessor rows now have explicit final dispositions; predecessor
+archive, final metadata/spec commits, final v1.1 rebuild, and post-final E 6.3
+rerun remain open. None of these packets are claimed as evidence for a later
+SHA.
+
 ## Chosen next campaign — visual evidence closure and performance requalification
 
-**Status:** implementation is in progress and deterministic closure is proven
-only as pre-final evidence. The planning-only skeleton was strictly validated,
-predecessor reconciliation is complete at 93/178 checked with 85 explicit
-remainder classifications, and successor tasks 1.1–1.4, 2.1–2.5, 4.1–4.6,
-5.1–5.5, 6.1, and 7.1 are checked from source/tests. Successor E tasks 6.2–6.5
-are reopened in the ledger for final rerun; the recorded `ef9fe35` candidate
-and hashes are historical/pre-final only, and `7f4b9df` has no claimed exact
-binary candidate. Milestone A supervised evidence tasks (3.1–3.7) remain
-pending until an exclusive supervised desktop and capable multimodal review
-produce retained healthy, defect, and flight packets with hash-bound results,
-tamper rejection, native/lease precedence, and first-attempt preservation.
-Milestone B synthetic headless qualification is proven; physical
-visual-evidence measurements remain separate and are not relabeled as
-synthetic PASS. Milestone E final exact-candidate Release closure remains
-pending until A, predecessor disposition/archive, final metadata/spec commits,
-and the fresh final v1.1 build/gates settle.
-The skeleton contains 34 implementation tasks and six required spec deltas.
-The campaign explicitly defers DPI/topology hardening and real-app hardening
-to separate future campaign candidates; neither is hidden in this scope.
+**Status:** implementation and exact pre-final Milestone A evidence are
+complete, but final v1.1 closure is not. The predecessor ledger has 178/178
+checked rows, with all former unchecked rows explicitly dispositioned. The
+predecessor remains unarchived until the OpenSpec acceptance boundary is
+validated and the canonical specs are synchronized. Successor tasks 1.1–1.4,
+2.1–2.5, 3.1–3.6, 4.1–4.6, 5.1–5.5, 6.1, and 7.1 are checked. Task 3.7,
+successor E 6.2–6.6, the final metadata/spec commits, final v1.1 build,
+canonical final gates, push, and origin-parity proof remain open.
+Milestone A evidence is bound to exact candidate
+`b19e33e926d751c5be26a4684265a5cd368cef34` only. Milestone B synthetic
+headless qualification is proven; physical mixed-DPI, signing, external,
+real-app, and final human-smoke gates remain separately classified and are not
+relabeled as PASS. The campaign explicitly defers DPI/topology hardening and
+real-app hardening to the destination campaigns recorded in the disposition
+ledger.
 The planning artifacts preserve the packet-hash, strict-collection,
 provenance, and archive-boundary decisions from the reconciliation and
 successor investigations.

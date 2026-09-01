@@ -125,6 +125,32 @@ or future schemas. A bundle with blocked, skipped, flaky, replay-only, or
 synthetic evidence may be useful diagnostic evidence but cannot satisfy a
 physical production gate.
 
+### Visual evidence indexing and review-result binding
+
+When a scenario includes visual evidence, its result links the
+run-owned `visual-manifest.json`, review packet, instructions, and review
+result by normalized relative path and SHA-256. The bundle artifact index
+must include every declared raw PNG, derived contact sheet, manifest, packet,
+instructions, and result. `scripts\verify-qualification-bundle.ps1` rehashes
+the files and checks candidate, run, scenario, attempt, checkpoint, artifact,
+and packet identity before accepting the visual section.
+
+The visual result is supplemental to native qualification. A required
+`VISUAL_DEFECT` is non-pass, a required `REVIEW_UNAVAILABLE` is
+`BLOCKED_CAPABILITY`, and `VISUAL_OK` never promotes a failed native outcome
+or invalid desktop lease. Optional visual review does not relabel native
+qualification. Historical bundles without a visual section remain valid under
+their declared non-visual schema; they do not acquire fabricated visual
+evidence.
+
+For a retained packet, verify the review result with the ValidationDriver's
+offline verifier after the reviewer writes it. Any changed image byte, stale
+packet hash, candidate/run/scenario/attempt substitution, missing required
+collection, unsafe path, or unacknowledged derived-artifact failure is a
+verification failure. Review packets and screenshots remain run-owned
+diagnostic artifacts and are not uploaded to an external model by the
+repository tooling.
+
 ## Exact-candidate bridge
 
 For a retained Stage-A candidate, run the bridge from a clean checkout of the
