@@ -157,6 +157,26 @@ final metadata/spec commit. Supervised healthy/defect/flight visual acceptance
 (A §3) and predecessor disposition are still open. The canonical workflow is
 `.agent/workflows/visual-evidence-review.md`.
 
+### Milestone A attempt — supervised desktop preflight
+
+An exact pre-final candidate was built from clean source commit
+`ef49d9a60201a55fa34ae5653a76a0b73cd5a2f6`, project version `1.0.0`,
+embedded identity matching that SHA, and executable SHA-256
+`e5ce77d5098952245586ed3e091426b8069f95ff43f522e5932fc3860ccb701b`.
+This is an A-run candidate only, not the final v1.1 candidate. The native ABI,
+strict OpenSpec `38/38`, and release qualification passed.
+
+The first supervised healthy-packet attempt was run with the exact executable
+and Release driver on `2026-09-01`, run ID
+`87470fb8-50c6-47cc-98eb-e0055363493b`. It failed closed as
+`FAIL_HARNESS` before scenario setup because the lease could not establish a
+verified TabDock foreground target: a Chrome window and an unrelated
+`nightwatch` window covered every tested monitor point. The driver killed only
+its own TabDock process and restored both user state snapshots. No healthy,
+defect, flight, or review claim is made from this attempt. A rerun requires the
+operator to clear/minimize unrelated desktop windows and leave the desktop
+untouched during each supervised scenario.
+
 ## Chosen next campaign — visual evidence closure and performance requalification
 
 **Status:** implementation is in progress and deterministic closure is proven
