@@ -1,7 +1,8 @@
 # Investigation: Visual evidence implementation checkpoint
 
 **Date:** 2026-09-01
-**Status:** open
+**Status:** closed; final-source evidence and release-boundary correction are
+recorded below.
 
 ## Question
 
@@ -84,3 +85,25 @@ predecessor archival, or release provenance.
 - `tests/ValidationDriver/TabDock.ValidationDriver/ScenarioCatalog.cs`
 - `scripts/qualification-bundle.ps1`
 - `docs/release/qualification-control-plane.md`
+
+## Final-source closure addendum
+
+The predecessor's 178-row ledger was fully dispositioned and archived at
+`openspec/changes/archive/2026-09-01-2026-08-31-visual-evidence-ai-review/`.
+The final source candidate is
+`6bb8ecc80b103ec9e2e1bc12cebe241b1ab9519f`; it produced Release v1.1
+executable SHA-256
+`cf442e369c56c7c06c23b33c25b3434b079398b479e188c47e03f2d76dfbc291`.
+The final-source supervised packets are healthy `VISUAL_OK`, preserved
+seeded attempt-1 `VISUAL_DEFECT` plus attempt-2 `VISUAL_OK`, flight
+`VISUAL_OK`, and unavailable `REVIEW_UNAVAILABLE`; packet/result verification,
+visual tamper rejection, and native/visual precedence all passed.
+
+Final deterministic evidence passed Debug/Release solution builds and
+`795/795` unit tests, `153/153` ValidationDriver selftests, 135 catalog
+scenarios, `179/179` release-tooling tests, canonical Release validation and
+publish, strict OpenSpec `38/38`, native ABI, resource stability, recovery,
+support, privacy, and version smokes. Signing is `NOT_CONFIGURED`, release
+mode is `QUALIFICATION_ONLY`, and physical/external requirements remain
+`BLOCKED_EXTERNAL`. Evidence records are bound to the candidate above;
+later record commits do not claim new executable bytes.

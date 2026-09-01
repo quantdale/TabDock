@@ -72,3 +72,39 @@ assigned here; the final build record must bind fresh bytes to that later
 source SHA and must not reuse either `ef9fe35` or the b19 Milestone A hash.
 No final v1.1 executable hash, push, or clean-tree claim is made by this
 correction record yet; those are finalization evidence.
+
+## Final source candidate and E rerun
+
+The final source candidate boundary is the clean committed SHA
+`6bb8ecc80b103ec9e2e1bc12cebe241b1ab9519f`. The exact command
+`scripts/release-qualify.ps1 -Sha 6bb8ecc80b103ec9e2e1bc12cebe241b1ab9519f -Version 1.1.0 -OutDir .artifacts/release-final -Ci`
+passed its source/HEAD, version, native ABI, strict OpenSpec, qualification,
+and publish gates. It produced the self-contained Release v1.1 executable
+with SHA-256
+`cf442e369c56c7c06c23b33c25b3434b079398b479e188c47e03f2d76dfbc291`;
+the release manifest SHA-256 is
+`8665641b1247e36bdaf9863ba9ac3d2ce49a06cc568ec6b2d93eff6076a4e849`;
+and `SHA256SUMS` SHA-256 is
+`3414edc07dc528a8fe50a777cb4133e7831d9d1623f330e0aebca1721a19fb81`.
+The embedded informational version is
+`1.1.0+6bb8ecc80b103ec9e2e1bc12cebe241b1ab9519f`.
+
+Post-boundary E evidence was rerun without relabeling the candidate:
+Debug/Release solution builds and unit tests passed (`795/795` each),
+ValidationDriver deterministic selftests passed (`153/153`), the catalog
+reported 135 scenarios, strict OpenSpec validation passed `38/38`, canonical
+Release validation/publish passed, and release-tooling regression passed
+`179/179`. The final supervised packets are run
+`1ca035cc-b73f-489b-8280-58c5ca713636` (healthy `VISUAL_OK`),
+`9ad16a31-52cc-4018-b44b-24c3355901a7` (attempt 1 `VISUAL_DEFECT`, attempt 2
+`VISUAL_OK`), `2cb0f55c-6437-4379-9599-f2ab74a26ad6` (flight `VISUAL_OK`),
+and `ce628549-9cf9-4c39-a426-0c44195dfb15`
+(`REVIEW_UNAVAILABLE`). Packet/result verification passed for all five
+review records; screenshot tamper was rejected; native/visual precedence
+remained fail-closed.
+
+This record is evidence for the candidate above, not a new binary candidate.
+Signing remains `NOT_CONFIGURED`, release mode is `QUALIFICATION_ONLY`, and
+production eligibility is `BLOCKED_EXTERNAL`; physical mixed-DPI and external
+Windows-human requirements remain blocked. The evidence-record commit and
+remote parity are still pending when this section is first written.

@@ -30,13 +30,24 @@ The historical 84/89 implementation roll-up was not a mapping to the
 canonical rows and is not a valid checkbox count. The prior
 presentation-integrity physical qualification remains historical evidence and
 is not relabeled.
+
+The final exact source candidate is the committed SHA
+`6bb8ecc80b103ec9e2e1bc12cebe241b1ab9519f`, version `1.1.0`, with
+self-contained Release executable SHA-256
+`cf442e369c56c7c06c23b33c25b3434b079398b479e188c47e03f2d76dfbc291`.
+Its release mode is `QUALIFICATION_ONLY`; production eligibility is
+`BLOCKED_EXTERNAL`; signing is `NOT_CONFIGURED`. The final candidate and all
+supervised visual packets are bound to that SHA. Later task/state/investigation
+commits are evidence records and do not redefine the binary candidate boundary.
+The exact evidence record, push, remote parity, and clean-tree result remain
+open until recorded dynamically.
+
 Foundation inventory, implementation status, exact pre-final candidate
-correction, row-level dispositions, and the archive result are recorded in
+correction, row-level dispositions, archive result, and final evidence are
+recorded in
 `.agent/investigations/visual-evidence-implementation-2026-09-01.md`,
 `.agent/investigations/visual-evidence-ledger-reconciliation-2026-09-01.md`,
 and `.agent/investigations/release-semantics-correction-2026-09-01.md`.
-No final v1.1 candidate, final hash, push, or clean-tree claim is made by this
-status update.
 
 ### Prior campaign evidence
 
@@ -129,31 +140,34 @@ recorded candidate identities.
 
 ## Active implementation
 
-The active visual-evidence and multimodal AI-review closure is now under
+The active visual-evidence and multimodal AI-review closure is under
 `openspec/changes/visual-evidence-closure-and-performance-requalification/`.
 The predecessor's 178 rows are archived with all 85 former unchecked rows
 explicitly dispositioned. The implementation checkpoint, reconciliation
-matrix, Release-semantics correction, exact Milestone A record, and successor
+matrix, Release-semantics correction, exact Milestone A records, and successor
 task ledger are the durable planning sources.
-Earlier deterministic records include 57/57 visual-filter tests, 789/789
-total unit tests, 179/179 PowerShell release-tooling tests, and successful
-Debug/Release solution builds and ValidationDriver deterministic self-tests
-(153/153). Those are retained pre-final qualification evidence. The exact
-b19 Milestone A candidate adds a current focused visual suite of 35/35, exact
-healthy/defect/flight/unavailable packets, capable multimodal review, tamper
-rejection, and native/lease precedence proof. No A packet is claimed for a
-later SHA.
-The successor deterministic closure is implemented: exact packet-byte hashing,
-strict current collections, derived-failure propagation, scenario/run hierarchy
-links, offline bundle verification, and the paired visual measurement/resource
-gates are present. Successor tasks 3.1–3.7 are checked from exact b19 evidence
-Successor E tasks 6.2–6.5 retain the `ef9fe35` execution evidence only as
-pre-final evidence. The predecessor archive and canonical spec synchronization
-are complete, and the final metadata/spec/task/state settlement is being made
-before the final candidate build. After this clean settlement commit, the E
-rerun MUST use its exact HEAD and record fresh executable/publish hashes. Task
-6.3 MUST use a fresh final v1.1 build from that committed SHA; neither
-`ef9fe35` nor `7f4b9df` is the final binary claim.
+
+The deterministic closure is implemented in ValidationDriver-only seams:
+exact packet-byte hashing, strict current collections, derived-failure
+propagation, scenario/run hierarchy links, offline bundle verification, paired
+visual measurement/resource gates, and native/visual outcome separation.
+Final deterministic evidence includes `153/153` selftests from run
+`a8771ecf-9ee9-4199-bc7a-686545503531`, 135 catalog scenarios,
+`179/179` release-tooling tests, Debug/Release solution builds, and
+`795/795` Debug/Release unit tests.
+
+The final source candidate is `6bb8ecc80b103ec9e2e1bc12cebe241b1ab9519f`.
+Its exact self-contained Release v1.1 executable is
+`cf442e369c56c7c06c23b33c25b3434b079398b479e188c47e03f2d76dfbc291`.
+Canonical Release validation/publish passed with no vulnerable packages,
+resource stability PASS (`900` samples, `30` cells, `720` pairs, flat
+counters), native ABI PASS, recovery/support/privacy/version/publish PASS,
+and strict OpenSpec `38/38`. Final supervised visual packets are healthy
+`VISUAL_OK`, seeded defect attempt 1 `VISUAL_DEFECT` followed by attempt 2
+`VISUAL_OK`, flight `VISUAL_OK`, and required-review unavailable
+`REVIEW_UNAVAILABLE`; all packet/result checks passed and screenshot tamper
+was rejected. These packets and the executable remain bound to `6bb8`; later
+evidence-record commits do not retag them.
 The canonical workflow is `.agent/workflows/visual-evidence-review.md`.
 
 ### Milestone A attempt — supervised desktop preflight
@@ -228,31 +242,65 @@ defect left native `PASS` effective while `visualPass=false`; and required
 `VISUAL_OK` produced release `PASS`. Focused visual unit tests passed `35/35`
 after the flight-ring capacity correction.
 
-This closes the supervised A evidence only for the b19 pre-final candidate.
-The 85 predecessor rows now have explicit final dispositions; predecessor
-archive, final metadata/spec commits, final v1.1 rebuild, and post-final E 6.3
-rerun remain open. None of these packets are claimed as evidence for a later
-SHA.
+The preceding section closes the supervised A evidence for the b19 pre-final
+candidate only. The final-source rerun below is separately bound to
+`6bb8ecc80b103ec9e2e1bc12cebe241b1ab9519f`; no packet was retagged.
+
+### Milestone A — final-source supervised requalification
+
+The exact final-source packets were run against the self-contained
+`.artifacts/release-final/TabDock.exe` and Release GuineaPig. Healthy run
+`1ca035cc-b73f-489b-8280-58c5ca713636` produced packet
+`98ebd8186c44325449b72cb4042701d001df9620e9c3568bce8b8e6a3d555bd0` and
+`VISUAL_OK`. Seeded defect run
+`9ad16a31-52cc-4018-b44b-24c3355901a7` preserved attempt 1 packet
+`ae2bd8143d78694cd4631636ad8170cfa2aa482a0accdcb5d6920261cd5ac6ac` as
+`VISUAL_DEFECT`; attempt 2 packet
+`12385900ee0770c0faae03b98f168a25812da2ff11d4f729b4fb49e03d859c37` was
+`VISUAL_OK`. Flight run
+`2cb0f55c-6437-4379-9599-f2ab74a26ad6` produced packet
+`51c4b244a5766735440ef5ce1410d3e5f469b690688e7dfbc331f7c163349a3c` and
+`VISUAL_OK`. Unavailable-review run
+`ce628549-9cf9-4c39-a426-0c44195dfb15` produced packet
+`b22fcaf135284605bc346ba85000e76339be065ac1b3478a4e70ddfa91198e25` with
+`REVIEW_UNAVAILABLE`, empty review collections, and required-gate
+`BLOCKED_CAPABILITY`. All final packet/result records passed strict
+verification. The tampered healthy packet was rejected by a visual evidence
+hash mismatch. Native `FAIL_HARNESS`/`BLOCKED_SUPERVISED` remained effective
+under `VISUAL_OK`; required defect/unavailable remained non-pass.
+
+Final candidate evidence is complete for the exact source boundary. The
+evidence-record commit, current-change disposition, push, and remote parity
+remain open until dynamically recorded.
 
 ## Chosen next campaign — visual evidence closure and performance requalification
 
-**Status:** the predecessor has been dispositioned, synchronized, and
-archived; exact pre-final Milestone A evidence is complete, but final v1.1
-closure is not. Successor tasks 1.1–1.4, 2.1–2.5, 3.1–3.7, 4.1–4.6, 5.1–5.5,
-6.1, and 7.1 are checked. Successor E 6.2–6.6, the final candidate build,
-canonical final gates, push, and origin-parity proof remain open. The
-pre-build metadata/spec/task/state settlement is the final source boundary
-for the exact candidate; its SHA is resolved dynamically after commit.
-Milestone A evidence is bound to exact candidate
-`b19e33e926d751c5be26a4684265a5cd368cef34` only. Milestone B synthetic
-headless qualification is proven; physical mixed-DPI, signing, external,
-real-app, and final human-smoke gates remain separately classified and are not
-relabeled as PASS. The campaign explicitly defers DPI/topology hardening and
-real-app hardening to the destination campaigns recorded in the disposition
-ledger.
-The planning artifacts preserve the packet-hash, strict-collection,
-provenance, and archive-boundary decisions from the reconciliation and
-successor investigations.
+**Status:** A and B evidence are complete, the predecessor is dispositioned,
+synchronized, and archived, and final E 6.2–6.5 evidence is recorded against
+source candidate `6bb8ecc80b103ec9e2e1bc12cebe241b1ab9519f`. The final
+self-contained Release v1.1 artifact is
+`cf442e369c56c7c06c23b33c25b3434b079398b479e188c47e03f2d76dfbc291`.
+The candidate is `QUALIFICATION_ONLY`; signing is `NOT_CONFIGURED` and
+production eligibility is `BLOCKED_EXTERNAL`. Physical mixed-DPI, external
+Windows-human, real-app, and any unavailable capability gates remain blocked
+and are not relabeled as PASS.
+
+Final E evidence includes Debug/Release solution builds with 0 warnings/errors,
+`795/795` Debug/Release unit tests, ValidationDriver selftests `153/153`,
+catalog `scenario-catalog-2026-08-24-v1` with 135 scenarios, `179/179`
+release-tooling tests, canonical Release validation/publish PASS, strict
+OpenSpec `38/38`, resource stability PASS with 900 samples/30 cells/720
+pairs and flat counters, native ABI PASS, and recovery/support/privacy/version
+smoke PASS. The final visual packets preserve healthy PASS, first-attempt
+seeded defect, successful rerun, flight flush, unavailable review, packet
+tamper rejection, and native/visual precedence.
+
+Successor E6.6 remains the final administrative boundary: complete any
+authorized current-change archive decision, record the evidence commit and
+remote push, and independently prove `HEAD == origin/main` with a clean
+worktree. The final binary candidate boundary remains the exact source SHA
+above; later evidence/archive records must not retag its packet or executable
+hash.
 
 **PLANNED/OPTIONAL:** repository-local Microsoft Learn and Context7 MCP
 integration, subject to a separately authorized upstream/security/scope
