@@ -50,4 +50,25 @@ The final disposition matrix will remain durable after archive and will identify
 
 ## Current closure truth
 
-Final exact-candidate Release closure remains pending. No archive, final v1.1 candidate, final hash, push, or clean-tree claim is made by this correction record.
+The predecessor archive boundary is satisfied. Final exact-candidate Release
+closure remains pending until the next clean source commit is qualified and
+fresh executable/publish hashes are recorded.
+
+## Disposition and archive boundary satisfied
+
+The 85 previously unchecked predecessor rows now each carry exactly one
+allowed disposition, with one row per ID in
+`.agent/investigations/visual-evidence-ledger-reconciliation-2026-09-01.md`.
+The predecessor was strictly validated, its three delta-spec capabilities were
+synchronized (`+11/~5`), and it was archived as
+`openspec/changes/archive/2026-09-01-2026-08-31-visual-evidence-ai-review/`.
+The repository project version is now `1.1.0`; workflow defaults and active
+release documentation agree with that authority.
+
+The final exact-candidate source boundary is the clean commit produced after
+this archive, spec, version, task, and state settlement. Its SHA is resolved
+dynamically immediately before the final Release build. No executable hash is
+assigned here; the final build record must bind fresh bytes to that later
+source SHA and must not reuse either `ef9fe35` or the b19 Milestone A hash.
+No final v1.1 executable hash, push, or clean-tree claim is made by this
+correction record yet; those are finalization evidence.

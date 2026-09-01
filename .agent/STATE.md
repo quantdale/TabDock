@@ -147,10 +147,12 @@ The successor deterministic closure is implemented: exact packet-byte hashing,
 strict current collections, derived-failure propagation, scenario/run hierarchy
 links, offline bundle verification, and the paired visual measurement/resource
 gates are present. Successor tasks 3.1–3.7 are checked from exact b19 evidence
-and the predecessor archive result. Successor E tasks 6.2–6.5 retain the
-`ef9fe35` execution evidence only as pre-final evidence. Their final rerun
-remains pending until all final metadata/spec commits settle. Task 6.3 MUST
-use a fresh final v1.1 build from the resulting committed SHA; neither
+Successor E tasks 6.2–6.5 retain the `ef9fe35` execution evidence only as
+pre-final evidence. The predecessor archive and canonical spec synchronization
+are complete, and the final metadata/spec/task/state settlement is being made
+before the final candidate build. After this clean settlement commit, the E
+rerun MUST use its exact HEAD and record fresh executable/publish hashes. Task
+6.3 MUST use a fresh final v1.1 build from that committed SHA; neither
 `ef9fe35` nor `7f4b9df` is the final binary claim.
 The canonical workflow is `.agent/workflows/visual-evidence-review.md`.
 
@@ -237,9 +239,10 @@ SHA.
 **Status:** the predecessor has been dispositioned, synchronized, and
 archived; exact pre-final Milestone A evidence is complete, but final v1.1
 closure is not. Successor tasks 1.1–1.4, 2.1–2.5, 3.1–3.7, 4.1–4.6, 5.1–5.5,
-6.1, and 7.1 are checked. Successor E 6.2–6.6, final metadata/spec commits,
-the final v1.1 build, canonical final gates, push, and origin-parity proof
-remain open.
+6.1, and 7.1 are checked. Successor E 6.2–6.6, the final candidate build,
+canonical final gates, push, and origin-parity proof remain open. The
+pre-build metadata/spec/task/state settlement is the final source boundary
+for the exact candidate; its SHA is resolved dynamically after commit.
 Milestone A evidence is bound to exact candidate
 `b19e33e926d751c5be26a4684265a5cd368cef34` only. Milestone B synthetic
 headless qualification is proven; physical mixed-DPI, signing, external,
