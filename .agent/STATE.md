@@ -9,35 +9,34 @@ contains this text.
 
 # CURRENT CAMPAIGN — VISUAL EVIDENCE AND AI REVIEW
 
-**Objective:** implement and validate the active
-`2026-08-31-visual-evidence-ai-review` OpenSpec change as bounded
-ValidationDriver evidence infrastructure. Preserve native identity, lease,
-timeline, cleanup, and release-gate semantics; do not change production
+**Objective:** complete and qualify the active
+`visual-evidence-closure-and-performance-requalification` OpenSpec change as
+bounded ValidationDriver evidence infrastructure. Preserve native identity,
+lease, timeline, cleanup, and release-gate semantics; do not change production
 TabDock behavior.
 
 **Status:** the predecessor `2026-08-31-visual-evidence-ai-review` campaign
-remains active and unarchived at this boundary. Its canonical ledger contains
-**178** unique rows: **93** were already directly proven, and the remaining
-**85** now each have one explicit final disposition recorded in
-`.agent/investigations/visual-evidence-ledger-reconciliation-2026-09-01.md`.
-The predecessor task file has no unchecked or undispositioned row. Final
-disposition totals are **41 `COMPLETED_AND_PROVEN`**, **3
-`ACCEPTED_SUPERSEDED`**, **35 `MIGRATED_TO_SUCCESSOR`**, **4
-`MIGRATED_TO_DPI_TOPOLOGY_CAMPAIGN`**, and **2
-`MIGRATED_TO_REAL_APP_CAMPAIGN`**. Migrated rows remain obligations of their
-named destination; they are not represented as completed implementation.
-The predecessor archive boundary is still pending the OpenSpec sync/archive
-operation. The historical 84/89 implementation roll-up was not a mapping to
-the canonical rows and is not a valid checkbox count. The prior
+has been dispositioned and archived at
+`openspec/changes/archive/2026-09-01-2026-08-31-visual-evidence-ai-review/`.
+Its canonical ledger contained **178** unique rows: **93** direct evidence
+rows plus **85** rows with explicit final dispositions. The archive operation
+passed strict validation, synchronized canonical specs (`+11/~5`), and moved
+the complete predecessor artifacts. Final disposition totals were **41
+`COMPLETED_AND_PROVEN`**, **3 `ACCEPTED_SUPERSEDED`**, **35
+`MIGRATED_TO_SUCCESSOR`**, **4 `MIGRATED_TO_DPI_TOPOLOGY_CAMPAIGN`**, and
+**2 `MIGRATED_TO_REAL_APP_CAMPAIGN`**. Migrated rows remain obligations of
+their named destination; they were not represented as completed implementation.
+The historical 84/89 implementation roll-up was not a mapping to the
+canonical rows and is not a valid checkbox count. The prior
 presentation-integrity physical qualification remains historical evidence and
 is not relabeled.
 Foundation inventory, implementation status, exact pre-final candidate
-correction, and the row-level disposition map are recorded in
+correction, row-level dispositions, and the archive result are recorded in
 `.agent/investigations/visual-evidence-implementation-2026-09-01.md`,
 `.agent/investigations/visual-evidence-ledger-reconciliation-2026-09-01.md`,
 and `.agent/investigations/release-semantics-correction-2026-09-01.md`.
-No predecessor archive, final v1.1 candidate, final hash, push, or clean-tree
-claim is made by this status update.
+No final v1.1 candidate, final hash, push, or clean-tree claim is made by this
+status update.
 
 ### Prior campaign evidence
 
@@ -130,16 +129,12 @@ recorded candidate identities.
 
 ## Active implementation
 
-The visual-evidence and multimodal AI-review change is active under
-`openspec/changes/2026-08-31-visual-evidence-ai-review/`. Its canonical source
-checklist has **178/178** checked rows: 93 direct evidence rows plus 85 rows
-closed by the explicit disposition ledger. The implementation checkpoint,
-reconciliation matrix, Release-semantics correction, and exact Milestone A
-record are in
-`.agent/investigations/visual-evidence-implementation-2026-09-01.md`,
-`.agent/investigations/visual-evidence-ledger-reconciliation-2026-09-01.md`,
-`.agent/investigations/release-semantics-correction-2026-09-01.md`, and this
-state file.
+The active visual-evidence and multimodal AI-review closure is now under
+`openspec/changes/visual-evidence-closure-and-performance-requalification/`.
+The predecessor's 178 rows are archived with all 85 former unchecked rows
+explicitly dispositioned. The implementation checkpoint, reconciliation
+matrix, Release-semantics correction, exact Milestone A record, and successor
+task ledger are the durable planning sources.
 Earlier deterministic records include 57/57 visual-filter tests, 789/789
 total unit tests, 179/179 PowerShell release-tooling tests, and successful
 Debug/Release solution builds and ValidationDriver deterministic self-tests
@@ -151,13 +146,12 @@ later SHA.
 The successor deterministic closure is implemented: exact packet-byte hashing,
 strict current collections, derived-failure propagation, scenario/run hierarchy
 links, offline bundle verification, and the paired visual measurement/resource
-gates are present. Successor tasks 3.1–3.6 are checked from exact b19 evidence;
-3.7 remains the owner of predecessor sync/archive and final handoff. Successor
-E tasks 6.2–6.5 retain the `ef9fe35` execution evidence only as pre-final
-evidence. Their final rerun remains pending until the predecessor archive and
-all final metadata/spec commits settle. Task 6.3 MUST use a fresh final
-v1.1 build from the resulting committed SHA; neither `ef9fe35` nor
-`7f4b9df` is the final binary claim.
+gates are present. Successor tasks 3.1–3.7 are checked from exact b19 evidence
+and the predecessor archive result. Successor E tasks 6.2–6.5 retain the
+`ef9fe35` execution evidence only as pre-final evidence. Their final rerun
+remains pending until all final metadata/spec commits settle. Task 6.3 MUST
+use a fresh final v1.1 build from the resulting committed SHA; neither
+`ef9fe35` nor `7f4b9df` is the final binary claim.
 The canonical workflow is `.agent/workflows/visual-evidence-review.md`.
 
 ### Milestone A attempt — supervised desktop preflight
@@ -240,14 +234,12 @@ SHA.
 
 ## Chosen next campaign — visual evidence closure and performance requalification
 
-**Status:** implementation and exact pre-final Milestone A evidence are
-complete, but final v1.1 closure is not. The predecessor ledger has 178/178
-checked rows, with all former unchecked rows explicitly dispositioned. The
-predecessor remains unarchived until the OpenSpec acceptance boundary is
-validated and the canonical specs are synchronized. Successor tasks 1.1–1.4,
-2.1–2.5, 3.1–3.6, 4.1–4.6, 5.1–5.5, 6.1, and 7.1 are checked. Task 3.7,
-successor E 6.2–6.6, the final metadata/spec commits, final v1.1 build,
-canonical final gates, push, and origin-parity proof remain open.
+**Status:** the predecessor has been dispositioned, synchronized, and
+archived; exact pre-final Milestone A evidence is complete, but final v1.1
+closure is not. Successor tasks 1.1–1.4, 2.1–2.5, 3.1–3.7, 4.1–4.6, 5.1–5.5,
+6.1, and 7.1 are checked. Successor E 6.2–6.6, final metadata/spec commits,
+the final v1.1 build, canonical final gates, push, and origin-parity proof
+remain open.
 Milestone A evidence is bound to exact candidate
 `b19e33e926d751c5be26a4684265a5cd368cef34` only. Milestone B synthetic
 headless qualification is proven; physical mixed-DPI, signing, external,
