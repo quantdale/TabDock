@@ -3,9 +3,9 @@
   "generation": "real-app-hardening-acceptance-matrix-2026-09-02",
   "sourceMatrixRecovered": false,
   "provenance": "Matrix constructed from supervised physical runs on host virtual (0,0)-(3840,1200) primary 1920x1200 120 DPI / secondary 1920x1080 96 DPI; candidate is final settled HEAD (not 6bb8e); deterministic gates 812/812; selftest 173/173; driver built Release win-x64. Some cells remain capability-blocked; first-attempt authority preserved.",
-  "candidateSha": "REPLACE_WITH_FINAL_HEAD_AFTER_COMMIT",
-  "candidateExecutableSha": "TBD_AFTER_PUBLISH_BUILD",
-  "driverSha": "FDEC9E985560ECA2577CFCBA73002205A4976B1B36505B7A5D9433253D75487C",
+  "candidateSha": "db98d313b2c3a6bef00854ea32db4febe09e8847",
+  "candidateExecutableSha": "B445BF472FCD5F1349CA2E7B2E3C6BEEE85922A31F5ECEAB753E82C2D9ED5E35",
+  "driverSha": "0BAFC906EEC34880437BCAF85567ED14A52631A170ACF56876994AB842D44618",
   "snapshotId": "92790d2a354c867d62950b0e12c1b498967d9ef4b3a22bdffcc9864c4a584ba2",
   "topology": {
     "virtual": "(0,0)-(3840,1200)",
@@ -220,11 +220,11 @@
     "action": "No production TabDock behavior edited from this real-app run; next step is to increase sample size for Edge (5 cycles x 3 runs) to disposition flake vs product, not to broaden F11 recovery."
   },
   "candidateVersion": {
-    "sourceSha": "REPLACE_WITH_FINAL_HEAD_AFTER_COMMIT",
-    "informationalVersion": "1.1.0+REPLACE",
+    "sourceSha": "db98d313b2c3a6bef00854ea32db4febe09e8847",
+    "informationalVersion": "1.1.0+db98d313b2c3a6bef00854ea32db4febe09e8847",
     "versionPolicy": "Remains 1.1.0 qualification-only; production eligibility BLOCKED_EXTERNAL (signing NOT_CONFIGURED, external gates blocked). Seam added to GuestDpiPositionScope is non-behavioral (Func delegates default to NativeMethods) and DPI repair bc678ef already archived; version stays 1.1.0 per release-engineering spec (RC qualification permits NOT_CONFIGURED). Signing remains external gate.",
-    "executableSha256": "TBD",
-    "driverSha256": "FDEC9E985560ECA2577CFCBA73002205A4976B1B36505B7A5D9433253D75487C",
+    "executableSha256": "B445BF472FCD5F1349CA2E7B2E3C6BEEE85922A31F5ECEAB753E82C2D9ED5E35",
+    "driverSha256": "0BAFC906EEC34880437BCAF85567ED14A52631A170ACF56876994AB842D44618",
     "releaseMode": "QUALIFICATION_ONLY",
     "signingStatus": "NOT_CONFIGURED",
     "productionEligibility": "BLOCKED_EXTERNAL"
@@ -239,5 +239,6 @@
     "catalog": "135 scenarios, scenario-catalog-2026-09-01-v2",
     "openSpec": "real-app-hardening 1/1 valid true (strict)",
     "capabilityPlan": "virtual (0,0)-(3840,1200) 120+96 DPI, runnable/bocked as matrix"
-  }
+  },
+  "generatedUtc": "2026-09-02T01:20:00Z"
 }
