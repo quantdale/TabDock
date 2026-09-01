@@ -553,6 +553,6 @@ Disposition totals: **85/85 rows explicitly dispositioned**, with
 **41 `COMPLETED_AND_PROVEN`**, **3 `ACCEPTED_SUPERSEDED`**, **35
 `MIGRATED_TO_SUCCESSOR`**, **4 `MIGRATED_TO_DPI_TOPOLOGY_CAMPAIGN`**, and
 **2 `MIGRATED_TO_REAL_APP_CAMPAIGN`**. No predecessor row remains without one
-of the seven allowed dispositions. The active successor remains open for its
-own remaining tasks; this table is not a claim that those migrated tasks are
-complete.
+of the seven allowed dispositions. The successor completed its final E6.6
+administrative boundary and is archived; migrated-row classifications remain
+the historical predecessor mapping and do not relabel those destination tasks.
