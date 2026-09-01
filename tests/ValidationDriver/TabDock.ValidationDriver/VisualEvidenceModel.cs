@@ -331,7 +331,7 @@ internal sealed record VisualEvidencePolicy(
             4096,
             4096,
             12,
-            8L * 1024 * 1024,
+            16L * 1024 * 1024,
             6000,
             2.0,
             false);
