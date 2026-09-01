@@ -37,8 +37,11 @@ internal static class DeterministicSelfTests
             tests.AddRange(LeaseTests());
             tests.AddRange(TimelineTests());
         }
-        if (normalized is "all" or "manifest" or "deterministic")
+        if (normalized is "all" or "manifest" or "visual" or "deterministic")
+        {
             tests.AddRange(ManifestTests());
+            tests.AddRange(VisualTests());
+        }
         if (normalized is "all" or "topology" or "deterministic")
             tests.AddRange(TopologyTests());
         if (normalized is "all" or "stress" or "deterministic")
@@ -49,7 +52,7 @@ internal static class DeterministicSelfTests
             tests.AddRange(ResourceTests());
         if (tests.Count == 0)
         {
-            Console.WriteLine($"Unknown self-test suite '{suite}'. Use split, identity, foreground, manifest, resource, or all.");
+            Console.WriteLine($"Unknown self-test suite '{suite}'. Use split, identity, foreground, manifest, visual, resource, or all.");
             return 2;
         }
 
@@ -530,7 +533,7 @@ internal static class DeterministicSelfTests
     private static IEnumerable<(string Id, Func<bool> Test)> CatalogTests()
     {
         yield return ("CAT01-catalog-generation-is-stable", () =>
-            ScenarioCatalog.Generation == "scenario-catalog-2026-08-24-v1"
+            ScenarioCatalog.Generation == "scenario-catalog-2026-09-01-v2"
             && ScenarioCatalog.All.Count == 135);
 
         yield return ("CAT02-catalog-validates-without-errors", () =>
@@ -927,6 +930,259 @@ internal static class DeterministicSelfTests
         }
     }
 
+    private static IEnumerable<(string Id, Func<bool> Test)> VisualTests()
+    {
+        static PhysicalTopologySnapshot Topology()
+            => PhysicalTopologySnapshot.Create(
+                DateTimeOffset.UtcNow,
+                new string('c', 40),
+                new string('d', 64),
+                new string('e', 64),
+                "visual-run",
+                "visual-scenario",
+                1,
+                new QualificationRect(0, 0, 1920, 1200),
+                "monitor-001",
+                new[]
+                {
+                    new PhysicalMonitorSnapshot(
+                        "monitor-001",
+                        new QualificationRect(0, 0, 1920, 1200),
+                        new QualificationRect(0, 0, 1920, 1140),
+                        true,
+                        120,
+                        125,
+                        "primary",
+                        new TaskbarDelta(0, 0, 0, 60)),
+                });
+
+        yield return ("VIS01-topology-binding-rejects-synthetic-context", () =>
+        {
+            VisualTopologyBinding binding = VisualTopologyBinding.From(
+                Topology(),
+                "visual-scenario",
+                1);
+            VisualTopologyBinding synthetic = binding with { SyntheticTopology = true };
+            return binding.IsPhysicalEligible
+                && !synthetic.IsPhysicalEligible;
+        });
+
+        yield return ("VIS02-physical-artifacts-carry-topology-binding", () =>
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "TabDock-visual-binding-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                PhysicalTopologySnapshot topology = Topology();
+                VisualTopologyBinding binding = VisualTopologyBinding.From(
+                    topology,
+                    "visual-scenario",
+                    1);
+                var target = new VisualTargetIdentity(
+                    "0x123",
+                    1,
+                    1,
+                    "Fixture.Window",
+                    1,
+                    "ControlledGuest",
+                    "OWNED");
+                var provider = new StaticVisualCaptureProvider(new VisualFrame(
+                    2,
+                    2,
+                    new[]
+                    {
+                        unchecked((int)0xFF000000),
+                        unchecked((int)0xFFFFFFFF),
+                        unchecked((int)0xFF112233),
+                        unchecked((int)0xFF445566),
+                    },
+                    DateTimeOffset.UtcNow,
+                    new VisualRect(0, 0, 2, 2),
+                    new VisualRect(0, 0, 2, 2),
+                    VisualCaptureMethod.SCREEN_COMPOSITION,
+                    VisualCaptureScopeKind.GUEST_WINDOW,
+                    target,
+                    VisualPrivacyClass.TEST_OWNED,
+                    120,
+                    "monitor-001"));
+                var recorder = new VisualEvidenceRecorder(
+                    VisualEvidencePolicy.SafeDefaults(
+                        VisualEvidenceLevel.CHECKPOINTS,
+                        buildReviewPacket: true),
+                    root,
+                    "visual-scenario",
+                    1,
+                    provider,
+                    binding);
+                VisualCaptureScope scope = VisualCaptureScope.ForWindow(
+                    VisualCaptureScopeKind.GUEST_WINDOW,
+                    target,
+                    VisualPrivacyClass.TEST_OWNED);
+                VisualCheckpointResult checkpoint = recorder.Checkpoint(new VisualCheckpointRequest(
+                    "baseline",
+                    VisualCheckpointPhase.BASELINE,
+                    "bounded fixture guest is visible",
+                    new[] { scope },
+                    VisualCaptureRequiredness.REQUIRED));
+                VisualEvidenceManifest manifest = recorder.CreateManifest(
+                    topology.CandidateSha,
+                    topology.RunId,
+                    DateTimeOffset.UtcNow,
+                    DateTimeOffset.UtcNow);
+                return checkpoint.Captured
+                    && manifest.TopologyBinding is not null
+                    && manifest.Artifacts.Length == 1
+                    && manifest.Artifacts[0].TopologyBinding is not null
+                    && manifest.Artifacts[0].TopologyBinding!.MatchesAttempt(binding);
+            }
+            finally
+            {
+                try { Directory.Delete(root, recursive: true); } catch { }
+            }
+        });
+
+        yield return ("VIS03-strict-verifier-rejects-tampered-topology-result", () =>
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "TabDock-visual-verifier-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                PhysicalTopologySnapshot topology = Topology();
+                VisualTopologyBinding binding = VisualTopologyBinding.From(
+                    topology,
+                    "visual-scenario",
+                    1);
+                var target = new VisualTargetIdentity(
+                    "0x123",
+                    1,
+                    1,
+                    "Fixture.Window",
+                    1,
+                    "ControlledGuest",
+                    "OWNED");
+                var recorder = new VisualEvidenceRecorder(
+                    VisualEvidencePolicy.SafeDefaults(
+                        VisualEvidenceLevel.CHECKPOINTS,
+                        buildReviewPacket: true),
+                    root,
+                    "visual-scenario",
+                    1,
+                    new StaticVisualCaptureProvider(new VisualFrame(
+                        2,
+                        2,
+                        new[]
+                        {
+                            unchecked((int)0xFF000000),
+                            unchecked((int)0xFFFFFFFF),
+                            unchecked((int)0xFF112233),
+                            unchecked((int)0xFF445566),
+                        },
+                        DateTimeOffset.UtcNow,
+                        new VisualRect(0, 0, 2, 2),
+                        new VisualRect(0, 0, 2, 2),
+                        VisualCaptureMethod.SCREEN_COMPOSITION,
+                        VisualCaptureScopeKind.GUEST_WINDOW,
+                        target,
+                        VisualPrivacyClass.TEST_OWNED,
+                        120,
+                        "monitor-001")),
+                    binding);
+                VisualCaptureScope scope = VisualCaptureScope.ForWindow(
+                    VisualCaptureScopeKind.GUEST_WINDOW,
+                    target,
+                    VisualPrivacyClass.TEST_OWNED);
+                recorder.Checkpoint(new VisualCheckpointRequest(
+                    "baseline",
+                    VisualCheckpointPhase.BASELINE,
+                    "bounded fixture guest is visible",
+                    new[] { scope },
+                    VisualCaptureRequiredness.REQUIRED));
+                DateTimeOffset now = DateTimeOffset.UtcNow;
+                VisualEvidenceManifest preliminary = recorder.CreateManifest(
+                    topology.CandidateSha,
+                    topology.RunId,
+                    now,
+                    now);
+                if (!VisualReviewPacketBuilder.TryBuild(
+                        preliminary,
+                        new Dictionary<string, string> { ["fixture"] = "physical-binding" },
+                        out VisualReviewPacketBuildResult? built,
+                        out _)
+                    || built is null)
+                {
+                    return false;
+                }
+                (VisualStoredArtifact packetArtifact, _) = recorder.WriteReviewPacket(built);
+                VisualEvidenceManifest finalManifest = recorder.CreateManifest(
+                    topology.CandidateSha,
+                    topology.RunId,
+                    now,
+                    DateTimeOffset.UtcNow,
+                    packetArtifact.RelativePath,
+                    packetArtifact.Sha256);
+                recorder.WriteManifest(
+                    finalManifest,
+                    $"visual/visual-scenario/attempt-001/manifest.json");
+                byte[] packetBytes = File.ReadAllBytes(
+                    Path.Combine(root, built.PacketRelativePath.Replace('/', Path.DirectorySeparatorChar)));
+                string packetSha = Convert.ToHexString(SHA256.HashData(packetBytes)).ToLowerInvariant();
+                var review = new VisualReviewResult(
+                    VisualEvidenceSchema.ReviewResult,
+                    VisualEvidenceSchema.CurrentVersion,
+                    packetSha,
+                    topology.CandidateSha,
+                    topology.RunId,
+                    "visual-scenario",
+                    1,
+                    VisualReviewVerdict.VISUAL_OK,
+                    "deterministic",
+                    "fixture",
+                    DateTimeOffset.UtcNow,
+                    built.Packet.Images.Select(image => new VisualReviewReviewedImage(
+                        image.ArtifactId,
+                        image.CheckpointId,
+                        image.Sha256)).ToArray(),
+                    Array.Empty<VisualReviewFinding>(),
+                    "fixture review",
+                    Array.Empty<string>(),
+                    binding);
+                string resultPath = Path.Combine(
+                    root,
+                    built.ResultRelativePath.Replace('/', Path.DirectorySeparatorChar));
+                File.WriteAllBytes(resultPath, JsonSerializer.SerializeToUtf8Bytes(review, VisualJson.Options));
+                VisualReviewVerificationResult valid = VisualReviewVerifier.VerifyFiles(
+                    root,
+                    built.PacketRelativePath,
+                    built.ResultRelativePath,
+                    requirePhysicalTopology: true,
+                    expectedTopology: binding);
+                VisualReviewResult tampered = review with
+                {
+                    TopologyBinding = binding with { SnapshotId = new string('f', 64) },
+                };
+                File.WriteAllBytes(resultPath, JsonSerializer.SerializeToUtf8Bytes(tampered, VisualJson.Options));
+                VisualReviewVerificationResult invalid = VisualReviewVerifier.VerifyFiles(
+                    root,
+                    built.PacketRelativePath,
+                    built.ResultRelativePath,
+                    requirePhysicalTopology: true,
+                    expectedTopology: binding);
+                return valid.Valid
+                    && !invalid.Valid
+                    && invalid.Failures.Any(failure =>
+                        failure.Contains("topology", StringComparison.OrdinalIgnoreCase));
+            }
+            finally
+            {
+                try { Directory.Delete(root, recursive: true); } catch { }
+            }
+        });
+    }
+
     private static IEnumerable<(string Id, Func<bool> Test)> TopologyTests()
     {
         yield return ("TOPO01-lab-is-explicitly-synthetic", () =>
@@ -934,7 +1190,8 @@ internal static class DeterministicSelfTests
             VirtualTopologyLabReport report = VirtualTopologyLab.Run();
             return report.SyntheticTopology
                 && report.SchemaVersion == VirtualTopologyLab.SchemaVersion
-                && report.Generation == VirtualTopologyLab.Generation;
+                && report.Generation == VirtualTopologyLab.Generation
+                && report.Cases.Any(item => item.Name == "seeded-transition-stress");
         });
 
         yield return ("TOPO02-fixed-matrix-covers-boundaries", () =>
@@ -942,8 +1199,9 @@ internal static class DeterministicSelfTests
             string[] required =
             {
                 "single-96", "dual-horizontal", "dual-vertical", "negative-left",
-                "above-origin", "asymmetric-work-areas", "mixed-100-125-150-200",
-                "odd-width", "narrow-work-area", "large-coordinates", "removal-reorder-transition",
+                "above-origin", "staggered-work-areas", "asymmetric-work-areas",
+                "mixed-100-125-150-175-200", "odd-width", "narrow-work-area",
+                "large-coordinates", "removal-reorder-transition",
             };
             string[] actual = VirtualTopologyLab.FixedTopologies().Select(topology => topology.Name).ToArray();
             return required.All(name => actual.Contains(name, StringComparer.Ordinal));
@@ -953,9 +1211,11 @@ internal static class DeterministicSelfTests
         {
             VirtualTopologyLabReport first = VirtualTopologyLab.Run();
             VirtualTopologyLabReport second = VirtualTopologyLab.Run();
-            return first.Seed == 20260824
+            return first.Seed == VirtualTopologyLab.Seed
                 && first.NormalizedSha256 == second.NormalizedSha256
-                && first.AssertionCount == second.AssertionCount;
+                && first.AssertionCount == second.AssertionCount
+                && first.DpiTransitions.Select(item => item.Name)
+                    .SequenceEqual(second.DpiTransitions.Select(item => item.Name), StringComparer.Ordinal);
         });
 
         yield return ("TOPO04-all-lab-invariants-pass", () =>
@@ -964,30 +1224,111 @@ internal static class DeterministicSelfTests
         yield return ("TOPO05-mixed-dpi-matrix-is-observed-in-model", () =>
         {
             LabTopology mixed = VirtualTopologyLab.FixedTopologies()
-                .Single(topology => topology.Name == "mixed-100-125-150-200");
+                .Single(topology => topology.Name == "mixed-100-125-150-175-200");
             return mixed.HasMixedDpi
-                && new[] { 96, 120, 144, 192 }.All(dpi => mixed.Monitors.Any(monitor => monitor.EffectiveDpi == dpi));
+                && new[] { 96, 120, 144, 168, 192 }.All(
+                    dpi => mixed.Monitors.Any(monitor => monitor.EffectiveDpi == dpi));
         });
 
-        yield return ("TOPO06-negative-and-above-origin-rectangles-are-preserved", () =>
+        yield return ("TOPO06-negative-above-staggered-and-asymmetric-rectangles-are-preserved", () =>
         {
             LabTopology negative = VirtualTopologyLab.FixedTopologies().Single(topology => topology.Name == "negative-left");
             LabTopology above = VirtualTopologyLab.FixedTopologies().Single(topology => topology.Name == "above-origin");
-            return negative.HasNegativeCoordinates
+            LabTopology staggered = VirtualTopologyLab.FixedTopologies().Single(topology => topology.Name == "staggered-work-areas");
+            LabTopology asymmetric = VirtualTopologyLab.FixedTopologies().Single(topology => topology.Name == "asymmetric-work-areas");
+            return negative.HasNegativeXMonitor
                 && above.HasAboveOriginMonitor
+                && staggered.HasStaggeredPlacement
+                && asymmetric.HasAsymmetricWorkAreas
                 && negative.VirtualBounds.Left < 0
                 && above.VirtualBounds.Top < 0;
         });
 
         yield return ("TOPO07-transition-removal-and-reorder-clamps-to-new-primary", () =>
         {
-            LabTopology oldTopology = VirtualTopologyLab.FixedTopologies().Single(topology => topology.Name == "mixed-100-125-150-200");
-            LabTopology newTopology = VirtualTopologyLab.FixedTopologies().Single(topology => topology.Name == "removal-reorder-transition");
+            LabTopology oldTopology = VirtualTopologyLab.FixedTopologies()
+                .Single(topology => topology.Name == "mixed-100-125-150-175-200");
+            LabTopology newTopology = VirtualTopologyLab.FixedTopologies()
+                .Single(topology => topology.Name == "removal-reorder-transition");
             LabRect restored = VirtualTopologyPolicy.RestoreAfterTransition(
                 new LabRect(-2000, 300, -1500, 700),
                 oldTopology,
                 newTopology);
-            return newTopology.Primary.WorkArea.Contains(restored);
+            return newTopology.Primary.WorkArea.Contains(restored)
+                && VirtualTopologyPolicy.FindMonitorForRectangle(restored, newTopology) == newTopology.Primary;
+        });
+
+        yield return ("TOPO08-required-dpi-transitions-run-in-both-directions", () =>
+        {
+            VirtualTopologyLabReport report = VirtualTopologyLab.Run();
+            return report.DpiTransitions.Count == VirtualTopologyLab.RequiredDpiTransitions.Count
+                && report.DpiTransitions.All(item => item.Passed)
+                && VirtualTopologyLab.RequiredDpiTransitions.All(pair =>
+                    report.DpiTransitions.Any(item =>
+                        item.SourceDpi == pair.SourceDpi
+                        && item.DestinationDpi == pair.DestinationDpi));
+        });
+
+        yield return ("TOPO09-title-inputs-cover-width-classes", () =>
+        {
+            VirtualTopologyLabReport report = VirtualTopologyLab.Run();
+            return report.Cases
+                .Where(item => item.Name != "seeded-transition-stress")
+                .All(item => item.TitleAssertionCount == item.MonitorCount * 3 * 3);
+        });
+
+        yield return ("TOPO10-artifact-reports-boundary-metadata", () =>
+        {
+            VirtualTopologyLabReport report = VirtualTopologyLab.Run();
+            return report.Cases.Any(item => item.StaggeredPlacement)
+                && report.Cases.Any(item => item.AsymmetricWorkAreas)
+                && report.Cases.Any(item => item.RelativePlacements.Any(
+                    placement => placement.Contains(":left", StringComparison.Ordinal)
+                        || placement.Contains(":above", StringComparison.Ordinal)));
+        });
+
+        yield return ("TOPO11-synthetic-topology-is-ineligible-for-physical-gate", () =>
+        {
+            string candidateSha = new string('0', 40);
+            string executableSha = new string('a', 64);
+            string driverSha = new string('b', 64);
+            var metadata = new PhysicalTopologyCaptureMetadata(
+                candidateSha,
+                executableSha,
+                driverSha,
+                "run-fixture",
+                "scenario-fixture",
+                1);
+            PhysicalTopologySnapshot snapshot = PhysicalTopologySnapshot.Create(
+                DateTimeOffset.UtcNow,
+                candidateSha,
+                executableSha,
+                driverSha,
+                "run-fixture",
+                "scenario-fixture",
+                1,
+                new QualificationRect(0, 0, 1920, 1080),
+                "monitor-001",
+                new[]
+                {
+                    new PhysicalMonitorSnapshot(
+                        "monitor-001",
+                        new QualificationRect(0, 0, 1920, 1080),
+                        new QualificationRect(0, 0, 1920, 1040),
+                        true,
+                        96,
+                        100,
+                        "primary",
+                        new TaskbarDelta(0, 0, 0, 40)),
+                },
+                syntheticTopology: true);
+            IReadOnlyList<string> failures = PhysicalTopologyGate.ValidatePhysicalSnapshot(
+                snapshot,
+                metadata,
+                DateTimeOffset.UtcNow,
+                TimeSpan.FromMinutes(1));
+            return !PhysicalTopologyGate.IsPhysicalEligible(snapshot)
+                && failures.Any(failure => failure.Contains("synthetic", StringComparison.OrdinalIgnoreCase));
         });
     }
 
@@ -1011,6 +1352,56 @@ internal static class DeterministicSelfTests
             SendInputAvailable: true,
             CandidateSigningConfigured: true,
             StageBAvailable: true);
+
+        string fixtureCandidateSha = new string('c', 40);
+        string fixtureExecutableSha = new string('d', 64);
+        string fixtureDriverSha = new string('e', 64);
+        PhysicalTopologyCaptureMetadata fixtureMetadata = new(
+            fixtureCandidateSha,
+            fixtureExecutableSha,
+            fixtureDriverSha,
+            "run-fixture",
+            "scenario-fixture",
+            1);
+        PhysicalTopologySnapshot fixtureTopology = PhysicalTopologySnapshot.Create(
+            DateTimeOffset.UtcNow,
+            fixtureCandidateSha,
+            fixtureExecutableSha,
+            fixtureDriverSha,
+            "run-fixture",
+            "scenario-fixture",
+            1,
+            new QualificationRect(0, 0, 3840, 1200),
+            "monitor-001",
+            new[]
+            {
+                new PhysicalMonitorSnapshot(
+                    "monitor-001",
+                    new QualificationRect(0, 0, 1920, 1200),
+                    new QualificationRect(0, 0, 1920, 1140),
+                    true,
+                    120,
+                    125,
+                    "primary",
+                    new TaskbarDelta(0, 0, 0, 60)),
+                new PhysicalMonitorSnapshot(
+                    "monitor-002",
+                    new QualificationRect(1920, 0, 3840, 1080),
+                    new QualificationRect(1920, 0, 3840, 1032),
+                    false,
+                    96,
+                    100,
+                    "right",
+                    new TaskbarDelta(0, 0, 0, 48)),
+            });
+        ScenarioCapabilitySnapshot physicalComplete = complete with
+        {
+            MonitorCount = 2,
+            MixedDpiAvailable = true,
+            NonDefaultDpiAvailable = true,
+            Topology = fixtureTopology,
+            TopologyProbeFailure = null,
+        };
 
         yield return ("C01-complete-browser-runnable", () =>
             ScenarioCapabilities.Resolve(
@@ -1073,6 +1464,158 @@ internal static class DeterministicSelfTests
                 && !result.Runnable
                 && result.Outcome == ScenarioOutcomeKind.SkipCapability;
         });
+        yield return ("C09-physical-plan-blocks-before-supervision", () =>
+        {
+            IReadOnlyList<PhysicalQualificationPlanRow> rows = PhysicalQualificationPlan.BuildRows(
+                physicalComplete,
+                fixtureMetadata,
+                supervisionConfirmed: false,
+                DateTimeOffset.UtcNow);
+            return rows.Count == PhysicalQualificationPlan.Cells.Count
+                && rows.All(row => row.Outcome == PhysicalCellOutcome.BLOCKED_SUPERVISED)
+                && rows.All(row => row.Reason?.Contains("supervised", StringComparison.OrdinalIgnoreCase) == true);
+        });
+        yield return ("C10-physical-plan-exposes-only-supported-cells", () =>
+        {
+            IReadOnlyList<PhysicalQualificationPlanRow> rows = PhysicalQualificationPlan.BuildRows(
+                physicalComplete,
+                fixtureMetadata,
+                supervisionConfirmed: true,
+                DateTimeOffset.UtcNow);
+            PhysicalQualificationPlanRow split = rows.Single(row => row.Cell.Id == "single-split-containment");
+            PhysicalQualificationPlanRow highDpi = rows.Single(row => row.Cell.Id == "dpi-150-percent");
+            PhysicalQualificationPlanRow negative = rows.Single(row => row.Cell.Id == "topology-negative-x");
+            return split.Outcome == PhysicalCellOutcome.RUNNABLE
+                && highDpi.Outcome == PhysicalCellOutcome.BLOCKED_CAPABILITY
+                && negative.Outcome == PhysicalCellOutcome.BLOCKED_CAPABILITY
+                && rows.All(row => row.Outcome != PhysicalCellOutcome.BLOCKED_SUPERVISED);
+        });
+        yield return ("C11-stale-topology-is-rejected", () =>
+        {
+            PhysicalTopologySnapshot stale = fixtureTopology with
+            {
+                ObservedUtc = DateTimeOffset.UtcNow.AddMinutes(-6),
+            };
+            IReadOnlyList<string> failures = PhysicalTopologyGate.ValidatePhysicalSnapshot(
+                stale,
+                fixtureMetadata,
+                DateTimeOffset.UtcNow,
+                TimeSpan.FromMinutes(5));
+            return failures.Any(failure => failure.Contains("stale", StringComparison.OrdinalIgnoreCase));
+        });
+        yield return ("C12-candidate-mismatch-is-rejected", () =>
+        {
+            PhysicalTopologyCaptureMetadata wrongCandidate = fixtureMetadata with
+            {
+                CandidateSha = new string('f', 40),
+            };
+            IReadOnlyList<string> failures = PhysicalTopologyGate.ValidatePhysicalSnapshot(
+                fixtureTopology,
+                wrongCandidate,
+                DateTimeOffset.UtcNow,
+                TimeSpan.FromMinutes(5));
+            return failures.Any(failure => failure.Contains("candidate", StringComparison.OrdinalIgnoreCase));
+        });
+        yield return ("C13-invalid-monitor-id-is-rejected", () =>
+        {
+            PhysicalTopologySnapshot invalid = fixtureTopology with
+            {
+                PrimaryMonitorId = "monitor-999",
+            };
+            invalid = invalid with { SnapshotId = PhysicalTopologySnapshot.ComputeSnapshotId(invalid) };
+            IReadOnlyList<string> failures = PhysicalTopologyGate.ValidatePhysicalSnapshot(
+                invalid,
+                fixtureMetadata,
+                DateTimeOffset.UtcNow,
+                TimeSpan.FromMinutes(5));
+            return failures.Any(failure => failure.Contains("primary identity", StringComparison.OrdinalIgnoreCase));
+        });
+        yield return ("C14-monitor-disappearance-is-restoration-mismatch", () =>
+        {
+            PhysicalTopologySnapshot missingMonitor = PhysicalTopologySnapshot.Create(
+                DateTimeOffset.UtcNow,
+                fixtureCandidateSha,
+                fixtureExecutableSha,
+                fixtureDriverSha,
+                "run-fixture",
+                "scenario-fixture",
+                1,
+                fixtureTopology.VirtualScreen,
+                fixtureTopology.PrimaryMonitorId,
+                new[] { fixtureTopology.Monitors[0] });
+            bool equivalent = PhysicalTopologySnapshot.EquivalentTopology(
+                fixtureTopology,
+                missingMonitor,
+                out string reason);
+            return !equivalent && reason.Contains("count", StringComparison.OrdinalIgnoreCase);
+        });
+        yield return ("C15-topology-change-between-preflight-and-input-is-rejected", () =>
+        {
+            PhysicalMonitorSnapshot changedMonitor = fixtureTopology.Monitors[1] with
+            {
+                WorkArea = new QualificationRect(1920, 0, 3840, 1031),
+                TaskbarDelta = new TaskbarDelta(0, 0, 0, 49),
+            };
+            PhysicalTopologySnapshot changed = PhysicalTopologySnapshot.Create(
+                DateTimeOffset.UtcNow,
+                fixtureCandidateSha,
+                fixtureExecutableSha,
+                fixtureDriverSha,
+                "run-fixture",
+                "scenario-fixture",
+                1,
+                fixtureTopology.VirtualScreen,
+                fixtureTopology.PrimaryMonitorId,
+                new[] { fixtureTopology.Monitors[0], changedMonitor });
+            bool equivalent = PhysicalTopologySnapshot.EquivalentTopology(
+                fixtureTopology,
+                changed,
+                out string reason);
+            return !equivalent && reason.Contains("geometry", StringComparison.OrdinalIgnoreCase);
+        });
+        yield return ("C16-dpi-probe-unavailable-is-environment-block", () =>
+        {
+            ScenarioCapabilitySnapshot unavailable = complete with
+            {
+                MonitorCount = 0,
+                MixedDpiAvailable = false,
+                NonDefaultDpiAvailable = false,
+                Topology = null,
+                TopologyProbeFailure = "native monitor enumeration or DPI probe failed",
+            };
+            ScenarioCapabilityResolution result = ScenarioCapabilities.Resolve(
+                new ScenarioDescriptor("physical-mixed-dpi", RequiresMixedDpi: true),
+                unavailable);
+            return !result.Runnable
+                && result.Outcome == ScenarioOutcomeKind.BlockedEnvironment
+                && result.Reason?.Contains("DPI probe", StringComparison.OrdinalIgnoreCase) == true;
+        });
+        yield return ("C17-source-destination-dpi-mismatch-is-blocked", () =>
+        {
+            PhysicalQualificationPlanRow transition = PhysicalQualificationPlan.BuildRows(
+                physicalComplete,
+                fixtureMetadata,
+                supervisionConfirmed: true,
+                DateTimeOffset.UtcNow)
+                .Single(row => row.Cell.Id == "transition-120-to-144");
+            return transition.Outcome == PhysicalCellOutcome.BLOCKED_CAPABILITY
+                && transition.Reason?.Contains("144", StringComparison.Ordinal) == true;
+        });
+        yield return ("C18-operator-display-protocol-gates-input", () =>
+            PhysicalDisplayStateProtocol.Steps.Count == 10
+            && PhysicalDisplayStateProtocol.Steps.Count(step => step.InputAllowed) == 1
+            && PhysicalDisplayStateProtocol.Steps.Single(step => step.InputAllowed).Id == "run-bounded-cell"
+            && PhysicalDisplayStateProtocol.ProhibitedOperations.Count == 4
+            && !PhysicalDisplayStateProtocol.InputMayBegin(
+                PhysicalCellOutcome.BLOCKED_CAPABILITY,
+                supervisionConfirmed: true,
+                topologyVerified: true,
+                leaseActive: true)
+            && PhysicalDisplayStateProtocol.InputMayBegin(
+                PhysicalCellOutcome.RUNNABLE,
+                supervisionConfirmed: true,
+                topologyVerified: true,
+                leaseActive: true));
     }
 
     private static IEnumerable<(string Id, Func<bool> Test)> LeaseTests()
@@ -1084,7 +1627,42 @@ internal static class DeterministicSelfTests
             string key = "fixture-window")
             => new(hwnd, key, ownership, role, true, true);
 
-        DesktopQualificationSnapshot Snapshot(bool locked = false)
+        PhysicalTopologySnapshot FixtureTopology()
+            => PhysicalTopologySnapshot.Create(
+                DateTimeOffset.UtcNow,
+                new string('1', 40),
+                new string('2', 64),
+                new string('3', 64),
+                "lease-run",
+                "lease-scenario",
+                1,
+                new QualificationRect(0, 0, 3840, 1200),
+                "monitor-001",
+                new[]
+                {
+                    new PhysicalMonitorSnapshot(
+                        "monitor-001",
+                        new QualificationRect(0, 0, 1920, 1200),
+                        new QualificationRect(0, 0, 1920, 1140),
+                        true,
+                        120,
+                        125,
+                        "primary",
+                        new TaskbarDelta(0, 0, 0, 60)),
+                    new PhysicalMonitorSnapshot(
+                        "monitor-002",
+                        new QualificationRect(1920, 0, 3840, 1080),
+                        new QualificationRect(1920, 0, 3840, 1032),
+                        false,
+                        96,
+                        100,
+                        "right",
+                        new TaskbarDelta(0, 0, 0, 48)),
+                });
+
+        DesktopQualificationSnapshot Snapshot(
+            bool locked = false,
+            PhysicalTopologySnapshot? topology = null)
             => new(
                 Foreground: Window(new IntPtr(0x100), RunOwnershipKind.OwnedWindow),
                 VisibleTestWindows: new[] { Window(new IntPtr(0x100), RunOwnershipKind.OwnedWindow) },
@@ -1098,7 +1676,8 @@ internal static class DeterministicSelfTests
                 WorkstationLocked: locked,
                 InputDesktop: "fixture",
                 TabDockCandidateIdentity: "not-started",
-                TestRunnerIdentity: "pid=fixture");
+                TestRunnerIdentity: "pid=fixture",
+                Topology: topology);
 
         yield return ("LSE01-active-lease-accepts-owned-point", () =>
         {
@@ -1163,6 +1742,55 @@ internal static class DeterministicSelfTests
                 "foreground-source-before-switch",
                 requireForeground: true);
             return !lease.IsValid && checkpoint.Kind == DesktopLeaseCheckpointKind.ForeignForeground;
+        });
+        yield return ("LSE08-missing-topology-restore-proof-invalidates", () =>
+        {
+            var lease = new DesktopQualificationLease(
+                new FakeDesktopProbe(Snapshot()),
+                new NativeInteractionTimeline());
+            lease.Start();
+            return !lease.VerifyRestored()
+                && lease.State == DesktopLeaseState.Invalidated
+                && lease.LastFailureReason?.Contains("topology", StringComparison.OrdinalIgnoreCase) == true;
+        });
+        yield return ("LSE09-equivalent-topology-restores-successfully", () =>
+        {
+            DesktopQualificationSnapshot baseline = Snapshot(topology: FixtureTopology());
+            var probe = new FakeDesktopProbe(baseline);
+            var lease = new DesktopQualificationLease(probe, new NativeInteractionTimeline());
+            lease.Start();
+            bool restored = lease.VerifyRestored();
+            return restored
+                && lease.IsValid
+                && lease.LastFailureReason == null;
+        });
+        yield return ("LSE10-changed-topology-restoration-invalidates", () =>
+        {
+            DesktopQualificationSnapshot baseline = Snapshot(topology: FixtureTopology());
+            PhysicalMonitorSnapshot changedMonitor = baseline.Topology!.Monitors[1] with
+            {
+                WorkArea = new QualificationRect(1920, 0, 3840, 1031),
+                TaskbarDelta = new TaskbarDelta(0, 0, 0, 49),
+            };
+            PhysicalTopologySnapshot changed = PhysicalTopologySnapshot.Create(
+                DateTimeOffset.UtcNow,
+                baseline.Topology.CandidateSha,
+                baseline.Topology.CandidateExecutableSha,
+                baseline.Topology.DriverSha,
+                baseline.Topology.RunId,
+                baseline.Topology.Scenario,
+                baseline.Topology.Attempt,
+                baseline.Topology.VirtualScreen,
+                baseline.Topology.PrimaryMonitorId,
+                new[] { baseline.Topology.Monitors[0], changedMonitor });
+            var probe = new FakeDesktopProbe(baseline);
+            probe.Captures.Enqueue(baseline with { Topology = changed });
+            var lease = new DesktopQualificationLease(probe, new NativeInteractionTimeline());
+            lease.Start();
+            bool restored = lease.VerifyRestored();
+            return !restored
+                && !lease.IsValid
+                && lease.LastFailureReason?.Contains("restored", StringComparison.OrdinalIgnoreCase) == true;
         });
     }
 
@@ -1553,6 +2181,24 @@ internal static class DeterministicSelfTests
         }
     }
 
+    private sealed class StaticVisualCaptureProvider : IVisualCaptureProvider
+    {
+        private readonly VisualFrame _frame;
+
+        public StaticVisualCaptureProvider(VisualFrame frame)
+            => _frame = frame;
+
+        public bool TryCapture(
+            VisualCaptureScope scope,
+            out VisualFrame? frame,
+            out string reason)
+        {
+            frame = _frame;
+            reason = string.Empty;
+            return true;
+        }
+    }
+
     private sealed class FakeDesktopProbe : IDesktopQualificationProbe
     {
         private readonly DesktopQualificationSnapshot _snapshot;
@@ -1565,8 +2211,10 @@ internal static class DeterministicSelfTests
 
         public Queue<DesktopWindowObservation> Foregrounds { get; } = new();
         public Queue<DesktopWindowObservation> Points { get; } = new();
+        public Queue<DesktopQualificationSnapshot> Captures { get; } = new();
 
-        public DesktopQualificationSnapshot Capture() => _snapshot;
+        public DesktopQualificationSnapshot Capture()
+            => Captures.Count == 0 ? _snapshot : Captures.Dequeue();
 
         public DesktopWindowObservation ObserveForeground()
             => Foregrounds.Count == 0 ? _snapshot.Foreground : Foregrounds.Dequeue();

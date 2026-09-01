@@ -51,7 +51,8 @@ internal sealed record ScenarioDefinition(
     ScenarioDestructiveState DestructiveState,
     int ExpectedRuntimeSeconds,
     bool IncludeInAll,
-    bool MayContributeReleaseEvidence);
+    bool MayContributeReleaseEvidence,
+    bool RequiresPhysicalTopology = false);
 
 internal sealed record ScenarioShardDefinition(
     string Name,
@@ -66,7 +67,7 @@ internal sealed record ScenarioShardDefinition(
 /// </summary>
 internal static class ScenarioCatalog
 {
-    public const string Generation = "scenario-catalog-2026-08-24-v1";
+    public const string Generation = "scenario-catalog-2026-09-01-v2";
 
     private static readonly IReadOnlyList<ScenarioShardDefinition> Shards =
         new[]
@@ -260,7 +261,8 @@ internal static class ScenarioCatalog
             bool requiresStageB = false,
             ScenarioDestructiveState destructiveState = ScenarioDestructiveState.TestOwnedMutation,
             int expectedRuntimeSeconds = 60,
-            bool mayContributeReleaseEvidence = true)
+            bool mayContributeReleaseEvidence = true,
+            bool requiresPhysicalTopology = false)
         {
             list.Add(new ScenarioDefinition(
                 id,
@@ -283,7 +285,8 @@ internal static class ScenarioCatalog
                 destructiveState,
                 expectedRuntimeSeconds,
                 includeInAll,
-                mayContributeReleaseEvidence));
+                mayContributeReleaseEvidence,
+                requiresPhysicalTopology));
         }
 
         // Default all-order hermetic scenarios. Keeping the declaration in
@@ -296,9 +299,10 @@ internal static class ScenarioCatalog
         Add("selfhide", "SelfHide", "core-lifecycle", includeInAll: true);
         Add("selfminhide", "SelfMinHide", "core-lifecycle", includeInAll: true);
         Add("tabswitch-hidesafety", "TabSwitchHideSafety", "core-lifecycle", includeInAll: true);
-        Add("minrestore", "MinRestore", "dpi-multi-monitor", includeInAll: true);
+        Add("minrestore", "MinRestore", "dpi-multi-monitor", includeInAll: true, requiresPhysicalTopology: true);
         Add("maximize-repro", "MaximizeRepro", "dpi-multi-monitor", includeInAll: true,
-            applicationsByGuest: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["wt"] = "windows-terminal" });
+            applicationsByGuest: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["wt"] = "windows-terminal" },
+            requiresPhysicalTopology: true);
         Add("repeat-cycles", "RepeatCycles", "core-lifecycle", includeInAll: true);
         Add("crossfeature", "CrossFeature", "core-lifecycle", includeInAll: true);
         Add("hotkey-afterclose", "HotkeyAfterClose", "core-lifecycle", includeInAll: true);
@@ -307,17 +311,17 @@ internal static class ScenarioCatalog
         Add("chrometabdrag", "ChromeTabDrag", "drag-z-order", includeInAll: true, browsers: new[] { "chrome-normal" });
         Add("closegroupprompt", "CloseGroupPrompt", "capture-group", includeInAll: true);
         Add("exitpopulated", "ExitPopulated", "core-lifecycle", includeInAll: true);
-        Add("container-minimize-retains-tabs", "ContainerMinimizeRetainsTabs", "dpi-multi-monitor", includeInAll: true);
+        Add("container-minimize-retains-tabs", "ContainerMinimizeRetainsTabs", "dpi-multi-monitor", includeInAll: true, requiresPhysicalTopology: true);
         Add("hotkey-hold-single-picker", "HotkeyHoldSinglePicker", "core-lifecycle", includeInAll: true);
         Add("popout-inactive-keeps-active", "PopOutInactiveKeepsActive", "core-lifecycle", includeInAll: true);
         Add("double-capture-refused", "DoubleCaptureRefused", "capture-group", includeInAll: true);
         Add("persist-active-tab-index", "PersistActiveTabIndex", "capture-group", includeInAll: true);
         Add("restored-group-survives-member-reclose", "RestoredGroupSurvivesMemberReclose", "capture-group", includeInAll: true);
-        Add("selfminimize-timer-vs-teardown", "SelfMinimizeTimerVsTeardown", "dpi-multi-monitor", includeInAll: true);
+        Add("selfminimize-timer-vs-teardown", "SelfMinimizeTimerVsTeardown", "dpi-multi-monitor", includeInAll: true, requiresPhysicalTopology: true);
         Add("launcher-empty-state-hint", "LauncherEmptyStateHint", "diagnostics", includeInAll: true,
             inputRequirement: ScenarioInputRequirement.UiAutomationRead);
         Add("split-single-disabled", "SplitSingleDisabled", "split-core", includeInAll: true);
-        Add("split-two-auto", "SplitTwoAuto", "split-core", includeInAll: true);
+        Add("split-two-auto", "SplitTwoAuto", "split-core", includeInAll: true, requiresPhysicalTopology: true);
         Add("split-select-partner", "SplitSelectPartner", "split-core", includeInAll: true);
         Add("split-exit", "SplitExit", "split-core", includeInAll: true);
         Add("split-resize", "SplitResize", "split-core", includeInAll: true);
@@ -363,17 +367,17 @@ internal static class ScenarioCatalog
         Add("split-narrow-container-constraints", "SplitNarrowContainerConstraints", "split-render", includeInAll: true);
         Add("single-guest-does-not-overflow-content", "SingleGuestDoesNotOverflowContent", "core-lifecycle", includeInAll: true);
         Add("hung-guest-mintrack", "HungGuestMinTrack", "dpi-multi-monitor", includeInAll: true);
-        Add("guest-maximize-contained", "GuestMaximizeContained", "core-lifecycle", includeInAll: true);
-        Add("guest-caption-maximize-contained", "GuestCaptionMaximizeContained", "dpi-multi-monitor", includeInAll: true, expectedRuntimeSeconds: 90);
-        Add("guest-win-up-contained", "GuestWinUpContained", "dpi-multi-monitor", includeInAll: true, expectedRuntimeSeconds: 90);
+        Add("guest-maximize-contained", "GuestMaximizeContained", "core-lifecycle", includeInAll: true, requiresPhysicalTopology: true);
+        Add("guest-caption-maximize-contained", "GuestCaptionMaximizeContained", "dpi-multi-monitor", includeInAll: true, expectedRuntimeSeconds: 90, requiresPhysicalTopology: true);
+        Add("guest-win-up-contained", "GuestWinUpContained", "dpi-multi-monitor", includeInAll: true, expectedRuntimeSeconds: 90, requiresPhysicalTopology: true);
         Add("dual-monitor-mixed-dpi-transfer", "DualMonitorMixedDpiTransfer", "dpi-multi-monitor",
             includeInAll: true, requiresMultiMonitor: true, requiresMixedDpi: true,
-            requiresNonDefaultDpi: true, expectedRuntimeSeconds: 150);
-        Add("topmost-guest-interaction", "TopmostGuestInteraction", "drag-z-order", includeInAll: true, expectedRuntimeSeconds: 120);
+            requiresNonDefaultDpi: true, expectedRuntimeSeconds: 150, requiresPhysicalTopology: true);
+        Add("topmost-guest-interaction", "TopmostGuestInteraction", "drag-z-order", includeInAll: true, expectedRuntimeSeconds: 120, requiresPhysicalTopology: true);
         Add("locationchange-controlled-load", "LocationChangeControlledLoad", "diagnostics", includeInAll: true, expectedRuntimeSeconds: 180);
         Add("title-centering-physical-measurement", "TitleCenteringPhysicalMeasurement", "dpi-multi-monitor",
             includeInAll: true, requiresMultiMonitor: true, requiresMixedDpi: true,
-            requiresNonDefaultDpi: true, expectedRuntimeSeconds: 180);
+            requiresNonDefaultDpi: true, expectedRuntimeSeconds: 180, requiresPhysicalTopology: true);
         Add("guest-caption-maximize-notepad", "NotepadCaptionMaximizeContained", "real-app",
             applications: new[] { "notepad-broker" },
             destructiveState: ScenarioDestructiveState.UserOwnedExternal,
@@ -427,8 +431,8 @@ internal static class ScenarioCatalog
         Add("crashkill-during-active-drag", "CrashKillDuringActiveDrag", "crash-recovery", executionClass: ScenarioExecutionClass.Standalone, destructiveState: ScenarioDestructiveState.CrashRecovery);
         Add("dwm-transitions-disabled-on-capture", "DwmTransitionsDisabledOnCapture", "diagnostics", executionClass: ScenarioExecutionClass.Standalone);
         Add("dragprobe", "DragProbe", "drag-z-order", executionClass: ScenarioExecutionClass.Standalone);
-        Add("capture-dpi-unaware-guest", "CaptureDpiUnawareGuest", "dpi-multi-monitor", executionClass: ScenarioExecutionClass.Standalone, requiresNonDefaultDpi: true);
-        Add("capture-dpi-system-guest", "CaptureDpiSystemGuest", "dpi-multi-monitor", executionClass: ScenarioExecutionClass.Standalone, requiresNonDefaultDpi: true);
+        Add("capture-dpi-unaware-guest", "CaptureDpiUnawareGuest", "dpi-multi-monitor", executionClass: ScenarioExecutionClass.Standalone, requiresNonDefaultDpi: true, requiresPhysicalTopology: true);
+        Add("capture-dpi-system-guest", "CaptureDpiSystemGuest", "dpi-multi-monitor", executionClass: ScenarioExecutionClass.Standalone, requiresNonDefaultDpi: true, requiresPhysicalTopology: true);
         Add("split-comparison-observe", "SplitComparisonObserve", "split-render", executionClass: ScenarioExecutionClass.Standalone);
         Add("startup-group-not-hidden-behind-existing-window", "StartupGroupNotHiddenBehindExistingWindow", "startup", executionClass: ScenarioExecutionClass.Standalone);
         Add("startup-does-not-steal-foreground-after-external-activation", "StartupDoesNotStealForegroundAfterExternalActivation", "startup", executionClass: ScenarioExecutionClass.Standalone);

@@ -362,7 +362,55 @@ internal static partial class Scenarios
         GuestInfo pigA = SpawnPig(ctx, "STA", "--color", "red");
         GuestInfo pigB = SpawnPig(ctx, "STB", "--color", "blue");
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
+        ctx.ExpectedState = "Two captured guests remain contained in separate split panes before and after a test-owned monitor transfer, with no tab click required to restore either pane.";
+
+        DpiMonitor? primary = EnumerateDpiMonitors().FirstOrDefault(IsPrimaryMonitor);
+        DpiMonitor? secondary = EnumerateDpiMonitors().FirstOrDefault(m => !IsPrimaryMonitor(m));
+        if (primary != null
+            && NativeMethods.MonitorFromWindow(container, NativeMethods.MONITOR_DEFAULTTONEAREST) != primary.Handle
+            && !MoveContainerToMonitor(ctx, container, pigA.Hwnd, primary, "split-two-auto: container to primary"))
+        {
+            return;
+        }
+
+        bool CapturePhysical(string id, VisualCheckpointPhase phase, string expectation)
+        {
+            if (!TryGetVisualMonitorBinding(ctx, container, out VisualTopologyBinding? monitorBinding))
+            {
+                ctx.BlockEnvironment($"split-two-auto: visual checkpoint '{id}' could not resolve the container's observed physical monitor");
+                return false;
+            }
+            return CapturePhysicalVisual(
+                ctx,
+                id,
+                phase,
+                expectation,
+                new[]
+                {
+                    ctx.VisualContainerScope(container),
+                    ctx.VisualGuestScope(pigA),
+                    ctx.VisualGuestScope(pigB)
+                },
+                monitorBinding);
+        }
+
+        if (!CapturePhysical(
+                "split-two-auto-baseline",
+                VisualCheckpointPhase.BASELINE,
+                "Two captured guests are visible in their pre-split host pane on the observed physical monitor."))
+        {
+            return;
+        }
+
         ctx.Check(TabCount(container) == 2, "2 tabs after capture");
+
+        if (!CapturePhysical(
+                "split-two-auto-before-split",
+                VisualCheckpointPhase.BEFORE_ACTION,
+                "The two captured guests are identity-proven immediately before entering the split."))
+        {
+            return;
+        }
 
         long off = EnterSplitTwo(ctx, container, pigA);
         ctx.Check(TabDockLog.WaitForLogLine(off, "SPLIT[enter]", 3000), "SPLIT[enter] logged");
@@ -372,6 +420,33 @@ internal static partial class Scenarios
         ctx.Check(Util.WaitUntil(() => NativeMethods.GetForegroundWindow() == pigA.Hwnd, 3000),
             "split creation settles the initiating LEFT member as real foreground");
         ctx.Check(TabCount(container) == 1, "pair renders as ONE composite tab item (both captured, none released)");
+
+        if (!CapturePhysical(
+                "split-two-auto-after-split",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                "The split pair remains visible in separate contained panes after the split settles."))
+        {
+            return;
+        }
+
+        if (secondary != null)
+        {
+            if (!MoveContainerToMonitor(ctx, container, pigA.Hwnd, secondary, "split-two-auto: transfer split pair"))
+                return;
+            AssertSplitPanes(ctx, host, pigA, pigB, "split-two-auto after transfer");
+            if (!CapturePhysical(
+                    "split-two-auto-after-transfer",
+                    VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                    "The split pair remains contained after a test-owned transfer to the second observed monitor."))
+            {
+                return;
+            }
+            if (primary != null
+                && !MoveContainerToMonitor(ctx, container, pigA.Hwnd, primary, "split-two-auto: restore primary"))
+            {
+                return;
+            }
+        }
     }
 
     // -------------------------------------------------------------------------

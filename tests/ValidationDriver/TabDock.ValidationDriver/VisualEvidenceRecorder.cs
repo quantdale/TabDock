@@ -30,6 +30,7 @@ internal sealed class VisualEvidenceRecorder
     private readonly IVisualCaptureProvider _capture;
     private readonly string _scenario;
     private readonly int _attempt;
+    private readonly VisualTopologyBinding? _topologyBinding;
     private readonly VisualRingBuffer? _ring;
     private readonly List<VisualArtifactRecord> _artifacts = new();
     private readonly List<VisualUnavailableRecord> _unavailable = new();
@@ -42,7 +43,8 @@ internal sealed class VisualEvidenceRecorder
         string artifactRoot,
         string scenario,
         int attempt,
-        IVisualCaptureProvider capture)
+        IVisualCaptureProvider capture,
+        VisualTopologyBinding? topologyBinding = null)
     {
         policy.Validate();
         if (string.IsNullOrWhiteSpace(artifactRoot))
@@ -56,6 +58,8 @@ internal sealed class VisualEvidenceRecorder
         _policy = policy;
         _store = new VisualArtifactStore(artifactRoot);
         _scenario = scenario;
+        _topologyBinding = topologyBinding;
+        _topologyBinding?.Validate();
         _attempt = attempt;
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _ring = policy.Level == VisualEvidenceLevel.FLIGHT_RECORDER
@@ -67,6 +71,7 @@ internal sealed class VisualEvidenceRecorder
     public VisualEvidencePolicy Policy => _policy;
     public IReadOnlyList<VisualArtifactRecord> Artifacts => _artifacts;
     public IReadOnlyList<VisualUnavailableRecord> Unavailable => _unavailable;
+    public VisualTopologyBinding? TopologyBinding => _topologyBinding;
     public IReadOnlyList<VisualDerivedArtifactFailure> DerivedFailures => _derivedFailures;
     public VisualEvidenceCounterSnapshot Counters => _counters.Snapshot();
     public string ArtifactRoot => _store.Root;
@@ -94,7 +99,8 @@ internal sealed class VisualEvidenceRecorder
             _counters.Snapshot(),
             reviewPacketPath,
             reviewPacketSha256,
-            _derivedFailures.ToArray());
+            _derivedFailures.ToArray(),
+            _topologyBinding);
         manifest.Validate();
         return manifest;
     }
@@ -215,7 +221,8 @@ internal sealed class VisualEvidenceRecorder
                 "Derived chronological overview; raw visual artifacts remain authoritative.",
                 true,
                 first.ArtifactId,
-                stopwatch.ElapsedMilliseconds);
+                stopwatch.ElapsedMilliseconds,
+                TopologyBinding: _topologyBinding);
             candidate.Validate();
             _artifacts.Add(candidate);
             _counters.RetainBytes(candidate.SizeBytes);
@@ -540,6 +547,8 @@ internal sealed class VisualEvidenceRecorder
             string artifactId = $"{_scenario}-attempt-{_attempt:D3}-{request.Id}-{ordinal:D4}";
             string relativePath =
                 $"visual/{_scenario}/attempt-{_attempt:D3}/{category}/{request.Id}/{ordinal:D4}-{frame.ScopeKind}.png";
+            if (!TryBindFrame(request, frame, out VisualTopologyBinding? topologyBinding, out reason))
+                return false;
             VisualStoredArtifact stored = _store.WriteImmutable(
                 artifactId,
                 relativePath,
@@ -571,7 +580,8 @@ internal sealed class VisualEvidenceRecorder
                 SourceArtifactId: null,
                 frame.CaptureDurationMilliseconds,
                 request.Requiredness,
-                request.IncludeInReview);
+                request.IncludeInReview,
+                TopologyBinding: topologyBinding);
             candidate.Validate();
             artifact = candidate;
             return true;
@@ -579,6 +589,49 @@ internal sealed class VisualEvidenceRecorder
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or OverflowException)
         {
             reason = $"visual artifact finalization failed: {ex.GetType().Name}";
+            return false;
+        }
+    }
+
+    private bool TryBindFrame(
+        VisualCheckpointRequest request,
+        VisualFrame frame,
+        out VisualTopologyBinding? binding,
+        out string reason)
+    {
+        reason = string.Empty;
+        binding = request.TopologyBinding ?? _topologyBinding;
+        if (binding is null)
+            return true;
+
+        if (binding.MonitorId is string expectedMonitor
+            && !string.Equals(expectedMonitor, frame.MonitorId, StringComparison.Ordinal))
+        {
+            reason = "visual frame monitor disagrees with its topology binding";
+            binding = null;
+            return false;
+        }
+        if (binding.EffectiveDpi is int expectedDpi && expectedDpi != frame.Dpi)
+        {
+            reason = "visual frame effective DPI disagrees with its topology binding";
+            binding = null;
+            return false;
+        }
+
+        binding = binding with
+        {
+            MonitorId = binding.MonitorId ?? frame.MonitorId,
+            EffectiveDpi = binding.EffectiveDpi ?? frame.Dpi,
+        };
+        try
+        {
+            binding.Validate(requireMonitor: true);
+            return true;
+        }
+        catch (ArgumentException ex)
+        {
+            reason = ex.Message;
+            binding = null;
             return false;
         }
     }

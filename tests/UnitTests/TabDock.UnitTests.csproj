@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <DefineConstants>$(DefineConstants);TABDOCK_UNIT_TESTS</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -29,6 +30,8 @@
              Link="ValidationDriver\Pixels.cs" />
     <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualEvidenceModel.cs"
              Link="ValidationDriver\VisualEvidenceModel.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\PhysicalTopologyContracts.cs"
+             Link="ValidationDriver\PhysicalTopologyContracts.cs" />
     <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualPathPolicy.cs"
              Link="ValidationDriver\VisualPathPolicy.cs" />
     <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualPngArtifacts.cs"

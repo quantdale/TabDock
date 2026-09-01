@@ -204,7 +204,14 @@ internal static class Program
         if (helpRequested)
             return Usage(null, 0);
         if (planGate != null)
+        {
+            // Planning creates only a run identity and native observations; it
+            // never starts TabDock, GuineaPig, or sends input.
+            Scenarios.ConfigureArtifacts(opt.Configuration, opt.Rid, opt.TabDockPath, opt.GuineaPigPath);
+            TestRunProvenance.BeginRun();
+            QualificationResultWriter.BeginRun();
             return PrintQualificationPlan(planGate, opt);
+        }
         if (selfTestSuite != null)
         {
             // Deterministic runs may still be bound to the exact retained
@@ -301,9 +308,11 @@ internal static class Program
                 Console.WriteLine("Aborted by user.");
                 return 3;
             }
+            opt.SupervisionConfirmed = true;
         }
         else
         {
+            opt.SupervisionConfirmed = true;
             GuardedProc.Log("--yes supplied; confirmation skipped (supervised run).");
         }
 
@@ -614,7 +623,8 @@ internal static class Program
         IReadOnlyList<ScenarioDefinition> required = normalized switch
         {
             "physicaldpimixed" or "physicalmixeddpi" or "mixed-dpi" or "mixed_dpi"
-                => ScenarioCatalog.All.Where(definition => definition.RequiresMixedDpi
+                => ScenarioCatalog.All.Where(definition => definition.RequiresPhysicalTopology
+                    || definition.RequiresMixedDpi
                     || definition.RequiresNonDefaultDpi
                     || definition.RequiresNegativeCoordinates).ToArray(),
             "automated" or "deterministic"
@@ -627,23 +637,52 @@ internal static class Program
         };
         if (required.Count == 0 && normalized is not "physicaldpimixed" and not "physicalmixeddpi"
             and not "mixed-dpi" and not "mixed_dpi")
+        {
             return Usage($"Unknown or empty qualification plan gate '{gate}'.");
+        }
 
-        ScenarioCapabilitySnapshot snapshot = ScenarioCapabilities.CaptureCurrent();
-        DesktopQualificationSnapshot desktop = new NativeDesktopQualificationProbe().Capture();
-        var requiredRows = required.Select(definition => PlanRow(definition, options, snapshot, required: true)).ToArray();
+        const string planScenario = "qualification-plan";
+        ScenarioCapabilitySnapshot snapshot = ScenarioCapabilities.CaptureCurrent(planScenario, 1);
+        var expected = new PhysicalTopologyCaptureMetadata(
+            QualificationResultWriter.CandidateSha(),
+            QualificationResultWriter.Sha256File(Scenarios.TabDockExe),
+            QualificationResultWriter.DriverIdentitySha256(),
+            TestRunProvenance.RunId,
+            planScenario,
+            1);
+        IReadOnlyList<PhysicalQualificationPlanRow> physicalRows = PhysicalQualificationPlan.BuildRows(
+            snapshot,
+            expected,
+            options.Yes,
+            DateTimeOffset.UtcNow);
+        var requiredRows = required
+            .Select(definition => PlanRow(definition, options, snapshot, required: true, options.Yes, expected))
+            .ToArray();
         var optionalRows = ScenarioCatalog.All
             .Where(definition => !required.Contains(definition))
             .Where(definition => definition.ExecutionClass is not ScenarioExecutionClass.Browser
                 and not ScenarioExecutionClass.UserOwnedApplication)
-            .Select(definition => PlanRow(definition, options, snapshot, required: false))
+            .Select(definition => PlanRow(definition, options, snapshot, required: false, options.Yes, expected))
             .ToArray();
+        object topologyEvidence = snapshot.Topology is null
+            ? new
+            {
+                available = false,
+                syntheticTopology = false,
+                failure = snapshot.TopologyProbeFailure,
+            }
+            : QualificationResultWriter.TopologyEvidence(snapshot.Topology);
         var payload = new
         {
-            schemaVersion = 1,
+            schemaVersion = 2,
             planKind = "qualification-plan",
             gate = normalized,
             catalogGeneration = ScenarioCatalog.Generation,
+            candidateSha = expected.CandidateSha,
+            candidateExecutableSha = expected.CandidateExecutableSha,
+            driverSha = expected.DriverSha,
+            runId = expected.RunId,
+            supervisionConfirmed = options.Yes,
             visualPolicy = new
             {
                 level = VisualPolicyResolver.ToCliValue(options.VisualPolicy.Level),
@@ -658,6 +697,13 @@ internal static class Program
                 ringMaxFramesPerSecond = options.VisualPolicy.RingMaxFramesPerSecond,
                 allowVirtualDesktop = options.VisualPolicy.AllowVirtualDesktop,
             },
+            operatorProtocol = new
+            {
+                authority = PhysicalDisplayStateProtocol.Authority,
+                mutationPolicy = PhysicalDisplayStateProtocol.MutationPolicy,
+                prohibitedOperations = PhysicalDisplayStateProtocol.ProhibitedOperations,
+                steps = PhysicalDisplayStateProtocol.Steps,
+            },
             syntheticTopology = false,
             environment = new
             {
@@ -667,24 +713,24 @@ internal static class Program
                 processArchitecture = RuntimeInformation.ProcessArchitecture.ToString(),
                 interactiveSession = snapshot.InteractiveSessionAvailable,
                 workstationLocked = snapshot.WorkstationLocked,
+                sendInputAvailable = snapshot.SendInputAvailable,
             },
-            topology = new
+            topology = topologyEvidence,
+            physicalCells = physicalRows.Select(row => new
             {
-                syntheticTopology = false,
-                monitorCount = desktop.Monitors.Count,
-                dpiValues = desktop.Monitors.Where(monitor => monitor.Dpi != 0)
-                    .Select(monitor => (int)monitor.Dpi).Distinct().OrderBy(value => value).ToArray(),
-                mixedDpi = desktop.MixedDpiAvailable,
-                negativeCoordinates = desktop.Monitors.Any(monitor => monitor.Left < 0 || monitor.Top < 0),
-                monitors = desktop.Monitors.Select(monitor => new
-                {
-                    left = monitor.Left,
-                    top = monitor.Top,
-                    right = monitor.Right,
-                    bottom = monitor.Bottom,
-                    dpi = monitor.Dpi,
-                }).ToArray(),
-            },
+                id = row.Cell.Id,
+                scenario = row.Cell.Scenario,
+                topologyClass = row.Cell.TopologyClass,
+                requiredDpi = row.Cell.RequiredDpi,
+                sourceDpi = row.Cell.SourceDpi,
+                destinationDpi = row.Cell.DestinationDpi,
+                sourceMonitorId = row.SourceMonitorId,
+                destinationMonitorId = row.DestinationMonitorId,
+                outcome = row.Outcome.ToString(),
+                runnable = row.Outcome == PhysicalCellOutcome.RUNNABLE,
+                reason = row.Reason,
+                topologySnapshotId = row.TopologySnapshotId,
+            }).ToArray(),
             required = requiredRows,
             optional = optionalRows,
         };
@@ -696,10 +742,40 @@ internal static class Program
         ScenarioDefinition definition,
         Options options,
         ScenarioCapabilitySnapshot snapshot,
-        bool required)
+        bool required,
+        bool supervisionConfirmed,
+        PhysicalTopologyCaptureMetadata expected)
     {
         ScenarioCapabilityResolution resolution = ScenarioCapabilities.Resolve(
             ScenarioCapabilities.Describe(definition, options), snapshot);
+        ScenarioOutcomeKind? outcome = resolution.Outcome;
+        string? reason = resolution.Reason;
+        if (definition.RequiresPhysicalTopology && resolution.Runnable)
+        {
+            IReadOnlyList<string> failures = PhysicalTopologyGate.ValidatePhysicalSnapshot(
+                snapshot.Topology,
+                expected,
+                DateTimeOffset.UtcNow,
+                TimeSpan.FromMinutes(5));
+            if (!supervisionConfirmed)
+            {
+                outcome = ScenarioOutcomeKind.BlockedSupervised;
+                reason = "supervised operator confirmation is required before input";
+            }
+            else if (failures.Count != 0)
+            {
+                bool capability = failures.Any(failure =>
+                    failure.Contains("candidate", StringComparison.OrdinalIgnoreCase)
+                    || failure.Contains("driver", StringComparison.OrdinalIgnoreCase)
+                    || failure.Contains("SHA", StringComparison.OrdinalIgnoreCase)
+                    || failure.Contains("synthetic", StringComparison.OrdinalIgnoreCase));
+                outcome = capability
+                    ? ScenarioOutcomeKind.BlockedCapability
+                    : ScenarioOutcomeKind.BlockedEnvironment;
+                reason = string.Join("; ", failures);
+            }
+        }
+        bool runnable = resolution.Runnable && outcome is null;
         return new
         {
             id = definition.Id,
@@ -710,6 +786,7 @@ internal static class Program
             inputRequirement = definition.InputRequirement.ToString(),
             requiresInteractiveSession = definition.RequiresInteractiveSession,
             requiresSupervision = definition.RequiresSupervision,
+            requiresPhysicalTopology = definition.RequiresPhysicalTopology,
             requiresMultiMonitor = definition.RequiresMultiMonitor,
             requiresMixedDpi = definition.RequiresMixedDpi,
             requiresNonDefaultDpi = definition.RequiresNonDefaultDpi,
@@ -717,11 +794,11 @@ internal static class Program
             destructiveState = definition.DestructiveState.ToString(),
             expectedRuntimeSeconds = definition.ExpectedRuntimeSeconds,
             mayContributeReleaseEvidence = definition.MayContributeReleaseEvidence,
-            runnable = resolution.Runnable,
-            outcome = resolution.Runnable
+            runnable,
+            outcome = runnable
                 ? ScenarioOutcomeContract.Code(ScenarioOutcomeKind.Pass)
-                : ScenarioOutcomeContract.Code(resolution.Outcome ?? ScenarioOutcomeKind.FailHarness),
-            reason = resolution.Reason,
+                : ScenarioOutcomeContract.Code(outcome ?? ScenarioOutcomeKind.FailHarness),
+            reason = runnable ? null : reason,
         };
     }
 }

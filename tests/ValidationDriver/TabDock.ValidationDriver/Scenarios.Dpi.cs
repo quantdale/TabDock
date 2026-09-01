@@ -179,8 +179,20 @@ internal static partial class Scenarios
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
         ctx.Check(NativeMethods.IsWindow(container), "container opened while capturing DPI-unaware guest (capture accepted, not refused)");
         ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 5000), "DPI-unaware guest docked into the group (no geometry drift on acceptance)");
+        if (!TryGetVisualMonitorBinding(ctx, container, out VisualTopologyBinding? monitorBinding))
+        {
+            ctx.BlockEnvironment("capture-dpi-unaware-guest: visual evidence could not bind to the observed non-default-DPI monitor");
+            return;
+        }
+        if (!CapturePhysicalVisual(
+                ctx,
+                "capture-dpi-unaware-baseline",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                "A known DPI-unaware guest is visibly captured and docked on the observed non-default-DPI monitor.",
+                new[] { ctx.VisualContainerScope(container), ctx.VisualGuestScope(pig) },
+                monitorBinding))
+            return;
     }
-
     /// <summary>
     /// capture-dpi-system-guest: a SYSTEM-aware guest must also capture normally under the
     /// revised policy (control case; ensures the policy change did not regress aware guests).
@@ -193,5 +205,18 @@ internal static partial class Scenarios
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
         ctx.Check(NativeMethods.IsWindow(container), "container opened while capturing system-aware guest");
         ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 5000), "system-aware guest docked into the group");
+        if (!TryGetVisualMonitorBinding(ctx, container, out VisualTopologyBinding? monitorBinding))
+        {
+            ctx.BlockEnvironment("capture-dpi-system-guest: visual evidence could not bind to the observed non-default-DPI monitor");
+            return;
+        }
+        if (!CapturePhysicalVisual(
+                ctx,
+                "capture-dpi-system-baseline",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                "A known system-aware guest is visibly captured and docked on the observed non-default-DPI monitor.",
+                new[] { ctx.VisualContainerScope(container), ctx.VisualGuestScope(pig) },
+                monitorBinding))
+            return;
     }
 }

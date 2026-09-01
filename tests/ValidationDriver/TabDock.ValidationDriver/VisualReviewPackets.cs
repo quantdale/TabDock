@@ -139,7 +139,8 @@ internal static class VisualReviewPacketBuilder
             instructionsPath,
             resultPath,
             VisualEvidenceSchema.ReviewResult,
-            manifest.DerivedArtifactFailures);
+            manifest.DerivedArtifactFailures,
+            manifest.TopologyBinding);
         packet.Validate();
         Stopwatch packetSerialization = Stopwatch.StartNew();
         byte[] packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet, VisualJson.Options);

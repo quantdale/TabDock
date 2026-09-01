@@ -122,6 +122,96 @@ internal readonly record struct VisualRect(int Left, int Top, int Right, int Bot
             Math.Min(Bottom, other.Bottom));
 }
 
+internal sealed record VisualTopologyBinding(
+    string SnapshotId,
+    bool SyntheticTopology,
+    PhysicalTopologyProvenance Provenance,
+    string CandidateSha,
+    string RunId,
+    string Scenario,
+    int Attempt,
+    string? MonitorId,
+    int? EffectiveDpi,
+    string? SourceMonitorId,
+    int? SourceDpi,
+    string? DestinationMonitorId,
+    int? DestinationDpi)
+{
+    public bool IsPhysicalEligible
+        => !SyntheticTopology
+            && (Provenance is PhysicalTopologyProvenance.Observed
+                or PhysicalTopologyProvenance.OperatorPrepared);
+
+#if !TABDOCK_UNIT_TESTS
+    public static VisualTopologyBinding From(
+        PhysicalTopologySnapshot snapshot,
+        string scenario,
+        int attempt,
+        string? monitorId = null,
+        int? effectiveDpi = null,
+        string? sourceMonitorId = null,
+        int? sourceDpi = null,
+        string? destinationMonitorId = null,
+        int? destinationDpi = null)
+    {
+        snapshot.Validate();
+        return new VisualTopologyBinding(
+            snapshot.SnapshotId,
+            snapshot.SyntheticTopology,
+            snapshot.Provenance,
+            snapshot.CandidateSha,
+            snapshot.RunId,
+            scenario,
+            attempt,
+            monitorId,
+            effectiveDpi,
+            sourceMonitorId,
+            sourceDpi,
+            destinationMonitorId,
+            destinationDpi);
+    }
+#endif
+
+    public void Validate(string name = "topologyBinding", bool requireMonitor = false)
+    {
+        if (!IsSha256(SnapshotId)
+            || string.IsNullOrWhiteSpace(CandidateSha)
+            || !IsSha256(CandidateSha, 40)
+            || !Enum.IsDefined(Provenance)
+            || string.IsNullOrWhiteSpace(RunId)
+            || string.IsNullOrWhiteSpace(Scenario)
+            || Attempt < 1)
+        {
+            throw new ArgumentException($"{name} identity is incomplete or malformed.", name);
+        }
+        if (requireMonitor && (string.IsNullOrWhiteSpace(MonitorId) || EffectiveDpi is not > 0))
+            throw new ArgumentException($"{name} must identify the observed monitor and effective DPI.", name);
+        if (MonitorId is null != (EffectiveDpi is null)
+            || EffectiveDpi is <= 0
+            || SourceMonitorId is null != (SourceDpi is null)
+            || SourceDpi is <= 0
+            || DestinationMonitorId is null != (DestinationDpi is null)
+            || DestinationDpi is <= 0)
+        {
+            throw new ArgumentException($"{name} monitor and DPI fields are incomplete.", name);
+        }
+    }
+
+    public bool MatchesAttempt(VisualTopologyBinding other)
+        => string.Equals(SnapshotId, other.SnapshotId, StringComparison.OrdinalIgnoreCase)
+            && SyntheticTopology == other.SyntheticTopology
+            && Provenance == other.Provenance
+            && string.Equals(CandidateSha, other.CandidateSha, StringComparison.Ordinal)
+            && string.Equals(RunId, other.RunId, StringComparison.Ordinal)
+            && string.Equals(Scenario, other.Scenario, StringComparison.Ordinal)
+            && Attempt == other.Attempt;
+
+    private static bool IsSha256(string? value, int length = 64)
+        => !string.IsNullOrWhiteSpace(value)
+            && value.Length == length
+            && value.All(Uri.IsHexDigit);
+}
+
 internal sealed record VisualTargetIdentity(
     string Hwnd,
     uint ProcessId,
@@ -279,7 +369,8 @@ internal sealed record VisualCheckpointRequest(
     IReadOnlyList<VisualCaptureScope> Scopes,
     VisualCaptureRequiredness Requiredness = VisualCaptureRequiredness.BEST_EFFORT,
     bool FlushRing = false,
-    bool IncludeInReview = true)
+    bool IncludeInReview = true,
+    VisualTopologyBinding? TopologyBinding = null)
 {
     private static readonly Regex IdPattern = new("^[a-z][a-z0-9._-]{1,80}$", RegexOptions.CultureInvariant);
 
@@ -289,6 +380,7 @@ internal sealed record VisualCheckpointRequest(
             throw new ArgumentException($"{name}.id is not a stable checkpoint identifier.", name);
         if (string.IsNullOrWhiteSpace(Expectation) || Expectation.Length > 500)
             throw new ArgumentException($"{name}.expectation is empty or too long.", name);
+        TopologyBinding?.Validate($"{name}.topologyBinding");
         if (Scopes == null || Scopes.Count == 0)
             throw new ArgumentException($"{name} must declare at least one capture scope.", name);
         for (int i = 0; i < Scopes.Count; i++)
@@ -407,7 +499,8 @@ internal sealed record VisualArtifactRecord(
     string? SourceArtifactId,
     long CaptureDurationMilliseconds,
     VisualCaptureRequiredness Requiredness = VisualCaptureRequiredness.BEST_EFFORT,
-    bool IncludeInReview = true)
+    bool IncludeInReview = true,
+    VisualTopologyBinding? TopologyBinding = null)
 {
     public void Validate(string name = "artifact")
     {
@@ -425,6 +518,7 @@ internal sealed record VisualArtifactRecord(
         if (Dpi <= 0 || CaptureDurationMilliseconds < 0)
             throw new ArgumentException($"{name} contains invalid capture metadata.", name);
         Target?.Validate($"{name}.target");
+        TopologyBinding?.Validate($"{name}.topologyBinding");
         if (Derived && string.IsNullOrWhiteSpace(SourceArtifactId))
             throw new ArgumentException($"{name} derived artifacts require a source artifact.", name);
     }
@@ -615,7 +709,8 @@ internal sealed record VisualReviewPacket(
     string InstructionsPath,
     string RequiredResultPath,
     string RequiredResultSchema,
-    VisualDerivedArtifactFailure[] DerivedArtifactFailures)
+    VisualDerivedArtifactFailure[] DerivedArtifactFailures,
+    VisualTopologyBinding? TopologyBinding = null)
 {
     public void Validate()
     {
@@ -636,6 +731,15 @@ internal sealed record VisualReviewPacket(
             || DerivedArtifactFailures is null)
         {
             throw new ArgumentException("visual review packet identity or contents are invalid.");
+        }
+        TopologyBinding?.Validate();
+        if (TopologyBinding is not null
+            && (!string.Equals(TopologyBinding.CandidateSha, CandidateSha, StringComparison.Ordinal)
+                || !string.Equals(TopologyBinding.RunId, RunId, StringComparison.Ordinal)
+                || !string.Equals(TopologyBinding.Scenario, Scenario, StringComparison.Ordinal)
+                || TopologyBinding.Attempt != Attempt))
+        {
+            throw new ArgumentException("visual review packet topology binding disagrees with packet identity.");
         }
         var imageIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (VisualReviewImageReference image in Images)
@@ -760,7 +864,8 @@ internal sealed record VisualReviewResult(
     VisualReviewReviewedImage[] ReviewedImages,
     VisualReviewFinding[] Findings,
     string Notes,
-    string[] AcknowledgedDerivedFailureIds)
+    string[] AcknowledgedDerivedFailureIds,
+    VisualTopologyBinding? TopologyBinding = null)
 {
     public void Validate()
     {
@@ -781,6 +886,7 @@ internal sealed record VisualReviewResult(
         {
             throw new ArgumentException("visual review result identity or contents are invalid.");
         }
+        TopologyBinding?.Validate();
         var imageIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (VisualReviewReviewedImage image in ReviewedImages)
         {
@@ -819,7 +925,8 @@ internal sealed record VisualEvidenceManifest(
     VisualEvidenceCounterSnapshot Counters,
     string? ReviewPacketPath,
     string? ReviewPacketSha256,
-    VisualDerivedArtifactFailure[] DerivedArtifactFailures)
+    VisualDerivedArtifactFailure[] DerivedArtifactFailures,
+    VisualTopologyBinding? TopologyBinding = null)
 {
     public void Validate()
     {
@@ -838,6 +945,15 @@ internal sealed record VisualEvidenceManifest(
         {
             throw new ArgumentException("visual evidence manifest identity, timestamps, or collections are invalid.");
         }
+        TopologyBinding?.Validate();
+        if (TopologyBinding is not null
+            && (!string.Equals(TopologyBinding.CandidateSha, CandidateSha, StringComparison.Ordinal)
+                || !string.Equals(TopologyBinding.RunId, RunId, StringComparison.Ordinal)
+                || !string.Equals(TopologyBinding.Scenario, Scenario, StringComparison.Ordinal)
+                || TopologyBinding.Attempt != Attempt))
+        {
+            throw new ArgumentException("visual manifest topology binding disagrees with manifest identity.");
+        }
         Policy.Validate();
         Counters.Validate();
         var ids = new HashSet<string>(StringComparer.Ordinal);
@@ -845,6 +961,12 @@ internal sealed record VisualEvidenceManifest(
         foreach (VisualArtifactRecord artifact in Artifacts)
         {
             artifact.Validate();
+            if ((TopologyBinding is null) != (artifact.TopologyBinding is null)
+                || (TopologyBinding is not null
+                    && !artifact.TopologyBinding!.MatchesAttempt(TopologyBinding)))
+            {
+                throw new ArgumentException($"visual artifact '{artifact.ArtifactId}' topology binding disagrees with manifest.");
+            }
             if (!ids.Add(artifact.ArtifactId))
                 throw new ArgumentException($"duplicate visual artifact ID '{artifact.ArtifactId}'.");
             if (!paths.Add(artifact.RelativePath))

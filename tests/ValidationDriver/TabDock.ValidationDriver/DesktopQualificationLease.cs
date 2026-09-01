@@ -63,7 +63,8 @@ internal sealed record DesktopQualificationSnapshot(
     bool WorkstationLocked,
     string InputDesktop,
     string TabDockCandidateIdentity,
-    string TestRunnerIdentity)
+    string TestRunnerIdentity,
+    PhysicalTopologySnapshot? Topology = null)
 {
     public bool MultiMonitorAvailable => Monitors.Count > 1;
     public bool MixedDpiAvailable => Monitors.Select(monitor => monitor.Dpi)
@@ -106,6 +107,7 @@ internal sealed class DesktopQualificationLease : IDisposable
     private readonly Dictionary<IntPtr, TargetBinding> _targets = new();
     private DesktopLeaseState _state = DesktopLeaseState.Unstarted;
     private DesktopQualificationSnapshot? _snapshot;
+    private DesktopQualificationSnapshot? _restoredSnapshot;
     private string? _lastFailureReason;
 
     public DesktopQualificationLease(
@@ -116,8 +118,10 @@ internal sealed class DesktopQualificationLease : IDisposable
         _timeline = timeline ?? throw new ArgumentNullException(nameof(timeline));
     }
 
-    public static DesktopQualificationLease CreateNative(NativeInteractionTimeline timeline)
-        => new(new NativeDesktopQualificationProbe(), timeline);
+    public static DesktopQualificationLease CreateNative(
+        NativeInteractionTimeline timeline,
+        PhysicalTopologyCaptureMetadata? metadata = null)
+        => new(new NativeDesktopQualificationProbe(metadata), timeline);
 
     public DesktopLeaseState State
     {
@@ -145,6 +149,15 @@ internal sealed class DesktopQualificationLease : IDisposable
         {
             lock (_sync)
                 return _snapshot;
+        }
+    }
+
+    public DesktopQualificationSnapshot? RestoredSnapshot
+    {
+        get
+        {
+            lock (_sync)
+                return _restoredSnapshot;
         }
     }
 
@@ -371,6 +384,118 @@ internal sealed class DesktopQualificationLease : IDisposable
         _timeline.Record("environment-lease-closed");
     }
 
+    /// <summary>
+    /// Proves that the lease-start topology still matches the topology admitted
+    /// during preflight. A drift is an environment block before app launch or
+    /// guarded input.
+    /// </summary>
+    public bool VerifyTopology(PhysicalTopologySnapshot expected, out string reason)
+    {
+        reason = string.Empty;
+        if (!IsValid)
+        {
+            reason = LastFailureReason ?? "desktop qualification lease is not active";
+            return false;
+        }
+
+        DesktopQualificationSnapshot? current = Snapshot;
+        if (current?.Topology is null)
+        {
+            reason = "desktop topology at lease start is unavailable";
+            Invalidate(reason, DesktopLeaseCheckpointKind.Unverifiable);
+            return false;
+        }
+
+        if (!PhysicalTopologySnapshot.EquivalentTopology(
+                expected,
+                current.Topology,
+                out reason))
+        {
+            reason = "topology changed between preflight and input: " + reason;
+            Invalidate(reason, DesktopLeaseCheckpointKind.Unverifiable);
+            _timeline.Record("environment-topology-preinput-mismatch",
+                data: new Dictionary<string, string>
+                {
+                    ["reason"] = reason,
+                    ["expectedSnapshotId"] = expected.SnapshotId,
+                    ["observedSnapshotId"] = current.Topology.SnapshotId,
+                });
+            return false;
+        }
+
+        _timeline.Record("environment-topology-preinput-verified",
+            data: new Dictionary<string, string>
+            {
+                ["snapshotId"] = current.Topology.SnapshotId,
+            });
+        return true;
+    }
+
+    /// <summary>
+    /// Captures the native topology after cleanup and proves it is equivalent
+    /// to the pre-input observation. A missing or changed topology permanently
+    /// invalidates this lease; callers must stop further physical input.
+    /// </summary>
+    public bool VerifyRestored()
+    {
+        if (!IsValid)
+            return false;
+
+        DesktopQualificationSnapshot? baseline = Snapshot;
+        if (baseline?.Topology is null)
+        {
+            Invalidate("desktop topology restoration baseline is unavailable",
+                DesktopLeaseCheckpointKind.Unverifiable);
+            return false;
+        }
+
+        DesktopQualificationSnapshot current;
+        try
+        {
+            current = _probe.Capture();
+        }
+        catch (Exception ex)
+        {
+            Invalidate($"desktop topology restoration probe failed: {ex.GetType().Name}",
+                DesktopLeaseCheckpointKind.Unverifiable);
+            return false;
+        }
+
+        lock (_sync)
+            _restoredSnapshot = current;
+
+        if (current.Topology is null)
+        {
+            Invalidate("desktop topology restoration observation is unavailable",
+                DesktopLeaseCheckpointKind.Unverifiable);
+            return false;
+        }
+
+        if (!PhysicalTopologySnapshot.EquivalentTopology(
+                baseline.Topology,
+                current.Topology,
+                out string reason))
+        {
+            Invalidate("desktop topology was not restored: " + reason,
+                DesktopLeaseCheckpointKind.Unverifiable);
+            _timeline.Record("environment-topology-restore-mismatch",
+                data: new Dictionary<string, string>
+                {
+                    ["reason"] = reason,
+                    ["expectedSnapshotId"] = baseline.Topology.SnapshotId,
+                    ["observedSnapshotId"] = current.Topology.SnapshotId,
+                });
+            return false;
+        }
+
+        _timeline.Record("environment-topology-restored",
+            data: new Dictionary<string, string>
+            {
+                ["snapshotId"] = baseline.Topology.SnapshotId,
+            });
+        return true;
+    }
+
     public void Dispose() => Close();
 
     private DesktopWindowObservation SafeObserveForeground()
@@ -475,6 +600,13 @@ internal sealed class DesktopQualificationLease : IDisposable
 /// <summary>Live Windows probe used only by supervised physical runs.</summary>
 internal sealed class NativeDesktopQualificationProbe : IDesktopQualificationProbe
 {
+    private readonly PhysicalTopologyCaptureMetadata? _metadata;
+
+    public NativeDesktopQualificationProbe(PhysicalTopologyCaptureMetadata? metadata = null)
+    {
+        _metadata = metadata;
+    }
+
     public DesktopQualificationSnapshot Capture()
     {
         DesktopWindowObservation foreground = ObserveForeground();
@@ -506,30 +638,29 @@ internal sealed class NativeDesktopQualificationProbe : IDesktopQualificationPro
             windows.Clear();
         }
 
-        var monitors = new List<DesktopMonitorObservation>();
-        try
-        {
-            NativeMethods.EnumDisplayMonitors(
-                IntPtr.Zero,
-                IntPtr.Zero,
-                (IntPtr monitor, IntPtr _, ref NativeMethods.RECT rect, IntPtr _) =>
-                {
-                    uint dpi = 0;
-                    try { dpi = MonitorDpiService.GetEffectiveDpi(monitor); } catch { }
-                    monitors.Add(new DesktopMonitorObservation(rect.left, rect.top, rect.right, rect.bottom, dpi));
-                    return true;
-                },
-                IntPtr.Zero);
-        }
-        catch
-        {
-            monitors.Clear();
-        }
+        PhysicalTopologyCaptureMetadata metadata = _metadata ?? new(
+            QualificationResultWriter.CandidateSha(),
+            QualificationResultWriter.Sha256File(Scenarios.TabDockExe),
+            QualificationResultWriter.DriverIdentitySha256(),
+            TestRunProvenance.RunId,
+            TestRunProvenance.CurrentScenario,
+            1);
+        PhysicalTopologyCaptureResult topologyResult = PhysicalTopologyProbe.CaptureNative(metadata);
+        PhysicalTopologySnapshot? topology = topologyResult.Snapshot;
+        IReadOnlyList<DesktopMonitorObservation> monitors = topology?.Monitors
+            .Select(monitor => new DesktopMonitorObservation(
+                monitor.Bounds.Left,
+                monitor.Bounds.Top,
+                monitor.Bounds.Right,
+                monitor.Bounds.Bottom,
+                monitor.EffectiveDpi))
+            .ToArray()
+            ?? Array.Empty<DesktopMonitorObservation>();
 
-        int virtualLeft = SafeMetric(NativeMethods.SM_XVIRTUALSCREEN);
-        int virtualTop = SafeMetric(NativeMethods.SM_YVIRTUALSCREEN);
-        int virtualWidth = SafeMetric(NativeMethods.SM_CXVIRTUALSCREEN);
-        int virtualHeight = SafeMetric(NativeMethods.SM_CYVIRTUALSCREEN);
+        int virtualLeft = topology?.VirtualScreen.Left ?? SafeMetric(NativeMethods.SM_XVIRTUALSCREEN);
+        int virtualTop = topology?.VirtualScreen.Top ?? SafeMetric(NativeMethods.SM_YVIRTUALSCREEN);
+        int virtualWidth = topology?.VirtualScreen.Width ?? SafeMetric(NativeMethods.SM_CXVIRTUALSCREEN);
+        int virtualHeight = topology?.VirtualScreen.Height ?? SafeMetric(NativeMethods.SM_CYVIRTUALSCREEN);
         bool interactive = Environment.UserInteractive;
         bool lockedKnown = true;
         bool locked = foreground.Hwnd == IntPtr.Zero;
@@ -548,7 +679,8 @@ internal sealed class NativeDesktopQualificationProbe : IDesktopQualificationPro
             foreground.Role.StartsWith("TabDock", StringComparison.Ordinal)
                 ? foreground.IdentityKey
                 : "not-started",
-            RunnerIdentity());
+            RunnerIdentity(),
+            topology);
     }
 
     public DesktopWindowObservation ObserveForeground()

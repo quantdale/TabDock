@@ -46,7 +46,35 @@ internal static partial class Scenarios
         for (int cycle = 1; cycle <= cycles; cycle++)
         {
             string phase = $"Win+Up cycle {cycle}/{cycles}";
+            bool CaptureVisual(string suffix, VisualCheckpointPhase checkpointPhase, string expectation)
+            {
+                if (!TryGetVisualMonitorBinding(ctx, pig.Hwnd, out VisualTopologyBinding? monitorBinding))
+                {
+                    ctx.BlockEnvironment($"{phase}: visual checkpoint '{suffix}' could not resolve the guest's observed physical monitor.");
+                    return false;
+                }
+                return CapturePhysicalVisual(
+                    ctx,
+                    $"gwu-cycle-{cycle}-{suffix}",
+                    checkpointPhase,
+                    expectation,
+                    new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) },
+                    monitorBinding);
+            }
+
+            if (!CaptureVisual(
+                    "baseline",
+                    VisualCheckpointPhase.BASELINE,
+                    "Win+Up baseline shows the same captured guest over its assigned host pane."))
+                return;
+
             if (!AssertGuestPresentation(ctx, pig, container, host, phase + " baseline"))
+                return;
+
+            if (!CaptureVisual(
+                    "before-winup",
+                    VisualCheckpointPhase.BEFORE_ACTION,
+                    "The captured guest is identity-proven and ready for real Win+Up input."))
                 return;
 
             long off = TabDockLog.RecordLogLength();
@@ -65,6 +93,12 @@ internal static partial class Scenarios
                 return;
             }
             ctx.Check(nativeMax, $"{phase}: real Win+Up produced native maximize evidence ({maxEvidence})");
+            if (!CaptureVisual(
+                    "after-winup",
+                    VisualCheckpointPhase.AFTER_ACTION_IMMEDIATE,
+                    "Real Win+Up produced native maximize evidence before restoration."))
+                return;
+
 
             bool restoredByShepherd = Util.WaitUntil(
                 () => !NativeMethods.IsZoomed(pig.Hwnd) && IsDocked(pig.Hwnd, host),
@@ -90,6 +124,12 @@ internal static partial class Scenarios
             ctx.Check(!NativeMethods.IsZoomed(pig.Hwnd), $"{phase}: guest is not zoomed after restore");
             if (!AssertGuestPresentation(ctx, pig, container, host, phase + " restored"))
                 return;
+            if (!CaptureVisual(
+                    "after-restore",
+                    VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                    "Win+Down or Shepherd reconciliation restored the same captured guest pane."))
+                return;
+
             ctx.Check(TabDockLog.CountNewLines(off, "SHEPHERD[drift-reconcile]") > 0
                 || TabDockLog.CountNewLines(off, "SHEPHERD[position]") > 0,
                 $"{phase}: TabDock recorded native-presentation reconciliation without a tab click");
@@ -119,16 +159,71 @@ internal static partial class Scenarios
             ctx.SkipCapability($"dual-monitor-mixed-dpi-transfer: monitors are not mixed-DPI ({primary.Dpi} and {secondary.Dpi})");
             return;
         }
+        if (!TryGetPhysicalMonitor(ctx, primary, out PhysicalMonitorSnapshot? primarySnapshot)
+            || !TryGetPhysicalMonitor(ctx, secondary, out PhysicalMonitorSnapshot? secondarySnapshot)
+            || primarySnapshot == null
+            || secondarySnapshot == null)
+        {
+            ctx.BlockEnvironment("dual-monitor-mixed-dpi-transfer: observed monitors could not be bound to the preflight topology snapshot");
+            return;
+        }
 
         GuestInfo pig = SpawnPig(ctx, "DMT", "--pulse", "--resize-probe", "--color", "green",
             "--min-width", "200", "--min-height", "150");
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
         ctx.ExpectedState = "The captured guest and container remain paired while the container crosses both physical monitors and real Win+Shift+Arrow transfer attempts are reconciled without a silent roam.";
         GuardedProc.Log($"  PHYSICAL_TOPOLOGY monitors primary={primary.Describe()} secondary={secondary.Describe()}");
+
+        if (NativeMethods.MonitorFromWindow(container, NativeMethods.MONITOR_DEFAULTTONEAREST) != primary.Handle
+            && !MoveContainerToMonitor(ctx, container, pig.Hwnd, primary, "container to primary before transfer"))
+        {
+            return;
+        }
+
+        bool CaptureTransition(
+            string id,
+            VisualCheckpointPhase phase,
+            string expectation,
+            PhysicalMonitorSnapshot captureMonitor,
+            PhysicalMonitorSnapshot sourceMonitor,
+            PhysicalMonitorSnapshot destinationMonitor,
+            bool includeContainer)
+        {
+            VisualTopologyBinding? binding = ctx.VisualTopologyFor(
+                includeContainer ? captureMonitor.MonitorId : null,
+                includeContainer ? (int)captureMonitor.EffectiveDpi : null,
+                sourceMonitor.MonitorId,
+                (int)sourceMonitor.EffectiveDpi,
+                destinationMonitor.MonitorId,
+                (int)destinationMonitor.EffectiveDpi);
+            IReadOnlyList<VisualCaptureScope> scopes = includeContainer
+                ? new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) }
+                : new[] { ctx.VisualGuestScope(pig) };
+            return CapturePhysicalVisual(ctx, id, phase, expectation, scopes, binding);
+        }
+
+        if (!CaptureTransition(
+                "dmt-baseline-primary",
+                VisualCheckpointPhase.BASELINE,
+                "Primary-monitor baseline shows the captured guest and container paired before either transfer direction.",
+                primarySnapshot,
+                primarySnapshot,
+                secondarySnapshot,
+                includeContainer: true))
+            return;
         if (!AssertGuestPresentation(ctx, pig, container, host, "dual-monitor baseline"))
             return;
 
         bool secondaryIsRight = secondary.Bounds.left > primary.Bounds.left;
+        if (!CaptureTransition(
+                "dmt-before-primary-to-secondary",
+                VisualCheckpointPhase.BEFORE_ACTION,
+                "The captured guest is ready for a real Win+Shift+Arrow transfer attempt from the primary monitor to the secondary monitor.",
+                primarySnapshot,
+                primarySnapshot,
+                secondarySnapshot,
+                includeContainer: true))
+            return;
         bool sentTowardSecondary = secondaryIsRight
             ? Input.SendWinShiftRightTo(pig.Hwnd)
             : Input.SendWinShiftLeftTo(pig.Hwnd);
@@ -137,6 +232,15 @@ internal static partial class Scenarios
             ctx.BlockEnvironment("dual-monitor-mixed-dpi-transfer: exact foreground/lease proof refused Win+Shift+Arrow toward the secondary monitor");
             return;
         }
+        if (!CaptureTransition(
+                "dmt-after-primary-to-secondary",
+                VisualCheckpointPhase.AFTER_ACTION_IMMEDIATE,
+                "The primary-to-secondary Win+Shift+Arrow attempt is represented by a topology-bound guest frame before reconciliation.",
+                primarySnapshot,
+                primarySnapshot,
+                secondarySnapshot,
+                includeContainer: false))
+            return;
         bool recontainedAfterGuestTransfer = Util.WaitUntil(
             () => IsDocked(pig.Hwnd, host)
                 && NativeMethods.MonitorFromWindow(pig.Hwnd, NativeMethods.MONITOR_DEFAULTTONEAREST)
@@ -155,11 +259,29 @@ internal static partial class Scenarios
             return;
         ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3500, 40),
             "guest settled back over the secondary host after monitor placement");
-        if (!AssertGuestPresentation(ctx, pig, container, host, "dual-monitor secondary 100/125 transfer"))
+        if (!CaptureTransition(
+                "dmt-after-container-secondary",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                "The container and captured guest remain paired after moving to the secondary monitor and inherit its effective DPI.",
+                secondarySnapshot,
+                primarySnapshot,
+                secondarySnapshot,
+                includeContainer: true))
+            return;
+        if (!AssertGuestPresentation(ctx, pig, container, host, "dual-monitor secondary transfer"))
             return;
         ctx.Check(NativeMethods.GetDpiForWindow(container) == secondary.Dpi,
             $"container DPI follows the secondary monitor ({NativeMethods.GetDpiForWindow(container)} == {secondary.Dpi})");
 
+        if (!CaptureTransition(
+                "dmt-before-secondary-to-primary",
+                VisualCheckpointPhase.BEFORE_ACTION,
+                "The captured guest is ready for the reverse Win+Shift+Arrow transfer attempt from the secondary monitor to the primary monitor.",
+                secondarySnapshot,
+                secondarySnapshot,
+                primarySnapshot,
+                includeContainer: true))
+            return;
         bool sentTowardPrimary = secondaryIsRight
             ? Input.SendWinShiftLeftTo(pig.Hwnd)
             : Input.SendWinShiftRightTo(pig.Hwnd);
@@ -168,6 +290,15 @@ internal static partial class Scenarios
             ctx.BlockEnvironment("dual-monitor-mixed-dpi-transfer: secondary monitor has no safe exact guest activation point for the reverse Win+Shift+Arrow attempt");
             return;
         }
+        if (!CaptureTransition(
+                "dmt-after-secondary-to-primary",
+                VisualCheckpointPhase.AFTER_ACTION_IMMEDIATE,
+                "The secondary-to-primary Win+Shift+Arrow attempt is represented by a topology-bound guest frame before reconciliation.",
+                secondarySnapshot,
+                secondarySnapshot,
+                primarySnapshot,
+                includeContainer: false))
+            return;
         bool recontainedAfterReverse = Util.WaitUntil(
             () => IsDocked(pig.Hwnd, host)
                 && NativeMethods.MonitorFromWindow(pig.Hwnd, NativeMethods.MONITOR_DEFAULTTONEAREST)
@@ -186,6 +317,15 @@ internal static partial class Scenarios
             return;
         ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3500, 40),
             "guest settled back over the primary host after monitor placement");
+        if (!CaptureTransition(
+                "dmt-final-primary",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                "The reverse transition ends with the captured guest and container paired on the primary monitor.",
+                primarySnapshot,
+                secondarySnapshot,
+                primarySnapshot,
+                includeContainer: true))
+            return;
         if (!AssertGuestPresentation(ctx, pig, container, host, "dual-monitor primary return"))
             return;
         ctx.Check(NativeMethods.GetDpiForWindow(container) == primary.Dpi,
@@ -198,25 +338,26 @@ internal static partial class Scenarios
 
     private static void TopmostGuestInteraction(Ctx ctx, Options opt)
     {
-        GuestInfo pig = SpawnPig(ctx, "TOP", "--text-box", "--pulse", "--color", "purple");
+        GuestInfo pig = SpawnPig(ctx, "TOP", "--topmost", "--text-box", "--pulse", "--color", "purple");
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
-        ctx.ExpectedState = "A captured guest pinned into the topmost z-order band remains a real top-level window above its content pane while the container's group menu, rename editor, and direct guest input remain usable.";
-        if (pig.Identity is not WindowIdentity guestIdentity
-            || !VerifiedWindowOps.SetWindowPos(
-                guestIdentity,
-                NativeMethods.HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE))
-        {
-            ctx.BlockEnvironment("topmost-guest-interaction: could not pin the already-captured guest topmost with its stable identity");
-            return;
-        }
-        GuardedProc.Log($"  PHYSICAL_TOPMOST setup: captured guest 0x{pig.Hwnd.ToInt64():X} pinned with identity-checked HWND_TOPMOST; capture preceded the pin so the topmost guest cannot obscure the picker.");
+        ctx.ExpectedState = "A controlled GuineaPig launched in the topmost z-order band remains a real top-level window above its content pane while the container's group menu, rename editor, and direct guest input remain usable.";
+        GuardedProc.Log($"  PHYSICAL_TOPMOST setup: GuineaPig requested its topmost state before capture; capture and all later input use stable identities.");
         Thread.Sleep(300);
         if (!AssertGuestPresentation(ctx, pig, container, host, "topmost baseline"))
+
+            return;
+        if (!TryGetVisualMonitorBinding(ctx, container, out VisualTopologyBinding? topmostBinding))
+        {
+            ctx.BlockEnvironment("topmost-guest-interaction: baseline visual evidence could not bind to the observed monitor");
+            return;
+        }
+        if (!CapturePhysicalVisual(
+                ctx,
+                "topmost-baseline",
+                VisualCheckpointPhase.BASELINE,
+                "A controlled topmost guest remains a real top-level window over its captured host pane.",
+                new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) },
+                topmostBinding))
             return;
 
         uint guestExStyle = unchecked((uint)NativeMethods.GetWindowLongPtr(pig.Hwnd, NativeMethods.GWL_EXSTYLE).ToInt64());
@@ -234,10 +375,28 @@ internal static partial class Scenarios
             ctx.BlockEnvironment("topmost-guest-interaction: captured topmost guest content point was not safely foregroundable");
             return;
         }
+        if (!CapturePhysicalVisual(
+                ctx,
+                "topmost-before-input",
+                VisualCheckpointPhase.BEFORE_ACTION,
+                "The topmost guest and normal-band container are ready for identity-proven direct input.",
+                new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) },
+                topmostBinding))
+            return;
+
         Input.ClickAt(contentX, contentY);
         Input.TypeText("TOP-INPUT");
         ctx.Check(PigLog.WaitForPigLine(pig.Pid, "TEXTBOX text='TOP-INPUT'", 3000),
             "topmost guest accepted direct typed input at the content center");
+        if (!CapturePhysicalVisual(
+                ctx,
+                "topmost-after-input",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                "The topmost guest accepted direct typed input without losing its captured presentation.",
+                new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) },
+                topmostBinding))
+            return;
+
 
         AutomationElement root = Uia.FromHwnd(container)
             ?? throw new InvalidOperationException("topmost interaction: container UIA root unavailable.");
@@ -260,6 +419,25 @@ internal static partial class Scenarios
         NativeMethods.GetWindowThreadProcessId(menuRoot, out uint menuPid);
         ctx.Check(menuPid == ctx.TabDockPid,
             $"group menu item is topmost and owned by TabDock (root=0x{menuRoot.ToInt64():X} pid={menuPid})");
+        if (menuPid != ctx.TabDockPid
+            || !Discover.TryCaptureIdentity(menuRoot, out WindowIdentity menuIdentity))
+        {
+            ctx.BlockEnvironment("topmost-guest-interaction: the opened group menu lacked a stable TabDock-owned popup identity for visual capture");
+            return;
+        }
+        VisualCaptureScope menuScope = VisualCaptureScope.ForWindow(
+            VisualCaptureScopeKind.OWNED_POPUP,
+            VisualTargetIdentityFactory.From(menuIdentity),
+            VisualPrivacyClass.PRODUCT_OWNED);
+        if (!CapturePhysicalVisual(
+                ctx,
+                "topmost-group-menu",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                "The TabDock group menu is visibly usable above the controlled topmost guest.",
+                new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container), menuScope },
+                topmostBinding))
+            return;
+
         Input.SendKey(Input.VK_ESCAPE);
         ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000),
             "topmost guest remains docked after closing the group menu");
@@ -294,6 +472,15 @@ internal static partial class Scenarios
             ctx.Check(Util.WaitUntil(() => NativeMethods.GetWindowTextString(container) == "TOP-Renamed", 3000),
                 "topmost interaction renamed the group through the real menu/editor path");
         }
+        if (!CapturePhysicalVisual(
+                ctx,
+                "topmost-after-rename",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                "The topmost guest remains visible while the real group rename path commits.",
+                new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) },
+                topmostBinding))
+            return;
+
         ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000),
             "topmost guest remains docked after the rename editor closes");
 
@@ -329,6 +516,15 @@ internal static partial class Scenarios
             "topmost guest accepted input again after foreground was stolen");
         if (!AssertGuestPresentation(ctx, pig, container, host, "topmost after menu-rename-foreground"))
             return;
+        if (!CapturePhysicalVisual(
+                ctx,
+                "topmost-final-input",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                "The topmost guest accepts direct input again after an unrelated window temporarily owns the foreground.",
+                new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) },
+                topmostBinding))
+            return;
+
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0,
             "no EXCEPTION lines across topmost guest interactions");
     }
@@ -549,57 +745,143 @@ internal static partial class Scenarios
             ctx.SkipCapability($"title-centering-physical-measurement: monitors are not mixed-DPI ({primary.Dpi} and {secondary.Dpi})");
             return;
         }
+        if (!TryGetPhysicalMonitor(ctx, primary, out PhysicalMonitorSnapshot? primarySnapshot)
+            || !TryGetPhysicalMonitor(ctx, secondary, out PhysicalMonitorSnapshot? secondarySnapshot)
+            || primarySnapshot == null
+            || secondarySnapshot == null)
+        {
+            ctx.BlockEnvironment("title-centering-physical-measurement: observed monitors could not be bound to the preflight topology snapshot");
+            return;
+        }
 
         GuestInfo pig = SpawnPig(ctx, "TCM", "--pulse", "--color", "blue");
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
-        ctx.ExpectedState = "The visible workspace title remains centered on the container midpoint for short and long names at both the 125% and 100% physical monitor DPIs.";
-        string shortName = "TDVAL-C";
-        string longName = "TDVAL-Center-" + new string('W', 80);
-
-        if (!RenameGroupForMeasurement(ctx, container, "Group", shortName))
+        ctx.ExpectedState = "The visible workspace title remains centered on the physical container midpoint for short, medium, and long names at narrow, default, and wide container widths on both mixed-DPI monitors.";
+        var titleCases = new[]
         {
-            ctx.BlockEnvironment("title-centering-physical-measurement: the short-name UIA rename path was not safely actionable");
+            (Key: "short", Name: "TDVAL-C"),
+            (Key: "medium", Name: "TDVAL-Center-Medium"),
+            (Key: "long", Name: "TDVAL-Center-" + new string('W', 80)),
+        };
+        string[] widthKinds = { "narrow", "default", "wide" };
+        string currentName = "Group";
+
+        bool ResizeForTitle(DpiMonitor target, string widthKind, int defaultWidth)
+        {
+            if (!NativeMethods.GetWindowRect(container, out NativeMethods.RECT current))
+            {
+                ctx.Check(false, $"title centering {target.Handle:X} {widthKind}: container rect was unavailable before resize");
+                return false;
+            }
+            int availableWidth = target.Work.Width - 80;
+            if (availableWidth < 320)
+            {
+                ctx.SkipCapability($"title-centering-physical-measurement: monitor 0x{target.Handle.ToInt64():X} work area is too narrow for the bounded width matrix");
+                return false;
+            }
+            int safeDefaultWidth = Math.Clamp(defaultWidth, 320, availableWidth);
+            int width = widthKind switch
+            {
+                "narrow" => Math.Max(320, Math.Min(safeDefaultWidth, availableWidth / 2)),
+                "wide" => Math.Min(availableWidth, Math.Max(safeDefaultWidth, availableWidth * 3 / 4)),
+                _ => safeDefaultWidth,
+            };
+            int x = target.Work.left + Math.Max(40, (target.Work.Width - width) / 2);
+            x = Math.Clamp(x, target.Work.left + 20, target.Work.right - width - 20);
+            int y = Math.Clamp(
+                current.top,
+                target.Work.top + 20,
+                Math.Max(target.Work.top + 20, target.Work.bottom - current.Height - 20));
+            if (!VerifiedWindowOps.SetWindowPos(
+                    GetRememberedContainerIdentity(ctx, container),
+                    NativeMethods.HWND_TOP,
+                    x,
+                    y,
+                    width,
+                    current.Height,
+                    NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW))
+            {
+                ctx.Check(false, $"title centering {target.Handle:X} {widthKind}: verified resize failed");
+                return false;
+            }
+            bool resized = Util.WaitUntil(
+                () => NativeMethods.MonitorFromWindow(container, NativeMethods.MONITOR_DEFAULTTONEAREST) == target.Handle
+                    && NativeMethods.GetWindowRect(container, out NativeMethods.RECT resizedRect)
+                    && resizedRect.Width == width,
+                3500,
+                40);
+            ctx.Check(resized, $"title centering {target.Handle:X} {widthKind}: container reached bounded width {width}px");
+            return resized;
+        }
+
+        if (!NativeMethods.GetWindowRect(container, out NativeMethods.RECT initialRect))
+        {
+            ctx.BlockEnvironment("title-centering-physical-measurement: initial container rect unavailable");
             return;
         }
-        if (!MeasureTitleCenter(ctx, container, shortName, primary, "primary short"))
-            return;
+        int initialWidth = initialRect.Width;
 
-        if (!MoveContainerToMonitor(ctx, container, pig.Hwnd, secondary, "title measurement to secondary"))
-            return;
-        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3500, 40),
-            "guest settled over the secondary host before short-title measurement");
-        if (!AssertGuestPresentation(ctx, pig, container, host, "title centering secondary short"))
-            return;
-        if (!MeasureTitleCenter(ctx, container, shortName, secondary, "secondary short"))
-            return;
-
-        if (!MoveContainerToMonitor(ctx, container, pig.Hwnd, primary, "title measurement back to primary"))
-            return;
-        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3500, 40),
-            "guest settled over the primary host before long-title rename");
-        if (!AssertGuestPresentation(ctx, pig, container, host, "title centering primary before long"))
-            return;
-        if (!RenameGroupForMeasurement(ctx, container, shortName, longName))
+        (DpiMonitor Monitor, PhysicalMonitorSnapshot Snapshot)[] targetCases =
         {
-            ctx.BlockEnvironment("title-centering-physical-measurement: the long-name UIA rename path was not safely actionable");
+            (primary, primarySnapshot),
+            (secondary, secondarySnapshot),
+        };
+        foreach ((DpiMonitor target, PhysicalMonitorSnapshot targetSnapshot) in targetCases)
+        {
+            if (NativeMethods.MonitorFromWindow(container, NativeMethods.MONITOR_DEFAULTTONEAREST) != target.Handle
+                && !MoveContainerToMonitor(ctx, container, pig.Hwnd, target, $"title measurement to {targetSnapshot.MonitorId}"))
+            {
+                return;
+            }
+            if (!AssertGuestPresentation(ctx, pig, container, host, $"title centering {targetSnapshot.MonitorId} baseline"))
+                return;
+            int defaultWidth = initialWidth;
+            foreach ((string titleKey, string titleName) in titleCases)
+            {
+                if (!string.Equals(currentName, titleName, StringComparison.Ordinal)
+                    && !RenameGroupForMeasurement(ctx, container, currentName, titleName))
+                {
+                    ctx.BlockEnvironment($"title-centering-physical-measurement: UIA rename to {titleKey} was not safely actionable");
+                    return;
+                }
+                currentName = titleName;
+                foreach (string widthKind in widthKinds)
+                {
+                    if (!ResizeForTitle(target, widthKind, defaultWidth))
+                        return;
+                    ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3500, 40),
+                        $"title centering {targetSnapshot.MonitorId} {titleKey} {widthKind}: captured guest remains docked");
+                    VisualTopologyBinding? binding = ctx.VisualTopologyFor(
+                        targetSnapshot.MonitorId,
+                        (int)targetSnapshot.EffectiveDpi);
+                    if (!CapturePhysicalVisual(
+                            ctx,
+                            $"title-{targetSnapshot.MonitorId}-{titleKey}-{widthKind}",
+                            VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                            $"The {titleKey} workspace title is centered at the physical midpoint at {widthKind} width on {targetSnapshot.MonitorId}.",
+                            new[] { ctx.VisualContainerScope(container), ctx.VisualGuestScope(pig) },
+                            binding))
+                        return;
+                    if (!MeasureTitleCenter(
+                            ctx,
+                            container,
+                            titleName,
+                            target,
+                            $"{targetSnapshot.MonitorId} {titleKey} {widthKind}"))
+                        return;
+                }
+            }
+        }
+
+        if (!string.Equals(currentName, "Group", StringComparison.Ordinal)
+            && !RenameGroupForMeasurement(ctx, container, currentName, "Group"))
+        {
+            ctx.BlockEnvironment("title-centering-physical-measurement: final UIA rename back to Group was not safely actionable");
             return;
         }
-        if (!MeasureTitleCenter(ctx, container, longName, primary, "primary long"))
+        if (!MoveContainerToMonitor(ctx, container, pig.Hwnd, primary, "title measurement final primary")
+            || !AssertGuestPresentation(ctx, pig, container, host, "title centering final primary"))
             return;
-
-        if (!MoveContainerToMonitor(ctx, container, pig.Hwnd, secondary, "title measurement long name to secondary"))
-            return;
-        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3500, 40),
-            "guest settled over the secondary host before long-title measurement");
-        if (!AssertGuestPresentation(ctx, pig, container, host, "title centering secondary long"))
-            return;
-        if (!MeasureTitleCenter(ctx, container, longName, secondary, "secondary long"))
-            return;
-
-        if (!MoveContainerToMonitor(ctx, container, pig.Hwnd, primary, "title measurement final primary"))
-            return;
-        ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3500),
-            "title-centering measurement restored the guest to the primary host pane");
         ctx.Check(TabCount(container) == 1, "title-centering measurement retained the single captured tab");
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0,
             "no EXCEPTION lines across title-centering measurements");
@@ -686,6 +968,80 @@ internal static partial class Scenarios
         => (monitor.Bounds.left == 0 && monitor.Bounds.top == 0)
             || monitor.Work.left == 0 && monitor.Work.top == 0
                 && monitor.Bounds.left == 0;
+    private static bool CapturePhysicalVisual(
+        Ctx ctx,
+        string id,
+        VisualCheckpointPhase phase,
+        string expectation,
+        IReadOnlyList<VisualCaptureScope> scopes,
+        VisualTopologyBinding? binding = null)
+    {
+        if (ctx.Visual is null || ctx.VisualPolicy.Level is VisualEvidenceLevel.NONE or VisualEvidenceLevel.FAILURE_ONLY)
+        {
+            ctx.BlockCapability($"{ctx.Name}: physical checkpoint '{id}' requires checkpoint visual evidence.");
+            return false;
+        }
+        binding ??= ctx.VisualTopologyFor();
+        if (binding is null)
+        {
+            ctx.BlockEnvironment($"{ctx.Name}: physical checkpoint '{id}' could not bind to the observed topology.");
+            return false;
+        }
+
+        VisualCheckpointResult result = ctx.VisualCheckpoint(new VisualCheckpointRequest(
+            id,
+            phase,
+            expectation,
+            scopes,
+            VisualCaptureRequiredness.REQUIRED,
+            IncludeInReview: true,
+            TopologyBinding: binding));
+        return result.Captured;
+    }
+
+    private static bool TryGetPhysicalMonitor(
+        Ctx ctx,
+        DpiMonitor observed,
+        out PhysicalMonitorSnapshot? snapshot)
+    {
+        snapshot = null;
+        if (ctx.Capabilities?.Topology is not { } topology)
+            return false;
+
+        snapshot = topology.Monitors.FirstOrDefault(m =>
+            m.Bounds.Left == observed.Bounds.left
+            && m.Bounds.Top == observed.Bounds.top
+            && m.Bounds.Right == observed.Bounds.right
+            && m.Bounds.Bottom == observed.Bounds.bottom
+            && m.WorkArea.Left == observed.Work.left
+            && m.WorkArea.Top == observed.Work.top
+            && m.WorkArea.Right == observed.Work.right
+            && m.WorkArea.Bottom == observed.Work.bottom
+            && m.EffectiveDpi == observed.Dpi);
+        return snapshot != null;
+    }
+
+    private static bool TryGetVisualMonitorBinding(
+        Ctx ctx,
+        IntPtr hwnd,
+        out VisualTopologyBinding? binding)
+    {
+        binding = null;
+        if (hwnd == IntPtr.Zero)
+            return false;
+
+        IntPtr handle = NativeMethods.MonitorFromWindow(hwnd, NativeMethods.MONITOR_DEFAULTTONEAREST);
+        DpiMonitor? observed = EnumerateDpiMonitors().FirstOrDefault(m => m.Handle == handle);
+        if (observed == null
+            || !TryGetPhysicalMonitor(ctx, observed, out PhysicalMonitorSnapshot? snapshot)
+            || snapshot == null)
+        {
+            return false;
+        }
+
+        binding = ctx.VisualTopologyFor(snapshot.MonitorId, (int)snapshot.EffectiveDpi);
+        return binding != null;
+    }
 
     private static bool MoveContainerToMonitor(Ctx ctx, IntPtr container, IntPtr guest, DpiMonitor target, string phase)
     {
@@ -695,6 +1051,7 @@ internal static partial class Scenarios
             return false;
         }
         int x = target.Work.left + Math.Max(40, (target.Work.Width - current.Width) / 2);
+
         int y = target.Work.top + Math.Max(40, (target.Work.Height - current.Height) / 2);
         GuardedProc.Log($"  PHYSICAL_TOPOLOGY {phase}: test-owned SetWindowPos target=({x},{y}) size={current.Width}x{current.Height}; monitor={target.Handle.ToInt64():X}");
         if (!VerifiedWindowOps.SetWindowPos(
@@ -732,6 +1089,29 @@ internal static partial class Scenarios
         for (int cycle = 1; cycle <= cycles; cycle++)
         {
             string phase = $"{guestLabel} caption cycle {cycle}/{cycles}";
+            string visualPrefix = guest.IsPig ? "guineapig" : "notepad";
+            bool CaptureVisual(string suffix, VisualCheckpointPhase checkpointPhase, string expectation)
+            {
+                if (!TryGetVisualMonitorBinding(ctx, guest.Hwnd, out VisualTopologyBinding? monitorBinding))
+                {
+                    ctx.BlockEnvironment($"{phase}: visual checkpoint '{suffix}' could not resolve the guest's observed physical monitor.");
+                    return false;
+                }
+                return CapturePhysicalVisual(
+                    ctx,
+                    $"{visualPrefix}-caption-cycle-{cycle}-{suffix}",
+                    checkpointPhase,
+                    expectation,
+                    new[] { ctx.VisualGuestScope(guest), ctx.VisualContainerScope(container) },
+                    monitorBinding);
+            }
+
+            if (!CaptureVisual(
+                    "baseline",
+                    VisualCheckpointPhase.BASELINE,
+                    $"{guestLabel} baseline remains the same captured guest in its assigned pane."))
+                return;
+
             if (!AssertGuestPresentation(ctx, guest, container, host, phase + " baseline"))
                 return;
 
@@ -748,6 +1128,12 @@ internal static partial class Scenarios
                 ctx.BlockEnvironment($"{phase}: native maximize point became covered or failed exact foreground/lease proof");
                 return;
             }
+            if (!CaptureVisual(
+                    "before-maximize",
+                    VisualCheckpointPhase.BEFORE_ACTION,
+                    $"{guestLabel} maximize caption is identity-proven and ready for the real click."))
+                return;
+
             Input.ClickAt(maxX, maxY);
 
             bool nativeMax = WaitForNativeMaximizeEvidence(guest, sysMaxBefore, 2500, out string maxEvidence);
@@ -761,6 +1147,12 @@ internal static partial class Scenarios
                 ctx.Check(PigLog.CountLines(guest.Pid, "WM_SYSCOMMAND wParam=0xF030") > sysMaxBefore,
                     $"{phase}: GuineaPig received the native SC_MAXIMIZE message after the real caption click");
             ctx.Check(nativeMax, $"{phase}: caption click produced native maximize evidence ({maxEvidence})");
+            if (!CaptureVisual(
+                    "after-maximize",
+                    VisualCheckpointPhase.AFTER_ACTION_IMMEDIATE,
+                    $"{guestLabel} real caption maximize produced observable native presentation before reconciliation."))
+                return;
+
 
             bool contained = Util.WaitUntil(
                 () => !NativeMethods.IsZoomed(guest.Hwnd) && IsDocked(guest.Hwnd, host),
@@ -797,6 +1189,12 @@ internal static partial class Scenarios
             ctx.Check(!NativeMethods.IsZoomed(guest.Hwnd), $"{phase}: guest is not zoomed after native restore/reconciliation");
             if (!AssertGuestPresentation(ctx, guest, container, host, phase + " restored"))
                 return;
+            if (!CaptureVisual(
+                    "after-restore",
+                    VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                    $"{guestLabel} restored to the same captured pane after native presentation reconciliation."))
+                return;
+
             ctx.Check(TabDockLog.CountNewLines(off, "SHEPHERD[drift-reconcile]") > 0
                 || TabDockLog.CountNewLines(off, "SHEPHERD[position]") > 0,
                 $"{phase}: TabDock recorded native-presentation reconciliation without a corrective tab click");

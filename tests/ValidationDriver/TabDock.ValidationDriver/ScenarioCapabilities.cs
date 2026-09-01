@@ -37,7 +37,9 @@ internal sealed record ScenarioCapabilitySnapshot(
     bool WorkstationLocked,
     bool SendInputAvailable,
     bool CandidateSigningConfigured,
-    bool StageBAvailable)
+    bool StageBAvailable,
+    PhysicalTopologySnapshot? Topology = null,
+    string? TopologyProbeFailure = null)
 {
     public bool MultiMonitorAvailable => MonitorCount > 1;
 
@@ -167,6 +169,18 @@ internal static class ScenarioCapabilities
                 $"{descriptor.Name}: interactive SendInput capability could not be proven");
         }
 
+        if ((descriptor.RequiresMultiMonitor
+                || descriptor.RequiresMixedDpi
+                || descriptor.RequiresNonDefaultDpi
+                || descriptor.RequiresNegativeCoordinates)
+            && snapshot.TopologyProbeFailure != null)
+        {
+            return ScenarioCapabilityResolution.Blocked(
+                snapshot,
+                ScenarioOutcomeKind.BlockedEnvironment,
+                $"{descriptor.Name}: physical topology probe failed: {snapshot.TopologyProbeFailure}");
+        }
+
         if (descriptor.RequiresNegativeCoordinates && !snapshot.NegativeVirtualCoordinatesAvailable)
         {
             return ScenarioCapabilityResolution.Blocked(
@@ -218,41 +232,31 @@ internal static class ScenarioCapabilities
         return ScenarioCapabilityResolution.RunnableResult(snapshot);
     }
 
-    public static ScenarioCapabilitySnapshot CaptureCurrent()
+    public static ScenarioCapabilitySnapshot CaptureCurrent(
+        string? scenario = null,
+        int attempt = 1)
     {
         bool interactive = Environment.UserInteractive;
         IntPtr foreground = IntPtr.Zero;
         try { foreground = NativeMethods.GetForegroundWindow(); } catch { }
 
-        List<NativeMethods.RECT> monitors = new();
-        try
-        {
-            NativeMethods.EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero,
-                (IntPtr _, IntPtr _, ref NativeMethods.RECT rect, IntPtr _) =>
-                {
-                    monitors.Add(rect);
-                    return true;
-                }, IntPtr.Zero);
-        }
-        catch
-        {
-            monitors.Clear();
-        }
-
-        bool negative = monitors.Any(rect => rect.left < 0 || rect.top < 0);
-        var dpis = new HashSet<uint>();
-        try
-        {
-            NativeMethods.EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero,
-                (IntPtr monitor, IntPtr _, ref NativeMethods.RECT _, IntPtr _) =>
-                {
-                    uint dpi = MonitorDpiService.GetEffectiveDpi(monitor);
-                    if (dpi != 0)
-                        dpis.Add(dpi);
-                    return true;
-                }, IntPtr.Zero);
-        }
-        catch { dpis.Clear(); }
+        string runId = string.IsNullOrWhiteSpace(TestRunProvenance.RunId)
+            ? "preflight"
+            : TestRunProvenance.RunId;
+        string scenarioName = string.IsNullOrWhiteSpace(scenario)
+            ? TestRunProvenance.CurrentScenario
+            : scenario;
+        var metadata = new PhysicalTopologyCaptureMetadata(
+            QualificationResultWriter.CandidateSha(),
+            QualificationResultWriter.Sha256File(Scenarios.TabDockExe),
+            QualificationResultWriter.DriverIdentitySha256(),
+            runId,
+            scenarioName,
+            Math.Max(1, attempt));
+        PhysicalTopologyCaptureResult topologyResult = PhysicalTopologyProbe.CaptureNative(metadata);
+        PhysicalTopologySnapshot? topology = topologyResult.Snapshot;
+        IReadOnlyList<uint> dpis = topology?.DpiValues ?? Array.Empty<uint>();
+        bool negative = topology?.NegativeXAvailable == true || topology?.NegativeYAvailable == true;
         bool nonDefaultDpi = dpis.Any(dpi => dpi != NativeMethods.USER_DEFAULT_SCREEN_DPI);
 
         bool lockedKnown = true;
@@ -284,8 +288,8 @@ internal static class ScenarioCapabilities
             IsExecutableAvailable("wt.exe", Array.Empty<string>()),
             IsExecutableAvailable("notepad.exe", new[] { Path.Combine(Environment.SystemDirectory, "notepad.exe") }),
             IsNotepadBrokerBehaviorDetectable(),
-            monitors.Count,
-            dpis.Count > 1,
+            topology?.Monitors.Count ?? 0,
+            topology?.MixedDpiAvailable ?? false,
             nonDefaultDpi,
             negative,
             interactive,
@@ -293,7 +297,9 @@ internal static class ScenarioCapabilities
             locked,
             sendInput,
             !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SIGNING_PROVIDER")),
-            string.Equals(Environment.GetEnvironmentVariable("TABDOCK_STAGE_B_AVAILABLE"), "true", StringComparison.OrdinalIgnoreCase));
+            string.Equals(Environment.GetEnvironmentVariable("TABDOCK_STAGE_B_AVAILABLE"), "true", StringComparison.OrdinalIgnoreCase),
+            topology,
+            topologyResult.Failure);
     }
 
     private static bool IsExecutableAvailable(string executable, IReadOnlyList<string> knownPaths)

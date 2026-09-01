@@ -33,6 +33,7 @@ internal sealed class Options
     public bool VisualReviewPacket;
     public long? VisualMaxBytes;
     public VisualEvidencePolicy VisualPolicy = VisualEvidencePolicy.Disabled;
+    public bool SupervisionConfirmed;
 }
 
 /// <summary>A window under test: a guinea pig or a real app (wt/chrome) for maximize-repro.</summary>
@@ -116,6 +117,7 @@ internal sealed class Ctx
     /// </summary>
     public DesktopQualificationLease? DesktopLease { get; set; }
     public bool? DesktopLeaseValidAtCompletion { get; set; }
+    public bool? DesktopTopologyRestored { get; set; }
 
     /// <summary>
     /// Semantic visual evidence for this attempt. Scenario bodies submit
@@ -131,6 +133,39 @@ internal sealed class Ctx
             VisualCaptureScopeKind.GUEST_WINDOW,
             VisualTargetIdentityFactory.From(identity),
             VisualPrivacyClass.TEST_OWNED);
+    }
+
+    public VisualCaptureScope VisualContainerScope(IntPtr container)
+    {
+        WindowIdentity identity = ContainerIdentities
+            .FirstOrDefault(candidate => candidate.Hwnd == container);
+        if (identity.Hwnd == IntPtr.Zero)
+            throw new InvalidOperationException($"Container 0x{container.ToInt64():X} has no stable identity for visual capture.");
+        return VisualCaptureScope.ForWindow(
+            VisualCaptureScopeKind.CONTAINER_WINDOW,
+            VisualTargetIdentityFactory.From(identity),
+            VisualPrivacyClass.TEST_OWNED);
+    }
+
+    public VisualTopologyBinding? VisualTopologyFor(
+        string? monitorId = null,
+        int? effectiveDpi = null,
+        string? sourceMonitorId = null,
+        int? sourceDpi = null,
+        string? destinationMonitorId = null,
+        int? destinationDpi = null)
+    {
+        if (Visual?.TopologyBinding is not { } binding)
+            return null;
+        return binding with
+        {
+            MonitorId = monitorId,
+            EffectiveDpi = effectiveDpi,
+            SourceMonitorId = sourceMonitorId,
+            SourceDpi = sourceDpi,
+            DestinationMonitorId = destinationMonitorId,
+            DestinationDpi = destinationDpi,
+        };
     }
 
 
@@ -357,7 +392,7 @@ internal static partial class Scenarios
             GuardedProc.Log($"Unknown or unresolvable scenario '{name}'.");
             return false;
         }
-        ScenarioCapabilitySnapshot capabilities = ScenarioCapabilities.CaptureCurrent();
+        ScenarioCapabilitySnapshot capabilities = ScenarioCapabilities.CaptureCurrent(name, attempt);
         ScenarioCapabilityResolution capabilityResolution = ScenarioCapabilities.Resolve(
             ScenarioCapabilities.Describe(definition!, opt), capabilities);
         if (!capabilityResolution.Runnable)
@@ -398,8 +433,81 @@ internal static partial class Scenarios
             return false;
         }
 
+        if (definition!.RequiresPhysicalTopology)
+        {
+            var expectedTopology = new PhysicalTopologyCaptureMetadata(
+                QualificationResultWriter.CandidateSha(),
+                QualificationResultWriter.Sha256File(TabDockExe),
+                QualificationResultWriter.DriverIdentitySha256(),
+                TestRunProvenance.RunId,
+                name,
+                Math.Max(1, attempt));
+            IReadOnlyList<string> topologyFailures = PhysicalTopologyGate.ValidatePhysicalSnapshot(
+                capabilities.Topology,
+                expectedTopology,
+                DateTimeOffset.UtcNow,
+                TimeSpan.FromMinutes(5));
+            if (!opt.SupervisionConfirmed)
+                topologyFailures = topologyFailures
+                    .Append("supervised operator confirmation was not established")
+                    .ToArray();
+            if (opt.VisualPolicy.Level is VisualEvidenceLevel.NONE or VisualEvidenceLevel.FAILURE_ONLY)
+                topologyFailures = topologyFailures
+                    .Append("physical scenarios require checkpoint or flight visual evidence")
+                    .ToArray();
+            if (topologyFailures.Count != 0)
+            {
+                Input.SetDesktopLease(null);
+                Input.ResetIdentityScope(name);
+                var physicalPreflight = new Ctx
+                {
+                    Name = name,
+                    Attempt = attempt,
+                    Capabilities = capabilities,
+                    VisualPolicy = opt.VisualPolicy,
+                };
+                bool supervisionBlocked = !opt.SupervisionConfirmed;
+                bool candidateBlocked = topologyFailures.Any(failure =>
+                    failure.Contains("candidate", StringComparison.OrdinalIgnoreCase)
+                    || failure.Contains("driver", StringComparison.OrdinalIgnoreCase)
+                    || failure.Contains("SHA", StringComparison.OrdinalIgnoreCase));
+                bool visualBlocked = topologyFailures.Any(failure =>
+                    failure.Contains("visual evidence", StringComparison.OrdinalIgnoreCase));
+                ScenarioOutcomeKind outcome = supervisionBlocked
+                    ? ScenarioOutcomeKind.BlockedSupervised
+                    : candidateBlocked || visualBlocked
+                        ? ScenarioOutcomeKind.BlockedCapability
+                        : ScenarioOutcomeKind.BlockedEnvironment;
+                string reason = string.Join("; ", topologyFailures);
+                switch (outcome)
+                {
+                    case ScenarioOutcomeKind.BlockedSupervised:
+                        physicalPreflight.BlockSupervised(reason);
+                        break;
+                    case ScenarioOutcomeKind.BlockedCapability:
+                        physicalPreflight.BlockCapability(reason);
+                        break;
+                    default:
+                        physicalPreflight.BlockEnvironment(reason);
+                        break;
+                }
+                physicalPreflight.FinishedUtc = DateTimeOffset.UtcNow;
+                QualificationResultWriter.WriteScenario(physicalPreflight);
+                GuardedProc.Log($"SCENARIO {name}: {physicalPreflight.Outcome.Code} ({physicalPreflight.Outcome.Reason})");
+                return false;
+            }
+        }
+
+
         var timeline = new NativeInteractionTimeline();
-        var lease = DesktopQualificationLease.CreateNative(timeline);
+        var leaseMetadata = new PhysicalTopologyCaptureMetadata(
+            QualificationResultWriter.CandidateSha(),
+            QualificationResultWriter.Sha256File(TabDockExe),
+            QualificationResultWriter.DriverIdentitySha256(),
+            TestRunProvenance.RunId,
+            name,
+            Math.Max(1, attempt));
+        var lease = DesktopQualificationLease.CreateNative(timeline, leaseMetadata);
         lease.Start();
         if (!lease.IsValid)
         {
@@ -415,6 +523,63 @@ internal static partial class Scenarios
                 VisualPolicy = opt.VisualPolicy,
             };
             blocked.BlockEnvironment(lease.LastFailureReason ?? "desktop qualification lease could not start");
+            blocked.FinishedUtc = DateTimeOffset.UtcNow;
+            QualificationResultWriter.WriteScenario(blocked);
+            lease.Close();
+            GuardedProc.Log($"SCENARIO {name}: {blocked.Outcome.Code} ({blocked.Outcome.Reason})");
+            return false;
+        }
+        bool topologyVerifiedForInput = !definition.RequiresPhysicalTopology;
+        if (definition.RequiresPhysicalTopology)
+        {
+            string preinputTopologyReason = "physical topology pre-input verification failed";
+            if (capabilities.Topology is not { } preflightTopology
+                || !lease.VerifyTopology(preflightTopology, out preinputTopologyReason))
+            {
+                Input.ResetIdentityScope(name);
+                Input.SetDesktopLease(null);
+                var blocked = new Ctx
+                {
+                    Name = name,
+                    Attempt = attempt,
+                    Timeline = timeline,
+                    Capabilities = capabilities,
+                    DesktopLease = lease,
+                    VisualPolicy = opt.VisualPolicy,
+                };
+                blocked.BlockEnvironment(capabilities.Topology is null
+                    ? "physical preflight topology was unavailable before input"
+                    : preinputTopologyReason);
+                blocked.FinishedUtc = DateTimeOffset.UtcNow;
+                QualificationResultWriter.WriteScenario(blocked);
+                lease.Close();
+                GuardedProc.Log($"SCENARIO {name}: {blocked.Outcome.Code} ({blocked.Outcome.Reason})");
+                return false;
+            }
+            topologyVerifiedForInput = true;
+        }
+        if (definition.RequiresPhysicalTopology
+            && !PhysicalDisplayStateProtocol.InputMayBegin(
+                PhysicalCellOutcome.RUNNABLE,
+                opt.SupervisionConfirmed,
+                topologyVerifiedForInput,
+                lease.IsValid))
+        {
+            Input.ResetIdentityScope(name);
+            Input.SetDesktopLease(null);
+            var blocked = new Ctx
+            {
+                Name = name,
+                Attempt = attempt,
+                Timeline = timeline,
+                Capabilities = capabilities,
+                DesktopLease = lease,
+                VisualPolicy = opt.VisualPolicy,
+            };
+            if (!opt.SupervisionConfirmed)
+                blocked.BlockSupervised("supervised operator confirmation was lost before input");
+            else
+                blocked.BlockEnvironment("physical input gate did not prove a runnable topology and active lease");
             blocked.FinishedUtc = DateTimeOffset.UtcNow;
             QualificationResultWriter.WriteScenario(blocked);
             lease.Close();
@@ -439,6 +604,9 @@ internal static partial class Scenarios
             VisualEvidencePolicy visualPolicy = opt.VisualPolicy;
             if (visualPolicy.Enabled)
             {
+                VisualTopologyBinding? topologyBinding = capabilities.Topology is { } topology
+                    ? VisualTopologyBinding.From(topology, name, attempt)
+                    : null;
                 ctx.Visual = new VisualEvidenceRecorder(
                     visualPolicy,
                     TestRunProvenance.ArtifactDirectory,
@@ -447,7 +615,9 @@ internal static partial class Scenarios
                     new VisualCaptureService(
                         visualPolicy.MaxWidth,
                         visualPolicy.MaxHeight,
-                        visualPolicy.AllowVirtualDesktop));
+                        visualPolicy.AllowVirtualDesktop,
+                        capabilities.Topology),
+                    topologyBinding);
             }
             GuardedProc.Log($"  Visual policy: {VisualPolicyResolver.Describe(visualPolicy)}.");
             body!(ctx, opt);
@@ -477,6 +647,17 @@ internal static partial class Scenarios
                     ctx.DesktopLeaseValidAtCompletion = lease.IsValid;
                     Cleanup(ctx);
                     ctx.Check(NoSpawnedGuestWindowsRemain(ctx), "cleanup left no spawned guest top-level windows");
+                    if (definition.RequiresPhysicalTopology)
+                    {
+                        bool restored = lease.VerifyRestored();
+                        ctx.DesktopTopologyRestored = restored;
+                        if (!restored)
+                        {
+                            ctx.Check(
+                                false,
+                                "physical display topology restored to the pre-input baseline");
+                        }
+                    }
                     ctx.FinishedUtc = DateTimeOffset.UtcNow;
                     lease.Close();
                     QualificationResultWriter.WriteScenario(ctx);

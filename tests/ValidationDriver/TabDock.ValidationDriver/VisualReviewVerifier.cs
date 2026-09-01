@@ -19,7 +19,9 @@ internal static class VisualReviewVerifier
         string artifactRoot,
         string packetRelativePath,
         string resultRelativePath,
-        bool requireAllCheckpoints = true)
+        bool requireAllCheckpoints = true,
+        bool requirePhysicalTopology = false,
+        VisualTopologyBinding? expectedTopology = null)
     {
         var failures = new List<string>();
         try
@@ -49,7 +51,9 @@ internal static class VisualReviewVerifier
                 packetBytes,
                 packet,
                 review,
-                requireAllCheckpoints);
+                requireAllCheckpoints,
+                requirePhysicalTopology,
+                expectedTopology);
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or JsonException)
         {
@@ -57,11 +61,14 @@ internal static class VisualReviewVerifier
             return new VisualReviewVerificationResult(false, failures);
         }
     }
+
     public static VisualReviewVerificationResult Verify(
         string artifactRoot,
         string packetRelativePath,
         VisualReviewResult review,
-        bool requireAllCheckpoints = true)
+        bool requireAllCheckpoints = true,
+        bool requirePhysicalTopology = false,
+        VisualTopologyBinding? expectedTopology = null)
     {
         var failures = new List<string>();
         try
@@ -82,7 +89,9 @@ internal static class VisualReviewVerifier
                 packetBytes,
                 packet,
                 review,
-                requireAllCheckpoints);
+                requireAllCheckpoints,
+                requirePhysicalTopology,
+                expectedTopology);
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or JsonException)
         {
@@ -97,7 +106,9 @@ internal static class VisualReviewVerifier
         byte[] packetBytes,
         VisualReviewPacket packet,
         VisualReviewResult? review,
-        bool requireAllCheckpoints)
+        bool requireAllCheckpoints,
+        bool requirePhysicalTopology,
+        VisualTopologyBinding? expectedTopology)
     {
         var failures = new List<string>();
         string packetSha256 = Convert.ToHexString(SHA256.HashData(packetBytes)).ToLowerInvariant();
@@ -166,6 +177,13 @@ internal static class VisualReviewVerifier
         {
             failures.Add(ex.Message);
         }
+        VerifyTopologyBindings(
+            manifest,
+            packet,
+            review,
+            requirePhysicalTopology || expectedTopology is not null,
+            expectedTopology,
+            failures);
         if (paths != null)
             VerifyReviewedImages(paths, packet, review, failures);
         VerifyFindings(packet, review, failures);
@@ -398,6 +416,120 @@ internal static class VisualReviewVerifier
                 && left.SourceArtifactIds.SequenceEqual(right.SourceArtifactIds, StringComparer.Ordinal)
                 && left.RecordedUtc == right.RecordedUtc;
     }
+    private static void VerifyTopologyBindings(
+        VisualEvidenceManifest? manifest,
+        VisualReviewPacket packet,
+        VisualReviewResult review,
+        bool requirePhysicalTopology,
+        VisualTopologyBinding? expectedTopology,
+        List<string> failures)
+    {
+        VisualTopologyBinding? packetBinding = packet.TopologyBinding;
+        bool physicalRequired = requirePhysicalTopology || expectedTopology is not null;
+        if (physicalRequired)
+        {
+            if (packetBinding is null)
+                failures.Add("physical visual verification requires a topology binding");
+            else if (!packetBinding.IsPhysicalEligible)
+                failures.Add("synthetic or non-physical topology cannot satisfy physical visual verification");
+        }
+
+        if (packetBinding is not null)
+        {
+            try
+            {
+                packetBinding.Validate();
+            }
+            catch (ArgumentException ex)
+            {
+                failures.Add(ex.Message);
+            }
+            if (!string.Equals(packetBinding.CandidateSha, packet.CandidateSha, StringComparison.Ordinal)
+                || !string.Equals(packetBinding.RunId, packet.RunId, StringComparison.Ordinal)
+                || !string.Equals(packetBinding.Scenario, packet.Scenario, StringComparison.Ordinal)
+                || packetBinding.Attempt != packet.Attempt)
+            {
+                failures.Add("visual packet topology binding disagrees with packet identity");
+            }
+        }
+
+        if (manifest is not null)
+        {
+            if ((manifest.TopologyBinding is null) != (packetBinding is null))
+            {
+                failures.Add("visual manifest and packet topology-binding presence disagrees");
+            }
+            else if (manifest.TopologyBinding is not null
+                && !manifest.TopologyBinding.MatchesAttempt(packetBinding!))
+            {
+                failures.Add("visual manifest and packet topology bindings disagree");
+            }
+
+            foreach (VisualArtifactRecord artifact in manifest.Artifacts)
+            {
+                if (packetBinding is null)
+                {
+                    if (artifact.TopologyBinding is not null)
+                        failures.Add($"visual artifact '{artifact.ArtifactId}' has an unexpected topology binding");
+                    continue;
+                }
+                if (artifact.TopologyBinding is null)
+                {
+                    failures.Add($"visual artifact '{artifact.ArtifactId}' is missing its topology binding");
+                    continue;
+                }
+                try
+                {
+                    artifact.TopologyBinding.Validate(requireMonitor: !artifact.Derived);
+                }
+                catch (ArgumentException ex)
+                {
+                    failures.Add(ex.Message);
+                }
+                if (!artifact.TopologyBinding.MatchesAttempt(packetBinding))
+                    failures.Add($"visual artifact '{artifact.ArtifactId}' topology identity disagrees");
+            }
+        }
+
+        if (expectedTopology is not null)
+        {
+            try
+            {
+                expectedTopology.Validate();
+                if (!expectedTopology.IsPhysicalEligible)
+                    failures.Add("expected visual topology binding is synthetic or non-physical");
+            }
+            catch (ArgumentException ex)
+            {
+                failures.Add(ex.Message);
+            }
+            if (packetBinding is null || !packetBinding.MatchesAttempt(expectedTopology))
+                failures.Add("visual packet topology binding disagrees with expected topology");
+        }
+
+        if (review.TopologyBinding is null)
+        {
+            if (packetBinding is not null)
+                failures.Add("visual review result is missing its topology binding");
+        }
+        else
+        {
+            try
+            {
+                review.TopologyBinding.Validate();
+            }
+            catch (ArgumentException ex)
+            {
+                failures.Add(ex.Message);
+            }
+            if (packetBinding is null
+                || !review.TopologyBinding.MatchesAttempt(packetBinding))
+            {
+                failures.Add("visual review result topology binding disagrees with packet");
+            }
+        }
+    }
+
     private static void VerifyFile(
         VisualPathPolicy paths,
         string relativePath,

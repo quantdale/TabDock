@@ -1,6 +1,7 @@
 using System;
+using System.Linq;
 using System.Runtime.InteropServices;
-
+using TabDock.Services;
 namespace TabDock.ValidationDriver;
 
 internal static class VisualTargetIdentityFactory
@@ -27,11 +28,13 @@ internal sealed class VisualCaptureService : IVisualCaptureProvider
     private readonly int _maximumWidth;
     private readonly int _maximumHeight;
     private readonly bool _allowVirtualDesktop;
+    private readonly PhysicalTopologySnapshot? _topology;
 
     public VisualCaptureService(
         int maximumWidth = DefaultMaximumDimension,
         int maximumHeight = DefaultMaximumDimension,
-        bool allowVirtualDesktop = false)
+        bool allowVirtualDesktop = false,
+        PhysicalTopologySnapshot? topology = null)
     {
         if (maximumWidth <= 0 || maximumWidth > DefaultMaximumDimension)
             throw new ArgumentOutOfRangeException(nameof(maximumWidth));
@@ -39,6 +42,7 @@ internal sealed class VisualCaptureService : IVisualCaptureProvider
             throw new ArgumentOutOfRangeException(nameof(maximumHeight));
         _maximumWidth = maximumWidth;
         _maximumHeight = maximumHeight;
+        _topology = topology;
         _allowVirtualDesktop = allowVirtualDesktop;
     }
 
@@ -85,10 +89,9 @@ internal sealed class VisualCaptureService : IVisualCaptureProvider
             return false;
         if (!TestRunProvenance.TryValidateWindow(identity, out reason))
             return false;
-
         if (!TryGetWindowGeometry(hwnd, out VisualRect windowRect, out VisualRect clientRect, out reason))
             return false;
-        if (!TryGetMonitorGeometry(hwnd, out VisualRect monitorWorkArea, out int dpi, out string monitorId, out reason))
+        if (!TryGetMonitorGeometry(hwnd, _topology, out VisualRect monitorWorkArea, out int dpi, out string monitorId, out reason))
             return false;
         if (!VisualScopeResolver.TryResolveWindow(
                 scope,
@@ -286,6 +289,7 @@ internal sealed class VisualCaptureService : IVisualCaptureProvider
 
     private static bool TryGetMonitorGeometry(
         IntPtr hwnd,
+        PhysicalTopologySnapshot? topology,
         out VisualRect workArea,
         out int dpi,
         out string monitorId,
@@ -306,16 +310,56 @@ internal sealed class VisualCaptureService : IVisualCaptureProvider
             cbSize = (uint)Marshal.SizeOf<NativeMethods.MONITORINFO>(),
         };
         if (!NativeMethods.GetMonitorInfo(monitor, ref info)
-            || !TryRect(info.rcWork, out workArea))
+            || !TryRect(info.rcMonitor, out VisualRect monitorBounds)
+            || !TryRect(info.rcWork, out VisualRect observedWorkArea))
         {
-            reason = "target monitor work area could not be read";
+            reason = "target monitor geometry could not be read";
             return false;
         }
-        uint nativeDpi = NativeMethods.GetDpiForWindow(hwnd);
-        dpi = nativeDpi == 0
-            ? checked((int)Math.Max(NativeMethods.GetDpiForSystem(), NativeMethods.USER_DEFAULT_SCREEN_DPI))
-            : checked((int)nativeDpi);
-        monitorId = $"0x{monitor.ToInt64():X}";
+        workArea = observedWorkArea;
+
+        uint nativeDpi;
+        try
+        {
+            nativeDpi = MonitorDpiService.GetEffectiveDpi(monitor);
+        }
+        catch
+        {
+            nativeDpi = 0;
+        }
+        if (nativeDpi == 0)
+        {
+            reason = "target monitor effective DPI is unavailable";
+            return false;
+        }
+        dpi = checked((int)nativeDpi);
+
+        if (topology is null)
+        {
+            monitorId = $"0x{monitor.ToInt64():X}";
+            return true;
+        }
+
+        PhysicalMonitorSnapshot? observed = topology.Monitors.FirstOrDefault(candidate =>
+            candidate.Bounds.Left == monitorBounds.Left
+            && candidate.Bounds.Top == monitorBounds.Top
+            && candidate.Bounds.Right == monitorBounds.Right
+            && candidate.Bounds.Bottom == monitorBounds.Bottom
+            && candidate.WorkArea.Left == observedWorkArea.Left
+            && candidate.WorkArea.Top == observedWorkArea.Top
+            && candidate.WorkArea.Right == observedWorkArea.Right
+            && candidate.WorkArea.Bottom == observedWorkArea.Bottom);
+        if (observed is null)
+        {
+            reason = "target monitor geometry is not present in the admitted topology";
+            return false;
+        }
+        if (observed.EffectiveDpi != nativeDpi)
+        {
+            reason = "target monitor effective DPI changed after topology preflight";
+            return false;
+        }
+        monitorId = observed.MonitorId;
         return true;
     }
 

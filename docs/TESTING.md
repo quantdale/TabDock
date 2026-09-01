@@ -341,12 +341,12 @@ and privacy fields without executing anything returned. The machine runner
 writes results outside the immutable package.
 
 The native-free virtual topology laboratory has generation
-`virtual-topology-lab-2026-08-24-v1`, seed `20260824`, and fixed coverage for
-96/120/144/192 DPI, negative and above-origin coordinates, asymmetric/odd/
-narrow work areas, large coordinates, dual orientations, and monitor
-removal/reordering. Every lab record says `syntheticTopology=true`; it is
-deterministic policy coverage only and cannot satisfy physical mixed-DPI
-qualification.
+`virtual-topology-lab-2026-08-24-v2`, seed `20260824`, and 12 fixed coverage
+records for 96/120/144/168/192 DPI, negative-X and above-origin coordinates,
+staggered/asymmetric/odd/narrow work areas, large coordinates, dual
+orientations, and monitor removal/reordering. Every lab record says
+`syntheticTopology=true`; it is deterministic policy coverage only and cannot
+satisfy physical mixed-DPI qualification.
 
 Native-free replay fixtures live under
 `tests/ValidationDriver/fixtures/native-replay/`. They exercise the smallest
@@ -376,6 +376,37 @@ through a foreign foreground window: record `BLOCKED_ENVIRONMENT` or
 `BLOCKED_SUPERVISED`, preserve the manifest/timeline, and run the headless
 replay/model coverage instead. A successful rerun after a valid-environment
 failure is `FLAKE_UNCLASSIFIED` until the cause is understood.
+
+For the DPI/topology hardening campaign, the physical gate is a ten-step
+operator-controlled protocol: record baseline; prove idle; check the requested
+cell; require explicit supervised preparation only when the cell is absent;
+reread and verify native topology/DPI; run one bounded cell; restore any
+operator change; reread the restored topology; and prove equivalence to the
+baseline. Only the bounded cell step permits input. The driver never changes
+registry DPI state, automates Display Settings, invokes unsupported display
+mutation, or hot-unplugs a monitor. `--yes` confirms supervision; it does not
+authorize display reconfiguration.
+
+Use the no-input plan before any physical run:
+
+```powershell
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --plan physicalMixedDpi --configuration Release --rid none --yes
+```
+
+Physical scenario execution additionally requires checkpoint or flight visual
+evidence and a topology-bound review packet:
+
+```powershell
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -- --configuration Release --rid none --yes --visual-evidence checkpoints --visual-review-packet dual-monitor-mixed-dpi-transfer
+```
+
+The current verified host is a primary `(0,0)-(1920,1200)` monitor at
+120 DPI/125% and a right `(1920,0)-(3840,1080)` monitor at 96 DPI/100%;
+negative-X, above-origin, odd/narrow/large-coordinate, and 144/168/192 DPI
+cells must remain explicit capability blocks until an operator supplies those
+display states. A physical result records both the pre-input and
+post-cleanup topology snapshots and cannot be a release PASS without the
+restoration proof.
 
 #### Presentation-integrity campaign closure — 2026-09-01
 

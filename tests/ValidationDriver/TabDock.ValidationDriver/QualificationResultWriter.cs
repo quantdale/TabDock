@@ -122,7 +122,7 @@ internal static class QualificationResultWriter
         {
             schemaVersion = report.SchemaVersion,
             labGeneration = report.Generation,
-            syntheticTopology = true,
+            syntheticTopology = report.SyntheticTopology,
             seed = report.Seed,
             passed = report.Passed,
             assertionCount = report.AssertionCount,
@@ -134,6 +134,21 @@ internal static class QualificationResultWriter
                 dpiValues = item.DpiValues,
                 negativeCoordinates = item.NegativeCoordinates,
                 aboveOrigin = item.AboveOrigin,
+                staggeredPlacement = item.StaggeredPlacement,
+                asymmetricWorkAreas = item.AsymmetricWorkAreas,
+                relativePlacements = item.RelativePlacements,
+                titleAssertionCount = item.TitleAssertionCount,
+                passed = item.Passed,
+                assertionCount = item.AssertionCount,
+                failure = item.Failure,
+            }).ToArray(),
+            dpiTransitions = report.DpiTransitions.Select(item => new
+            {
+                name = item.Name,
+                sourceMonitorId = item.SourceMonitorId,
+                destinationMonitorId = item.DestinationMonitorId,
+                sourceDpi = item.SourceDpi,
+                destinationDpi = item.DestinationDpi,
                 passed = item.Passed,
                 assertionCount = item.AssertionCount,
                 failure = item.Failure,
@@ -313,7 +328,10 @@ internal static class QualificationResultWriter
             applicationVersion = ApplicationVersion(),
             environment = EnvironmentFingerprint(),
             capabilities = CapabilityEvidence(ctx.Capabilities),
-            desktopQualification = DesktopEvidence(ctx.DesktopLease?.Snapshot),
+            desktopQualification = DesktopEvidence(
+                ctx.DesktopLease?.Snapshot,
+                ctx.DesktopLease?.RestoredSnapshot,
+                ctx.DesktopTopologyRestored),
             result = ctx.Outcome.Code,
             outcomeReason = ctx.Outcome.Reason,
             failureReason = ctx.FailureReasons.Count == 0 ? null : string.Join("; ", ctx.FailureReasons),
@@ -336,6 +354,9 @@ internal static class QualificationResultWriter
                 : new
                 {
                     policy = VisualPolicyResolver.Describe(ctx.Visual.Policy),
+                    topologyBinding = ctx.Visual.TopologyBinding is { } binding
+                        ? TopologyBindingEvidence(binding)
+                        : null,
                     manifestArtifact = visualManifest?.RelativePath,
                     manifestSha256 = visualManifest?.Sha256,
                     reviewPacketArtifact = reviewPacket?.RelativePath,
@@ -709,7 +730,10 @@ internal static class QualificationResultWriter
             },
         };
 
-    private static object? DesktopEvidence(DesktopQualificationSnapshot? snapshot)
+    private static object? DesktopEvidence(
+        DesktopQualificationSnapshot? snapshot,
+        DesktopQualificationSnapshot? restoredSnapshot,
+        bool? topologyRestored)
     {
         if (snapshot == null)
             return null;
@@ -731,6 +755,14 @@ internal static class QualificationResultWriter
                 top = snapshot.VirtualTop,
                 width = snapshot.VirtualWidth,
                 height = snapshot.VirtualHeight,
+            },
+            physicalTopology = snapshot.Topology is null ? null : TopologyEvidence(snapshot.Topology),
+            restoration = new
+            {
+                verified = topologyRestored,
+                physicalTopology = restoredSnapshot?.Topology is null
+                    ? null
+                    : TopologyEvidence(restoredSnapshot.Topology),
             },
             interactiveSessionAvailable = snapshot.InteractiveSessionAvailable,
             workstationLockedKnown = snapshot.WorkstationLockedKnown,
@@ -765,8 +797,88 @@ internal static class QualificationResultWriter
             sendInputAvailable = snapshot.SendInputAvailable,
             candidateSigningConfigured = snapshot.CandidateSigningConfigured,
             stageBAvailable = snapshot.StageBAvailable,
+            topologyProbeFailure = snapshot.TopologyProbeFailure,
+            physicalTopology = snapshot.Topology is null ? null : TopologyEvidence(snapshot.Topology),
         };
     }
+
+    internal static object TopologyEvidence(PhysicalTopologySnapshot topology)
+        => new
+        {
+            schemaVersion = topology.SchemaVersion,
+            generation = topology.Generation,
+            syntheticTopology = topology.SyntheticTopology,
+            provenance = topology.Provenance.ToString().ToUpperInvariant(),
+            observedUtc = topology.ObservedUtc,
+            candidateSha = topology.CandidateSha,
+            candidateExecutableSha = topology.CandidateExecutableSha,
+            driverSha = topology.DriverSha,
+            runId = topology.RunId,
+            scenario = topology.Scenario,
+            attempt = topology.Attempt,
+            virtualScreen = new
+            {
+                left = topology.VirtualScreen.Left,
+                top = topology.VirtualScreen.Top,
+                right = topology.VirtualScreen.Right,
+                bottom = topology.VirtualScreen.Bottom,
+                width = topology.VirtualScreen.Width,
+                height = topology.VirtualScreen.Height,
+            },
+            primaryMonitorId = topology.PrimaryMonitorId,
+            snapshotId = topology.SnapshotId,
+            monitors = topology.Monitors.Select(monitor => new
+            {
+                monitorId = monitor.MonitorId,
+                bounds = new
+                {
+                    left = monitor.Bounds.Left,
+                    top = monitor.Bounds.Top,
+                    right = monitor.Bounds.Right,
+                    bottom = monitor.Bounds.Bottom,
+                    width = monitor.Bounds.Width,
+                    height = monitor.Bounds.Height,
+                },
+                workArea = new
+                {
+                    left = monitor.WorkArea.Left,
+                    top = monitor.WorkArea.Top,
+                    right = monitor.WorkArea.Right,
+                    bottom = monitor.WorkArea.Bottom,
+                    width = monitor.WorkArea.Width,
+                    height = monitor.WorkArea.Height,
+                },
+                isPrimary = monitor.IsPrimary,
+                effectiveDpi = monitor.EffectiveDpi,
+                scalePercent = monitor.ScalePercent,
+                relativePlacement = monitor.RelativePlacement,
+                taskbarDelta = new
+                {
+                    left = monitor.TaskbarDelta.Left,
+                    top = monitor.TaskbarDelta.Top,
+                    right = monitor.TaskbarDelta.Right,
+                    bottom = monitor.TaskbarDelta.Bottom,
+                },
+            }).ToArray(),
+        };
+
+    internal static object TopologyBindingEvidence(VisualTopologyBinding binding)
+        => new
+        {
+            snapshotId = binding.SnapshotId,
+            syntheticTopology = binding.SyntheticTopology,
+            provenance = binding.Provenance.ToString().ToUpperInvariant(),
+            candidateSha = binding.CandidateSha,
+            runId = binding.RunId,
+            scenario = binding.Scenario,
+            attempt = binding.Attempt,
+            monitorId = binding.MonitorId,
+            effectiveDpi = binding.EffectiveDpi,
+            sourceMonitorId = binding.SourceMonitorId,
+            sourceDpi = binding.SourceDpi,
+            destinationMonitorId = binding.DestinationMonitorId,
+            destinationDpi = binding.DestinationDpi,
+        };
 
     private static object WindowEvidence(DesktopWindowObservation observation)
         => new

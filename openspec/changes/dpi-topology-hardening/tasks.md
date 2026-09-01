@@ -1,26 +1,26 @@
 # Tasks — DPI and topology hardening
 
 ## 0. Authority, migration, and baseline
-- [ ] 0.1 Resolve branch, HEAD, origin/main, worktree/worktrees, OpenSpec, and branch topology dynamically.
-- [ ] 0.2 Read canonical agent, architecture/testing, monitor/topology/presentation/visual specs, and archived visual records.
-- [ ] 0.3 Create row-level handoff for predecessor rows 4.8, 18.6, 19.2, 19.3; preserve real-app rows 19.1 and 19.4 out of scope.
-- [ ] 0.4 Record current deterministic coverage and last proven physical topology without relabeling historical evidence.
+- [x] 0.1 Resolve branch, HEAD, origin/main, worktree/worktrees, OpenSpec, and branch topology dynamically.
+- [x] 0.2 Read canonical agent, architecture/testing, monitor/topology/presentation/visual specs, and archived visual records.
+- [x] 0.3 Create row-level handoff for predecessor rows 4.8, 18.6, 19.2, 19.3; preserve real-app rows 19.1 and 19.4 out of scope.
+- [x] 0.4 Record current deterministic coverage and last proven physical topology without relabeling historical evidence.
 
 ## 1. Deterministic topology laboratory
-- [ ] 1.1 Add/verify left-negative, above-origin, vertical stagger, asymmetric work-area, odd-dimension, and large-coordinate matrices.
-- [ ] 1.2 Add/verify 96, 120, 144, 168, 192 DPI conversion classes.
-- [ ] 1.3 Add 96↔144/168/192 and 120↔144/168/192 transitions in both directions.
-- [ ] 1.4 Exercise placement, split, title inputs, clamp/restore, drag projection, and monitor selection across the matrix.
-- [ ] 1.5 Exercise synthetic monitor reorder/removal with stable seeds and deterministic artifacts.
-- [ ] 1.6 Prove every laboratory artifact is synthetic and ineligible for physical gates.
+- [x] 1.1 Add/verify left-negative, above-origin, vertical stagger, asymmetric work-area, odd-dimension, and large-coordinate matrices.
+- [x] 1.2 Add/verify 96, 120, 144, 168, 192 DPI conversion classes.
+- [x] 1.3 Add 96↔144/168/192 and 120↔144/168/192 transitions in both directions.
+- [x] 1.4 Exercise placement, split, title inputs, clamp/restore, drag projection, and monitor selection across the matrix.
+- [x] 1.5 Exercise synthetic monitor reorder/removal with stable seeds and deterministic artifacts.
+- [x] 1.6 Prove every laboratory artifact is synthetic and ineligible for physical gates.
 
 ## 2. Capability and safety boundary
-- [ ] 2.1 Add/verify privacy-safe topology snapshots with virtual screen, monitor/work rects, primary, DPI, scale, placement, candidate/run identity.
-- [ ] 2.2 Map requested physical cells to runnable/BLOCKED_CAPABILITY/BLOCKED_ENVIRONMENT before launch/input.
-- [ ] 2.3 Define snapshot/configure/verify/restore protocol for operator-controlled temporary layout/scale.
-- [ ] 2.4 Prove no registry hacks, blind Display Settings input, unrelated-window manipulation, unsupported display mutation, or hot-unplug automation.
-- [ ] 2.5 Add seams/tests for topology drift, unavailable DPI, vanished monitor, restore mismatch, stale snapshot, invalid candidate/lease.
-- [ ] 2.6 Stop before input when topology/candidate/supervision/identity/foreground/point ownership is unproven.
+- [x] 2.1 Add/verify privacy-safe topology snapshots with virtual screen, monitor/work rects, primary, DPI, scale, placement, candidate/run identity.
+- [x] 2.2 Map requested physical cells to runnable/BLOCKED_CAPABILITY/BLOCKED_ENVIRONMENT before launch/input.
+- [x] 2.3 Define snapshot/configure/verify/restore protocol for operator-controlled temporary layout/scale.
+- [x] 2.4 Prove no registry hacks, blind Display Settings input, unrelated-window manipulation, unsupported display mutation, or hot-unplug automation.
+- [x] 2.5 Add seams/tests for topology drift, unavailable DPI, vanished monitor, restore mismatch, stale snapshot, invalid candidate/lease.
+- [x] 2.6 Stop before input when topology/candidate/supervision/identity/foreground/point ownership is unproven.
 
 ## 3. Supervised physical geometry
 - [ ] 3.1 Establish exact Release candidate, exclusive supervised desktop, and pre-run topology/restoration baseline.

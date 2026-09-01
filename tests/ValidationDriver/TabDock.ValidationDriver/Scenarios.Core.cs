@@ -301,6 +301,20 @@ internal static partial class Scenarios
         GuestInfo pig = SpawnPig(ctx, "MR", "--color", "white", "--self-minimize-after", "7");
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
         long off = TabDockLog.RecordLogLength();
+        if (!TryGetVisualMonitorBinding(ctx, container, out VisualTopologyBinding? monitorBinding))
+        {
+            ctx.BlockEnvironment("minrestore: baseline visual evidence could not bind to the observed monitor");
+            return;
+        }
+        if (!CapturePhysicalVisual(
+                ctx,
+                "minrestore-baseline",
+                VisualCheckpointPhase.BASELINE,
+                "The self-minimizing guest is captured in its assigned pane before the timer transition.",
+                new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) },
+                monitorBinding))
+            return;
+
 
         Thread.Sleep(8000);
 
@@ -311,6 +325,15 @@ internal static partial class Scenarios
         Input.ForceForegroundRoot(host);
         int[]? frame = Pixels.CaptureHostScreenArea(host);
         double brightness = frame != null ? Pixels.ComputeAvgBrightness(frame) : -1;
+        if (!CapturePhysicalVisual(
+                ctx,
+                "minrestore-after-restore",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                "The guest is visibly restored inside the same captured pane after its self-minimize timer.",
+                new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) },
+                monitorBinding))
+            return;
+
         ctx.Check(brightness > 1.0, $"host brightness > 1.0 ({brightness:F2})");
     }
 
@@ -991,11 +1014,34 @@ internal static partial class Scenarios
         GuestInfo pigB = SpawnPig(ctx, "CMB", "--color", "blue");
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
         ctx.Check(TabCount(container) == 2, "2 tabs after capture");
+        if (!TryGetVisualMonitorBinding(ctx, container, out VisualTopologyBinding? monitorBinding))
+        {
+            ctx.BlockEnvironment("container-minimize-retains-tabs: baseline visual evidence could not bind to the observed monitor");
+            return;
+        }
+        if (!CapturePhysicalVisual(
+                ctx,
+                "container-minimize-baseline",
+                VisualCheckpointPhase.BASELINE,
+                "Two captured guests are visibly present in the same container before its real minimize action.",
+                new[] { ctx.VisualContainerScope(container), ctx.VisualGuestScope(pigA), ctx.VisualGuestScope(pigB) },
+                monitorBinding))
+            return;
+
 
         if (!Input.ForceForeground(container))
             throw new InvalidOperationException("Could not bring the container to the foreground — refusing to click blind.");
 
         long off = TabDockLog.RecordLogLength();
+        if (!CapturePhysicalVisual(
+                ctx,
+                "container-minimize-before",
+                VisualCheckpointPhase.BEFORE_ACTION,
+                "The populated container is ready for its identity-proven real minimize caption click.",
+                new[] { ctx.VisualContainerScope(container), ctx.VisualGuestScope(pigA), ctx.VisualGuestScope(pigB) },
+                monitorBinding))
+            return;
+
         // Real click on the container's own minimize button. The container was
         // JUST created and its WM_ACTIVATE -> 120ms BringToFront reassert
         // (ContainerWindow.WndProc) can race the click: if the shepherd puts the
@@ -1021,6 +1067,15 @@ internal static partial class Scenarios
         VerifiedWindowOps.ShowWindow(container, ctx.TabDockPid, NativeMethods.SW_RESTORE);
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsIconic(container), 3000), "container restored (no longer minimized)");
         Thread.Sleep(800);
+        if (!CapturePhysicalVisual(
+                ctx,
+                "container-minimize-after-restore",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                "After real minimize and restore, both captured tabs remain visibly represented by the same container.",
+                new[] { ctx.VisualContainerScope(container), ctx.VisualGuestScope(pigA), ctx.VisualGuestScope(pigB) },
+                monitorBinding))
+            return;
+
 
         ctx.Check(TabCount(container) == 2, "2 tabs retained after minimize/restore (H6 regression)");
         bool aDocked = IsDocked(pigA.Hwnd, host);
@@ -1368,6 +1423,20 @@ internal static partial class Scenarios
         NativeMethods.GetWindowRect(pig.Hwnd, out NativeMethods.RECT preCaptureRect);
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
         ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "pig docked over host right after capture");
+        if (!TryGetVisualMonitorBinding(ctx, container, out VisualTopologyBinding? monitorBinding))
+        {
+            ctx.BlockEnvironment("self-minimize-timer-vs-teardown: baseline visual evidence could not bind to the observed monitor");
+            return;
+        }
+        if (!CapturePhysicalVisual(
+                ctx,
+                "self-minimize-before",
+                VisualCheckpointPhase.BASELINE,
+                "The captured guest is visibly docked before its real native minimize and container teardown sequence.",
+                new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) },
+                monitorBinding))
+            return;
+
 
         // Minimize the guest via its OWN native minimize button (real input at
         // the guest's caption chrome) — arms the 200ms RestoreMinimizedWindow
@@ -1382,6 +1451,15 @@ internal static partial class Scenarios
         ctx.Check(Util.WaitUntil(() => !NativeMethods.IsIconic(pig.Hwnd) && IsDocked(pig.Hwnd, host), 5000),
             "app restored the self-minimized guest inside its tab within 5s");
         ctx.Check(TabCount(container) == 1, "still 1 tab after self-minimize + restore");
+        if (!CapturePhysicalVisual(
+                ctx,
+                "self-minimize-after-restore",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                "The guest is visibly restored inside the captured pane before its container is closed.",
+                new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) },
+                monitorBinding))
+            return;
+
 
         // Release via container close. The restore re-asserts the active guest's
         // foreground repeatedly for a second or two (container WM_ACTIVATE ->
@@ -1437,6 +1515,20 @@ internal static partial class Scenarios
             "released pig is visible and NOT iconic after the restore-check delay would have fired");
         ctx.Check(Util.RectNear(preCaptureRect, rcNow, 10),
             $"released pig still at its pre-capture placement — not repositioned by a stale restore timer (before {Util.FormatRect(preCaptureRect)}, now {Util.FormatRect(rcNow)})");
+        if (!TryGetVisualMonitorBinding(ctx, pig.Hwnd, out VisualTopologyBinding? releasedBinding))
+        {
+            ctx.BlockEnvironment("self-minimize-timer-vs-teardown: released guest visual evidence could not bind to the observed monitor");
+            return;
+        }
+        if (!CapturePhysicalVisual(
+                ctx,
+                "self-minimize-after-teardown",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                "After the container closes, the released guest remains visibly live at its pre-capture placement.",
+                new[] { ctx.VisualGuestScope(pig) },
+                releasedBinding))
+            return;
+
         ctx.Check(TabDockLog.CountNewLines(ctx.LogOffset, "EXCEPTION") == 0, "no EXCEPTION lines in TabDock log");
         ctx.Check(NoOrphanPigWindows(ctx), "no orphaned guest windows survive the scenario");
     }
