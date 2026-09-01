@@ -560,7 +560,9 @@ internal static class QualificationResultWriter
         => new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["nativeOutcome"] = ctx.Outcome.Code,
-            ["desktopLeaseValid"] = (ctx.DesktopLease?.IsValid ?? false).ToString().ToLowerInvariant(),
+            ["desktopLeaseValid"] = (ctx.DesktopLeaseValidAtCompletion
+                ?? ctx.DesktopLease?.IsValid
+                ?? false).ToString().ToLowerInvariant(),
             ["assertionCount"] = ctx.Assertions.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["timelineArtifact"] = ctx.Attempt > 1
                 ? $"{SafeFileName(ctx.Name)}-attempt-{ctx.Attempt}.timeline.json"

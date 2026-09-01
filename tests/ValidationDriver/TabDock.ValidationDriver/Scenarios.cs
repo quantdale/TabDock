@@ -115,6 +115,8 @@ internal sealed class Ctx
     /// any guarded input. Native-free/preflight contexts may leave it null.
     /// </summary>
     public DesktopQualificationLease? DesktopLease { get; set; }
+    public bool? DesktopLeaseValidAtCompletion { get; set; }
+
     /// <summary>
     /// Semantic visual evidence for this attempt. Scenario bodies submit
     /// checkpoints here; they never manage image paths or hashes.
@@ -476,6 +478,7 @@ internal static partial class Scenarios
                     Cleanup(ctx);
                     ctx.Check(NoSpawnedGuestWindowsRemain(ctx), "cleanup left no spawned guest top-level windows");
                     ctx.FinishedUtc = DateTimeOffset.UtcNow;
+                    ctx.DesktopLeaseValidAtCompletion = lease.IsValid;
                     lease.Close();
                     QualificationResultWriter.WriteScenario(ctx);
                 }
