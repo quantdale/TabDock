@@ -171,7 +171,14 @@ internal static class VisualReviewVerifier
         VerifyFindings(packet, review, failures);
         VerifyDerivedFailureBindings(manifest, packet, review, failures);
 
-        if (requireAllCheckpoints)
+        if (review.Verdict == VisualReviewVerdict.REVIEW_UNAVAILABLE)
+        {
+            if (review.ReviewedImages.Length != 0 || review.Findings.Length != 0)
+                failures.Add("REVIEW_UNAVAILABLE result cannot contain reviewed images or findings");
+            if (string.IsNullOrWhiteSpace(review.Notes))
+                failures.Add("REVIEW_UNAVAILABLE result requires a capability note");
+        }
+        else if (requireAllCheckpoints)
         {
             var reviewed = review.ReviewedImages
                 .Select(image => image.CheckpointId)

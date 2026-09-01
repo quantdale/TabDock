@@ -41,13 +41,19 @@
 - [x] 5.3 Add deterministic synthetic gates for hard dimensions/count/bytes/ring limits, measured timing/size budgets, contact/packet limits, healthy discard, and bounded failure flush.
 - [x] 5.4 Extend resource-lifecycle qualification to compare visual-disabled and visual-enabled cells and fail/block on handle/GDI/file/timer/worker leaks, unbounded memory/artifact growth, or unexplained baseline regression.
 - [x] 5.5 Exercise success, required/optional capture failure, encode/contact/packet failure, cancellation, timeout, abort, healthy discard, and failure flush; prove recorder stop, native cleanup, temp-file cleanup, and first-attempt evidence preservation.
-
 ## 6. Milestone E — exact Release v1.1 closure
-- [x] 6.1 Integrate visual manifests, review packet/result bindings, performance reports, selected budget provenance, and historical compatibility into the qualification hierarchy and offline bundle index.
-- [x] 6.2 Run Debug/Release solution builds, unit tests, ValidationDriver/GuineaPig deterministic self-tests, catalog/plan checks, visual verifier gates, and historical non-visual manifest/bundle checks.
-- [x] 6.3 From the final clean committed tree, build the Release v1.1 candidate once; verify requested SHA equals `HEAD`, embedded source identity equals SHA, and record a fresh executable SHA-256 without reusing the historical artifact hash.
-- [x] 6.4 Run canonical `scripts/validate.ps1 -Configuration Release -Ci -Publish`, dependency vulnerability audit, strict OpenSpec validation, version/publish smoke, resource/privacy/ABI checks, and exact artifact/hash re-verification.
-- [x] 6.5 Preserve blocked signing, physical, external, and capability states honestly; reject any release claim whose visual/performance evidence is stale, missing, tampered, synthetic-only for a physical gate, or unproven by measured budgets.
+> **Pre-final evidence correction (2026-09-01).** The prior `ef9fe35` execution
+> evidence for 6.2–6.5 is preserved in
+> `.agent/investigations/release-semantics-correction-2026-09-01.md`, but it is
+> not final closure evidence. These rows remain pending until the final
+> post-A/archive/metadata clean tree is qualified. Task 6.3's exact-candidate
+> build MUST be rerun after supervised A, predecessor disposition/archive, and
+> all final metadata/spec commits settle; the `7f4b9df` task-ledger commit has
+> no claimed exact binary candidate.
+- [ ] 6.2 Run Debug/Release solution builds, unit tests, ValidationDriver/GuineaPig deterministic self-tests, catalog/plan checks, visual verifier gates, and historical non-visual manifest/bundle checks. **Pre-final `ef9fe35` evidence retained; final rerun pending.**
+- [ ] 6.3 From the final clean committed tree, build the Release v1.1 candidate once; verify requested SHA equals `HEAD`, embedded source identity equals SHA, and record a fresh executable SHA-256 without reusing the historical artifact hash. **The pre-final `ef9fe35` candidate evidence does not satisfy this row.**
+- [ ] 6.4 Run canonical `scripts/validate.ps1 -Configuration Release -Ci -Publish`, dependency vulnerability audit, strict OpenSpec validation, version/publish smoke, resource/privacy/ABI checks, and exact artifact/hash re-verification. **Pre-final `ef9fe35` evidence retained; final rerun pending.**
+- [ ] 6.5 Preserve blocked signing, physical, external, and capability states honestly; reject any release claim whose visual/performance evidence is stale, missing, tampered, synthetic-only for a physical gate, or unproven by measured budgets. **Pre-final `ef9fe35` evidence retained; final truthfulness record pending.**
 - [ ] 6.6 Obtain acceptance, synchronize/archive this change only after A, B, and E are complete, commit/push through the repository's authorized mainline workflow, and independently verify final SHA, remote equality, and clean worktree.
 
 - [x] 7.1 Record handoff candidates for separate DPI/topology hardening (negative/above-origin monitors, 150%–200% DPI, deeper mixed-DPI/topmost/transfer coverage) and real-app hardening (Chromium fullscreen breadth, Notepad broker, Windows Terminal hosting, adopted-app lifecycle quirks); do not implement either here.

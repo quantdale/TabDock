@@ -45,6 +45,10 @@
              Link="ValidationDriver\VisualReviewPackets.cs" />
     <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualReviewVerifier.cs"
              Link="ValidationDriver\VisualReviewVerifier.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\ScenarioOutcome.cs"
+             Link="ValidationDriver\ScenarioOutcome.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualQualificationGate.cs"
+             Link="ValidationDriver\VisualQualificationGate.cs" />
     <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualMeasurement.cs"
              Link="ValidationDriver\VisualMeasurement.cs" />
     <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualMeasurementRunner.cs"

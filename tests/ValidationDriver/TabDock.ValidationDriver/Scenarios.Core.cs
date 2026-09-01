@@ -319,11 +319,39 @@ internal static partial class Scenarios
     // -------------------------------------------------------------------------
     private static void MaximizeRepro(Ctx ctx, Options opt)
     {
-        int cycles = opt.Cycles ?? 3;
-        GuestInfo guest = SpawnGuest(ctx, opt.Guest);
+        bool seedWrongGuest = string.Equals(
+            Environment.GetEnvironmentVariable("TABDOCK_QA_VISUAL_SEED"),
+            "wrong-guest",
+            StringComparison.Ordinal)
+            && ctx.Attempt == 1
+            && string.Equals(opt.Guest, "pig", StringComparison.OrdinalIgnoreCase);
+        bool flightMode = string.Equals(
+            Environment.GetEnvironmentVariable("TABDOCK_QA_VISUAL_MODE"),
+            "flight",
+            StringComparison.Ordinal);
+        int cycles = flightMode ? 1 : opt.Cycles ?? 3;
+        GuestInfo guest = seedWrongGuest
+            ? SpawnPig(ctx, "MAX", "--pulse", "--color", "red")
+            : SpawnGuest(ctx, opt.Guest);
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, guest);
+        string expectation = string.Equals(opt.Guest, "pig", StringComparison.OrdinalIgnoreCase)
+            ? "The controlled white GuineaPig fills its assigned host pane completely, with no clipping, occlusion, unrelated window, or blank region."
+            : "The captured guest fills its assigned host pane completely, with no clipping, occlusion, unrelated window, or blank region.";
 
-        void CaptureVisualCheckpoint(string id, VisualCheckpointPhase phase, string expectation)
+        VisualEvidenceRecorder? flightRecorder = null;
+        if (flightMode)
+        {
+            flightRecorder = ctx.Visual;
+            if (flightRecorder == null || flightRecorder.Policy.Level != VisualEvidenceLevel.FLIGHT_RECORDER)
+            {
+                ctx.FailHarness("flight visual fixture requires the FLIGHT_RECORDER policy");
+                return;
+            }
+            flightRecorder.StartFlightRecorder();
+            ctx.Check(flightRecorder.FlightRecorderRunning, "flight recorder started before the controlled transition");
+        }
+
+        void CaptureVisualCheckpoint(string id, VisualCheckpointPhase phase)
         {
             if (ctx.Visual is not { } visual
                 || visual.Policy.Level is VisualEvidenceLevel.NONE or VisualEvidenceLevel.FAILURE_ONLY)
@@ -341,6 +369,16 @@ internal static partial class Scenarios
                     : VisualCaptureRequiredness.BEST_EFFORT));
         }
 
+        void RecordFlightFrame(string phase)
+        {
+            if (flightRecorder == null)
+                return;
+            Thread.Sleep(600);
+            bool recorded = flightRecorder.TryRecordFlightFrame(
+                ctx.VisualGuestScope(guest),
+                out string reason);
+            ctx.Check(recorded, $"flight recorder retained an ordered {phase} frame ({reason})");
+        }
 
         for (int cycle = 1; cycle <= cycles; cycle++)
         {
@@ -352,13 +390,12 @@ internal static partial class Scenarios
 
             CaptureVisualCheckpoint(
                 $"maximize-cycle-{cycle}-baseline",
-                VisualCheckpointPhase.BASELINE,
-                $"The captured guest is fully visible in its assigned host pane before maximize cycle {cycle}.");
+                VisualCheckpointPhase.BASELINE);
+            RecordFlightFrame("baseline");
 
             CaptureVisualCheckpoint(
                 $"maximize-cycle-{cycle}-before-maximize",
-                VisualCheckpointPhase.BEFORE_ACTION,
-                $"The captured guest is ready for maximize cycle {cycle} with its stable identity and pane presentation intact.");
+                VisualCheckpointPhase.BEFORE_ACTION);
 
             ClickMaximizeButton(container);
             Thread.Sleep(1500);
@@ -376,15 +413,14 @@ internal static partial class Scenarios
             DumpGeometry(ctx, container, host, guest, $"cycle{cycle} after-maximize");
             bool geoMaxOk = GuestMatchesHost(guest.Hwnd, host, out string geoMax);
             GuardedProc.Log($"  cycle {cycle}: brightnessAfterMax={bMax:F2} varianceAfterMax={vMax:F4}");
+            RecordFlightFrame("after-maximize");
             CaptureVisualCheckpoint(
                 $"maximize-cycle-{cycle}-after-maximize",
-                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
-                $"The captured guest remains fully visible and aligned after maximize cycle {cycle} settles.");
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED);
 
             CaptureVisualCheckpoint(
                 $"maximize-cycle-{cycle}-before-restore",
-                VisualCheckpointPhase.BEFORE_ACTION,
-                $"The maximized captured guest is ready for restore cycle {cycle}.");
+                VisualCheckpointPhase.BEFORE_ACTION);
 
             // Restore: recompute the button position from the NEW (maximized) rect.
             ClickMaximizeButton(container);
@@ -398,10 +434,25 @@ internal static partial class Scenarios
             DumpGeometry(ctx, container, host, guest, $"cycle{cycle} after-restore");
             bool geoRestOk = GuestMatchesHost(guest.Hwnd, host, out string geoRest);
             GuardedProc.Log($"  cycle {cycle}: brightnessAfterRestore={bRest:F2} varianceAfterRestore={vRest:F4}");
+            if (flightRecorder != null)
+            {
+                RecordFlightFrame("before-failure");
+                VisualCheckpointResult flushed = flightRecorder.CaptureFailure(
+                    "controlled maximize transition flight flush",
+                    new[] { ctx.VisualGuestScope(guest) },
+                    VisualCaptureRequiredness.REQUIRED);
+                ctx.Check(
+                    flushed.Captured && flushed.Artifacts.Count >= 2,
+                    $"flight failure flush retained pre-trigger history and a trigger frame (artifacts={flushed.Artifacts.Count})");
+                VisualRingBufferSnapshot afterFlush = flightRecorder.SnapshotFlightRecorder();
+                ctx.Check(!afterFlush.Running && afterFlush.Count == 0,
+                    $"flight recorder stopped and released its ring after flush (count={afterFlush.Count})");
+                ctx.Check(flightRecorder.Counters.FramesFlushed >= 2,
+                    $"flight recorder reported bounded flushed history (frames={flightRecorder.Counters.FramesFlushed})");
+            }
             CaptureVisualCheckpoint(
                 $"maximize-cycle-{cycle}-after-restore",
-                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
-                $"The captured guest is fully visible and aligned after restore cycle {cycle} settles.");
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED);
 
             string newLines = TabDockLog.DumpNewLines(cycOff);
             GuardedProc.Log($"  cycle {cycle}: new TabDock log lines (MAXCLICK/STATE/SHEPHERD instrumentation):");

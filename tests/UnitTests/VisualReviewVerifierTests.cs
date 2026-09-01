@@ -61,6 +61,61 @@ public sealed class VisualReviewVerifierTests
     }
 
     [Fact]
+    public void ReviewUnavailable_AllowsEmptyReviewCollectionsButRemainsExplicit()
+    {
+        string root = CreateTempRoot();
+        try
+        {
+            (VisualEvidenceRecorder recorder, VisualReviewPacket packet, VisualStoredArtifact storedPacket) = Prepare(root);
+            VisualReviewResult unavailable = new(
+                VisualEvidenceSchema.ReviewResult,
+                VisualEvidenceSchema.CurrentVersion,
+                storedPacket.Sha256,
+                packet.CandidateSha,
+                packet.RunId,
+                packet.Scenario,
+                packet.Attempt,
+                VisualReviewVerdict.REVIEW_UNAVAILABLE,
+                "non-vision-test",
+                "capability-fixture",
+                DateTimeOffset.UtcNow,
+                Array.Empty<VisualReviewReviewedImage>(),
+                Array.Empty<VisualReviewFinding>(),
+                "No capable image reviewer was available.",
+                Array.Empty<string>());
+
+            VisualReviewVerificationResult verification = VisualReviewVerifier.Verify(
+                root,
+                $"visual/{packet.Scenario}/attempt-{packet.Attempt:D3}/review/visual-review-manifest.json",
+                unavailable);
+
+            Assert.True(verification.Valid, string.Join("; ", verification.Failures));
+
+            unavailable = unavailable with
+            {
+                ReviewedImages = new[]
+                {
+                    new VisualReviewReviewedImage(
+                        packet.Images[0].ArtifactId,
+                        packet.Images[0].CheckpointId,
+                        packet.Images[0].Sha256),
+                },
+            };
+            VisualReviewVerificationResult nonEmpty = VisualReviewVerifier.Verify(
+                root,
+                $"visual/{packet.Scenario}/attempt-{packet.Attempt:D3}/review/visual-review-manifest.json",
+                unavailable);
+
+            Assert.False(nonEmpty.Valid);
+            Assert.Contains(nonEmpty.Failures, failure => failure.Contains("REVIEW_UNAVAILABLE", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact]
     public void TamperedImage_IsRejectedEvenWhenReviewHashIsUnchanged()
     {
         string root = CreateTempRoot();
