@@ -16,16 +16,19 @@ timeline, cleanup, and release-gate semantics; do not change production
 TabDock behavior.
 
 **Status:** the predecessor `2026-08-31-visual-evidence-ai-review`
-campaign remains active and unarchived. Its tracked checklist is at 84/89
-implementation tasks complete; four supervised visual acceptance tasks and
-the archive/push task remain blocked on the interactive desktop, capable
-vision review, and acceptance boundary. The prior presentation-integrity
-physical qualification remains historical evidence and is not relabeled.
-Foundation inventory and the updated checkpoint are recorded in
+campaign remains active and unarchived. Its canonical ledger contains
+**178** rows: **93** are checked as `COMPLETED_AND_PROVEN` after the
+2026-09-01 reconciliation, and **85** remain unchecked with one explicit
+classification each. The complete row-level evidence is in
+`.agent/investigations/visual-evidence-ledger-reconciliation-2026-09-01.md`.
+The historical 84/89 implementation roll-up was not a mapping to the
+canonical rows and is not a valid checkbox count. Remaining implementation,
+acceptance, supervised, capability, documentation, archive, and provenance
+obligations remain open; the prior presentation-integrity physical
+qualification remains historical evidence and is not relabeled.
+Foundation inventory and the implementation checkpoint are recorded in
 `.agent/investigations/visual-evidence-implementation-2026-09-01.md`.
-The next-campaign investigation was verified untracked at planning start and
-is intentionally preserved as a planning artifact; the current visual source
-and test implementation remains outside this planning-only commit.
+No staging, commit, archive, or push claim is made by the reconciliation.
 
 ### Prior campaign evidence
 
@@ -119,29 +122,31 @@ recorded candidate identities.
 ## Active implementation
 
 The visual-evidence and multimodal AI-review change is active under
-`openspec/changes/2026-08-31-visual-evidence-ai-review/`. Its 89 tracked
-implementation tasks are the source checklist. The implementation
-checkpoint and current scope are in
-`.agent/investigations/visual-evidence-implementation-2026-09-01.md`.
-Validated deterministic evidence: Debug/Release builds pass; 776/776 unit
-tests pass (44 visual-specific); historical non-visual manifests remain
-valid; `scripts/qualification-bundle.ps1` parses clean and now indexes/
-verifies visual manifests, packet, and image hashes offline without a model.
-Canonical workflow is `.agent/workflows/visual-evidence-review.md`.
+`openspec/changes/2026-08-31-visual-evidence-ai-review/`. Its canonical source
+checklist is the reconciled 178-row ledger: 93 proven rows are checked and 85
+remain explicitly classified and unchecked. The implementation checkpoint and
+reconciliation matrix are in
+`.agent/investigations/visual-evidence-implementation-2026-09-01.md` and
+`.agent/investigations/visual-evidence-ledger-reconciliation-2026-09-01.md`.
+Current deterministic evidence includes 57/57 visual-filter unit tests,
+789/789 total unit tests, 179/179 PowerShell 7 release-tooling tests, and successful Debug/Release
+solution builds and ValidationDriver deterministic self-tests (153/153). The successor Milestone A deterministic closure is
+implemented: exact packet-byte hashing, strict current collections,
+derived-failure propagation, scenario/run hierarchy links, and offline
+bundle verification. Milestone B is implemented: paired disabled/checkpoints/flight measurement harness, portable report with per-cell median/p95/max, conservative budget derivation (25% margin, provenance), disabled/enabled/paired resource gates, and healthy-discard/flush lifecycle proof. Milestone E visual-manifest/packet/budget integration into the qualification hierarchy and bundle index is implemented with historical non-visual compatibility. Supervised healthy/defect/flight visual acceptance (A §3) and the remaining predecessor rows are still open and require an exclusive supervised desktop and capable multimodal review; the Release visual path's remaining verification from a clean committed tree remains successor work. The canonical workflow
+is `.agent/workflows/visual-evidence-review.md`.
 
 ## Chosen next campaign — visual evidence closure and performance requalification
 
-**Change:** `openspec/changes/visual-evidence-closure-and-performance-requalification/`.
-**Status:** planning-only skeleton complete and strict OpenSpec validation passes;
-implementation has not started. A closes the predecessor's supervised visual
-evidence gap first, B rebaselines bounded visual overhead and resource cost
-from observed distributions, and E closes the exact Release v1.1 candidate.
+**Status:** implementation is in progress and deterministic closure is proven. The planning-only skeleton was
+strictly validated, predecessor reconciliation is complete at 93/178 checked
+with 85 explicit remainder classifications, and successor tasks 1.1–1.4, 2.1–2.5, 4.1–4.6, 5.1–5.5, 6.1, and 7.1 are now checked from source/tests. Milestone A supervised evidence tasks (3.1–3.7) remain `BLOCKED_SUPERVISED` until an exclusive supervised desktop and capable multimodal review produce retained healthy, defect, and flight packets with hash-bound results and tamper rejection. Milestone B synthetic headless qualification is proven; physical visual-evidence measurements remain separate and are not relabeled as synthetic PASS. Milestone E release closure remains pending exact clean-tree candidate verification.
 The skeleton contains 34 implementation tasks and six required spec deltas.
 The campaign explicitly defers DPI/topology hardening and real-app hardening
 to separate future campaign candidates; neither is hidden in this scope.
 The planning artifacts preserve the packet-hash, strict-collection,
 derived-failure, provenance, and archive-boundary decisions from the
-next-campaign investigation.
+reconciliation and next-campaign investigation.
 
 **PLANNED/OPTIONAL:** repository-local Microsoft Learn and Context7 MCP
 integration, subject to a separately authorized upstream/security/scope

@@ -3,32 +3,37 @@
 ## Why
 
 The preceding `2026-08-31-visual-evidence-ai-review` campaign added bounded,
-model-free ValidationDriver visual evidence, but its acceptance boundary still
-requires supervised visual review and the new capture path has not yet been
-re-baselined against resource-lifecycle behavior. This campaign closes that
-visual evidence boundary first, then measures its disabled/checkpoint/flight
-cost from representative scenarios and uses the measured results to qualify an
-exact Release v1.1 candidate.
+model-free ValidationDriver visual evidence. Its canonical 178-row task ledger
+has now been reconciled against current repository evidence: 93 rows are
+checked as `COMPLETED_AND_PROVEN`, while 85 remain unchecked with explicit
+`IMPLEMENTED_BUT_NOT_ACCEPTED`, `NOT_IMPLEMENTED`, `SUPERSEDED`,
+`BLOCKED_SUPERVISED`, or `BLOCKED_CAPABILITY` classifications. The
+row-level matrix is
+`.agent/investigations/visual-evidence-ledger-reconciliation-2026-09-01.md`.
+This campaign closes the applicable visual evidence boundary first, then
+measures its disabled/checkpoint/flight cost from representative scenarios and
+uses measured results to qualify an exact Release v1.1 candidate.
 
 The current worktree is intentionally not treated as an accepted visual
-release: visual implementation files and the investigation
-`.agent/investigations/next-campaign-ultrathink-2026-09-02.md` are untracked or
-modified, while the current visual campaign remains active. This change must
-resolve that provenance before any archive or release claim.
+release: visual implementation files, tests, workflow/investigation records,
+and generated run roots are modified or untracked. The predecessor remains
+unarchived, and no historical 84/89 implementation roll-up is substituted for
+the reconciled canonical ledger. This change must resolve that provenance
+before any archive or release claim.
 
 ## What Changes
 
-- **Milestone A — visual evidence closure (first milestone):** complete the
-  five remaining acceptance/archival-boundary items from the preceding visual
-  campaign only after an exclusive supervised desktop run proves exact
-  candidate identity, a healthy packet, a seeded defect packet, a transient
-  flight packet, actual multimodal inspection, hash-bound review results,
-  honest `REVIEW_UNAVAILABLE` behavior, tamper rejection, first-attempt defect
-  preservation, and native/lease precedence.
+- **Milestone A — visual evidence closure (first milestone):** close the
+  applicable remaining predecessor obligations identified by the reconciled
+  row-level matrix, not an assumed five-row roll-up. An exclusive supervised
+  desktop run must prove exact candidate identity, a healthy packet, a seeded
+  defect packet, a transient flight packet, actual multimodal inspection,
+  hash-bound review results, honest `REVIEW_UNAVAILABLE` behavior, tamper
+  rejection, first-attempt defect preservation, and native/lease precedence.
 - Make the intended verifier invariant explicit before implementation:
-  investigate the `packetSha256: string.Empty` literal, determine whether it
-  is a test-only defect or can weaken packet binding, and then fix and test the
-  authoritative packet/result hash comparison.
+  trace the current `packetSha256` data flow, determine whether any
+  caller-supplied or placeholder value can weaken packet binding, and then fix
+  and test the authoritative packet/result hash comparison.
 - Tighten required visual collection contracts so null/default collections
   cannot satisfy a required packet, manifest, or review-result field. JSON
   round trips, historical migration behavior, and malformed-input failures

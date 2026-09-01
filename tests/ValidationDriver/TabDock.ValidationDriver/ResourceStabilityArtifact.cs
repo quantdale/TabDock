@@ -30,7 +30,8 @@ internal sealed record ResourceStabilityRunArtifact(
     ResourceSeriesAnalysis ProcessSeries,
     IReadOnlyList<ResourceSnapshot> Snapshots,
     string Outcome,
-    string? FailureReason);
+    string? FailureReason,
+    VisualMeasurementReport? VisualMeasurements = null);
 
 internal static class ResourceStabilityArtifactWriter
 {

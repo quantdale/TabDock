@@ -192,3 +192,15 @@ node_modules/
 # metadata. Portable MCP registration is kept in the repository root; generated
 # indexes and caches remain local.
 .repowise/
+
+# ------------------------------------------------------------------------------
+# Visual validation run outputs
+# ------------------------------------------------------------------------------
+# Run-owned screenshots, contact sheets, review packets/results, and manifests
+# are evidence outputs, not source. Keep them available locally for inspection
+# while preventing normal validation output from entering Git.
+
+.visual-validation-runs/
+**/visual-review-manifest.json
+**/visual-review-instructions.md
+**/visual-review-result.json

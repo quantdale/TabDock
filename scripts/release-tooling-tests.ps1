@@ -677,7 +677,8 @@ function New-TestQualificationPackage {
     param(
         [string]$Name = 'qualification-bundle-valid',
         [string]$SourceSha = ('a' * 40),
-        [bool]$SyntheticTopology = $false
+        [bool]$SyntheticTopology = $false,
+        [bool]$IncludeVisualPerformance = $false
     )
     $dir = Join-Path $testRoot $Name
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -695,6 +696,8 @@ function New-TestQualificationPackage {
     $resultPath = Join-Path $runDir 'scenario-a.json'
     $junitPath = Join-Path $runDir 'scenario-a.junit.xml'
     $timelinePath = Join-Path $runDir 'scenario-a.timeline.json'
+    $visualReportPath = Join-Path $runDir 'visual-performance-measurements.json'
+    $visualJUnitPath = Join-Path $runDir 'visual-performance-measurements.junit.xml'
     [IO.File]::WriteAllText($resultPath, (@{ scenario = 'scenario-a'; result = 'PASS'; syntheticTopology = $SyntheticTopology } | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($junitPath, '<testsuite tests="1" failures="0" skipped="0" />', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($timelinePath, (@{ schemaVersion = 1; syntheticTopology = $SyntheticTopology; events = @() } | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
@@ -732,6 +735,9 @@ function New-TestQualificationPackage {
                 jsonArtifact = 'scenario-a.json'
                 junitArtifact = 'scenario-a.junit.xml'
                 timelineArtifact = 'scenario-a.timeline.json'
+                visualPerformanceArtifact = if ($IncludeVisualPerformance) { 'visual-performance-measurements.json' } else { $null }
+                visualPerformanceJUnitArtifact = if ($IncludeVisualPerformance) { 'visual-performance-measurements.junit.xml' } else { $null }
+                capabilities = if ($IncludeVisualPerformance) { [ordered]@{ syntheticMeasurements = $true } } else { $null }
                 startedUtc = $started
                 endedUtc = $ended
             })
@@ -747,6 +753,56 @@ function New-TestQualificationPackage {
             [ordered]@{ relativePath = 'scenario-a.junit.xml'; kind = 'junit'; sha256 = Get-FileSha256Lower $junitPath; exists = $true }
             [ordered]@{ relativePath = 'scenario-a.timeline.json'; kind = 'timeline'; sha256 = Get-FileSha256Lower $timelinePath; exists = $true }
         )
+    }
+    if ($IncludeVisualPerformance) {
+    $machineTopology = [ordered]@{
+        machineClass = 'ci-synthetic'
+        topologyClass = 'single-monitor'
+        monitorCount = 1
+        dpi = 96
+        displayClass = 'primary'
+    }
+    $visualReport = [ordered]@{
+        schemaVersion = 1
+        artifactKind = 'visual-performance-measurements'
+        candidateSha = $SourceSha
+        runId = $runManifest.runId
+        driverSha = Get-FileSha256Lower $driver
+        configuration = 'Debug'
+        classification = 'SYNTHETIC'
+        startedUtc = $started
+        endedUtc = $ended
+        samples = @([ordered]@{
+                recordedUtc = $started
+                candidateSha = $SourceSha
+                runId = $runManifest.runId
+                scenario = 'scenario-a'
+                configuration = 'Debug'
+                attempt = 1
+                sampleNumber = 1
+                mode = 'DISABLED'
+                classification = 'SYNTHETIC'
+                machineTopology = $machineTopology
+            })
+        cells = @([ordered]@{
+                cellKey = 'scenario-a|DISABLED|SYNTHETIC|Debug|ci-synthetic|single-monitor|primary|96'
+                scenario = 'scenario-a'
+                mode = 'DISABLED'
+                classification = 'SYNTHETIC'
+                candidateSha = $SourceSha
+                configuration = 'Debug'
+                machineTopology = $machineTopology
+                sampleCount = 1
+                statistics = @()
+                limitation = 'fixture'
+            })
+        budgets = @()
+        outcome = 'PROVISIONAL'
+        limitation = 'fixture'
+        pairComparisons = @()
+    }
+    [IO.File]::WriteAllText($visualReportPath, ($visualReport | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($visualJUnitPath, '<testsuite name="TabDock.VisualMeasurements" tests="1" failures="0" skipped="0" />', [Text.UTF8Encoding]::new($false))
     }
     $runManifestPath = Join-Path $runDir 'run-manifest.json'
     [IO.File]::WriteAllText($runManifestPath, ($runManifest | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
@@ -871,6 +927,31 @@ try {
         Assert-True $result.Valid ($result.Failures -join '; ')
         Assert-True ($result.Bundle.schemaVersion -eq 1) 'bundle schema version must be current'
         Assert-True ($result.Bundle.syntheticTopology -eq $false) 'normal bundle must not claim synthetic topology'
+    }
+
+    New-TestCase 'qualification-bundle-visual-performance-validates-and-physical-gate-rejects-synthetic' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-visual-performance' -SyntheticTopology $true -IncludeVisualPerformance $true
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True $result.Valid ($result.Failures -join '; ')
+        $physical = Test-QualificationBundle -BundlePath $pkg.BundlePath -RequirePhysicalTopology
+        Assert-True (-not $physical.Valid) 'synthetic visual performance must be rejected by a physical gate'
+        Assert-True (($physical.Failures -join ';') -match 'synthetic visual performance') 'physical rejection must identify synthetic performance evidence'
+    }
+
+    New-TestCase 'qualification-bundle-visual-performance-hash-tamper-fails-closed' {
+        $pkg = New-TestQualificationPackage -Name 'bundle-visual-performance-tamper' -SyntheticTopology $true -IncludeVisualPerformance $true
+        $reportPath = Join-Path (Split-Path $pkg.RunManifest) 'visual-performance-measurements.json'
+        $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+        $report.classification = 'PHYSICAL'
+        $report | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $reportPath -Encoding utf8
+        $bundle = Get-Content -LiteralPath $pkg.BundlePath -Raw | ConvertFrom-Json
+        $reportIndex = @($bundle.artifactIndex | Where-Object { $_.relativePath -match 'visual-performance-measurements\.json$' })
+        Assert-True ($reportIndex.Count -eq 1) 'visual performance report must be indexed exactly once'
+        $reportIndex[0].sha256 = Get-FileSha256Lower $reportPath
+        $bundle | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $pkg.BundlePath -Encoding utf8
+        $result = Test-QualificationBundle -BundlePath $pkg.BundlePath
+        Assert-True (-not $result.Valid) 'synthetic capability/report classification substitution must fail'
+        Assert-True (($result.Failures -join ';') -match 'marks a synthetic run as non-synthetic') 'classification substitution must be diagnosed'
     }
 
     New-TestCase 'qualification-bundle-candidate-hash-substitution-fails-closed' {

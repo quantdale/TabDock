@@ -62,6 +62,29 @@ internal static class Program
                     opt.Cycles = n;
                     i++;
                     break;
+                case "--visual-evidence":
+                    if (i + 1 >= args.Length
+                        || !VisualPolicyResolver.TryParseLevel(args[i + 1], out VisualEvidenceLevel visualLevel))
+                    {
+                        return Usage("--visual-evidence requires none, failure, checkpoints, or flight.");
+                    }
+                    opt.VisualEvidence = visualLevel;
+                    i++;
+                    break;
+                case "--visual-review-packet":
+                    opt.VisualReviewPacket = true;
+                    break;
+                case "--visual-max-bytes":
+                    if (i + 1 >= args.Length
+                        || !long.TryParse(args[i + 1], out long visualMaxBytes)
+                        || visualMaxBytes <= 0
+                        || visualMaxBytes > 256L * 1024 * 1024)
+                    {
+                        return Usage("--visual-max-bytes requires an integer from 1 through 268435456.");
+                    }
+                    opt.VisualMaxBytes = visualMaxBytes;
+                    i++;
+                    break;
                 case "--resource-soak":
                     opt.ResourceSoak = true;
                     break;
@@ -159,6 +182,14 @@ internal static class Program
         opt.Rid = opt.Rid.ToLowerInvariant();
         if (opt.ResourceSoak && opt.Cycles.GetValueOrDefault(100) > 10_000)
             return Usage("resource --cycles is capped at 10000 to keep evidence and process lifetime bounded.");
+        try
+        {
+            opt.VisualPolicy = VisualPolicyResolver.Resolve(opt);
+        }
+        catch (ArgumentException ex)
+        {
+            return Usage(ex.Message);
+        }
 
         try
         {
@@ -228,6 +259,7 @@ internal static class Program
                 && !ScenarioCatalog.BrowserGuestKinds.Contains(opt.Guest, StringComparer.OrdinalIgnoreCase))
                 return Usage($"{s} requires --guest {string.Join("|", ScenarioCatalog.BrowserGuestKinds)}.");
         }
+        Console.WriteLine($"Visual evidence: {VisualPolicyResolver.Describe(opt.VisualPolicy)} reviewPacket={opt.VisualReviewPacket.ToString().ToLowerInvariant()}");
 
         // Single-instance guard (guarded-spawn pattern rule 3).
         using var mutex = new Mutex(true, GuardedProc.SingleInstanceMutexName, out bool isNew);
@@ -483,6 +515,18 @@ internal static class Program
             psi.ArgumentList.Add("--reruns");
             psi.ArgumentList.Add(opt.Reruns.ToString());
         }
+        if (opt.VisualEvidence != VisualEvidenceLevel.NONE)
+        {
+            psi.ArgumentList.Add("--visual-evidence");
+            psi.ArgumentList.Add(VisualPolicyResolver.ToCliValue(opt.VisualEvidence));
+        }
+        if (opt.VisualReviewPacket)
+            psi.ArgumentList.Add("--visual-review-packet");
+        if (opt.VisualMaxBytes is long visualMaxBytes)
+        {
+            psi.ArgumentList.Add("--visual-max-bytes");
+            psi.ArgumentList.Add(visualMaxBytes.ToString());
+        }
         psi.Environment["TABDOCK_VALIDATION_ARTIFACT_ROOT"] = childArtifactBase;
         psi.Environment.Remove("TABDOCK_VALIDATION_RESULT_ROOT");
         psi.Environment["TABDOCK_VALIDATION_RUN_KIND"] = "shard";
@@ -512,8 +556,8 @@ internal static class Program
         Console.WriteLine("Options:");
         Console.WriteLine("  --yes          skip the interactive confirmation (supervised runs)");
         Console.WriteLine("  --selftest NAME run native-free split/identity contracts (split|identity|all)");
-        Console.WriteLine("  --resource-headless run bounded CI-safe resource lifecycle profiles with synthetic snapshots");
-        Console.WriteLine("  --resource-soak run the same profiles plus read-only counters for a run-owned TabDock process");
+        Console.WriteLine("  --resource-headless run bounded CI-safe resource lifecycle profiles with synthetic snapshots and paired visual measurements");
+        Console.WriteLine("  --resource-soak run the same profiles plus read-only counters for a run-owned TabDock process (visual measurements remain opt-in/headless)");
         Console.WriteLine("  --profile NAME    resource profile: all, group-capture, split, layout, picker-icon, winevent, diagnostics, persistence, restart");
         Console.WriteLine("  --duration-seconds N  resource sample duration (1-600; opt-in local soak)");
         Console.WriteLine("  --artifact-output PATH  resource evidence root (default: temp TabDock-ResourceStability)");
@@ -521,6 +565,9 @@ internal static class Program
         Console.WriteLine("  --plan GATE    print a JSON qualification plan without sending input (physicalMixedDpi|automated|release|all)");
         Console.WriteLine("  --cycles N     cycle count for maximize-repro (default 3) and repeat-cycles (default 5)");
         Console.WriteLine("  --reruns N     run N additional bounded investigation attempts; never best-of-N (default 0)");
+        Console.WriteLine("  --visual-evidence LEVEL  opt-in visual retention: none, failure, checkpoints, or flight");
+        Console.WriteLine("  --visual-review-packet   emit a vendor-neutral review packet for retained checkpoints");
+        Console.WriteLine("  --visual-max-bytes N     total retained visual bytes (1-268435456; requires visual evidence)");
         Console.WriteLine("  --guest KIND   guest app for scenarios that need one: pig (default), wt, chrome-nogpu, chrome-gpu, chrome-normal, edge-normal, firefox-normal, codex, chatgptclassic");
         Console.WriteLine("  --configuration Debug|Release   select build output (default Debug)");
         Console.WriteLine("  --rid auto|none|win-x64         select RID-specific output (default auto)");
@@ -597,6 +644,20 @@ internal static class Program
             planKind = "qualification-plan",
             gate = normalized,
             catalogGeneration = ScenarioCatalog.Generation,
+            visualPolicy = new
+            {
+                level = VisualPolicyResolver.ToCliValue(options.VisualPolicy.Level),
+                buildReviewPacket = options.VisualPolicy.BuildReviewPacket,
+                maxBytes = options.VisualPolicy.MaxBytes,
+                maxArtifacts = options.VisualPolicy.MaxArtifacts,
+                maxWidth = options.VisualPolicy.MaxWidth,
+                maxHeight = options.VisualPolicy.MaxHeight,
+                ringMaxFrames = options.VisualPolicy.RingMaxFrames,
+                ringMaxBytes = options.VisualPolicy.RingMaxBytes,
+                ringDurationMilliseconds = options.VisualPolicy.RingDurationMilliseconds,
+                ringMaxFramesPerSecond = options.VisualPolicy.RingMaxFramesPerSecond,
+                allowVirtualDesktop = options.VisualPolicy.AllowVirtualDesktop,
+            },
             syntheticTopology = false,
             environment = new
             {

@@ -48,6 +48,19 @@ provider credentials.
 - **THEN** it uses synthetic fixtures and retains the supervised visual gate as
   pending/blocked rather than weakening the contract
 
+ 
+#### Scenario: A hermetic regression fails CI
+
+- **WHEN** a self-test, catalog contract, topology assertion, bundle/privacy
+  check, OpenSpec validation, or Release/publish check fails
+- **THEN** the CI job exits nonzero and does not convert the failure into a
+  warning-only result
+
+#### Scenario: Synthetic topology is covered in CI
+
+- **WHEN** the topology laboratory passes its deterministic matrix
+- **THEN** CI records the result as synthetic coverage and does not mark
+  physical mixed-DPI qualification as complete
 ### Requirement: ValidationDriver SHALL support bounded configurable shards
 
 The driver SHALL discover or accept explicit TabDock and GuineaPig paths for
@@ -116,3 +129,37 @@ lease, topology, or multimodal review.
   evidence
 - **THEN** it remains valid under its original schema and no visual PASS,
   collection, artifact, or performance result is synthesized
+ 
+#### Scenario: Release artifacts run without source edits
+
+- **WHEN** the driver is invoked with `--configuration Release` against Release
+  artifacts
+- **THEN** it locates both executables, validates their candidate identities,
+  resolves declared capabilities before destructive setup, and runs the
+  selected catalog scenario or shard
+
+#### Scenario: All runs as bounded shards
+
+- **WHEN** the driver is invoked with `--yes all`
+- **THEN** it runs the catalog-declared shards sequentially in isolated child
+  directories, verifies each child manifest and exit outcome, and reports the
+  first disagreement or non-pass shard without a monolithic impossible budget
+
+#### Scenario: A scenario cannot prove its harness boundary
+
+- **WHEN** a selector, cleanup, ownership, or evidence invariant is not proven
+- **THEN** the scenario is recorded as `FAIL_HARNESS` with bounded evidence and
+  the shard does not relabel it as a product failure
+
+#### Scenario: Reruns remain first-attempt authoritative
+
+- **WHEN** a physical presentation-integrity scenario has investigation reruns
+- **THEN** the first valid attempt remains authoritative and a later pass after
+  a valid failure is recorded as unresolved/flake evidence rather than PASS
+
+#### Scenario: Synthetic pass does not satisfy a physical field cell
+
+- **WHEN** a headless or synthetic presentation-integrity scenario passes but
+  the matching requirement calls for real guarded input/topology
+- **THEN** deterministic coverage is recorded separately and the physical cell
+  remains pending or blocked until physically qualified

@@ -33,7 +33,18 @@ internal static class QualificationResultWriter
         string JUnitArtifact,
         string TimelineArtifact,
         DateTimeOffset StartedUtc,
-        DateTimeOffset EndedUtc);
+        DateTimeOffset EndedUtc,
+        VisualEvidencePolicy? VisualPolicy = null,
+        string? VisualManifestArtifact = null,
+        string? VisualManifestSha256 = null,
+        IReadOnlyList<VisualArtifactRecord>? VisualArtifacts = null,
+        string? VisualReviewPacketArtifact = null,
+        string? VisualReviewPacketSha256 = null,
+        string? VisualReviewInstructionsArtifact = null,
+        IReadOnlyList<string>? VisualDerivedFailureIds = null,
+        string? VisualReviewResultArtifact = null,
+        string? VisualPerformanceArtifact = null,
+        string? VisualPerformanceJUnitArtifact = null);
 
     public static void BeginRun()
     {
@@ -153,6 +164,13 @@ internal static class QualificationResultWriter
         string root = ResultRoot();
         string jsonPath = ResourceStabilityArtifactWriter.Write(artifact, root);
         string junitPath = ResourceStabilityArtifactWriter.WriteJUnit(artifact, root);
+        string? performancePath = null;
+        string? performanceJUnitPath = null;
+        if (artifact.VisualMeasurements is { } report)
+        {
+            performancePath = Path.GetFileName(VisualMeasurementReportWriter.Write(report, root));
+            performanceJUnitPath = Path.GetFileName(VisualMeasurementReportWriter.WriteJUnit(report, root));
+        }
         RegisterManifestEntry(new ScenarioManifestEntry(
             "resource-stability",
             1,
@@ -163,15 +181,20 @@ internal static class QualificationResultWriter
                 resourceOnly = true,
                 syntheticMeasurements = artifact.SyntheticMeasurements,
                 measurementTarget = artifact.MeasurementTarget,
+                visualPerformanceArtifact = performancePath,
+                visualPerformanceOutcome = artifact.VisualMeasurements?.Outcome,
             },
             Path.GetFileName(jsonPath),
             Path.GetFileName(junitPath),
             string.Empty,
             artifact.StartedUtc,
-            artifact.EndedUtc));
+            artifact.EndedUtc,
+            VisualPerformanceArtifact: performancePath,
+            VisualPerformanceJUnitArtifact: performanceJUnitPath));
         GuardedProc.Log(
             $"RESULT_JSON scenario=resource-stability status={artifact.Outcome} " +
             $"syntheticMeasurements={artifact.SyntheticMeasurements.ToString().ToLowerInvariant()} " +
+            $"visualPerformance={artifact.VisualMeasurements?.Outcome ?? "none"} " +
             "artifact=<validation-artifact>/resource-stability.json");
     }
 
@@ -203,6 +226,82 @@ internal static class QualificationResultWriter
             GuardedProc.Log($"  Timeline artifact unavailable: {ex.GetType().Name}.");
         }
 
+        VisualStoredArtifact? visualManifest = null;
+        VisualStoredArtifact? reviewPacket = null;
+        VisualStoredArtifact? reviewInstructions = null;
+        string? reviewResultArtifact = null;
+        if (ctx.Visual is { } visual)
+        {
+            try
+            {
+                if (visual.Policy.BuildReviewPacket
+                    && !visual.TryBuildContactSheet(out _, out string contactSheetReason))
+                {
+                    GuardedProc.Log($"  Contact-sheet unavailable: {contactSheetReason}.");
+                }
+
+                VisualEvidenceManifest preliminaryManifest = visual.CreateManifest(
+                    CandidateSha(),
+                    TestRunProvenance.RunId,
+                    ctx.StartedUtc,
+                    ctx.FinishedUtc.Value);
+                if (visual.Policy.BuildReviewPacket)
+                {
+                    if (VisualReviewPacketBuilder.TryBuild(
+                        preliminaryManifest,
+                        ReviewCorrelations(ctx),
+                        out VisualReviewPacketBuildResult? packet,
+                        out string packetReason)
+                        && packet != null)
+                    {
+                        try
+                        {
+                            (reviewPacket, reviewInstructions) = visual.WriteReviewPacket(packet);
+                            reviewResultArtifact = packet.ResultRelativePath;
+                        }
+                        catch (Exception ex)
+                        {
+                            visual.RecordReviewUnavailable($"visual review packet write failed: {ex.GetType().Name}");
+                            GuardedProc.Log($"  Visual review packet unavailable: {ex.GetType().Name}.");
+                        }
+                    }
+                    else
+                    {
+                        visual.RecordReviewUnavailable(packetReason);
+                        GuardedProc.Log($"  Visual review packet unavailable: {packetReason}.");
+                    }
+                }
+
+                VisualEvidenceManifest manifest = visual.CreateManifest(
+                    CandidateSha(),
+                    TestRunProvenance.RunId,
+                    ctx.StartedUtc,
+                    ctx.FinishedUtc.Value,
+                    reviewPacket?.RelativePath,
+                    reviewPacket?.Sha256);
+                visualManifest = visual.WriteManifest(
+                    manifest,
+                    $"visual/{SafeFileName(ctx.Name)}/attempt-{ctx.Attempt:D3}/manifest.json");
+            }
+            catch (Exception ex)
+            {
+                ctx.FailHarness($"visual manifest could not be finalized: {ex.GetType().Name}");
+                GuardedProc.Log($"  Visual manifest unavailable: {ex.GetType().Name}.");
+            }
+        }
+        var traceArtifacts = new List<string>
+        {
+            $"<validation-artifact>/{Path.GetFileName(TestRunProvenance.ArtifactDirectory)}",
+            $"<validation-artifact>/{timelineName}",
+        };
+        if (visualManifest != null)
+            traceArtifacts.Add($"<validation-artifact>/{visualManifest.RelativePath}");
+        if (reviewPacket != null)
+            traceArtifacts.Add($"<validation-artifact>/{reviewPacket.RelativePath}");
+        if (reviewInstructions != null)
+            traceArtifacts.Add($"<validation-artifact>/{reviewInstructions.RelativePath}");
+
+
         var result = new
         {
             runId = TestRunProvenance.RunId,
@@ -232,13 +331,27 @@ internal static class QualificationResultWriter
             ownership = TestRunProvenance.OwnershipSummary(),
             assertions = ctx.Assertions,
             diagnosticLogOffset = ctx.LogOffset,
-            traceArtifacts = new[]
-            {
-                $"<validation-artifact>/{Path.GetFileName(TestRunProvenance.ArtifactDirectory)}",
-                $"<validation-artifact>/{timelineName}",
-            },
+            visualEvidence = ctx.Visual == null
+                ? null
+                : new
+                {
+                    policy = VisualPolicyResolver.Describe(ctx.Visual.Policy),
+                    manifestArtifact = visualManifest?.RelativePath,
+                    manifestSha256 = visualManifest?.Sha256,
+                    reviewPacketArtifact = reviewPacket?.RelativePath,
+                    reviewPacketSha256 = reviewPacket?.Sha256,
+                    reviewInstructionsArtifact = reviewInstructions?.RelativePath,
+                    reviewResultArtifact = reviewResultArtifact,
+                    artifactCount = ctx.Visual.Artifacts.Count,
+                    unavailableCount = ctx.Visual.Unavailable.Count,
+                    derivedArtifactFailureCount = ctx.Visual.DerivedFailures.Count,
+                    derivedArtifactFailureIds = ctx.Visual.DerivedFailures
+                        .Select(failure => failure.FailureId)
+                        .ToArray(),
+                    counters = ctx.Visual.Counters,
+                },
+            traceArtifacts = traceArtifacts.ToArray(),
         };
-
         string jsonPath = Path.Combine(root, $"{stem}.json");
         File.WriteAllText(jsonPath, JsonSerializer.Serialize(result, JsonOptions), Encoding.UTF8);
         WriteJUnit(root, stem, ctx);
@@ -252,7 +365,16 @@ internal static class QualificationResultWriter
             $"{stem}.junit.xml",
             timelineName,
             ctx.StartedUtc,
-            ctx.FinishedUtc.Value));
+            ctx.FinishedUtc.Value,
+            ctx.Visual?.Policy,
+            visualManifest?.RelativePath,
+            visualManifest?.Sha256,
+            ctx.Visual?.Artifacts.ToArray(),
+            reviewPacket?.RelativePath,
+            reviewPacket?.Sha256,
+            reviewInstructions?.RelativePath,
+            ctx.Visual?.DerivedFailures.Select(failure => failure.FailureId).ToArray(),
+            reviewResultArtifact));
         GuardedProc.Log($"RESULT_JSON scenario={ctx.Name} status={ctx.Outcome.Code} artifact=<validation-artifact>/{Path.GetFileName(jsonPath)}");
     }
 
@@ -368,6 +490,16 @@ internal static class QualificationResultWriter
                 jsonArtifact = entry.JsonArtifact,
                 junitArtifact = entry.JUnitArtifact,
                 timelineArtifact = entry.TimelineArtifact,
+                visualManifestArtifact = entry.VisualManifestArtifact,
+                visualManifestSha256 = entry.VisualManifestSha256,
+                visualReviewPacketArtifact = entry.VisualReviewPacketArtifact,
+                visualReviewPacketSha256 = entry.VisualReviewPacketSha256,
+                visualReviewInstructionsArtifact = entry.VisualReviewInstructionsArtifact,
+                visualDerivedFailureIds = entry.VisualDerivedFailureIds,
+                visualReviewResultArtifact = entry.VisualReviewResultArtifact,
+                visualPerformanceArtifact = entry.VisualPerformanceArtifact,
+                visualPerformanceJUnitArtifact = entry.VisualPerformanceJUnitArtifact,
+                visualArtifactCount = entry.VisualArtifacts?.Count ?? 0,
                 startedUtc = entry.StartedUtc,
                 endedUtc = entry.EndedUtc,
             }).ToArray(),
@@ -398,11 +530,18 @@ internal static class QualificationResultWriter
             Add(entry.JsonArtifact, "scenario-result");
             Add(entry.JUnitArtifact, "junit");
             Add(entry.TimelineArtifact, "timeline");
+            Add(entry.VisualManifestArtifact, "visual-manifest");
+            Add(entry.VisualReviewPacketArtifact, "visual-review-packet");
+            Add(entry.VisualReviewInstructionsArtifact, "visual-review-instructions");
+            Add(entry.VisualReviewResultArtifact, "visual-review-result");
+            Add(entry.VisualPerformanceArtifact, "visual-performance-report");
+            Add(entry.VisualPerformanceJUnitArtifact, "visual-performance-junit");
+            foreach (VisualArtifactRecord artifact in entry.VisualArtifacts ?? Array.Empty<VisualArtifactRecord>())
+                Add(artifact.RelativePath, artifact.Derived ? "visual-derived-image" : "visual-image");
         }
-
         return result.ToArray();
 
-        void Add(string relativePath, string kind)
+        void Add(string? relativePath, string kind)
         {
             if (string.IsNullOrWhiteSpace(relativePath) || !paths.Add(relativePath))
                 return;
@@ -417,6 +556,16 @@ internal static class QualificationResultWriter
             });
         }
     }
+    private static IReadOnlyDictionary<string, string> ReviewCorrelations(Ctx ctx)
+        => new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["nativeOutcome"] = ctx.Outcome.Code,
+            ["desktopLeaseValid"] = (ctx.DesktopLease?.IsValid ?? false).ToString().ToLowerInvariant(),
+            ["assertionCount"] = ctx.Assertions.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["timelineArtifact"] = ctx.Attempt > 1
+                ? $"{SafeFileName(ctx.Name)}-attempt-{ctx.Attempt}.timeline.json"
+                : $"{SafeFileName(ctx.Name)}.timeline.json",
+        };
 
     public static void CaptureLiveEvidence(Ctx ctx)
     {

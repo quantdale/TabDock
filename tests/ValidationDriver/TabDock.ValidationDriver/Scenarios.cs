@@ -29,6 +29,10 @@ internal sealed class Options
     public int ResourceSeed = 20260824;
     public int ResourceDurationSeconds;
     public string? ResourceArtifactOutput;
+    public VisualEvidenceLevel VisualEvidence = VisualEvidenceLevel.NONE;
+    public bool VisualReviewPacket;
+    public long? VisualMaxBytes;
+    public VisualEvidencePolicy VisualPolicy = VisualEvidencePolicy.Disabled;
 }
 
 /// <summary>A window under test: a guinea pig or a real app (wt/chrome) for maximize-repro.</summary>
@@ -111,6 +115,51 @@ internal sealed class Ctx
     /// any guarded input. Native-free/preflight contexts may leave it null.
     /// </summary>
     public DesktopQualificationLease? DesktopLease { get; set; }
+    /// <summary>
+    /// Semantic visual evidence for this attempt. Scenario bodies submit
+    /// checkpoints here; they never manage image paths or hashes.
+    /// </summary>
+    public VisualEvidenceRecorder? Visual { get; set; }
+    public VisualEvidencePolicy VisualPolicy { get; set; } = VisualEvidencePolicy.Disabled;
+    public VisualCaptureScope VisualGuestScope(GuestInfo guest)
+    {
+        if (guest.Identity is not WindowIdentity identity)
+            throw new InvalidOperationException($"Guest '{guest.Title}' has no stable identity for visual capture.");
+        return VisualCaptureScope.ForWindow(
+            VisualCaptureScopeKind.GUEST_WINDOW,
+            VisualTargetIdentityFactory.From(identity),
+            VisualPrivacyClass.TEST_OWNED);
+    }
+
+
+    public VisualCheckpointResult VisualCheckpoint(VisualCheckpointRequest request)
+    {
+        request.Validate();
+        if (Visual == null)
+        {
+            var unavailable = new List<VisualUnavailableRecord>();
+            foreach (VisualCaptureScope scope in request.Scopes)
+            {
+                var item = new VisualUnavailableRecord(
+                    request.Id,
+                    request.Phase,
+                    scope.Kind,
+                    request.Requiredness,
+                    "visual recorder is unavailable for this context",
+                    DateTimeOffset.UtcNow);
+                unavailable.Add(item);
+            }
+            bool requiredFailure = request.Requiredness == VisualCaptureRequiredness.REQUIRED;
+            if (requiredFailure)
+                FailHarness($"required visual checkpoint '{request.Id}' could not be recorded");
+            return new VisualCheckpointResult(request.Id, false, requiredFailure, Array.Empty<VisualArtifactRecord>(), unavailable);
+        }
+
+        VisualCheckpointResult result = Visual.Checkpoint(request);
+        if (result.RequiredFailure)
+            FailHarness($"required visual checkpoint '{request.Id}' could not be recorded");
+        return result;
+    }
 
     public void Check(bool condition, string what)
     {
@@ -322,6 +371,7 @@ internal static partial class Scenarios
                 Name = name,
                 Attempt = attempt,
                 Capabilities = capabilities,
+                VisualPolicy = opt.VisualPolicy,
             };
             ScenarioOutcomeKind outcome = capabilityResolution.Outcome
                 ?? ScenarioOutcomeKind.FailHarness;
@@ -360,6 +410,7 @@ internal static partial class Scenarios
                 Timeline = timeline,
                 Capabilities = capabilities,
                 DesktopLease = lease,
+                VisualPolicy = opt.VisualPolicy,
             };
             blocked.BlockEnvironment(lease.LastFailureReason ?? "desktop qualification lease could not start");
             blocked.FinishedUtc = DateTimeOffset.UtcNow;
@@ -380,8 +431,23 @@ internal static partial class Scenarios
             ctx.Timeline = timeline;
             ctx.Capabilities = capabilities;
             ctx.DesktopLease = lease;
+            ctx.VisualPolicy = opt.VisualPolicy;
             if (ctx.MainIdentity.HasValue)
                 lease.RegisterTarget(ctx.MainIdentity.Value, "TabDockMainWindow");
+            VisualEvidencePolicy visualPolicy = opt.VisualPolicy;
+            if (visualPolicy.Enabled)
+            {
+                ctx.Visual = new VisualEvidenceRecorder(
+                    visualPolicy,
+                    TestRunProvenance.ArtifactDirectory,
+                    name,
+                    attempt,
+                    new VisualCaptureService(
+                        visualPolicy.MaxWidth,
+                        visualPolicy.MaxHeight,
+                        visualPolicy.AllowVirtualDesktop));
+            }
+            GuardedProc.Log($"  Visual policy: {VisualPolicyResolver.Describe(visualPolicy)}.");
             body!(ctx, opt);
         }
 
@@ -405,6 +471,7 @@ internal static partial class Scenarios
             {
                 if (ctx != null)
                 {
+                    ctx.Visual?.StopFlightRecorder();
                     QualificationResultWriter.CaptureLiveEvidence(ctx);
                     Cleanup(ctx);
                     ctx.Check(NoSpawnedGuestWindowsRemain(ctx), "cleanup left no spawned guest top-level windows");
@@ -2228,12 +2295,21 @@ internal static partial class Scenarios
     {
         // Pixel sampling reads the screen; the container must actually be on top.
         Input.ForceForegroundRoot(host);
-        int[]? f0 = Pixels.CaptureHostScreenArea(host);
+        PixelCaptureResult? first = Pixels.CaptureHostScreenAreaDetailed(host);
         Thread.Sleep(1500);
-        int[]? f1 = Pixels.CaptureHostScreenArea(host);
-        if (f0 == null || f1 == null)
+        PixelCaptureResult? second = Pixels.CaptureHostScreenAreaDetailed(host);
+        if (first == null || second == null)
             return (-1, -1);
-        return (Pixels.ComputeAvgBrightness(f1), Pixels.ComputeAvgFrameDiff(f0, f1));
+
+        GuardedProc.Log(
+            $"  screen capture characterization: size={first.Value.Width}x{first.Value.Height} " +
+            $"rawBytes={first.Value.Width * first.Value.Height * sizeof(int)} " +
+            $"rect=({first.Value.ScreenRect.Left},{first.Value.ScreenRect.Top}," +
+            $"{first.Value.ScreenRect.Right},{first.Value.ScreenRect.Bottom}) " +
+            $"latencyMs={first.Value.DurationMilliseconds}/{second.Value.DurationMilliseconds}");
+        return (
+            Pixels.ComputeAvgBrightness(second.Value.Pixels),
+            Pixels.ComputeAvgFrameDiff(first.Value.Pixels, second.Value.Pixels));
     }
 
     private static bool GuestMatchesHost(IntPtr guest, IntPtr host, out string description)

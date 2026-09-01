@@ -193,17 +193,30 @@ internal static partial class Scenarios
                 // land in the same blink phase and read as byte-identical (variance
                 // 0.0000). That is the documented sampling-timing flake class, not a
                 // rendering regression — resample with a fresh pair before failing.
-                int[]? f0 = Pixels.CaptureWindowViaPrintWindow(browser.Hwnd);
+                PixelCaptureResult? direct0 = Pixels.CaptureWindowViaPrintWindowDetailed(browser.Hwnd);
+                int[]? f0 = direct0?.Pixels;
                 Thread.Sleep(600);
-                int[]? f1 = Pixels.CaptureWindowViaPrintWindow(browser.Hwnd);
+                PixelCaptureResult? direct1 = Pixels.CaptureWindowViaPrintWindowDetailed(browser.Hwnd);
+                int[]? f1 = direct1?.Pixels;
+                if (direct0.HasValue && direct1.HasValue)
+                {
+                    GuardedProc.Log(
+                        $"  direct capture characterization: size={direct0.Value.Width}x{direct0.Value.Height} " +
+                        $"rawBytes={direct0.Value.Width * direct0.Value.Height * sizeof(int)} " +
+                        $"rect=({direct0.Value.ScreenRect.Left},{direct0.Value.ScreenRect.Top}," +
+                        $"{direct0.Value.ScreenRect.Right},{direct0.Value.ScreenRect.Bottom}) " +
+                        $"latencyMs={direct0.Value.DurationMilliseconds}/{direct1.Value.DurationMilliseconds}");
+                }
                 double var = f0 == null || f1 == null ? -1 : Pixels.ComputeAvgFrameDiff(f0, f1);
                 for (int s = 0; s < 3 && var <= 0.005; s++)
                 {
                     GuardedProc.Log($"  switch {i + 1}/24: H4 variance sample {s + 1} flat (var={var:F4}) — resampling.");
                     Thread.Sleep(700);
-                    f0 = Pixels.CaptureWindowViaPrintWindow(browser.Hwnd);
+                    direct0 = Pixels.CaptureWindowViaPrintWindowDetailed(browser.Hwnd);
+                    f0 = direct0?.Pixels;
                     Thread.Sleep(600);
-                    f1 = Pixels.CaptureWindowViaPrintWindow(browser.Hwnd);
+                    direct1 = Pixels.CaptureWindowViaPrintWindowDetailed(browser.Hwnd);
+                    f1 = direct1?.Pixels;
                     var = f0 == null || f1 == null ? -1 : Pixels.ComputeAvgFrameDiff(f0, f1);
                 }
                 if (f0 == null || f1 == null)

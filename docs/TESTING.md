@@ -180,6 +180,46 @@ PASS/FAIL/BLOCKED classification. Set
 `TABDOCK_RESOURCE_ARTIFACT_OUTPUT` when invoking `scripts\validate.ps1 -Ci` to
 retain the short CI gate's evidence outside its temporary validation root.
 
+### Visual-performance measurement qualification
+
+The CI-safe visual measurement path is opt-in and validation-side. It runs the
+six representative presentation scenarios (`rename`, `split`, `inline-capture`,
+`maximize-fullscreen`, `title-centering`, and `topmost-transition`) in paired
+visual-disabled, checkpoint, checkpoint-plus-packet, flight-healthy-discard,
+and flight-failure-flush modes. Each sample records candidate/run/driver
+identity, scenario and mode, machine/topology classification, dimensions,
+capture method, timing phases, work counters, ring state, memory/allocation
+observations, and native/resource observations.
+
+```powershell
+dotnet run --project tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj -c Release --no-restore -- `
+  --resource-headless --configuration Release --rid none --cycles 32 `
+  --profile all --seed 20260824 --artifact-output .\artifacts\resource-stability
+```
+
+The deterministic runner retains raw samples and emits
+`visual-performance-measurements.json` plus
+`visual-performance-measurements.junit.xml` beside the normal resource
+artifacts. The report aggregates each cell with count, median, p95 when at
+least 20 observations are available, maximum, units, outlier notes, explicit
+budget provenance, and paired enabled-versus-disabled resource deltas. The
+runner bounds its six-scenario collection at 30 samples per mode, so the
+canonical command produces 900 raw samples, 30 cells, and 720 enabled pair
+comparisons.
+
+Disabled samples must have zero visual capture, encoding, retention, packet,
+contact-sheet, worker, timer, artifact, and ring work; branch overhead is
+reported separately. Missing native/resource observations block a claim rather
+than becoming zero. Healthy flight samples must discard the ring, while failed
+flight samples must retain a bounded flush. Budget and pair-comparison
+regressions fail or block deterministically.
+
+This path uses an in-memory capture provider and is classified
+`SYNTHETIC`. Its PASS is useful for schema, lifecycle, budget, and offline
+verifier regression coverage only; it cannot satisfy the supervised physical
+visual gate or replace native desktop observation. Generated run directories
+are temporary/ignored and must not be committed.
+
 ### Qualification outcome contract
 
 Every scenario uses one canonical outcome value, serialized identically in the

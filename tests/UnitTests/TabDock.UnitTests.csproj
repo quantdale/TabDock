@@ -25,6 +25,30 @@
              Link="ValidationDriver\ResourceLifecycleProfiles.cs" />
     <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\ResourceStabilityArtifact.cs"
              Link="ValidationDriver\ResourceStabilityArtifact.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\Pixels.cs"
+             Link="ValidationDriver\Pixels.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualEvidenceModel.cs"
+             Link="ValidationDriver\VisualEvidenceModel.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualPathPolicy.cs"
+             Link="ValidationDriver\VisualPathPolicy.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualPngArtifacts.cs"
+             Link="ValidationDriver\VisualPngArtifacts.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualCaptureScopes.cs"
+             Link="ValidationDriver\VisualCaptureScopes.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualEvidenceRecorder.cs"
+             Link="ValidationDriver\VisualEvidenceRecorder.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualRingBuffer.cs"
+             Link="ValidationDriver\VisualRingBuffer.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualContactSheets.cs"
+             Link="ValidationDriver\VisualContactSheets.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualReviewPackets.cs"
+             Link="ValidationDriver\VisualReviewPackets.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualReviewVerifier.cs"
+             Link="ValidationDriver\VisualReviewVerifier.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualMeasurement.cs"
+             Link="ValidationDriver\VisualMeasurement.cs" />
+    <Compile Include="..\ValidationDriver\TabDock.ValidationDriver\VisualMeasurementRunner.cs"
+             Link="ValidationDriver\VisualMeasurementRunner.cs" />
   </ItemGroup>
 
 </Project>

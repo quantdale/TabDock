@@ -37,6 +37,19 @@ bindings fail, or a required supervised condition is blocked.
 - **THEN** qualification fails before evidence publication and does not reuse
   the historical artifact as a substitute
 
+ 
+#### Scenario: Mismatched SHA is refused
+
+- **WHEN** a requested release SHA differs from `HEAD` or a qualification bundle
+  names another source SHA
+- **THEN** qualification fails before any build work or evidence publication
+
+#### Scenario: The published executable must be the qualified executable
+
+- **WHEN** a release candidate is qualified
+- **THEN** the executable that passes `--version`, native ABI, and permitted
+  qualification checks is the same binary whose final hash is recorded in
+  every downstream evidence record
 ### Requirement: Stable releases are intentional and fail-closed
 
 The release workflow SHALL remain dispatch-only and exact-commit based. Before
@@ -72,3 +85,21 @@ synthetic visual/performance checks passed.
 - **WHEN** the Release v1.1 validation checks a supported pre-visual bundle
 - **THEN** the old bundle verifies under its declared schema without
   synthesizing visual or performance evidence
+ 
+#### Scenario: Production publication requires external evidence
+
+- **WHEN** a production release is requested without a valid
+  `release-external-evidence.json` record (missing, malformed, wrong source
+  SHA, wrong artifact hash, or any mandatory gate not `PASS`)
+- **THEN** publication is refused and no release or tag is created
+
+#### Scenario: Qualification-only runs need no external evidence
+
+- **WHEN** a qualification-only run is requested
+- **THEN** the qualification succeeds and the manifest records
+  `productionReleaseEligibility = BLOCKED_EXTERNAL` without any evidence
+
+#### Scenario: Tag identity
+
+- **WHEN** a release is published with tag `v<semver>`
+- **THEN** the tag resolves to the exact qualified candidate SHA

@@ -5,17 +5,20 @@
 The preceding `2026-08-31-visual-evidence-ai-review` change added a
 ValidationDriver-only visual pipeline: semantic capture scopes, lossless PNG
 artifacts, bounded checkpoints and flight history, contact sheets, review
-packets/results, and offline bundle verification. It deliberately did not
-change production TabDock or embed a model provider. Its deterministic work is
-reported as complete, but its acceptance boundary still requires supervised
-visual review and archival reconciliation.
+packets/results, and offline bundle verification. Its canonical 178-row ledger
+has now been reconciled against current source and evidence: 93 rows are
+checked as `COMPLETED_AND_PROVEN`, while 85 remain explicitly classified and
+unchecked in
+`.agent/investigations/visual-evidence-ledger-reconciliation-2026-09-01.md`.
+The acceptance boundary remains open; this design does not treat deterministic
+tests or a syntactically valid verifier as physical or multimodal evidence.
 
 The current repository is not an accepted release of that visual change. The
-working tree contains the visual implementation and test files as modified or
-untracked files, and the next-campaign investigation is itself untracked until
-proven otherwise. The first milestone of this change therefore closes the
-preceding campaign's acceptance boundary; it does not assume that passing unit
-tests or a syntactically valid verifier is physical or multimodal evidence.
+working tree contains intended visual implementation and test files as
+modified or untracked, generated run roots, and planning records. The first
+milestone of this change therefore closes the preceding campaign's applicable
+acceptance, provenance, and contract obligations; it does not assume an
+unmapped 84/89 roll-up or a five-row remainder.
 
 The new work also answers a separate question: what does retaining visual
 state cost? Existing resource qualification already measures run-owned process
@@ -360,11 +363,14 @@ intended allowlist. The audit must distinguish:
   artifacts to ignore or remove only when run-owned and authorized;
 - unrelated user changes to preserve and report.
 
-The preceding change is archived only after its five blocked tasks have an
-accepted disposition, verifier/collection/contact contracts are fixed and
-verified, supervised A evidence exists, canonical specs are synchronized, and
+The preceding change is archived only after every remaining predecessor row has
+an accepted, superseded, or explicitly blocked disposition, the
+verifier/collection/contact contracts are fixed and verified, supervised A
+evidence exists, canonical specs are synchronized, and
 `HEAD == origin/main` has been independently proven for the committed result.
-This change remains open until B and E are independently accepted.
+The current reconciliation is 93/178 checked with 85 rows still open; it is a
+ledger repair, not an archive claim. This change remains open until B and E are
+independently accepted.
 
 ### 12. Deferred campaign boundaries
 

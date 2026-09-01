@@ -51,6 +51,7 @@ internal static class ResourceSoakRunner
             ? "headless deterministic lifecycle fixtures"
             : "run-owned TabDock process";
         string? harnessFailure = null;
+        VisualMeasurementReport? visualMeasurements = null;
 
         TestRunProvenance.BeginRun();
         QualificationResultWriter.BeginRun();
@@ -66,6 +67,14 @@ internal static class ResourceSoakRunner
             if (options.ResourceHeadless)
             {
                 snapshots = SyntheticSnapshots(cycles);
+                visualMeasurements = VisualMeasurementRunner.RunSynthetic(
+                    QualificationResultWriter.CandidateSha(),
+                    TestRunProvenance.RunId,
+                    QualificationResultWriter.DriverIdentitySha256(),
+                    options.Configuration,
+                    Math.Max(1, Math.Min(30, cycles)),
+                    options.ResourceSeed,
+                    Path.Combine(temporaryRoot, "visual-measurements"));
             }
             else
             {
@@ -127,6 +136,16 @@ internal static class ResourceSoakRunner
             outcome = "BLOCKED_ENVIRONMENT";
             failureReason = series.FailureReason;
         }
+        else if (visualMeasurements?.Outcome == "FAIL")
+        {
+            outcome = "FAIL_PRODUCT";
+            failureReason = visualMeasurements.Limitation ?? "visual performance budget gate failed";
+        }
+        else if (visualMeasurements?.Outcome == "BLOCKED")
+        {
+            outcome = "BLOCKED_ENVIRONMENT";
+            failureReason = visualMeasurements.Limitation ?? "visual performance measurement was blocked";
+        }
         else
         {
             outcome = "PASS";
@@ -151,7 +170,8 @@ internal static class ResourceSoakRunner
             ProcessSeries: series,
             Snapshots: snapshots,
             Outcome: outcome,
-            FailureReason: failureReason);
+            FailureReason: failureReason,
+            VisualMeasurements: visualMeasurements);
         try
         {
             QualificationResultWriter.WriteResourceStability(artifact);
@@ -290,6 +310,14 @@ internal static class ResourceSoakRunner
         Console.WriteLine($"profile: {artifact.ProfileSelection}");
         Console.WriteLine($"cycles: {artifact.CycleCount}");
         Console.WriteLine($"measurement target: {artifact.MeasurementTarget}");
+        if (artifact.VisualMeasurements is { } visual)
+        {
+            Console.WriteLine(
+                $"visual measurements: outcome={visual.Outcome} classification={visual.Classification} "
+                + $"samples={visual.Samples.Count} cells={visual.Cells.Count} pairs={visual.PairComparisons?.Count ?? 0}");
+            if (visual.Limitation != null)
+                Console.WriteLine($"visual measurement note: {visual.Limitation}");
+        }
         foreach (ResourceMetricAnalysis metric in artifact.ProcessSeries.Metrics)
         {
             string baseline = metric.Baseline?.ToString() ?? "unavailable";

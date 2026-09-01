@@ -323,6 +323,25 @@ internal static partial class Scenarios
         GuestInfo guest = SpawnGuest(ctx, opt.Guest);
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, guest);
 
+        void CaptureVisualCheckpoint(string id, VisualCheckpointPhase phase, string expectation)
+        {
+            if (ctx.Visual is not { } visual
+                || visual.Policy.Level is VisualEvidenceLevel.NONE or VisualEvidenceLevel.FAILURE_ONLY)
+            {
+                return;
+            }
+
+            ctx.VisualCheckpoint(new VisualCheckpointRequest(
+                id,
+                phase,
+                expectation,
+                new[] { ctx.VisualGuestScope(guest) },
+                visual.Policy.Level == VisualEvidenceLevel.CHECKPOINTS
+                    ? VisualCaptureRequiredness.REQUIRED
+                    : VisualCaptureRequiredness.BEST_EFFORT));
+        }
+
+
         for (int cycle = 1; cycle <= cycles; cycle++)
         {
             GuardedProc.Log($"  --- maximize-repro cycle {cycle}/{cycles} (guest={opt.Guest}) ---");
@@ -330,6 +349,16 @@ internal static partial class Scenarios
 
             (double bBase, double vBase) = SampleHost(host);
             GuardedProc.Log($"  cycle {cycle}: baseline brightness={bBase:F2} variance={vBase:F4}");
+
+            CaptureVisualCheckpoint(
+                $"maximize-cycle-{cycle}-baseline",
+                VisualCheckpointPhase.BASELINE,
+                $"The captured guest is fully visible in its assigned host pane before maximize cycle {cycle}.");
+
+            CaptureVisualCheckpoint(
+                $"maximize-cycle-{cycle}-before-maximize",
+                VisualCheckpointPhase.BEFORE_ACTION,
+                $"The captured guest is ready for maximize cycle {cycle} with its stable identity and pane presentation intact.");
 
             ClickMaximizeButton(container);
             Thread.Sleep(1500);
@@ -347,6 +376,15 @@ internal static partial class Scenarios
             DumpGeometry(ctx, container, host, guest, $"cycle{cycle} after-maximize");
             bool geoMaxOk = GuestMatchesHost(guest.Hwnd, host, out string geoMax);
             GuardedProc.Log($"  cycle {cycle}: brightnessAfterMax={bMax:F2} varianceAfterMax={vMax:F4}");
+            CaptureVisualCheckpoint(
+                $"maximize-cycle-{cycle}-after-maximize",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                $"The captured guest remains fully visible and aligned after maximize cycle {cycle} settles.");
+
+            CaptureVisualCheckpoint(
+                $"maximize-cycle-{cycle}-before-restore",
+                VisualCheckpointPhase.BEFORE_ACTION,
+                $"The maximized captured guest is ready for restore cycle {cycle}.");
 
             // Restore: recompute the button position from the NEW (maximized) rect.
             ClickMaximizeButton(container);
@@ -360,6 +398,10 @@ internal static partial class Scenarios
             DumpGeometry(ctx, container, host, guest, $"cycle{cycle} after-restore");
             bool geoRestOk = GuestMatchesHost(guest.Hwnd, host, out string geoRest);
             GuardedProc.Log($"  cycle {cycle}: brightnessAfterRestore={bRest:F2} varianceAfterRestore={vRest:F4}");
+            CaptureVisualCheckpoint(
+                $"maximize-cycle-{cycle}-after-restore",
+                VisualCheckpointPhase.AFTER_ACTION_SETTLED,
+                $"The captured guest is fully visible and aligned after restore cycle {cycle} settles.");
 
             string newLines = TabDockLog.DumpNewLines(cycOff);
             GuardedProc.Log($"  cycle {cycle}: new TabDock log lines (MAXCLICK/STATE/SHEPHERD instrumentation):");

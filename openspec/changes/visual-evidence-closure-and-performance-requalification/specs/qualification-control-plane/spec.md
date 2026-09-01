@@ -51,6 +51,21 @@ never infer visual/performance evidence or review from absence.
 - **THEN** it remains verifiable under its declared schema and no visual,
   packet, review, or resource PASS is synthesized
 
+ 
+#### Scenario: A child exit code disagrees with its manifest
+
+- **WHEN** a child process exits with a result that disagrees with its verified
+  child manifest
+- **THEN** the parent records `FAIL_HARNESS` for that shard and the parent run
+  cannot be release PASS
+
+#### Scenario: A partial or tampered `all` run is imported
+
+- **WHEN** a child manifest is missing, malformed, stale, duplicated, tampered,
+  assigned to the wrong shard, bound to another candidate, or absent after
+  timeout/cancellation
+- **THEN** the parent records `FAIL_HARNESS` and never infers success from
+  process completion alone
 ### Requirement: Qualification bundles SHALL be portable and offline-verifiable
 
 A qualification bundle SHALL bind a source commit, semantic version, exact
@@ -91,6 +106,20 @@ valid under their original schema and do not synthesize visual evidence.
   duplicate path, or path that resolves outside the bundle root
 - **THEN** verification fails before accepting the artifact as evidence
 
+ 
+#### Scenario: An unsafe bundle path is supplied
+
+- **WHEN** an artifact index contains an absolute path, traversal segment,
+  duplicate path, or path that resolves outside the bundle root
+- **THEN** offline verification fails before reading or accepting the artifact
+  as qualification evidence
+
+#### Scenario: An unsupported bundle schema is supplied
+
+- **WHEN** the bundle uses a future schema or a schema outside the explicitly
+  accepted migration window
+- **THEN** verification returns a deterministic unsupported-schema failure
+  rather than partially accepting the bundle
 #### Scenario: A visual review packet/result is stale
 
 - **WHEN** packet/result hashes, strict collections, image bindings, derived
@@ -135,3 +164,16 @@ claim that a measured budget or supervised visual acceptance exists.
 - **THEN** it emits policy/capability/budget blocks without starting TabDock,
   sending input, recording the desktop, sampling a process, or invoking a
   multimodal reviewer
+ 
+#### Scenario: A second machine returns an untrusted report
+
+- **WHEN** an imported report contains malformed fields, a candidate/source/hash
+  mismatch, an unsupported OS classification, a future timestamp, or
+  executable/script content
+- **THEN** import fails closed and no external release gate is changed
+
+#### Scenario: Planning runs on an unsafe desktop
+
+- **WHEN** planning is requested without sending input
+- **THEN** it emits a machine-readable plan with capability blocks and never
+  starts TabDock, a guest, or a physical scenario

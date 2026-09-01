@@ -30,6 +30,19 @@ shall not include raw image content in resource records.
 - **THEN** the observation remains unavailable and the resource result blocks
   rather than converting the missing value to zero
 
+ 
+#### Scenario: Complete observation captures the supported signals
+
+- **WHEN** a run-owned TabDock process exposes the supported Windows counters
+- **THEN** the retained observation records the counters and the process-start
+  identity without collecting user content or identifying window text
+
+#### Scenario: Inaccessible observation fails closed
+
+- **WHEN** a process exits, cannot be opened, or one supported counter cannot be
+  read
+- **THEN** the observation records unavailable evidence and the series cannot
+  receive a resource-stability PASS
 ### Requirement: Resource series analysis distinguishes plateau from growth
 
 The qualification system SHALL analyze an explicit warm-up prefix and multiple
@@ -56,6 +69,26 @@ evidence SHALL be BLOCKED and MUST NOT be reported as PASS.
 - **THEN** rolling frames are released, retained visual bytes/artifacts remain
   within policy, and no visual worker/timer/file residue survives
 
+ 
+#### Scenario: Lazy warm-up reaches a plateau
+
+- **WHEN** resource counters rise during the configured warm-up and remain
+  within budget across settled checkpoints
+- **THEN** analysis reports a passing plateau result using the settled baseline
+
+#### Scenario: One native object leaks per settled cycle
+
+- **WHEN** USER, GDI, or process-handle counts increase persistently across
+  settled checkpoints
+- **THEN** analysis reports a failed resource result and identifies the leaking
+  metric and growth trend
+
+#### Scenario: Process generation changes during sampling
+
+- **WHEN** the process-start identity changes or becomes unavailable between
+  observations
+- **THEN** analysis reports BLOCKED rather than combining generations or
+  inferring stability from reset counters
 ### Requirement: Lifecycle qualification covers complementary churn profiles
 
 The safe resource qualification command SHALL provide repeatable profiles for
@@ -76,6 +109,19 @@ clean up run-owned processes and temporary state.
   final state, and reports no unexpected temporary, native, worker, timer, or
   artifact residue
 
+ 
+#### Scenario: All safe profiles complete their cycles
+
+- **WHEN** a bounded headless run selects all lifecycle profiles
+- **THEN** each profile completes its configured cycles, returns to its bounded
+  final state, and reports no unexpected temporary residue
+
+#### Scenario: A profile assertion fails
+
+- **WHEN** a lifecycle profile detects stale state or artifact residue
+- **THEN** the run reports a non-pass resource result, retains the resource
+  evidence, and still attempts cleanup of run-owned processes and temporary
+  state
 ### Requirement: Resource evidence is retained as resource-only qualification
 
 Each resource-aware run SHALL emit machine-readable JSON and JUnit-compatible
@@ -97,6 +143,19 @@ source-mismatched, or budget-unproven evidence SHALL fail closed.
   disabled, checkpoint, and flight cells, with budget provenance and no
   unsupported claim of physical visual acceptance
 
+ 
+#### Scenario: Headless resource evidence passes
+
+- **WHEN** deterministic lifecycle profiles and synthetic resource series pass
+- **THEN** the manifest records a resource-only synthetic PASS with its source
+  and driver identities
+
+#### Scenario: Synthetic evidence is used for a physical gate
+
+- **WHEN** a release decision has only a synthetic resource result for a
+  physical or supervised requirement
+- **THEN** that requirement remains unresolved rather than being promoted to
+  PASS
 ### Requirement: CI and extended soak execution remain safe
 
 The ordinary CI resource gate SHALL be bounded, headless, deterministic,
@@ -122,3 +181,15 @@ real-capture extension.
 - **THEN** the command reports source, scenario, mode, cycles, samples,
   metrics, trends, resource deltas, and artifact location while cleaning only
   run-owned processes and isolated state
+ 
+#### Scenario: Hosted CI runs the resource gate
+
+- **WHEN** the canonical CI validation path executes its resource check
+- **THEN** it completes without SendInput or arbitrary desktop interaction and
+  fails the job on a resource-profile or analyzer regression
+
+#### Scenario: Local extended soak is requested
+
+- **WHEN** a developer requests a longer resource soak
+- **THEN** the command reports source, profile, cycles, metrics, trends, and
+  artifact location while cleaning only run-owned processes and isolated state

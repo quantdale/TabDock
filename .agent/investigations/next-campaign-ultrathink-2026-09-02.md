@@ -2,8 +2,16 @@
 
 **Date:** 2026-09-02
 **Mode:** explore (no implementation — thinking only)
-**Source campaign:** `2026-08-31-visual-evidence-ai-review` — 84/89 done, 5 blocked awaiting supervised desktop + archival acceptance. Deterministic evidence: `776/776` unit tests (44 visual), Debug/Release builds 0 warnings (driver), historical manifests valid, `scripts/qualification-bundle.ps1` now indexes visual artifacts offline.
-**Verified head:** `fdb782e107d0bbf632a88936a876c7f5db35cb4c` == `origin/main`, worktree dirty only with visual-evidence untracked+staged files (expected pre-acceptance).
+**Source campaign:** `2026-08-31-visual-evidence-ai-review` — canonical
+ledger reconciled at **93/178 checked**, with 85 rows explicitly classified
+and unchecked. Current deterministic evidence: 44/44 visual-filter tests,
+successful Debug/Release solution builds, and historical manifests valid;
+the current visual implementation and generated run roots remain dirty.
+The row-level reconciliation is
+`.agent/investigations/visual-evidence-ledger-reconciliation-2026-09-01.md`.
+**Verified head at reconciliation:** `68e456ff8500750c32474927ce724292a54f1245`
+== `origin/main`, branch `main`, with seven modified files and 24 untracked
+paths before subsequent planning edits.
 
 ## 1. Where we stand
 
@@ -34,17 +42,34 @@
  └──────────────────────────────────────────────────────────────────────┘
 ```
 
-**What the visual campaign actually closed:** pure ValidationDriver pipeline with injectable `IVisualCaptureProvider`, no prod change, privacy classes (`TEST_OWNED/PRODUCT_OWNED/REAL_APP_RESTRICTED/DESKTOP_RESTRICTED`), `MaxBytes/MaxArtifacts/MaxWidth/Height` budgets, `VISUAL_*` vocabulary isolated from native `PASS/FAIL_*`, contact sheet is derived convenience.
 
-**What remains blocked (not failed):**
-- 4 supervised validations: healthy/defective packet multimodal review (non-vacuous), transient flight-evidence review, capable vs non-vision `REVIEW_UNAVAILABLE` path, hash-tamper + native-precedence on a physical run.
-- 1 archival gate: `openspec archive` only after operator acceptance + push.
+**What the visual campaign actually closed:** pure ValidationDriver pipeline
+with injectable `IVisualCaptureProvider`, no production change, privacy classes
+(`TEST_OWNED/PRODUCT_OWNED/REAL_APP_RESTRICTED/DESKTOP_RESTRICTED`),
+`MaxBytes/MaxArtifacts/MaxWidth/Height` budgets, `VISUAL_*` vocabulary isolated
+from native `PASS/FAIL_*`, contact sheet as derived convenience, and direct
+deterministic tests for the implemented pieces. This is not a claim that all
+178 predecessor rows are complete.
+
+**What remains open or blocked:** the exact row-level remainder is 35
+implemented-but-not-accepted, 38 not implemented, 3 superseded, 7 supervised
+blocked, and 2 capability blocked. It includes contract/verifier hardening,
+scenario integration, privacy/tamper/docs work, supervised packets and review,
+and archive/provenance gates. The 84/89 wording was an implementation-only
+roll-up with no mapping to the canonical rows and must not be reused.
 
 **Health signals from repo:**
-- 776/776 unit tests green, but visual model recently made collections nullable (`VisualReviewPacket.Checkpoints?` etc.) to survive JSON round-trip — hides the real contract (required fields should be non-null via required ctor + custom converter, not nullable). Leaves warnings `CS8602` in verifier/packets.
-- `VisualEvidenceRecorder.TryBuildContactSheet` records `BEST_EFFORT/SUSPICIOUS` unavailable on byte-count budget exhaustion but manifest still counts it as unavailable — correct, but plan task 10.6 expects explicit derived-failure reporting in scenario result (currently only in `Unavailable[]`, not surfaced in JUnit `visualEvidence`).
-- `qualification-bundle.ps1` now has `Test-QualificationVisualManifest` but `Get-QualificationManifestSummary` does not yet surface visual counts to `aggregateCounts` — parent `all` cannot yet fail a gate that declares visual review required.
-- Physical matrix last proven at `914a259` (732 tests at that time) — visual branch adds 44 tests, re-baselining needed before next physical `all`.
+- 44/44 visual tests pass, but visual model collections and verifier call paths
+  still require strict null/malformed-input closure; Release visual compilation
+  has nullable warnings.
+- `VisualEvidenceRecorder.TryBuildContactSheet` records a generic unavailable
+  entry; successor A requires an authoritative derived-failure record surfaced
+  through manifest, scenario result, packet eligibility, and offline verification.
+- `qualification-bundle.ps1` indexes visual manifest/image data, but successor A
+  still needs review packet/instructions linkage and aggregate visual outcome
+  gating.
+- Historical `.visual-validation-runs` roots contain native manifests/results
+  only; no current exact-candidate visual acceptance packet is present.
 
 ## 2. Problem space — where could the *next* campaign go?
 
@@ -90,12 +115,19 @@ Five naturally emerging directions, each grounded in a gap the visual work expos
 
 ### Thread A — why "just archive" is not trivial
 
-Visual evidence correct but leaves small verification gaps:
-- `VisualReviewPacketBuilder` builds `facts` as `SortedDictionary` then round-trips via `Dictionary` — loses sort determinism in JSON (harmless but `VisualReviewVerifier` does not check key order).
-- `VisualEvidenceManifest.ReviewPacketSha256` currently mismatched check in verifier (`packetSha256: string.Empty` literal — copy-paste bug at `VisualReviewVerifier:205`). Deterministic tests pass because that branch is only hit when `ReviewPacketPath != null` with wrong expected — needs fix before archival audit.
-- Dirty worktree has `??` files (new visual types) + `M` files — `openspec archive` will reject dirty visual change unless committed. Need a clean `feat(visual-evidence): ...` commit with only visual files, not `.visual-validation-runs/`.
-
-*Open questions:* Who is the accepting operator? Which commit SHA will be the candidate for the supervised run? Will the supervised run use `--yes all --visual checkpoints --visual-review-packet` or per-scenario?
+Visual evidence currently has two concrete contract risks to close before
+archive:
+- The investigation originally reported a `packetSha256: string.Empty` literal,
+  but that literal is not present in the current `VisualReviewVerifier.cs`;
+  current code accepts a caller-supplied packet hash. Successor A must trace the
+  current data flow and remove any caller-substitution opportunity, rather than
+  applying a stale text fix.
+- Required collections are nullable in the current model/JSON path and emit
+  nullable warnings. A strict current-schema constructor/converter/validation
+  path must reject missing or null collections while preserving explicitly
+  supported historical non-visual bundles.
+- `.visual-validation-runs/` is not currently ignored; generated roots must
+  remain on disk only as run-owned evidence and be excluded from Git.
 
 ### Thread B — resource/performance re-baseline
 
@@ -164,21 +196,69 @@ Last authoritative Release artifact was `win-x64` at `914a259` `E3C830...BBF06F`
 
 ## 5. Risks that apply to *any* next campaign
 
-- **Verification drift:** `VisualReviewVerifier` literal bug (`packetSha256: string.Empty`) and nullable-collection warnings indicate the verifier is not yet strict enough for a release gate. Archival without fixing it would cement a weak gate.
-- **Dirty tree:** `.visual-validation-runs/` and `??` visual files are intentionally gitignored? Check `.gitignore` — they are not ignored, they are just untracked. Archive step `doctor` will complain about untracked visual `??` files if they are not committed.
-- **Name legality:** `openspec` rejects `2026-08-31-*` (must start with letter). The active change *is* in-progress under that name but was created outside the CLI. Next change should be letter-leading: `visual-evidence-closure-and-performance-requalification` or similar.
-- **No third-party imaging dependency** — watch that `VisualContactSheets` hand-rolled font + nearest-neighbor thumbnail is intentionally dependency-free; a follow-up that adds SkiaSharp/System.Drawing would break determinism/repro.
+- **Verification drift:** the historical `packetSha256: string.Empty` report is
+  absent from current source. The current writer/packet builder emits a packet
+  path and the verifier now hashes the exact packet bytes on disk; no public
+  verifier path accepts a caller-supplied packet hash. `VisualJson` rejects
+  missing/null current collections, and manifest/packet/result derived-failure
+  bindings are checked by both the offline verifier and bundle validator.
+- **Literal classification:** `packetSha256: string.Empty` is not present in the
+  current writer, serializer, verifier, or fixture sources; the report was
+  stale/test-only evidence. The live weakness was the verifier trusting a
+  caller-provided hash, which could weaken packet binding; the API now removes
+  that substitute.
+- **Dirty tree:** `.visual-validation-runs/` and visual review JSON/instruction
+  outputs now have narrow ignore rules. Intended visual source/tests/planning
+  records remain modified or untracked; closure still requires an explicit
+  allowlist audit without staging generated evidence.
+- **Name legality:** `openspec` rejects `2026-08-31-*` (must start with letter).
+  The active predecessor remains in progress under that name; the successor is
+  the letter-leading `visual-evidence-closure-and-performance-requalification`.
+- **No third-party imaging dependency** — the hand-rolled contact sheet remains
+  dependency-free and deterministic; adding SkiaSharp/System.Drawing would
+  change the reproducibility boundary.
 
-## 6. Concrete next steps (if you want to proceed)
+## 5a. Milestone A packet-binding trace
 
-1. **Fix verifier bug** (`packetSha256` literal) + make `VisualEvidenceModel` collections `required`/non-nullable with a custom `JsonConverter` for strict non-null, remove `CS8602` warnings — 1 task, pre-closure.
-2. **Create change** (when ready): 
-   ```bash
-   openspec new change visual-evidence-closure-and-performance-requalification --type spec-driven
-   ```
-   Then `status --change <name>`, seed `proposal.md` with Option 2 scope, `design.md` with measurement protocol, `specs/validation-qualification/spec.md` with `disabled overhead = 0` requirement, `tasks.md` with ~22 tasks (measure → budgets → proof → bundle → deterministic CI → supervised `all` with visual enabled → archive).
-3. **Or close current first** (fastest): commit visual files as `feat(visual): bounded evidence and review harness`, run supervised `all` with `--visual checkpoints --visual-review-packet` on a single clean desktop, have a vision-capable agent run `.agent/workflows/visual-evidence-review.md` on one healthy + one defective synthetic packet (deterministic already), prove `Test-QualificationVisualManifest` fail-closed on tampered byte, then `openspec archive 2026-08-31-visual-evidence-ai-review --yes` + spec sync.
-4. **Do not** in the next campaign: change Shepherd z-order logic, add model SDKs, enable unrestricted desktop capture, or re-tag physical artifacts from `914a259`.
+The required `packetSha256` trace is now source-verified:
+
+1. `VisualReviewPacketBuilder` creates the packet and required result path;
+   `VisualEvidenceRecorder.WriteReviewPacket` writes immutable packet bytes and
+   instructions; `QualificationResultWriter` links packet, instructions,
+   result path, and derived-failure IDs in scenario/run manifests and the
+   artifact index.
+2. `VisualJson.Options` serializes current packet, manifest, and result
+   schemas; `StrictCollectionConverter<T>` rejects missing or JSON-null
+   required arrays during deserialization.
+3. `VisualReviewVerifier.VerifyFiles` reads exact packet bytes and
+   `VerifyLoaded` computes their SHA-256 before comparing result, manifest,
+   candidate, run, scenario, attempt, image, and derived-failure bindings.
+4. `scripts/qualification-bundle.ps1` re-hashes packet/result/manifest/raw
+   files, validates strict arrays and packet/result identity, checks scenario
+   hierarchy links, and fails closed for missing/non-pass review results.
+5. Unit fixtures cover empty and changed packet hashes, missing/null
+   collections, stale identity, tampered derived records, intact raw PNG after
+   contact failure, and unacknowledged derived failure. The current visual
+   filter is 49/49 passing.
+
+## 6. Concrete next steps
+
+1. The canonical predecessor ledger is now reconciled at 93/178 checked with
+   85 explicit remainder classifications; preserve the matrix and state
+   updates as provenance.
+2. Proceed with successor Milestone A: trace/fix packet hash binding, make
+   required collections strict, represent derived contact-sheet failures,
+   close deterministic verifier/index/tamper gaps, then attempt the supervised
+   healthy/defect/flight evidence boundary.
+3. Proceed to B only after A's deterministic work and any available supervised
+   evidence are recorded: measure none/checkpoints/flight modes, derive budgets
+   from repeated samples, and rerun resource-lifecycle qualification.
+4. Proceed to E only after A and B acceptance: qualify the exact clean committed
+   candidate with fresh executable identity and SHA-256. Repository policy
+   still forbids an unrequested commit/push; archive and release remain blocked
+   until their explicit authority and evidence boundaries are met.
+5. Do not change Shepherd z-order logic, add model SDKs, enable unrestricted
+   desktop capture, or retag physical artifacts from `914a259`.
 
 ## 7. What would make this stronger (spikes)
 
@@ -194,7 +274,10 @@ Last authoritative Release artifact was `win-x64` at `914a259` `E3C830...BBF06F`
 - `.agent/STATE.md`, `.agent/investigations/visual-evidence-implementation-2026-09-01.md`
 - `tests/ValidationDriver/.../{VisualEvidenceModel,VisualPngArtifacts,VisualEvidenceRecorder,VisualRingBuffer,VisualContactSheets,VisualReviewPackets,VisualReviewVerifier}.cs`
 - `scripts/qualification-bundle.ps1` + `Test-QualificationVisualManifest`
-- `tests/UnitTests` 776/776, `TabDock.sln` Release builds
+- `tests/UnitTests`: historical 776/776 baseline; current visual filter 49/49;
+  `scripts/release-tooling-tests.ps1` 177/177 on PowerShell 7; Debug/Release
+  solution builds
 
 ---
-*Next action if you green-light:* say which option (1 Minimal, 2 Perf-baseline, 3 DPI, 4 Real-app) you want as the *next* change, or "close current first" — I will generate the `openspec new change` proposal + tasks skeleton for that option (no prod code).
+*This investigation is superseded operationally by the successor OpenSpec
+change and the reconciled ledger; keep it as the decision record.*
