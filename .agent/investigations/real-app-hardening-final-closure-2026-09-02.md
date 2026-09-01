@@ -81,3 +81,22 @@ the exact binding reason (or produce packets).
   defect, minimal diagnostic fix applied (driver-only), Debug+Release build 0
   warnings/0 errors, xUnit 812/812, selftest 173/173; commit to follow as
   FINAL_CANDIDATE_SHA.
+- 2026-09-02: **Edge visual packet produced and verified** (run
+  `25dc6648-bd0d-4675-9689-743b03d2bf1a`, candidate `43360c6`): 3 F11 cycles
+  all PASS natively; 21 PNG checkpoints (baseline/before/fullscreen/after per
+  cycle, guest+container) all hash-verified; review packet SHA-256 matches;
+  topology binding `snapshotId 92790d2a`; `syntheticTopology=false`;
+  captures 20/20 succeeded; `derivedArtifactFailures=[]`. **PRIVACY DEFECT**:
+  Edge's implicit sign-in to the OS Microsoft account surfaced the device
+  account email (`palacamichaeldale16@outlook.com`) and Edge's sync prompt
+  text ("passwords, history, credentials") in the captured imagery, which
+  violates TEST_OWNED/no-logged-in-accounts. Harness fix: added
+  `--disable-sync --disable-features=msImplicitSignin,msEdgeFirstRunExperience`
+  to the isolated Chromium launch (Scenarios.Browser.cs); production TabDock
+  unchanged. Re-capture pending a clean exclusive desktop.
+- 2026-09-02: subsequent Edge run aborted `FAIL_HARNESS` at foreground
+  qualification — a non-exclusive desktop (user's real Edge window "Bohu on X"
+  and a terminal overlapping the test surface) prevented a verified foreground
+  target. The harness correctly refused to send input. Blocked on an
+  exclusive supervised desktop before completing the Edge 5×3 and
+  Chrome/Brave visual runs.

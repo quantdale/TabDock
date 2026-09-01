@@ -37,8 +37,13 @@ internal static partial class Scenarios
         }
 
         string page = new Uri(CreateBrowserResizeTestPage(probeRole)).AbsoluteUri;
+        // The profile dir is fresh and test-owned, but a Chromium guest can still
+        // implicit-sign-in to the OS Microsoft account (msImplicitSignin) and surface
+        // a sync first-run prompt (email + "passwords, history, credentials" text) in
+        // captured TEST_OWNED imagery. Disable sync and the implicit sign-in/first-run
+        // features so the isolated profile stays free of personal account content.
         GuestInfo guest = SpawnClassGuest(ctx, exe,
-            $"--user-data-dir=\"{FreshProfileDir(profilePrefix)}\" --no-first-run --no-default-browser-check --disable-session-crashed-bubble \"{page}\"",
+            $"--user-data-dir=\"{FreshProfileDir(profilePrefix)}\" --no-first-run --no-default-browser-check --disable-session-crashed-bubble --disable-sync --disable-features=msImplicitSignin,msEdgeFirstRunExperience \"{page}\"",
             "Chrome_WidgetWin_1", useShellExecute: true);
         return WithStableTabMatchKey(guest, tabKey);
     }
