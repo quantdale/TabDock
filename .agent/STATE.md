@@ -39,8 +39,13 @@ Its release mode is `QUALIFICATION_ONLY`; production eligibility is
 `BLOCKED_EXTERNAL`; signing is `NOT_CONFIGURED`. The final candidate and all
 supervised visual packets are bound to that SHA. Later task/state/investigation
 commits are evidence records and do not redefine the binary candidate boundary.
-The exact evidence record, push, remote parity, and clean-tree result remain
-open until recorded dynamically.
+Evidence record `de306d39722b9b67548b8e4878f228a97ef4e706` was pushed before
+the successor archive. Archive/spec commit
+`496b0c1e498c06b5d86211c9e24ec1ae62349eef` was then created and its
+post-archive strict validation passed `38/38`. Final E6.6 closure is now
+recorded below; the final push/parity proof is re-established after that
+record commit.
+
 
 Foundation inventory, implementation status, exact pre-final candidate
 correction, row-level dispositions, archive result, and final evidence are
@@ -148,8 +153,8 @@ matrix, Release-semantics correction, exact Milestone A records, and archived
 successor task ledger are the durable planning sources.
 
 The archive synchronized the six successor delta capabilities into canonical
-specs (`+8/~15`); strict repository validation remains required after the
-archive commit.
+specs (`+8/~15`); post-archive strict repository validation passed `38/38`.
+
 
 
 The deterministic closure is implemented in ValidationDriver-only seams:
@@ -274,10 +279,12 @@ verification. The tampered healthy packet was rejected by a visual evidence
 hash mismatch. Native `FAIL_HARNESS`/`BLOCKED_SUPERVISED` remained effective
 under `VISUAL_OK`; required defect/unavailable remained non-pass.
 
-Final candidate evidence is complete for the exact source boundary. The
-evidence record `de306d39722b9b67548b8e4878f228a97ef4e706` was pushed and
-matched `origin/main` before the current-change archive; the archive commit,
-final task closure, and final parity proof remain open.
+Final candidate evidence is complete for the exact source boundary. Evidence
+record `de306d39722b9b67548b8e4878f228a97ef4e706` was pushed and matched
+`origin/main` before the current-change archive. Archive/spec commit
+`496b0c1e498c06b5d86211c9e24ec1ae62349eef` is now created; final E6.6 task
+closure and final parity proof remain open.
+
 
 
 ## Chosen next campaign — visual evidence closure and performance requalification
@@ -304,11 +311,13 @@ preserve healthy PASS, first-attempt seeded defect, successful rerun, flight
 flush, unavailable review, packet tamper rejection, and native/visual
 precedence.
 
-Successor E6.6 remains the final administrative record: the archive and
-spec synchronization have completed; record the archive/final evidence commit
-and final `HEAD == origin/main` clean-tree proof. The final binary candidate
-boundary remains the exact source SHA above; later evidence/archive records
-must not retag its packet or executable hash.
+Successor E6.6 is complete in the archived task ledger: predecessor and
+successor changes are synchronized/archived, archive/spec commit
+`496b0c1e498c06b5d86211c9e24ec1ae62349eef` is recorded, and the final closure
+record is being pushed now. The final binary candidate boundary remains the
+exact source SHA above; later evidence/archive records do not retag its packet
+or executable hash. Final `HEAD == origin/main` and clean-tree status are
+verified dynamically after the push.
 
 Final branch deletion, push identity, clean worktree, and remote topology must
 always be re-proven dynamically rather than inferred from this file.

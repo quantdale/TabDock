@@ -118,5 +118,10 @@ The archive synchronized its six delta capabilities into canonical specs
 (`+8/~15`), and post-archive strict validation passed `38/38`. This archive
 and spec synchronization are evidence/provenance records after the exact
 candidate boundary; they do not retag the supervised packets or claim a new
-executable hash. The archived task ledger's E6.6 row remains the final
-administrative record until the archive commit is pushed and parity is proven.
+executable hash.
+The archive/spec synchronization was committed as
+`496b0c1e498c06b5d86211c9e24ec1ae62349eef`. Evidence record
+`de306d39722b9b67548b8e4878f228a97ef4e706` was already pushed. The archived
+task ledger now records E6.6 completion in the final closure record; its push
+and final parity proof are performed immediately after that commit. No new
+binary candidate is claimed.
