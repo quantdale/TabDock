@@ -3029,6 +3029,29 @@ private static void SingleGuestDoesNotOverflowContent(Ctx ctx, Options opt)
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
         ctx.Check(Util.WaitUntil(() => IsDocked(pig.Hwnd, host), 3000), "guest docked at capture");
         long off = TabDockLog.RecordLogLength();
+
+        void CaptureVisual(string id, VisualCheckpointPhase phase)
+        {
+            if (ctx.Visual is not { } visual
+                || visual.Policy.Level is VisualEvidenceLevel.NONE or VisualEvidenceLevel.FAILURE_ONLY)
+            {
+                return;
+            }
+
+            ctx.VisualCheckpoint(new VisualCheckpointRequest(
+                id,
+                phase,
+                "The captured guest remains visibly contained in its assigned pane before and after a guest-originated maximize.",
+                new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) },
+                visual.Policy.Level == VisualEvidenceLevel.CHECKPOINTS
+                    ? VisualCaptureRequiredness.REQUIRED
+                    : VisualCaptureRequiredness.BEST_EFFORT,
+                TopologyBinding: ctx.VisualTopologyFor()));
+        }
+
+        CaptureVisual("guest-maximize-baseline", VisualCheckpointPhase.BASELINE);
+        CaptureVisual("guest-maximize-before-action", VisualCheckpointPhase.BEFORE_ACTION);
+
         // Simulate guest-originated maximize without touching the container.
         // A real user would click the guest's own maximize button (its real
         // title bar remains visible while docked); ShowWindow(SW_SHOWMAXIMIZED)
@@ -3050,6 +3073,7 @@ private static void SingleGuestDoesNotOverflowContent(Ctx ctx, Options opt)
             NativeMethods.GetWindowThreadProcessId(root, out uint pid);
             return pid == pig.Pid;
         }, 6000);
+        CaptureVisual("guest-maximize-after-action", VisualCheckpointPhase.AFTER_ACTION_SETTLED);
         ctx.Check(contained, "guest maximize was contained: not zoomed, docked, and top at content center");
         // The reconciler logs SHEPHERD[drift-reconcile] at Input priority; on a
         // very fast machine the geometry may be corrected before the log is
