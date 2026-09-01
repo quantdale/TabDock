@@ -108,3 +108,15 @@ Signing remains `NOT_CONFIGURED`, release mode is `QUALIFICATION_ONLY`, and
 production eligibility is `BLOCKED_EXTERNAL`; physical mixed-DPI and external
 Windows-human requirements remain blocked. The evidence-record commit and
 remote parity are still pending when this section is first written.
+
+## Successor archive boundary
+
+After the final-source E evidence was recorded, the successor change was
+archived at
+`openspec/changes/archive/2026-09-01-visual-evidence-closure-and-performance-requalification/`.
+The archive synchronized its six delta capabilities into canonical specs
+(`+8/~15`), and post-archive strict validation passed `38/38`. This archive
+and spec synchronization are evidence/provenance records after the exact
+candidate boundary; they do not retag the supervised packets or claim a new
+executable hash. The archived task ledger's E6.6 row remains the final
+administrative record until the archive commit is pushed and parity is proven.

@@ -140,12 +140,17 @@ recorded candidate identities.
 
 ## Active implementation
 
-The active visual-evidence and multimodal AI-review closure is under
-`openspec/changes/visual-evidence-closure-and-performance-requalification/`.
+The visual-evidence and multimodal AI-review closure is archived at
+`openspec/changes/archive/2026-09-01-visual-evidence-closure-and-performance-requalification/`.
 The predecessor's 178 rows are archived with all 85 former unchecked rows
 explicitly dispositioned. The implementation checkpoint, reconciliation
-matrix, Release-semantics correction, exact Milestone A records, and successor
-task ledger are the durable planning sources.
+matrix, Release-semantics correction, exact Milestone A records, and archived
+successor task ledger are the durable planning sources.
+
+The archive synchronized the six successor delta capabilities into canonical
+specs (`+8/~15`); strict repository validation remains required after the
+archive commit.
+
 
 The deterministic closure is implemented in ValidationDriver-only seams:
 exact packet-byte hashing, strict current collections, derived-failure
@@ -270,15 +275,18 @@ hash mismatch. Native `FAIL_HARNESS`/`BLOCKED_SUPERVISED` remained effective
 under `VISUAL_OK`; required defect/unavailable remained non-pass.
 
 Final candidate evidence is complete for the exact source boundary. The
-evidence-record commit, current-change disposition, push, and remote parity
-remain open until dynamically recorded.
+evidence record `de306d39722b9b67548b8e4878f228a97ef4e706` was pushed and
+matched `origin/main` before the current-change archive; the archive commit,
+final task closure, and final parity proof remain open.
+
 
 ## Chosen next campaign — visual evidence closure and performance requalification
 
-**Status:** A and B evidence are complete, the predecessor is dispositioned,
-synchronized, and archived, and final E 6.2–6.5 evidence is recorded against
-source candidate `6bb8ecc80b103ec9e2e1bc12cebe241b1ab9519f`. The final
-self-contained Release v1.1 artifact is
+**Status:** A and B evidence are complete, both the predecessor and successor
+changes are dispositioned and archived, and final E 6.2–6.5 evidence is
+recorded against source candidate
+`6bb8ecc80b103ec9e2e1bc12cebe241b1ab9519f`. The final self-contained Release
+v1.1 artifact is
 `cf442e369c56c7c06c23b33c25b3434b079398b479e188c47e03f2d76dfbc291`.
 The candidate is `QUALIFICATION_ONLY`; signing is `NOT_CONFIGURED` and
 production eligibility is `BLOCKED_EXTERNAL`. Physical mixed-DPI, external
@@ -289,22 +297,18 @@ Final E evidence includes Debug/Release solution builds with 0 warnings/errors,
 `795/795` Debug/Release unit tests, ValidationDriver selftests `153/153`,
 catalog `scenario-catalog-2026-08-24-v1` with 135 scenarios, `179/179`
 release-tooling tests, canonical Release validation/publish PASS, strict
-OpenSpec `38/38`, resource stability PASS with 900 samples/30 cells/720
-pairs and flat counters, native ABI PASS, and recovery/support/privacy/version
-smoke PASS. The final visual packets preserve healthy PASS, first-attempt
-seeded defect, successful rerun, flight flush, unavailable review, packet
-tamper rejection, and native/visual precedence.
+OpenSpec `38/38` before archive and `38/38` after archive, resource stability
+PASS with 900 samples/30 cells/720 pairs and flat counters, native ABI PASS,
+and recovery/support/privacy/version smoke PASS. The final visual packets
+preserve healthy PASS, first-attempt seeded defect, successful rerun, flight
+flush, unavailable review, packet tamper rejection, and native/visual
+precedence.
 
-Successor E6.6 remains the final administrative boundary: complete any
-authorized current-change archive decision, record the evidence commit and
-remote push, and independently prove `HEAD == origin/main` with a clean
-worktree. The final binary candidate boundary remains the exact source SHA
-above; later evidence/archive records must not retag its packet or executable
-hash.
-
-**PLANNED/OPTIONAL:** repository-local Microsoft Learn and Context7 MCP
-integration, subject to a separately authorized upstream/security/scope
-revalidation. No global installation is authorized by this state.
+Successor E6.6 remains the final administrative record: the archive and
+spec synchronization have completed; record the archive/final evidence commit
+and final `HEAD == origin/main` clean-tree proof. The final binary candidate
+boundary remains the exact source SHA above; later evidence/archive records
+must not retag its packet or executable hash.
 
 Final branch deletion, push identity, clean worktree, and remote topology must
 always be re-proven dynamically rather than inferred from this file.

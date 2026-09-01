@@ -101,7 +101,7 @@ is not a best-of-N visual PASS.
 - **THEN** it emits `REVIEW_UNAVAILABLE` with bounded provenance and the gate
   remains non-pass when review is required
 
-### Requirement: Visual-review-required gates SHALL fail honestly when review is unavailable or derived evidence fails
+### Requirement: Visual-review-required gates SHALL fail honestly when review is unavailable
 
 A catalog scenario, shard, or release gate MAY declare visual review and
 required derived artifacts. For such a gate, missing, invalid, tampered,
@@ -126,6 +126,13 @@ without changing their ordinary native outcome.
 - **THEN** raw artifact hashes remain verifiable, a dedicated derived-failure
   record is emitted, and `VISUAL_OK` is forbidden unless policy permits raw-only
   review and the result explicitly acknowledges that record
+
+#### Scenario: Optional review is unavailable
+
+- **WHEN** a scenario collects visual evidence for diagnosis but its release
+  contract does not require a visual review
+- **THEN** `REVIEW_UNAVAILABLE` is recorded informationally and ordinary
+  qualification semantics remain intact
 
 ## ADDED Requirements
 

@@ -39,20 +39,62 @@ isolated artifact directory. An `all` invocation SHALL create a distinct
 parent run identity and manifest that imports every attempted child manifest,
 verifies schema, run kind, candidate commit and executable hashes, driver
 identity, shard identity, timestamps, outcomes, artifact existence, catalog
-generation, and exact scenario membership. The parent SHALL record aggregate
-outcome counts, capability observations, first-attempt-authoritative rerun
-lineage, child-manifest hashes, and relative links to result, JUnit, timeline
-artifacts, and any declared visual-evidence manifests.
+generation, exact scenario membership, and visual/performance evidence when
+declared. The parent SHALL record aggregate outcome counts, capability
+observations, first-attempt-authoritative rerun lineage, child-manifest hashes,
+and relative links to result, JUnit, timeline, visual manifest, review, and
+resource artifacts.
 
-When an attempt emits retained visual evidence, the child manifest SHALL index
-the visual manifest by normalized relative path and SHA-256. When an AI/human
-visual-review packet/result is produced, the hierarchy SHALL retain the packet
-hash, result hash, visual-review verdict, and the exact candidate/run/scenario/
-attempt binding without merging that verdict into the native scenario outcome.
+When a child emits visual evidence, the hierarchy SHALL index the visual
+manifest and every required retained/derived artifact by normalized relative
+path and SHA-256, verify candidate/run/scenario/attempt continuity, preserve
+explicit unavailable and derived-failure records, and retain packet/result
+hashes and visual verdict separately from native outcome. When a child emits
+performance evidence, the hierarchy SHALL retain mode, sample/distribution
+summary, selected budgets, resource comparison, and synthetic/physical
+classification.
 
-Historical child/parent manifests that predate visual evidence SHALL remain
-valid under their original supported schema. New manifests SHALL never infer
-visual evidence or review from absence.
+Historical child/parent manifests that predate visual or performance evidence
+SHALL remain valid under their original supported schema. New manifests SHALL
+never infer visual/performance evidence or review from absence.
+
+#### Scenario: A valid full hierarchy is aggregated
+
+- **WHEN** every declared child manifest and linked artifact passes its
+  schema/hash/path/identity checks
+- **THEN** the parent contains each shard and scenario/attempt exactly once,
+  preserves blocked/skipped/flaky outcomes, retains visual verdicts and
+  measured-resource dimensions separately, and derives counts from imported
+  evidence
+
+#### Scenario: A child declares visual evidence
+
+- **WHEN** a child manifest declares a visual-manifest artifact
+- **THEN** parent import verifies the visual-manifest path/hash and its declared
+  candidate/run/scenario/attempt identity before accepting the child evidence
+
+#### Scenario: A visual review is present
+
+- **WHEN** a child contains a visual-review packet/result
+- **THEN** the hierarchy retains the packet/result hashes and
+  `VISUAL_OK`/`VISUAL_SUSPECT`/`VISUAL_DEFECT`/
+  `REVIEW_UNAVAILABLE` dimension separately from the canonical scenario
+  outcome
+
+#### Scenario: A visual artifact or performance record is stale
+
+- **WHEN** a child visual/resource artifact is missing, malformed, duplicated,
+  path-escaping, tampered, stale, or bound to another candidate/run/attempt
+- **THEN** parent import records `FAIL_HARNESS` or the declared gate's non-pass
+  result and never infers success from process completion
+
+#### Scenario: Historical hierarchy contains no visual fields
+
+- **WHEN** a supported historical child/parent manifest has no visual or
+  performance section
+- **THEN** it remains verifiable under its declared schema and no visual,
+  packet, review, or resource PASS is synthesized
+
 
 #### Scenario: A child exit code disagrees with its manifest
 
@@ -69,27 +111,6 @@ visual evidence or review from absence.
 - **THEN** the parent records `FAIL_HARNESS` and never infers success from
   process completion alone
 
-#### Scenario: A valid full hierarchy is aggregated
-
-- **WHEN** every declared child manifest and linked artifact passes verification
-- **THEN** the parent contains every shard and scenario/attempt exactly once,
-  preserves blocked/skipped/flaky outcomes, and derives its aggregate counts
-  from imported evidence
-
-#### Scenario: A child declares visual evidence
-
-- **WHEN** a child manifest declares a visual-manifest artifact
-- **THEN** parent import verifies the visual-manifest path/hash and its declared
-  candidate/run/scenario/attempt identity before accepting the child evidence
-
-#### Scenario: A visual review is present
-
-- **WHEN** a child contains a visual-review packet/result
-- **THEN** the hierarchy retains the packet/result hashes and
-  `VISUAL_OK`/`VISUAL_SUSPECT`/`VISUAL_DEFECT`/
-  `REVIEW_UNAVAILABLE` dimension separately from the canonical scenario
-  outcome
-
 ### Requirement: Qualification bundles SHALL be portable and offline-verifiable
 
 A qualification bundle SHALL bind a source commit, semantic version, exact
@@ -97,27 +118,46 @@ candidate executable hash, driver hash, catalog/schema generations,
 run-manifest hashes, timestamps, privacy-safe OS/environment classification,
 capability observations, outcome counts, and an artifact index of normalized
 relative paths. An offline verifier SHALL validate all hashes, paths, required
-artifacts, schema versions, candidate/source consistency, outcome summaries, and
-bundle invariants without launching TabDock or trusting console output.
+artifacts, schema versions, candidate/source consistency, outcome summaries,
+and bundle invariants without launching TabDock, a guest, a model, or trusting
+console output.
 
-When visual evidence is declared, the bundle artifact index SHALL include each
-visual manifest, retained PNG/contact-sheet artifact that the run requires to be
-portable, and any visual-review packet/result. The verifier SHALL validate the
-visual artifact bytes/hash/path/schema, packet-to-image bindings,
-review-result-to-packet/image bindings, candidate/run/attempt continuity, and
-visual privacy classification metadata without invoking a model or executing
-returned content.
+When visual evidence is declared, the artifact index SHALL include each visual
+manifest, required retained raw PNG/contact-sheet artifact, derived-failure
+record, and visual-review packet/result. Verification SHALL re-hash visual
+bytes and validate strict required collections, packet-to-image bindings,
+review-result-to-packet/image bindings, manifest packet links,
+candidate/run/scenario/attempt continuity, privacy classes, and the rule that
+unacknowledged required or derived visual failures cannot claim PASS. When
+performance evidence is declared, the index SHALL include the measurement
+report and selected budget/provenance record.
 
 A bundle SHALL NOT silently include unrestricted desktop imagery merely because
-visual evidence exists. Portable inclusion follows the run's explicit visual
-privacy/retention policy.
+visual evidence exists. Portable inclusion follows the explicit visual
+privacy/retention policy. Historical bundles without visual fields remain
+valid under their original schema and do not synthesize visual evidence.
 
 #### Scenario: Evidence bytes are modified after capture
 
-- **WHEN** a referenced manifest, result, JUnit file, timeline, visual PNG,
-  visual-review packet/result, or driver artifact is changed or removed
+- **WHEN** a referenced manifest, result, JUnit, timeline, visual PNG,
+  contact-sheet, review packet/result, measurement report, or driver artifact
+  changes or is removed
 - **THEN** offline verification fails and identifies the relative artifact and
   violated hash/existence contract
+
+#### Scenario: A reviewed screenshot no longer matches the result
+
+- **WHEN** a visual-review result references a packet/image hash whose bytes in
+  the bundle differ from the reviewed evidence
+- **THEN** offline verification rejects the review and the bundle cannot claim
+  the associated visual-review gate
+
+#### Scenario: An unsafe or duplicate path is supplied
+
+- **WHEN** an artifact index contains an absolute path, traversal segment,
+  duplicate path, or path that resolves outside the bundle root
+- **THEN** verification fails before accepting the artifact as evidence
+
 
 #### Scenario: An unsafe bundle path is supplied
 
@@ -132,20 +172,20 @@ privacy/retention policy.
   accepted migration window
 - **THEN** verification returns a deterministic unsupported-schema failure
   rather than partially accepting the bundle
+#### Scenario: A visual review packet/result is stale
 
-#### Scenario: A reviewed screenshot no longer matches the result
-
-- **WHEN** a visual-review result references a packet/image hash whose bytes in
-  the bundle differ from the reviewed evidence
-- **THEN** offline verification rejects the review and the bundle cannot claim
-  the associated visual-review gate
+- **WHEN** packet/result hashes, strict collections, image bindings, derived
+  failure acknowledgements, candidate/run/attempt identity, or manifest links
+  disagree
+- **THEN** offline verification rejects the visual review and the related gate
+  cannot claim PASS
 
 #### Scenario: Historical bundle contains no visual evidence
 
-- **WHEN** a supported historical qualification bundle predates the visual
-  schemas
+- **WHEN** a supported historical qualification bundle predates visual and
+  performance schemas
 - **THEN** it remains verifiable under its declared historical schema and no
-  visual PASS/review is synthesized
+  visual/performance PASS is synthesized
 
 ### Requirement: Qualification planning and remote evidence import SHALL be defensive
 
@@ -153,34 +193,29 @@ The driver SHALL provide a no-input planning mode that explains catalog
 scenarios required for a requested gate and classifies each as runnable,
 blocked, skipped, or optional from a privacy-safe capability snapshot.
 Independent-machine reports SHALL be structured, candidate-bound,
-hash-verifiable, and importable without executing returned scripts or binaries;
-imported evidence SHALL retain its machine identity and synthetic/physical
-classification.
+hash-verifiable, and importable without executing returned scripts or
+binaries; imported evidence SHALL retain its machine identity and
+synthetic/physical classification.
 
-Planning SHALL also report a scenario/gate's declared visual-evidence level,
-whether multimodal visual review is required, and whether the current execution
-environment can collect the required approved capture scopes. Planning SHALL
-not invoke an AI reviewer, launch applications, or capture the desktop.
+Planning SHALL report the declared visual-evidence mode, packet/review
+requiredness, performance measurement mode/budget availability, and whether
+the current environment can collect approved scopes and resource signals.
+Planning SHALL not invoke a model, launch applications, capture the desktop, or
+claim that a measured budget or supervised visual acceptance exists.
 
-Independent-machine reports MAY return visual artifacts and visual-review
-records only when the package/run policy explicitly permits them. Import SHALL
-verify their paths, hashes, schemas, privacy classifications, and candidate/run
-bindings as untrusted data and SHALL never execute an included reviewer,
-script, model adapter, or binary.
+#### Scenario: A remote report contains untrusted visual/resource evidence
 
-#### Scenario: A second machine returns an untrusted report
+- **WHEN** an imported report contains malformed fields, candidate/source/hash
+  mismatch, unsupported environment, future timestamp, executable/script
+  content, path/privacy violation, or invalid visual/performance binding
+- **THEN** import fails closed and no external release gate changes
 
-- **WHEN** an imported report contains malformed fields, a candidate/source/hash
-  mismatch, an unsupported OS classification, a future timestamp, executable/
-  script content, or invalid visual-evidence/review bindings
-- **THEN** import fails closed and no external release gate is changed
+#### Scenario: Planning runs without input
 
-#### Scenario: Planning runs on an unsafe desktop
-
-- **WHEN** planning is requested without sending input
-- **THEN** it emits a machine-readable plan with capability and visual-policy
-  blocks and never starts TabDock, a guest, a physical scenario, screen
-  recording, or a multimodal reviewer
+- **WHEN** a visual/performance plan is requested
+- **THEN** it emits policy/capability/budget blocks without starting TabDock,
+  sending input, recording the desktop, sampling a process, or invoking a
+  multimodal reviewer
 
 #### Scenario: Remote report includes restricted visual imagery without policy
 
@@ -188,4 +223,17 @@ script, model adapter, or binary.
   that the originating package/run policy did not authorize
 - **THEN** import rejects those artifacts and the related visual gate remains
   non-pass
+
+#### Scenario: A second machine returns an untrusted report
+
+- **WHEN** an imported report contains malformed fields, a candidate/source/hash
+  mismatch, an unsupported OS classification, a future timestamp, or
+  executable/script content
+- **THEN** import fails closed and no external release gate is changed
+
+#### Scenario: Planning runs on an unsafe desktop
+
+- **WHEN** planning is requested without sending input
+- **THEN** it emits a machine-readable plan with capability blocks and never
+  starts TabDock, a guest, or a physical scenario
 
