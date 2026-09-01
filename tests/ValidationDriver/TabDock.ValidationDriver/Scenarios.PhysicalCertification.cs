@@ -419,31 +419,15 @@ internal static partial class Scenarios
         NativeMethods.GetWindowThreadProcessId(menuRoot, out uint menuPid);
         ctx.Check(menuPid == ctx.TabDockPid,
             $"group menu item is topmost and owned by TabDock (root=0x{menuRoot.ToInt64():X} pid={menuPid})");
-        if (menuPid != ctx.TabDockPid
-            || !Discover.TryCaptureIdentity(menuRoot, out WindowIdentity menuIdentity))
-        {
-            ctx.BlockEnvironment("topmost-guest-interaction: the opened group menu lacked a stable TabDock-owned popup identity for visual capture");
-            return;
-        }
-        if (!TestRunProvenance.TryValidateWindow(menuIdentity, out string menuValidationReason))
-        {
-            ctx.BlockEnvironment($"topmost-guest-interaction: the opened group menu could not be registered for visual capture ({menuValidationReason})");
-            return;
-        }
-        VisualCaptureScope menuScope = VisualCaptureScope.ForWindow(
-            VisualCaptureScopeKind.OWNED_POPUP,
-            VisualTargetIdentityFactory.From(menuIdentity),
-            VisualPrivacyClass.PRODUCT_OWNED);
-        // The WPF menu is transient. Capture it first while the identity
-        // proven by UIA is still live; capturing the underlying topmost guest
-        // and container first can let popup dismissal race the required menu
-        // artifact without any user input.
+        // The menu is intentionally observed in a container screen-composition
+        // scope: WPF Popup can expose its UIA subtree through the owning
+        // window even while the actual popup HWND is transient.
         if (!CapturePhysicalVisual(
                 ctx,
                 "topmost-group-menu",
                 VisualCheckpointPhase.AFTER_ACTION_SETTLED,
                 "The TabDock group menu is visibly usable above the controlled topmost guest.",
-                new[] { menuScope, ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) },
+                new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) },
                 topmostBinding))
             return;
 
