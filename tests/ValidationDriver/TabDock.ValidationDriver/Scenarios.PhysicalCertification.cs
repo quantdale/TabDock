@@ -1037,19 +1037,31 @@ internal static partial class Scenarios
     {
         binding = null;
         if (hwnd == IntPtr.Zero)
+        {
+            GuardedProc.Log("  VISUAL_BINDING_UNAVAILABLE: hwnd is zero");
             return false;
+        }
 
         IntPtr handle = NativeMethods.MonitorFromWindow(hwnd, NativeMethods.MONITOR_DEFAULTTONEAREST);
         DpiMonitor? observed = EnumerateDpiMonitors().FirstOrDefault(m => m.Handle == handle);
-        if (observed == null
-            || !TryGetPhysicalMonitor(ctx, observed, out PhysicalMonitorSnapshot? snapshot)
-            || snapshot == null)
+        if (observed == null)
         {
+            GuardedProc.Log($"  VISUAL_BINDING_UNAVAILABLE: monitor handle 0x{handle.ToInt64():X} not in EnumerateDpiMonitors");
+            return false;
+        }
+        if (!TryGetPhysicalMonitor(ctx, observed, out PhysicalMonitorSnapshot? snapshot) || snapshot == null)
+        {
+            GuardedProc.Log($"  VISUAL_BINDING_UNAVAILABLE: no capabilities.Topology monitor matches observed bounds={observed.Bounds.left},{observed.Bounds.top},{observed.Bounds.right},{observed.Bounds.bottom} work={observed.Work.left},{observed.Work.top},{observed.Work.right},{observed.Work.bottom} dpi={observed.Dpi}");
             return false;
         }
 
         binding = ctx.VisualTopologyFor(snapshot.MonitorId, (int)snapshot.EffectiveDpi);
-        return binding != null;
+        if (binding == null)
+        {
+            GuardedProc.Log($"  VISUAL_BINDING_UNAVAILABLE: VisualTopologyFor returned null for monitorId={snapshot.MonitorId} dpi={snapshot.EffectiveDpi}");
+            return false;
+        }
+        return true;
     }
 
     private static bool MoveContainerToMonitor(Ctx ctx, IntPtr container, IntPtr guest, DpiMonitor target, string phase)
@@ -1502,6 +1514,8 @@ internal static partial class Scenarios
         // Visual is best-effort for this cycle; native containment remains the authoritative outcome.
         VisualTopologyBinding? baselineBinding = null;
         bool hasBaselineBinding = TryGetVisualMonitorBinding(ctx, container, out baselineBinding);
+        if (!hasBaselineBinding && ctx.Visual != null)
+            GuardedProc.Log($"  VISUAL_SKIPPED: {opt.Guest} F11 visual checkpoints skipped because no monitor/topology binding was available (see VISUAL_BINDING_UNAVAILABLE above)");
         if (hasBaselineBinding && baselineBinding != null)
         {
             CapturePhysicalVisual(ctx, $"{opt.Guest}-f11-baseline", VisualCheckpointPhase.BASELINE,

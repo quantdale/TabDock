@@ -1,0 +1,7 @@
+schema: spec-driven
+created: 2026-09-02
+goal: Correct the four premature real-app-hardening closure defects — an
+  unexplained first-valid Edge F11 FAIL_PRODUCT (FLAKE_UNCLASSIFIED), missing
+  real Chromium visual packets and multimodal review, unexecuted canonical
+  final gates, and an incorrect 26-vs-38 task count — and close only with a
+  technically defensible final disposition.

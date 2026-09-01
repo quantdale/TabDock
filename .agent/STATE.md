@@ -6,13 +6,36 @@ Git is authoritative for `HEAD`, branch, `origin/main`, worktree state, and
 worktrees. Resolve those values dynamically (`git rev-parse HEAD`, `git rev-parse origin/main`, `git status`, `git branch --show-current`); this file never embeds a
 self-referential SHA claiming to be the commit that contains this file. Embedded SHAs name historical or last-substantive implementation commits only. After a push, report final SHA and CI result in session output for independent verification.
 
-## Current state — hardening sequence CLOSED
+## Current state — FINAL CLOSURE CORRECTION ACTIVE
 
-**Objective:** Repository hardening qualification sequence is closed and archived.
+**Objective:** Correct four premature real-app-hardening closure defects and
+close only with a technically defensible final disposition.
 
-**Active OpenSpec change:** none — `openspec/changes/` contains only `archive/` (38 specs, strict validation `valid=true`).
+**Active OpenSpec change:** `real-app-hardening-final-closure`
+(strict validation `valid=true` before implementation).
 
-**Status:** All hardening campaigns are **COMPLETED + ARCHIVED**. No active OpenSpec change. Git authority must be resolved dynamically; final branch/remote parity is reported in session handoff, not embedded here.
+**Status:** The previously archived real-app hardening campaign stands as
+history, but review found incomplete evidence. This correction campaign does
+NOT invalidate previously valid evidence — only these remain:
+
+1. Edge's preserved first valid `FAIL_PRODUCT` (second F11 cycle, first
+   invocation) is `FLAKE_UNCLASSIFIED` and not yet explained → bounded 5×3
+   characterization + defensible final disposition.
+2. Real Chromium visual acceptance was checked complete without actual
+   restricted browser visual packets or capable multimodal review → real
+   Chrome/Edge/Brave packets + review + tamper check.
+3. Final-validation task was checked complete although the canonical
+   `validate.ps1 -Configuration Release -Ci -Publish`, explicit native ABI
+   gate, and resource/privacy/recovery qualification were not all actually
+   executed → run the actual gates.
+4. Final report said 26 real-app tasks while the canonical archived
+   `tasks.md` contains 38 checkbox rows → ledger corrected to 38 with a
+   mapping for 1.7 / 4.3 / 7.1 + `EDGE_FIRST_VALID_FAIL_PRODUCT_DISPOSITION`
+   (`.agent/investigations/real-app-hardening-final-closure-2026-09-02.md`).
+
+No product repair is authorized merely to obtain closure; no timeout/retry/
+second-F11/weakened-assertion "fixes". Git authority must be resolved
+dynamically.
 
 ### COMPLETED / ARCHIVED
 
@@ -42,8 +65,9 @@ self-referential SHA claiming to be the commit that contains this file. Embedded
 - DPI repair provenance: `.agent/investigations/dpi-positioning-repair-provenance-2026-09-02.md` (`HISTORICAL_TRIGGER_NOT_RECOVERABLE`, deterministic defect, `GuestDpiPositionScopeTests` 17 cases)
 - Real-app handoff: `.agent/investigations/real-app-hardening-handoff-2026-09-02.md` (19.1/19.4 row-level closure)
 - Real-app acceptance matrix: `.agent/investigations/real-app-hardening-acceptance-matrix-2026-09-02.json` + `.md` (Chrome/Brave PASS, Edge FLAKE, Notepad/Terminal blocked, privacy `REAL_APP_RESTRICTED`)
+- Corrective ledger reconciliation: `.agent/investigations/real-app-hardening-final-closure-2026-09-02.md` (38-row ledger, 1.7/4.3/7.1 mapping, Edge obligation)
 - Current regression: `tests/UnitTests/GuestDpiPositionScopeTests.cs` (812 tests at final)
-- Active change: none (archive-only)
+- Active change: `real-app-hardening-final-closure` (corrective; NOT archiveable until Edge disposition + real Chromium packets/review + canonical gates + 38-row ledger are proven)
 
 Update this file after each physical run, defect disposition, validation
 milestone, and before final handoff. Keep it concise and evidence-based.
