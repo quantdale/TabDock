@@ -44,10 +44,10 @@
 
 ## 6. Milestone E — exact Release v1.1 closure
 - [x] 6.1 Integrate visual manifests, review packet/result bindings, performance reports, selected budget provenance, and historical compatibility into the qualification hierarchy and offline bundle index.
-- [ ] 6.2 Run Debug/Release solution builds, unit tests, ValidationDriver/GuineaPig deterministic self-tests, catalog/plan checks, visual verifier gates, and historical non-visual manifest/bundle checks.
-- [ ] 6.3 From the final clean committed tree, build the Release v1.1 candidate once; verify requested SHA equals `HEAD`, embedded source identity equals SHA, and record a fresh executable SHA-256 without reusing the historical artifact hash.
-- [ ] 6.4 Run canonical `scripts/validate.ps1 -Configuration Release -Ci -Publish`, dependency vulnerability audit, strict OpenSpec validation, version/publish smoke, resource/privacy/ABI checks, and exact artifact/hash re-verification.
-- [ ] 6.5 Preserve blocked signing, physical, external, and capability states honestly; reject any release claim whose visual/performance evidence is stale, missing, tampered, synthetic-only for a physical gate, or unproven by measured budgets.
+- [x] 6.2 Run Debug/Release solution builds, unit tests, ValidationDriver/GuineaPig deterministic self-tests, catalog/plan checks, visual verifier gates, and historical non-visual manifest/bundle checks.
+- [x] 6.3 From the final clean committed tree, build the Release v1.1 candidate once; verify requested SHA equals `HEAD`, embedded source identity equals SHA, and record a fresh executable SHA-256 without reusing the historical artifact hash.
+- [x] 6.4 Run canonical `scripts/validate.ps1 -Configuration Release -Ci -Publish`, dependency vulnerability audit, strict OpenSpec validation, version/publish smoke, resource/privacy/ABI checks, and exact artifact/hash re-verification.
+- [x] 6.5 Preserve blocked signing, physical, external, and capability states honestly; reject any release claim whose visual/performance evidence is stale, missing, tampered, synthetic-only for a physical gate, or unproven by measured budgets.
 - [ ] 6.6 Obtain acceptance, synchronize/archive this change only after A, B, and E are complete, commit/push through the repository's authorized mainline workflow, and independently verify final SHA, remote equality, and clean worktree.
 
 - [x] 7.1 Record handoff candidates for separate DPI/topology hardening (negative/above-origin monitors, 150%–200% DPI, deeper mixed-DPI/topmost/transfer coverage) and real-app hardening (Chromium fullscreen breadth, Notepad broker, Windows Terminal hosting, adopted-app lifecycle quirks); do not implement either here.
