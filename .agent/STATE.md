@@ -7,14 +7,30 @@ Resolve them dynamically at every fresh session. This file never records a
 self-referential SHA or treats an old CI run as evidence for the commit that
 contains this text.
 
-## CURRENT CAMPAIGN — PRESENTATION CLOSURE AND REPOSITORY CONSOLIDATION
+# CURRENT CAMPAIGN — VISUAL EVIDENCE AND AI REVIEW
 
-**Objective:** close the presentation-integrity physical-certification campaign
-against an exact current-main build, preserve every valuable side-branch plan
-on `main`, and leave only `main` locally and on GitHub.
+**Objective:** implement and validate the active
+`2026-08-31-visual-evidence-ai-review` OpenSpec change as bounded
+ValidationDriver evidence infrastructure. Preserve native identity, lease,
+timeline, cleanup, and release-gate semantics; do not change production
+TabDock behavior.
 
-**Status:** presentation-integrity implementation and supervised physical
-qualification are complete for the exercised matrix. The only valid physical
+**Status:** the predecessor `2026-08-31-visual-evidence-ai-review`
+campaign remains active and unarchived. Its tracked checklist is at 84/89
+implementation tasks complete; four supervised visual acceptance tasks and
+the archive/push task remain blocked on the interactive desktop, capable
+vision review, and acceptance boundary. The prior presentation-integrity
+physical qualification remains historical evidence and is not relabeled.
+Foundation inventory and the updated checkpoint are recorded in
+`.agent/investigations/visual-evidence-implementation-2026-09-01.md`.
+The next-campaign investigation was verified untracked at planning start and
+is intentionally preserved as a planning artifact; the current visual source
+and test implementation remains outside this planning-only commit.
+
+### Prior campaign evidence
+
+The presentation-integrity implementation and supervised physical qualification
+are complete for the exercised matrix. The only valid physical
 `FAIL_PRODUCT` is the frozen first Chrome F11 run
 (`7f5ba57f-af6e-491e-81aa-b33bd8229471`); its bounded Chromium-family F11
 repair was requalified by Chrome
@@ -35,7 +51,7 @@ Canonical `presentation-integrity`, `ui-ux-hardening`, and
 `validation-qualification` specs were synchronized before archival. Durable
 investigations and raw external validation artifacts remain preserved.
 
-### Exact-mainline qualification
+#### Exact-mainline qualification
 
 The pre-consolidation authoritative tree was
 `914a25923bd4bb1f5c08d925bfb210bb9208853f`, with a clean worktree and
@@ -71,9 +87,9 @@ recorded in
 The repository-local add-ons plan is preserved on `main` as planning-only
 content. Existing Repowise MCP, harness adapters, skills, CI, and onboarding
 surfaces remain protected; Microsoft Learn and Context7 were not installed.
-The visual-evidence plan is preserved as future qualification/diagnostic
-infrastructure. It augments hard identity/lease/native evidence and does not
-retroactively justify or relabel physical results.
+The active visual-evidence plan is now being implemented as supplemental
+qualification/diagnostic infrastructure. It never retroactively justifies or
+relables physical results and never replaces hard native evidence.
 
 ### Verified environment
 
@@ -94,14 +110,38 @@ retroactively justify or relabel physical results.
   secrets out of Git.
 - Visual evidence is supplemental; it never replaces hard native evidence.
 
-### Next campaign
+## Previous campaign
 
 **COMPLETED:** presentation-integrity implementation and physical certification
-for the exercised matrix.
+for the exercised matrix. Its changes are archived and remain bound to their
+recorded candidate identities.
 
-**PLANNED:** visual-evidence and multimodal AI-review infrastructure under
-`openspec/changes/2026-08-31-visual-evidence-ai-review/`. Its tasks remain
-unchecked and are not implemented by this consolidation.
+## Active implementation
+
+The visual-evidence and multimodal AI-review change is active under
+`openspec/changes/2026-08-31-visual-evidence-ai-review/`. Its 89 tracked
+implementation tasks are the source checklist. The implementation
+checkpoint and current scope are in
+`.agent/investigations/visual-evidence-implementation-2026-09-01.md`.
+Validated deterministic evidence: Debug/Release builds pass; 776/776 unit
+tests pass (44 visual-specific); historical non-visual manifests remain
+valid; `scripts/qualification-bundle.ps1` parses clean and now indexes/
+verifies visual manifests, packet, and image hashes offline without a model.
+Canonical workflow is `.agent/workflows/visual-evidence-review.md`.
+
+## Chosen next campaign — visual evidence closure and performance requalification
+
+**Change:** `openspec/changes/visual-evidence-closure-and-performance-requalification/`.
+**Status:** planning-only skeleton complete and strict OpenSpec validation passes;
+implementation has not started. A closes the predecessor's supervised visual
+evidence gap first, B rebaselines bounded visual overhead and resource cost
+from observed distributions, and E closes the exact Release v1.1 candidate.
+The skeleton contains 34 implementation tasks and six required spec deltas.
+The campaign explicitly defers DPI/topology hardening and real-app hardening
+to separate future campaign candidates; neither is hidden in this scope.
+The planning artifacts preserve the packet-hash, strict-collection,
+derived-failure, provenance, and archive-boundary decisions from the
+next-campaign investigation.
 
 **PLANNED/OPTIONAL:** repository-local Microsoft Learn and Context7 MCP
 integration, subject to a separately authorized upstream/security/scope
