@@ -14,12 +14,9 @@ supervised physical coverage across negative/above-origin geometry,
 controlled topmost presentation while preserving Shepherd/no-reparent
 semantics.
 
-**Active OpenSpec change:** `openspec/changes/dpi-topology-hardening/`.
-Strict pre-edit validation passed (`valid=true`, 1/1 change). The change is
-not archived while physical dispositions and final gates remain open.
+**Active OpenSpec change:** `openspec/changes/archive/2026-09-01-dpi-topology-hardening/` — **ARCHIVED** (`69b7ee4`). Strict validation `39 passed` (`valid=true`).
 
-**Status:** physical qualification complete on exact candidate `dc22ff3ab408d6aae84412f9cf418e8fed7aada8` (exe `EF22593A…` driver `6A1AC34…` snapshot `92790d2a…`). All runnable cells on host topology `3840x1200 120DPI/125% + 96DPI/100%` PASS with topology-bound visual evidence; unavailable cells BLOCKED_CAPABILITY. Zero FAIL_PRODUCT. Campaign ready to archive.
-
+**Status:** complete — deterministic + physical qualification proven on `dc22ff3ab408d6aae84412f9cf418e8fed7aada8` (exe `EF22593A` driver `6A1AC34` snapshot `92790d2a`). `38` specs passed, `173/173` selftest, `795/795` unit, `14` RUNNABLE PASS / `21` BLOCKED_CAPABILITY, visual `Valid:true`. No FAIL_PRODUCT. `main` sole branch, `HEAD==origin/main==69b7ee4`, clean.
 ### Physical qualification completed
 
 - Combined supervised run `6997ea9e-252a-4ff8-90d9-50daae02a6c4` with `--visual-evidence checkpoints --visual-review-packet` — **ALL 3 PASS** — `topmost-guest-interaction`, `title-centering-physical-measurement` (18 phases, `centerErrorPx ≤0.50` within 3px), `dual-monitor-mixed-dpi-transfer` (bidirectional `Win+Shift+Arrow` recontained, `DPI 96↔120`). Verifier `Valid:true` on all three packets.
