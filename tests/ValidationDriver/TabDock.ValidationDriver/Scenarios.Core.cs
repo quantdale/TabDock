@@ -373,7 +373,7 @@ internal static partial class Scenarios
         {
             if (flightRecorder == null)
                 return;
-            Thread.Sleep(600);
+            Thread.Sleep(525);
             bool recorded = flightRecorder.TryRecordFlightFrame(
                 ctx.VisualGuestScope(guest),
                 out string reason);
@@ -418,22 +418,6 @@ internal static partial class Scenarios
                 $"maximize-cycle-{cycle}-after-maximize",
                 VisualCheckpointPhase.AFTER_ACTION_SETTLED);
 
-            CaptureVisualCheckpoint(
-                $"maximize-cycle-{cycle}-before-restore",
-                VisualCheckpointPhase.BEFORE_ACTION);
-
-            // Restore: recompute the button position from the NEW (maximized) rect.
-            ClickMaximizeButton(container);
-            Thread.Sleep(1500);
-            (double bRest, double vRest) = SampleHost(host);
-            for (int retry = 0; retry < 3 && vRest <= 0.005; retry++)
-            {
-                Thread.Sleep(700);
-                (bRest, vRest) = SampleHost(host);
-            }
-            DumpGeometry(ctx, container, host, guest, $"cycle{cycle} after-restore");
-            bool geoRestOk = GuestMatchesHost(guest.Hwnd, host, out string geoRest);
-            GuardedProc.Log($"  cycle {cycle}: brightnessAfterRestore={bRest:F2} varianceAfterRestore={vRest:F4}");
             if (flightRecorder != null)
             {
                 RecordFlightFrame("before-failure");
@@ -450,6 +434,23 @@ internal static partial class Scenarios
                 ctx.Check(flightRecorder.Counters.FramesFlushed >= 2,
                     $"flight recorder reported bounded flushed history (frames={flightRecorder.Counters.FramesFlushed})");
             }
+
+            CaptureVisualCheckpoint(
+                $"maximize-cycle-{cycle}-before-restore",
+                VisualCheckpointPhase.BEFORE_ACTION);
+
+            // Restore: recompute the button position from the NEW (maximized) rect.
+            ClickMaximizeButton(container);
+            Thread.Sleep(1500);
+            (double bRest, double vRest) = SampleHost(host);
+            for (int retry = 0; retry < 3 && vRest <= 0.005; retry++)
+            {
+                Thread.Sleep(700);
+                (bRest, vRest) = SampleHost(host);
+            }
+            DumpGeometry(ctx, container, host, guest, $"cycle{cycle} after-restore");
+            bool geoRestOk = GuestMatchesHost(guest.Hwnd, host, out string geoRest);
+            GuardedProc.Log($"  cycle {cycle}: brightnessAfterRestore={bRest:F2} varianceAfterRestore={vRest:F4}");
             CaptureVisualCheckpoint(
                 $"maximize-cycle-{cycle}-after-restore",
                 VisualCheckpointPhase.AFTER_ACTION_SETTLED);
