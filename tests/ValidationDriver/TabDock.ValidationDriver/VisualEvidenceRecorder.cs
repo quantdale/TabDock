@@ -401,6 +401,7 @@ internal sealed class VisualEvidenceRecorder
         var captured = new List<VisualArtifactRecord>();
         var unavailable = new List<VisualUnavailableRecord>();
         bool requiredFailure = false;
+        VisualFrame? triggerFrame = null;
         try
         {
             VisualCaptureScope triggerScope = request.Scopes[0];
@@ -423,26 +424,25 @@ internal sealed class VisualEvidenceRecorder
                 unavailable.Add(item);
                 requiredFailure = request.Requiredness == VisualCaptureRequiredness.REQUIRED;
             }
+            else if (_ring.TryPrepareTriggerFrame(
+                trigger,
+                out VisualFrame? preparedTrigger,
+                out string triggerBoundReason))
+            {
+                triggerFrame = preparedTrigger!;
+                _counters.Succeeded();
+            }
             else
             {
-                VisualRingBufferSnapshot before = _ring.Snapshot();
-                if (_ring.TryAdd(trigger, forceRateLimit: true))
-                {
-                    VisualRingBufferSnapshot after = _ring.Snapshot();
-                    for (int i = before.FramesEvicted; i < after.FramesEvicted; i++)
-                        _counters.Evicted();
-                    _counters.Succeeded();
-                }
-                else
-                {
-                    _counters.Skipped();
-                    VisualUnavailableRecord item = RecordUnavailable(
-                        request,
-                        triggerScope,
-                        "trigger frame exceeded the flight recorder bounds");
-                    unavailable.Add(item);
-                    requiredFailure = request.Requiredness == VisualCaptureRequiredness.REQUIRED;
-                }
+                _counters.Skipped();
+                VisualUnavailableRecord item = RecordUnavailable(
+                    request,
+                    triggerScope,
+                    string.IsNullOrWhiteSpace(triggerBoundReason)
+                        ? "trigger frame exceeded the flight recorder bounds"
+                        : triggerBoundReason);
+                unavailable.Add(item);
+                requiredFailure = request.Requiredness == VisualCaptureRequiredness.REQUIRED;
             }
 
             IReadOnlyList<VisualFrame> frames = _ring.FlushForFailure();
@@ -466,7 +466,24 @@ internal sealed class VisualEvidenceRecorder
                 }
             }
 
-            if (frames.Count == 0 && unavailable.Count == 0)
+            if (triggerFrame is { } prepared)
+            {
+                if (TryRetainFrame(request, prepared, "ring", out VisualArtifactRecord? artifact, out string retainReason))
+                {
+                    _artifacts.Add(artifact!);
+                    captured.Add(artifact!);
+                    _counters.RetainBytes(artifact!.SizeBytes);
+                }
+                else
+                {
+                    _counters.Failed();
+                    VisualUnavailableRecord item = RecordUnavailable(request, triggerScope, retainReason);
+                    unavailable.Add(item);
+                    requiredFailure = request.Requiredness == VisualCaptureRequiredness.REQUIRED;
+                }
+            }
+
+            if (frames.Count == 0 && triggerFrame == null && unavailable.Count == 0)
             {
                 VisualUnavailableRecord item = RecordUnavailable(
                     request,

@@ -110,6 +110,66 @@ internal sealed class VisualRingBuffer : IDisposable
             return true;
         }
     }
+    /// <summary>
+    /// Prepares a failure trigger with ring sequence metadata without placing
+    /// the trigger into the pre-trigger queue. This preserves bounded history
+    /// when the trigger frame would evict every retained frame by byte budget.
+    /// </summary>
+    public bool TryPrepareTriggerFrame(
+        VisualFrame frame,
+        out VisualFrame? prepared,
+        out string reason)
+    {
+        if (frame == null)
+            throw new ArgumentNullException(nameof(frame));
+
+        prepared = null;
+        reason = string.Empty;
+        long frameBytes = checked((long)frame.Pixels.Length * sizeof(int));
+        if (frameBytes <= 0 || frameBytes > _maximumBytes)
+        {
+            reason = "trigger frame exceeded the flight recorder bounds";
+            return false;
+        }
+
+        lock (_sync)
+        {
+            if (!_running)
+            {
+                reason = "flight recorder is not running";
+                return false;
+            }
+            if (_startedUtc is null)
+                _startedUtc = frame.CapturedUtc;
+
+            long relativeMilliseconds = checked(
+                (frame.CapturedUtc - _startedUtc.Value).Ticks / TimeSpan.TicksPerMillisecond);
+            if (relativeMilliseconds < 0 || relativeMilliseconds > _maximumDurationMilliseconds)
+            {
+                reason = "trigger frame exceeded the flight recorder bounds";
+                return false;
+            }
+
+            prepared = new VisualFrame(
+                frame.Width,
+                frame.Height,
+                frame.Pixels.Span,
+                frame.CapturedUtc,
+                frame.RequestedRect,
+                frame.ActualRect,
+                frame.Method,
+                frame.ScopeKind,
+                frame.Target,
+                frame.Privacy,
+                frame.Dpi,
+                frame.MonitorId,
+                sequence: ++_sequence,
+                relativeMilliseconds: relativeMilliseconds,
+                captureDurationMilliseconds: frame.CaptureDurationMilliseconds);
+            return true;
+        }
+    }
+
 
     public IReadOnlyList<VisualFrame> FlushForFailure()
     {

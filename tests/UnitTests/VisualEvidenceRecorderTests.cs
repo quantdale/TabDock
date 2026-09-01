@@ -251,6 +251,51 @@ public sealed class VisualEvidenceRecorderTests
     }
 
     [Fact]
+    public void FlightRecorder_FailureFlushPreservesHistoryBeforeLargeTrigger()
+    {
+        string root = CreateTempRoot();
+        try
+        {
+            VisualEvidencePolicy policy = VisualEvidencePolicy
+                .SafeDefaults(VisualEvidenceLevel.FLIGHT_RECORDER)
+                with
+                {
+                    RingMaxFrames = 3,
+                    RingMaxBytes = 8L * 1024 * 1024,
+                    RingDurationMilliseconds = 2000,
+                    RingMaxFramesPerSecond = 2,
+                };
+            var recorder = new VisualEvidenceRecorder(
+                policy,
+                root,
+                "scenario",
+                1,
+                new LargeProvider());
+            VisualCaptureScope scope = VisualCaptureScope.ForWindow(
+                VisualCaptureScopeKind.GUEST_WINDOW,
+                Target,
+                VisualPrivacyClass.TEST_OWNED);
+
+            recorder.StartFlightRecorder();
+            Assert.True(recorder.TryRecordFlightFrame(scope, out string recordReason), recordReason);
+            VisualCheckpointResult result = recorder.CaptureFailure(
+                "large trigger preserves pre-trigger history",
+                new[] { scope },
+                VisualCaptureRequiredness.REQUIRED);
+
+            Assert.True(result.Captured);
+            Assert.False(result.RequiredFailure);
+            Assert.True(result.Artifacts.Count >= 2);
+            Assert.Equal(1, recorder.Counters.FramesFlushed);
+            Assert.False(recorder.FlightRecorderRunning);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact]
     public void Manifest_BindsPolicyArtifactsAndHashToImmutableJson()
     {
         string root = CreateTempRoot();
@@ -522,4 +567,30 @@ public sealed class VisualEvidenceRecorderTests
             return true;
         }
     }
+    private sealed class LargeProvider : IVisualCaptureProvider
+    {
+        public bool TryCapture(VisualCaptureScope scope, out VisualFrame? frame, out string reason)
+        {
+            const int width = 1500;
+            const int height = 800;
+            int[] pixels = new int[width * height];
+            Array.Fill(pixels, unchecked((int)0x00FF0000));
+            frame = new VisualFrame(
+                width,
+                height,
+                pixels,
+                DateTimeOffset.UtcNow,
+                new VisualRect(10, 20, 10 + width, 20 + height),
+                new VisualRect(10, 20, 10 + width, 20 + height),
+                VisualCaptureMethod.SYNTHETIC,
+                scope.Kind,
+                Target,
+                scope.Privacy,
+                96,
+                "synthetic-monitor");
+            reason = string.Empty;
+            return true;
+        }
+    }
+
 }
