@@ -75,7 +75,7 @@ publication gate closed.
 
 ## Production qualification requirements
 
-Before v1.0.0 production publication, the external compatibility gate must
+Before v1.1.0 production publication, the external compatibility gate must
 record PASS evidence in `release-external-evidence.json`
 (`windowsCompatibility`, schemaVersion 3 — see
 `docs/release/publication-gates.md`) for at minimum:

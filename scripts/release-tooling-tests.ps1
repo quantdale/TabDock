@@ -1724,7 +1724,7 @@ try {
 
     New-TestCase 'project-version-is-authoritative-for-the-real-project' {
         $version = Get-ProjectSemanticVersion (Join-Path $repoRoot 'TabDock.csproj')
-        Assert-True ($version -eq '1.0.0') "real TabDock.csproj <Version> must be 1.0.0, got '$version'"
+        Assert-True ($version -eq '1.1.0') "real TabDock.csproj <Version> must be 1.1.0, got '$version'"
     }
 
     New-TestCase 'malformed-semantic-version-rejected' {

@@ -529,7 +529,7 @@ function Test-ExternalEvidenceFile {
         }
     }
 
-    # Windows compatibility gate: v1.0.0 advertises Windows 10 and Windows 11
+    # Windows compatibility gate: v1.1.0 advertises Windows 10 and Windows 11
     # x64, so both must carry PASS evidence recorded on real machines (build
     # recorded, native ABI self-test evidence attached) before production
     # publication. Missing/malformed/FAIL/BLOCKED entries fail closed.

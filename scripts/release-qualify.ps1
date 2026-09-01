@@ -233,7 +233,7 @@ try {
     # The workflow -Version input is only an EXPECTED value and must agree
     # with the project version; the manifest records the project version, so
     # version=9.9.9 can never be recorded while the project still declares
-    # 1.0.0. Fails fast, before any restore/build work.
+    # 1.1.0. Fails fast, before any restore/build work.
     $projectVersion = Get-ProjectSemanticVersion $MainProject
     if (-not [string]::IsNullOrWhiteSpace($Version) -and $Version -ne $projectVersion) {
         throw "Version authority mismatch: workflow expected version '$Version' != project <Version> '$projectVersion' (TabDock.csproj is authoritative)."

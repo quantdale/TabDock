@@ -533,7 +533,7 @@ passes and attached to the release alongside `release-external-evidence.json`.
    `SIGNING_EXPECTED_SUBJECT` publisher policy), then dispatch
    `prepare-release-candidate.yml` from `main` with
    `sha=<current main HEAD == the trusted dispatch SHA>` (and the expected
-   `version`, default `1.0.0`). The run verifies the trusted dispatch
+   `version`, default `1.1.0`). The run verifies the trusted dispatch
    contract first (ref == main, requested SHA == dispatch SHA,
    workflow SHA == dispatch SHA), builds once, signs once through the
    signing service (non-exportable key, certificate subject == current
@@ -599,7 +599,7 @@ artifact retained by Stage A — byte-identical, never rebuilt, never re-signed.
   Stage A reads it from the exact candidate source; the workflow `version`
   input is only an EXPECTED value and the qualification fails on any
   disagreement (`version=9.9.9` cannot be recorded while the project
-  declares `1.0.0`).
+  declares `1.1.0`).
 - The published executable's reported semantic version and its
   informational version were verified by trusted Stage A and recorded as
   `buildIdentity` in the manifest; the Stage B gate requires manifest ==
@@ -607,13 +607,13 @@ artifact retained by Stage A — byte-identical, never rebuilt, never re-signed.
   contract from the trusted records and NEVER executes the downloaded
   binary to re-ask it.
 - The release tag is DERIVED as `v<semanticVersion>`; Stage B accepts no tag
-  input, so arbitrary tags (`stable-final`, `v2.0.0` for version `1.0.0`,
+  input, so arbitrary tags (`stable-final`, `v2.0.0` for version `1.1.0`,
   ...) are structurally impossible, and the protected `v*` tag namespace
   (ruleset `release-tags`) applies by construction.
 
 ## Windows compatibility gate
 
-v1.0.0 advertises Windows 10 (recent builds) and Windows 11 x64, so the
+v1.1.0 advertises Windows 10 (recent builds) and Windows 11 x64, so the
 production evidence schema REQUIRES `windowsCompatibility` with PASS entries
 for both:
 
@@ -626,7 +626,7 @@ for both:
   `build.yml` also runs it on `windows-2022`).
 
 Evidence must NOT be fabricated: if no real Windows 10 environment exists,
-the gate stays `BLOCKED_EXTERNAL` and v1.0.0 is not published. Dropping the
+the gate stays `BLOCKED_EXTERNAL` and v1.1.0 is not published. Dropping the
 Windows 10 support claim would be a product decision (README, release notes,
 manifest/support metadata, compatibility docs) — it must never be done
 silently merely to pass the gate.

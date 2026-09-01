@@ -32,7 +32,7 @@ on:
       version:
         description: 'Expected semantic version (must equal TabDock.csproj <Version>, which is authoritative)'
         required: false
-        default: '1.0.0'
+        default: '1.1.0'
         type: string
       signing-required:
         description: 'Treat missing Authenticode material as a qualification failure'
