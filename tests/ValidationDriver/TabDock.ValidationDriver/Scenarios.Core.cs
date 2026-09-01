@@ -297,8 +297,9 @@ internal static partial class Scenarios
     // -------------------------------------------------------------------------
     private static void MinRestore(Ctx ctx, Options opt)
     {
-        // 7s (not 3s) so the timer cannot fire while the real-input capture flow (~5s) is still running.
-        GuestInfo pig = SpawnPig(ctx, "MR", "--color", "white", "--self-minimize-after", "7");
+        // Leave enough margin for the real-input capture flow before the timer
+        // transition; the picker can take several seconds on a busy desktop.
+        GuestInfo pig = SpawnPig(ctx, "MR", "--color", "white", "--self-minimize-after", "15");
         (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pig);
         long off = TabDockLog.RecordLogLength();
         if (!TryGetVisualMonitorBinding(ctx, container, out VisualTopologyBinding? monitorBinding))
@@ -316,7 +317,7 @@ internal static partial class Scenarios
             return;
 
 
-        Thread.Sleep(8000);
+        Thread.Sleep(16000);
 
         ctx.Check(TabDockLog.ContainsNewLine(off, "minimized; restoring it inside its tab."),
             "TabDock log gained 'minimized; restoring it inside its tab.'");
