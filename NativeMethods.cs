@@ -46,8 +46,43 @@ public static partial class NativeMethods
     [DllImport("user32.dll")]
     public static extern bool IsZoomed(IntPtr hWnd);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+    [DllImport("user32.dll", SetLastError = true, EntryPoint = "GetWindowRect")]
+    private static extern bool GetWindowRectNative(IntPtr hWnd, out RECT lpRect);
+
+    /// <summary>
+    /// Reads a top-level window rectangle in physical screen pixels. USER32
+    /// virtualizes a DPI-unaware target when the caller is PMv2; switch only the
+    /// calling thread for that read so the rest of WPF remains PMv2.
+    /// </summary>
+    public static bool GetWindowRect(IntPtr hWnd, out RECT lpRect)
+    {
+        IntPtr targetContext = GetWindowDpiAwarenessContext(hWnd);
+        if (targetContext == IntPtr.Zero
+            || GetAwarenessFromDpiAwarenessContext(targetContext) != 0)
+        {
+            return GetWindowRectNative(hWnd, out lpRect);
+        }
+
+        IntPtr previousContext = SetThreadDpiAwarenessContext(DpiAwarenessContextUnaware);
+        if (previousContext == IntPtr.Zero)
+        {
+            lpRect = default;
+            return false;
+        }
+
+        bool result;
+        bool restored;
+        try
+        {
+            result = GetWindowRectNative(hWnd, out lpRect);
+        }
+        finally
+        {
+            restored = SetThreadDpiAwarenessContext(previousContext) != IntPtr.Zero;
+        }
+
+        return result && restored;
+    }
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);

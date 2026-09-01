@@ -598,6 +598,12 @@ public partial class ContainerWindow : Window
             MonitorDpiService.InvalidateDpiCache();
             _constraintDirty = true;
             _paneContainment.InvalidateAll();
+            // WM_DPICHANGED arrives before WPF has finished converting the
+            // container's logical size to its new physical monitor geometry.
+            // Latch one post-layout pass so an unaware top-level guest is
+            // re-glued after that conversion, not only during the intermediate
+            // window-position notification.
+            RequestRelayout(ensureFinalPass: true);
         }
         else if ((uint)msg == NativeMethods.WM_DISPLAYCHANGE)
         {

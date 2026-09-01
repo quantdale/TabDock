@@ -425,16 +425,25 @@ internal static partial class Scenarios
             ctx.BlockEnvironment("topmost-guest-interaction: the opened group menu lacked a stable TabDock-owned popup identity for visual capture");
             return;
         }
+        if (!TestRunProvenance.TryValidateWindow(menuIdentity, out string menuValidationReason))
+        {
+            ctx.BlockEnvironment($"topmost-guest-interaction: the opened group menu could not be registered for visual capture ({menuValidationReason})");
+            return;
+        }
         VisualCaptureScope menuScope = VisualCaptureScope.ForWindow(
             VisualCaptureScopeKind.OWNED_POPUP,
             VisualTargetIdentityFactory.From(menuIdentity),
             VisualPrivacyClass.PRODUCT_OWNED);
+        // The WPF menu is transient. Capture it first while the identity
+        // proven by UIA is still live; capturing the underlying topmost guest
+        // and container first can let popup dismissal race the required menu
+        // artifact without any user input.
         if (!CapturePhysicalVisual(
                 ctx,
                 "topmost-group-menu",
                 VisualCheckpointPhase.AFTER_ACTION_SETTLED,
                 "The TabDock group menu is visibly usable above the controlled topmost guest.",
-                new[] { ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container), menuScope },
+                new[] { menuScope, ctx.VisualGuestScope(pig), ctx.VisualContainerScope(container) },
                 topmostBinding))
             return;
 
@@ -833,6 +842,15 @@ internal static partial class Scenarios
             {
                 return;
             }
+            bool guestSettledAfterMonitorPlacement = Util.WaitUntil(
+                () => IsDocked(pig.Hwnd, host),
+                3500,
+                40);
+            ctx.Check(
+                guestSettledAfterMonitorPlacement,
+                $"title centering {targetSnapshot.MonitorId} baseline: captured guest settled after monitor placement");
+            if (!guestSettledAfterMonitorPlacement)
+                return;
             if (!AssertGuestPresentation(ctx, pig, container, host, $"title centering {targetSnapshot.MonitorId} baseline"))
                 return;
             int defaultWidth = initialWidth;
@@ -879,7 +897,14 @@ internal static partial class Scenarios
             ctx.BlockEnvironment("title-centering-physical-measurement: final UIA rename back to Group was not safely actionable");
             return;
         }
-        if (!MoveContainerToMonitor(ctx, container, pig.Hwnd, primary, "title measurement final primary")
+        if (!MoveContainerToMonitor(ctx, container, pig.Hwnd, primary, "title measurement final primary"))
+            return;
+        bool finalGuestSettled = Util.WaitUntil(
+            () => IsDocked(pig.Hwnd, host),
+            3500,
+            40);
+        ctx.Check(finalGuestSettled, "title centering final primary: captured guest settled after monitor placement");
+        if (!finalGuestSettled
             || !AssertGuestPresentation(ctx, pig, container, host, "title centering final primary"))
             return;
         ctx.Check(TabCount(container) == 1, "title-centering measurement retained the single captured tab");

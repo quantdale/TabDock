@@ -1170,8 +1170,8 @@ public sealed class WindowShepherdService
             return;
         }
 
-        bool positioned = NativeMethods.SetWindowPos(
-            window.Hwnd,
+        bool positioned = SetGuestWindowPos(
+            window,
             NativeMethods.HWND_TOP,
             screenRect.left,
             screenRect.top,
@@ -1234,14 +1234,14 @@ public sealed class WindowShepherdService
         }
 
 
-        if (!NativeMethods.SetWindowPos(
-            window.Hwnd,
-            insertAfter,
-            screenRect.left,
-            screenRect.top,
-            screenRect.Width,
-            screenRect.Height,
-            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW))
+        if (!SetGuestWindowPos(
+                window,
+                insertAfter,
+                screenRect.left,
+                screenRect.top,
+                screenRect.Width,
+                screenRect.Height,
+                NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW))
         {
             LogPositioningFailureOnce(window.Hwnd, "SetWindowPos(guest-split)");
         }
@@ -1249,6 +1249,31 @@ public sealed class WindowShepherdService
         // Deliberately NOT DescribeWindow here (same hot-path reason as
         // PositionAndShow): split layout runs on every move/resize tick.
         _log.Log($"SHEPHERD[position] guest=0x{window.Hwnd.ToInt64():X} rect={screenRect.left},{screenRect.top},{screenRect.Width}x{screenRect.Height}");
+    }
+
+    /// <summary>
+    /// Positions one guest in the physical screen-pixel contract. User32
+    /// interprets a size supplied by a PMv2 caller through the target's
+    /// post-transfer DPI state for a DPI-unaware window; temporarily switching
+    /// this UI thread to the target's unaware context prevents that second
+    /// scaling. The caller's context is restored before any WPF work resumes.
+    /// </summary>
+    private bool SetGuestWindowPos(
+        CapturedWindow window,
+        IntPtr insertAfter,
+        int x,
+        int y,
+        int width,
+        int height,
+        uint flags)
+    {
+        using GuestDpiPositionScope scope = GuestDpiPositionScope.EnterForWindow(window.Hwnd);
+        if (!scope.IsAvailable)
+        {
+            _log.Log($"SHEPHERD[position] guest=0x{window.Hwnd.ToInt64():X} refused physical position: DPI context unavailable.");
+            return false;
+        }
+        return NativeMethods.SetWindowPos(window.Hwnd, insertAfter, x, y, width, height, flags);
     }
 
     /// <summary>Queries a captured guest's effective native minimum track size (the size it refuses to shrink below) via a bounded cross-process WM_GETMINMAXINFO probe. Returns the min width/height in physical pixels, plus whether the probe was available. Callers invoke this only on dirty constraint transitions; a timeout uses the last successful value for the same captured object.</summary>
@@ -1285,11 +1310,12 @@ public sealed class WindowShepherdService
                 return (0, 0, false); // send failed / timed out / UIPI-blocked
             }
             mmi = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeMethods.MINMAXINFO>(lParam);
-            int minW = Math.Max(0, mmi.ptMinTrackSize.x);
-            int minH = Math.Max(0, mmi.ptMinTrackSize.y);
-            minW = ToPhysicalScaleForGuest(window.Hwnd, minW, dpiTargetMonitor);
-            minH = ToPhysicalScaleForGuest(window.Hwnd, minH, dpiTargetMonitor);
+            int rawMinW = Math.Max(0, mmi.ptMinTrackSize.x);
+            int rawMinH = Math.Max(0, mmi.ptMinTrackSize.y);
+            int minW = ToPhysicalScaleForGuest(window.Hwnd, rawMinW, dpiTargetMonitor);
+            int minH = ToPhysicalScaleForGuest(window.Hwnd, rawMinH, dpiTargetMonitor);
             _minTrackCache[window] = (minW, minH);
+            _log.Log($"SHEPHERD[sizemin] guest=0x{window.Hwnd.ToInt64():X} raw={rawMinW}x{rawMinH} effective={minW}x{minH} targetMonitor=0x{(dpiTargetMonitor ?? IntPtr.Zero).ToInt64():X}");
             return (minW, minH, true);
         }
         catch (Exception ex)
@@ -1430,6 +1456,14 @@ public sealed class WindowShepherdService
 
         const uint guestFlags = NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW;
         const uint containerFlags = NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE;
+        using GuestDpiPositionScope dpiScope = GuestDpiPositionScope.EnterForWindows(top.Hwnd, bottom.Hwnd);
+        if (!dpiScope.IsAvailable)
+        {
+            LogPositioningFailureOnce(top.Hwnd, "DeferWindowPos(batch:dpi-context)");
+            FallbackPosition(top, topRect, bottom, bottomRect, containerHwnd);
+            return;
+        }
+
         DeferredWindowPositionResult result = DeferredWindowPositionBatch.Apply(
             NativeDeferredWindowPositionApi.Instance,
             new[]

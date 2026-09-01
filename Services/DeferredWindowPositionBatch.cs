@@ -77,9 +77,7 @@ internal sealed class NativeDeferredWindowPositionApi : IDeferredWindowPositionA
         int width,
         int height,
         uint flags)
-    {
-        return NativeMethods.DeferWindowPos(hdwp, window, insertAfter, x, y, width, height, flags);
-    }
+        => NativeMethods.DeferWindowPos(hdwp, window, insertAfter, x, y, width, height, flags);
 
     public bool End(IntPtr hdwp) => NativeMethods.EndDeferWindowPos(hdwp);
 }
