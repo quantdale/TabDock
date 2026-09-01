@@ -48,6 +48,20 @@ provider credentials.
 - **THEN** it uses synthetic fixtures and retains the supervised visual gate as
   pending/blocked rather than weakening the contract
 
+
+#### Scenario: Synthetic visual-review fixtures pass CI
+
+- **WHEN** deterministic in-memory/test-owned images produce valid visual
+  manifests/review packets and known structured review-result fixtures verify
+- **THEN** CI records visual infrastructure/schema coverage only and does not
+  claim that a multimodal model inspected a live physical TabDock run
+
+#### Scenario: CI host has no interactive desktop or vision model
+
+- **WHEN** the CI environment cannot safely capture a physical Windows desktop
+  or invoke a multimodal reviewer
+- **THEN** the hermetic gate uses synthetic image fixtures and verifier tests
+  and does not weaken or skip the deterministic visual infrastructure contract
  
 #### Scenario: A hermetic regression fails CI
 
@@ -122,6 +136,45 @@ lease, topology, or multimodal review.
   `VISUAL_DEFECT`/`VISUAL_SUSPECT` although geometry/brightness metrics pass
 - **THEN** the finding remains in evidence and a required visual gate cannot
   pass until normal investigation/disposition
+
+#### Scenario: A visual-enabled attempt retains screenshots
+
+- **WHEN** a catalog scenario enables visual checkpoints and the recorder
+  successfully captures them
+- **THEN** its child evidence links a versioned visual manifest and immutable
+  image hashes under the attempt artifact root without changing the scenario's
+  native outcome semantics by itself
+
+#### Scenario: A required visual artifact is missing or tampered
+
+- **WHEN** a scenario/gate declares a checkpoint required but its PNG, visual
+  manifest, hash, candidate binding, or relative path fails verification
+- **THEN** the attempt is `FAIL_HARNESS` and parent/shard aggregation cannot
+  infer visual or release PASS
+
+#### Scenario: A visual-review-required gate has no capable reviewer
+
+- **WHEN** all physical/native scenario checks pass but the catalog/gate requires
+  multimodal review and the reviewer reports `REVIEW_UNAVAILABLE`
+- **THEN** the gate remains non-pass with the missing review capability named;
+  the native checks remain recorded independently
+
+#### Scenario: AI review says OK while native qualification failed
+
+- **WHEN** a valid hash-bound review says `VISUAL_OK` but the underlying
+  attempt lost its lease, identity, foreground, ownership, cleanup, or another
+  canonical prerequisite
+- **THEN** the native failure/block remains authoritative and the visual review
+  cannot promote the attempt
+
+#### Scenario: AI review identifies a visible defect while simple metrics pass
+
+- **WHEN** valid reviewed screen-composited imagery is
+  `VISUAL_DEFECT`/`VISUAL_SUSPECT` even though geometry, brightness, or
+  other simple pixel metrics appear nominal
+- **THEN** the visual finding remains in the evidence and a gate requiring
+  visual review cannot pass until the finding is dispositioned through normal
+  product/harness investigation
 
 #### Scenario: Historical run has no visual section
 

@@ -104,6 +104,11 @@ Options:
   `Debug`).
 - `--rid auto|none|win-x64` — select RID-aware discovery (default `auto`).
 - `--tabdock PATH` / `--guineapig PATH` — override artifact discovery.
+- `--visual-evidence none|failure|checkpoints|flight` — opt into bounded
+  visual retention; default `none`.
+- `--visual-review-packet` — emit the vendor-neutral packet and review
+  instructions for retained images.
+- `--visual-max-bytes N` — cap total retained visual bytes (1–268435456).
 - `--shard NAME` — run one named bounded shard.
 - `--reruns N` — run up to five additional investigation attempts. The first
   attempt remains authoritative; a valid first-attempt failure followed by a

@@ -37,6 +37,20 @@ never infer visual/performance evidence or review from absence.
   measured-resource dimensions separately, and derives counts from imported
   evidence
 
+#### Scenario: A child declares visual evidence
+
+- **WHEN** a child manifest declares a visual-manifest artifact
+- **THEN** parent import verifies the visual-manifest path/hash and its declared
+  candidate/run/scenario/attempt identity before accepting the child evidence
+
+#### Scenario: A visual review is present
+
+- **WHEN** a child contains a visual-review packet/result
+- **THEN** the hierarchy retains the packet/result hashes and
+  `VISUAL_OK`/`VISUAL_SUSPECT`/`VISUAL_DEFECT`/
+  `REVIEW_UNAVAILABLE` dimension separately from the canonical scenario
+  outcome
+
 #### Scenario: A visual artifact or performance record is stale
 
 - **WHEN** a child visual/resource artifact is missing, malformed, duplicated,
@@ -99,6 +113,13 @@ valid under their original schema and do not synthesize visual evidence.
   changes or is removed
 - **THEN** offline verification fails and identifies the relative artifact and
   violated hash/existence contract
+
+#### Scenario: A reviewed screenshot no longer matches the result
+
+- **WHEN** a visual-review result references a packet/image hash whose bytes in
+  the bundle differ from the reviewed evidence
+- **THEN** offline verification rejects the review and the bundle cannot claim
+  the associated visual-review gate
 
 #### Scenario: An unsafe or duplicate path is supplied
 
@@ -164,6 +185,13 @@ claim that a measured budget or supervised visual acceptance exists.
 - **THEN** it emits policy/capability/budget blocks without starting TabDock,
   sending input, recording the desktop, sampling a process, or invoking a
   multimodal reviewer
+
+#### Scenario: Remote report includes restricted visual imagery without policy
+
+- **WHEN** a returned package contains real-app/desktop-restricted screenshots
+  that the originating package/run policy did not authorize
+- **THEN** import rejects those artifacts and the related visual gate remains
+  non-pass
  
 #### Scenario: A second machine returns an untrusted report
 

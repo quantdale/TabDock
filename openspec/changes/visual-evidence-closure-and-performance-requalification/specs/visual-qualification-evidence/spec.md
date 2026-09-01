@@ -42,6 +42,18 @@ literal or a caller-supplied substitute.
 - **THEN** offline verification rejects the result and the visual gate cannot
   claim review completion
 
+#### Scenario: Screenshot changes after AI review
+
+- **WHEN** any reviewed image byte changes after the result was produced
+- **THEN** the result fails verification and cannot contribute visual evidence
+
+#### Scenario: Review result omits a required checkpoint
+
+- **WHEN** a gate requires visual review of declared checkpoints but the result
+  omits one or substitutes another artifact
+- **THEN** the review is incomplete and the required visual gate remains
+  non-pass
+
 ### Requirement: Visual-review acceptance SHALL be demonstrated with non-vacuous controlled fixtures
 
 Visual-review acceptance SHALL include an exact-candidate supervised desktop
@@ -69,6 +81,19 @@ is not a best-of-N visual PASS.
   disclosure in the prompt
 - **THEN** it produces a valid hash-bound `VISUAL_DEFECT` result identifying
   the observable checkpoint/image and finding
+
+#### Scenario: Seeded occlusion packet is reviewed
+
+- **WHEN** a capable agent reviews a controlled packet containing a deliberately
+  occluded guest presentation without being told which image is defective
+- **THEN** it identifies the visual problem and emits a valid hash-bound
+  `VISUAL_DEFECT` result
+
+#### Scenario: Seeded healthy packet is reviewed
+
+- **WHEN** the same workflow reviews a controlled healthy presentation packet
+- **THEN** it does not fabricate a defect and can emit a valid
+  `VISUAL_OK` result subject to the normal native-evidence boundary
 
 #### Scenario: The reviewer cannot inspect images
 
