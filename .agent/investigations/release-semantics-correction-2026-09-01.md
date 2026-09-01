@@ -122,6 +122,6 @@ executable hash.
 The archive/spec synchronization was committed as
 `496b0c1e498c06b5d86211c9e24ec1ae62349eef`. Evidence record
 `de306d39722b9b67548b8e4878f228a97ef4e706` was already pushed. The archived
-task ledger now records E6.6 completion in the final closure record; its push
-and final parity proof are performed immediately after that commit. No new
-binary candidate is claimed.
+task ledger records E6.6 completion in the final closure record; that record
+was pushed through `main`, and post-push `HEAD == origin/main` with a clean
+worktree was independently verified. No new binary candidate is claimed.

@@ -42,10 +42,9 @@ commits are evidence records and do not redefine the binary candidate boundary.
 Evidence record `de306d39722b9b67548b8e4878f228a97ef4e706` was pushed before
 the successor archive. Archive/spec commit
 `496b0c1e498c06b5d86211c9e24ec1ae62349eef` was then created and its
-post-archive strict validation passed `38/38`. Final E6.6 closure is now
-recorded below; the final push/parity proof is re-established after that
-record commit.
-
+post-archive strict validation passed `38/38`. Final E6.6 closure was
+recorded and pushed through `main`; post-push parity and clean-tree proof
+were independently verified.
 
 Foundation inventory, implementation status, exact pre-final candidate
 correction, row-level dispositions, archive result, and final evidence are
@@ -154,8 +153,6 @@ successor task ledger are the durable planning sources.
 
 The archive synchronized the six successor delta capabilities into canonical
 specs (`+8/~15`); post-archive strict repository validation passed `38/38`.
-
-
 
 The deterministic closure is implemented in ValidationDriver-only seams:
 exact packet-byte hashing, strict current collections, derived-failure
@@ -314,10 +311,10 @@ precedence.
 Successor E6.6 is complete in the archived task ledger: predecessor and
 successor changes are synchronized/archived, archive/spec commit
 `496b0c1e498c06b5d86211c9e24ec1ae62349eef` is recorded, and the final closure
-record is being pushed now. The final binary candidate boundary remains the
-exact source SHA above; later evidence/archive records do not retag its packet
-or executable hash. Final `HEAD == origin/main` and clean-tree status are
-verified dynamically after the push.
+record was pushed through `main`. The final binary candidate boundary remains
+the exact source SHA above; later evidence/archive records do not retag its
+packet or executable hash. Post-push `HEAD == origin/main` and clean-tree
+status were independently verified.
 
 Final branch deletion, push identity, clean worktree, and remote topology must
 always be re-proven dynamically rather than inferred from this file.
