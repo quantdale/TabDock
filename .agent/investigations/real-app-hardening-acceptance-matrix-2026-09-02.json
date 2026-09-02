@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "generation": "real-app-hardening-acceptance-matrix-2026-09-02",
   "sourceMatrixRecovered": false,
-  "provenance": "Matrix constructed from supervised physical runs on host virtual (0,0)-(3840,1200) primary 1920x1200 120 DPI / secondary 1920x1080 96 DPI; candidate is final settled HEAD (not 6bb8e); deterministic gates 812/812; selftest 173/173; driver built Release win-x64. Some cells remain capability-blocked; first-attempt authority preserved.",
-  "candidateSha": "6223cbffa44072149cbe1496bb9d5b635996f0b1",
-  "candidateExecutableSha": "57B4DC26E42B0B0440F84313F042641A892EE9416B8EA088A2DCD74C354DB10C",
-  "driverSha": "0BAFC906EEC34880437BCAF85567ED14A52631A170ACF56876994AB842D44618",
+  "provenance": "Matrix constructed from supervised physical runs on host virtual (0,0)-(3840,1200) primary 1920x1200 120 DPI / secondary 1920x1080 96 DPI; candidate is final settled HEAD (not 6bb8e); deterministic gates 812/812; selftest 173/173; driver built Release win-x64. Some cells remain capability-blocked; first-attempt authority preserved. FINAL CORRECTIVE CLOSURE 2026-09-02: candidate fbc4d92 (exe BFC7EF\u2026, driver 781FF394\u2026) with real Chromium visual packets + operator multimodal review + tamper rejection; historical rows preserved.",
+  "candidateSha": "fbc4d926abf34e1ace4260ddef25807699f402b9",
+  "candidateExecutableSha": "BFC7EF3445020EC920A1BAA41C4B697AEDC306541FBCF03D8CCA9AD024059851",
+  "driverSha": "781FF394A77A9828F687D66276DD9E16A059D4DE7B4CE1E440B30AC3F5C1BEC0",
   "snapshotId": "92790d2a354c867d62950b0e12c1b498967d9ef4b3a22bdffcc9864c4a584ba2",
   "topology": {
     "virtual": "(0,0)-(3840,1200)",
@@ -43,6 +43,25 @@
           "guestKind": "chrome-normal",
           "attempt": 2,
           "note": "Run with --visual-evidence checkpoints after code addition of restricted baseline/before/fullscreen/after captures; verifies no regression in F11 repair when recorder active."
+        },
+        {
+          "scenario": "browser-fullscreen-contained (final candidate fbc4d92, restricted visual packet + review)",
+          "guestKind": "chrome-normal",
+          "attempt": 1,
+          "runs": "6a5bb064-5ae3-4d6e-a7e0-b8a35127ebb5",
+          "cycles": 2,
+          "sourceMonitor": "monitor-001 120 DPI",
+          "destinationMonitor": "monitor-001 120 DPI (no transfer in this cell)",
+          "lease": "VALID",
+          "foreground": "true",
+          "pointOwnership": "true",
+          "nativeOutcome": "PASS (2/2 F11 cycles: transition observed 0x16CF->0x160B borderless fullscreen, containment to assigned pane, SHEPHERD[presentation-restore-request]==1 per cycle, no tab click, no Released tab, brightness>1)",
+          "visualOutcome": "operator review VISUAL_SUSPECT (2 informational CAPTURE_ARTIFACT findings: container-window frames at fullscreen checkpoints show covered/blank host region \u2014 benign, guest fullscreen frame correct; native PASS authoritative)",
+          "packetHash": "c03de02255c8a36c948dc71cbbeba31a1837ee88377c2658f30cd379e9f2dcfe",
+          "reviewResult": "visual-review-result.json present, hash-bound to packet, offline verifier Valid:true",
+          "cleanup": "PASS (run-owned browser killed by PID/start verification, container WM_CLOSE, state restored, no orphan)",
+          "finalDisposition": "COMPLETED_AND_PROVEN (native + restricted packet Valid:true + operator review; benign capture-artifact finding only)",
+          "blocker": null
         }
       ]
     },
@@ -75,6 +94,25 @@
           "nativeOutcome": "PASS (both cycles PASS with same code on second invocation runId 35525ad6)",
           "finalDisposition": "FLAKE_UNCLASSIFIED (first FAIL_PRODUCT followed by PASS => not best-of-N PASS; requires defect disposition before archive)",
           "blocker": "Edge shows intermittent second-cycle containment: first invocation FAIL, immediate rerun PASS. Classify as harness/environment flake pending larger sample, not a stable product defect."
+        },
+        {
+          "scenario": "browser-fullscreen-contained (final candidate fbc4d92, restricted visual packet + review)",
+          "guestKind": "edge-normal",
+          "attempt": 1,
+          "runs": "76fb0a68-cfa5-45d3-825c-f66e9e1378f2",
+          "cycles": 2,
+          "sourceMonitor": "monitor-001 120 DPI",
+          "destinationMonitor": "monitor-001 120 DPI (no transfer in this cell)",
+          "lease": "VALID",
+          "foreground": "true",
+          "pointOwnership": "true",
+          "nativeOutcome": "PASS (2/2 F11 cycles: transition observed 0x16CF->0x160B borderless fullscreen, containment to assigned pane, SHEPHERD[presentation-restore-request]==1 per cycle, no tab click, no Released tab, brightness>1)",
+          "visualOutcome": "operator review VISUAL_SUSPECT (2 informational CAPTURE_ARTIFACT findings: container-window frames at fullscreen checkpoints show covered/blank host region \u2014 benign, guest fullscreen frame correct; native PASS authoritative)",
+          "packetHash": "1a47df5abb05cbe50ce27ff941338e56de50d7af36d14cea499be2d8d844a019",
+          "reviewResult": "visual-review-result.json present, hash-bound to packet, offline verifier Valid:true",
+          "cleanup": "PASS (run-owned browser killed by PID/start verification, container WM_CLOSE, state restored, no orphan)",
+          "finalDisposition": "COMPLETED_AND_PROVEN (native + restricted packet Valid:true + operator review; benign capture-artifact finding only)",
+          "blocker": null
         }
       ],
       "compatibilityFalsePositiveReview": {
@@ -98,6 +136,25 @@
           "nativeOutcome": "PASS (both cycles: style 0x16CF->0x160B, drift 1/2, recontained 1225x700, brightness 188)",
           "visualOutcome": "n/a (policy none; visual added same as Chrome, will be Available with checkpoints)",
           "finalDisposition": "COMPLETED_AND_PROVEN"
+        },
+        {
+          "scenario": "browser-fullscreen-contained (final candidate fbc4d92, restricted visual packet + review)",
+          "guestKind": "brave-normal",
+          "attempt": 1,
+          "runs": "b151a8ce-c0c1-497d-8292-14e04642b32a",
+          "cycles": 2,
+          "sourceMonitor": "monitor-001 120 DPI",
+          "destinationMonitor": "monitor-001 120 DPI (no transfer in this cell)",
+          "lease": "VALID",
+          "foreground": "true",
+          "pointOwnership": "true",
+          "nativeOutcome": "PASS (2/2 F11 cycles: transition observed 0x16CF->0x160B borderless fullscreen, containment to assigned pane, SHEPHERD[presentation-restore-request]==1 per cycle, no tab click, no Released tab, brightness>1)",
+          "visualOutcome": "operator review VISUAL_OK (all checkpoints correct, no unrelated content)",
+          "packetHash": "75c6c51c6f547f636721ec3ad6a488b4d8929af35bc6fbf48376af185905c652",
+          "reviewResult": "visual-review-result.json present, hash-bound to packet, offline verifier Valid:true",
+          "cleanup": "PASS (run-owned browser killed by PID/start verification, container WM_CLOSE, state restored, no orphan)",
+          "finalDisposition": "COMPLETED_AND_PROVEN (native + restricted packet Valid:true + operator review; benign capture-artifact finding only)",
+          "blocker": null
         }
       ]
     },
@@ -134,7 +191,7 @@
           "guestKind": "notepad-broker",
           "attempt": 1,
           "lease": "VALID initially, but BLOCKED_ENVIRONMENT at visual checkpoint 'baseline could not resolve the guest's observed physical monitor' (monitor probe failed due to Notepad's work-area? Or HWND not yet stable)",
-          "nativeOutcome": "FAIL_PRODUCT (cleanup left no spawned guest top-level windows => false, orphan HWNDs remain: 0x352C64, 0x82CCC) — product reports FAIL_PRODUCT but classification is harness ENVIRONMENT due to single-instance tab host; first failure preserved",
+          "nativeOutcome": "FAIL_PRODUCT (cleanup left no spawned guest top-level windows => false, orphan HWNDs remain: 0x352C64, 0x82CCC) \u2014 product reports FAIL_PRODUCT but classification is harness ENVIRONMENT due to single-instance tab host; first failure preserved",
           "visualOutcome": "BLOCKED_ENVIRONMENT (visual monitor binding failed)",
           "packetHash": "n/a",
           "cleanup": "FAIL_PRODUCT (orphan windows remain; VerifyGuestForKill correctly refused to kill adopted HWND 0xB2CFA but left 2 orphans)",
@@ -162,7 +219,7 @@
         "visibleHwndOwner": "HWND class CASCADIA_HOSTING_WINDOW_CLASS, PID not necessarily equal to launcher PID",
         "processStartIdentity": "Launcher start ticks vs host start ticks differ; visible HWND's PID/start proves host; launcher exit does not equal guest disappearance",
         "root": "GA_ROOT == visible HWND itself; parent 0x0; GW_OWNER 0x0",
-        "reusesExistingHost": "Yes: Observed for wt — if host already running, new wt instance hands window to existing host and exits; clean launch requires proving no existing host or killing host pre-start (which would kill user's terminal, forbidden)",
+        "reusesExistingHost": "Yes: Observed for wt \u2014 if host already running, new wt instance hands window to existing host and exits; clean launch requires proving no existing host or killing host pre-start (which would kill user's terminal, forbidden)",
         "runOwned": "Only when host PID equals launcher PID and start matches and host was not pre-existing; otherwise must treat as ADOPTED (DoNotKill) and not cleanup-terminate host",
         "cleanupAuthority": "GuardedProc.VerifyGuestForKill for wt checks isOurProcess and host reuse; adopted host never killed"
       },
@@ -240,5 +297,5 @@
     "openSpec": "real-app-hardening 1/1 valid true (strict)",
     "capabilityPlan": "virtual (0,0)-(3840,1200) 120+96 DPI, runnable/bocked as matrix"
   },
-  "generatedUtc": "2026-09-02T01:20:00Z"
+  "generatedUtc": "2026-09-02T02:59:18.435073+00:00"
 }

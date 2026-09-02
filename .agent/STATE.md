@@ -6,36 +6,49 @@ Git is authoritative for `HEAD`, branch, `origin/main`, worktree state, and
 worktrees. Resolve those values dynamically (`git rev-parse HEAD`, `git rev-parse origin/main`, `git status`, `git branch --show-current`); this file never embeds a
 self-referential SHA claiming to be the commit that contains this file. Embedded SHAs name historical or last-substantive implementation commits only. After a push, report final SHA and CI result in session output for independent verification.
 
-## Current state — FINAL CLOSURE CORRECTION ACTIVE
+## Current state — HARDENING SEQUENCE CLOSED
 
-**Objective:** Correct four premature real-app-hardening closure defects and
-close only with a technically defensible final disposition.
+**Objective:** Corrective closure of `real-app-hardening-final-closure` is complete
+and archived; the hardening sequence is closed with a technically defensible
+final disposition.
 
-**Active OpenSpec change:** `real-app-hardening-final-closure`
-(strict validation `valid=true` before implementation).
+**Status (2026-09-02):** the corrective campaign resolved all four carried-forward
+obligations and was archived as
+`openspec/changes/archive/2026-09-02-real-app-hardening-final-closure/`
+(35/35 tasks, strict validation `valid=true`, canonical specs updated and valid;
+`openspec/changes/` contains only `archive/`). No active OpenSpec change.
 
-**Status:** The previously archived real-app hardening campaign stands as
-history, but review found incomplete evidence. This correction campaign does
-NOT invalidate previously valid evidence — only these remain:
-
-1. Edge's preserved first valid `FAIL_PRODUCT` (second F11 cycle, first
-   invocation) is `FLAKE_UNCLASSIFIED` and not yet explained → bounded 5×3
-   characterization + defensible final disposition.
-2. Real Chromium visual acceptance was checked complete without actual
-   restricted browser visual packets or capable multimodal review → real
-   Chrome/Edge/Brave packets + review + tamper check.
-3. Final-validation task was checked complete although the canonical
-   `validate.ps1 -Configuration Release -Ci -Publish`, explicit native ABI
-   gate, and resource/privacy/recovery qualification were not all actually
-   executed → run the actual gates.
-4. Final report said 26 real-app tasks while the canonical archived
-   `tasks.md` contains 38 checkbox rows → ledger corrected to 38 with a
+1. **Edge historical `FAIL_PRODUCT` (run `ba1cedc3`, candidate `ab8853f1`) —
+   terminal classification `PROVEN_EXTERNAL_BROWSER_INPUT_FLAKE`.** Bounded
+   5×3 characterization at final candidate `fbc4d92` = 15/15 PASS (runs
+   `928524b2`, `f0117322`, `7b8adc23`, `08a14221`, `b3d9464c`; setup-only
+   `FAIL_HARNESS` `8cfbc878` preserved). Historical mechanism reconstructed
+   from the TabDock log: one posted identity-checked F11 exit
+   (`presentation-restore-request method=browser-f11`) was not consumed by
+   Edge before the 3500 ms settle window; `size-constraint` correctly refused
+   to force-resize a fullscreen browser; no product/harness change made, no
+   unresolved valid product defect remains.
+2. **Real Chromium visual acceptance — completed at final candidate `fbc4d92`:**
+   Chrome run `6a5bb064`, Edge run `76fb0a68`, Brave run `b151a8ce`; each with
+   restricted packets (14 PNG checkpoints, `TEST_OWNED`, `AllowVirtualDesktop=
+   false`, topology `92790d2a`): packet SHA-256 `c03de022…dcfe` /
+   `1a47df5a…a019` / `75c6c51c…c652`; operator multimodal review per
+   `.agent/workflows/visual-evidence-review.md` (SUSPECT-benign / SUSPECT-benign
+   (privacy clean) / OK); offline verifier `Valid:true` on all three; real-packet
+   tamper rejection proven (one PNG byte flipped → `visual evidence hash
+   mismatch`).
+3. **Canonical final gates — actually executed at `fbc4d92`:**
+   `validate.ps1 -Configuration Release -Ci -Publish` exit 0 (publish smoke
+   sha `747187…2F85`), `--selftest-native-abi` PASS, resource-headless PASS
+   (`--cycles 32 --profile all --seed 20260824`), 812/812 unit Debug+Release,
+   173/173 selftest, 179/179 release-tooling, doctor/support-bundle (privacy
+   clean)/pending-recovery PASS, strict OpenSpec 39/39, catalog 135.
+4. **Ledger correction:** archived real-app ledger = 38 checkbox rows (not 26);
    mapping for 1.7 / 4.3 / 7.1 + `EDGE_FIRST_VALID_FAIL_PRODUCT_DISPOSITION`
-   (`.agent/investigations/real-app-hardening-final-closure-2026-09-02.md`).
+   all `SATISFIED_POST_ARCHIVE_BY_FINAL_CLOSURE` with final evidence in
+   `.agent/investigations/real-app-hardening-final-closure-2026-09-02.md`.
 
-No product repair is authorized merely to obtain closure; no timeout/retry/
-second-F11/weakened-assertion "fixes". Git authority must be resolved
-dynamically.
+***
 
 ### COMPLETED / ARCHIVED
 
@@ -48,9 +61,9 @@ dynamically.
 
 ### Qualification status (final settled candidate)
 
-- **Source:** final settled `HEAD` is not embedded; verify dynamically (last substantive implementation before archive was `c7d69ff856aff8f3179d6d8e1b6309728327c06e`, executable `57B4DC26E42B0B0440F84313F042641A892EE9416B8EA088A2DCD74C354DB10C` `1.1.0+c7d69ff`, driver `0BAFC906EEC34880437BCAF85567ED14A52631A170ACF56876994AB842D44618`). Historical `6bb8ecc` v1.1 qualification is preserved as pre-final; `bc678ef` DPI repair and `GuestDpiPositionScope` seam are part of final code, version stays `1.1.0` qualification-only per `release-engineering` (signing NOT_CONFIGURED, external gates blocked).
-- **Deterministic:** `dotnet build` Debug/Release 0 warnings, `812/812` Debug/Release unit, `173/173` selftest, `14/14` visual, `39` OpenSpec strict, `Valid:true` historical DPI packets, Chrome/Brave native packets `Valid:true`-equivalent, Edge preserved failure, Notepad/Terminal blocked with rationale.
-- **Supervised available physical cells:** DPI 14 RUNNABLE PASS (120/96), title center `≤0.50 px`, mixed-DPI bidirectional, topmost, maximize/winup/split containment; real-app Chrome/Brave F11 2 cycles PASS, Edge flake retained, Notepad/Terminal blocked per matrix.
+- **Qualification candidate (binary/driver authority): `fbc4d926abf34e1ace4260ddef25807699f402b9` — executable `BFC7EF3445020CE920A1BAA41C4B697AEDC306541FBCF03D8CCA9AD024059851` `1.1.0+fbc4d92`, driver `781FF394A77A9828F687D66276DD9E16A059D4DE7B4CE1E440B30AC3F5C1BEC0`. All physical Chromium evidence (Edge 5×3, Chrome/Edge/Brave packets) belongs to this SHA; later evidence/archive commits do not retag it. Historical `6bb8ecc`/`6223cbf`/`c7d69ff` qualifications are preserved as pre-final; version stays `1.1.0` qualification-only per `release-engineering`.
+- **Deterministic:** `dotnet build` Debug/Release 0 warnings, `812/812` Debug/Release unit, `173/173` selftest, `179/179` release-tooling, `39` OpenSpec strict, catalog `scenario-catalog-2026-09-01-v2` 135, `Valid:true` for all three final-candidate Chromium visual packets, Edge `PROVEN_EXTERNAL_BROWSER_INPUT_FLAKE` with preserved first-failure authority, Notepad/Terminal blocked with rationale.
+- **Supervised available physical cells:** DPI 14 RUNNABLE PASS (120/120+96), title center `≤0.50 px`, mixed-DPI bidirectional, topmost, maximize/winup/split containment; real-app Chrome/Edge/Brave F11 at `fbc4d92` (15/15 Edge, 2/2 Chrome, 2/2 Brave) with restricted visual packets + operator review + tamper rejection; Notepad/Terminal blocked per matrix.
 
 ### External / not product defect
 
@@ -64,10 +77,10 @@ dynamically.
 - DPI acceptance matrix (sanitized): `.agent/investigations/dpi-topology-hardening-acceptance-matrix-2026-09-01.json` (`sourceMatrixRecovered=true`, 35 cells)
 - DPI repair provenance: `.agent/investigations/dpi-positioning-repair-provenance-2026-09-02.md` (`HISTORICAL_TRIGGER_NOT_RECOVERABLE`, deterministic defect, `GuestDpiPositionScopeTests` 17 cases)
 - Real-app handoff: `.agent/investigations/real-app-hardening-handoff-2026-09-02.md` (19.1/19.4 row-level closure)
-- Real-app acceptance matrix: `.agent/investigations/real-app-hardening-acceptance-matrix-2026-09-02.json` + `.md` (Chrome/Brave PASS, Edge FLAKE, Notepad/Terminal blocked, privacy `REAL_APP_RESTRICTED`)
-- Corrective ledger reconciliation: `.agent/investigations/real-app-hardening-final-closure-2026-09-02.md` (38-row ledger, 1.7/4.3/7.1 mapping, Edge obligation)
+- Real-app acceptance matrix: `.agent/investigations/real-app-hardening-acceptance-matrix-2026-09-02.json` + `.md` (final candidate `fbc4d92`: Chrome/Edge/Brave native PASS + packets + reviews + tamper; Edge terminal classification; Notepad/Terminal blocked; privacy `REAL_APP_RESTRICTED`/`TEST_OWNED`)
+- Corrective ledger reconciliation: `.agent/investigations/real-app-hardening-final-closure-2026-09-02.md` (38-row ledger, 1.7/4.3/7.1 + Edge obligation mapping, final evidence, `SATISFIED_POST_ARCHIVE_BY_FINAL_CLOSURE`)
 - Current regression: `tests/UnitTests/GuestDpiPositionScopeTests.cs` (812 tests at final)
-- Active change: `real-app-hardening-final-closure` (corrective; NOT archiveable until Edge disposition + real Chromium packets/review + canonical gates + 38-row ledger are proven)
+- Corrective change: **archived** `openspec/changes/archive/2026-09-02-real-app-hardening-final-closure/` (35/35 tasks; strict validation valid; canonical specs updated)
 
 Update this file after each physical run, defect disposition, validation
 milestone, and before final handoff. Keep it concise and evidence-based.
