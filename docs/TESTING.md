@@ -59,9 +59,10 @@ project path. The CI-safe entry point is:
 ```
 
 It performs audited restore, solution/app/Spike/driver/GuineaPig Release
-builds, geometry and diagnostics/persistence/privacy self-tests, `--version`,
-`--doctor`, support-bundle ZIP inspection, OpenSpec validation, and a
-self-contained publish smoke. It never sends desktop input.
+builds, the headless xUnit behavioral suite, the bounded headless
+resource-lifecycle gate, the native-ABI self-test, `--version`, `--doctor`,
+support-bundle ZIP inspection, OpenSpec validation, and a self-contained
+publish smoke. It never sends desktop input.
 
 ### What `TabDock.GuineaPig` is for
 
@@ -224,6 +225,30 @@ This path uses an in-memory capture provider and is classified
 verifier regression coverage only; it cannot satisfy the supervised physical
 visual gate or replace native desktop observation. Generated run directories
 are temporary/ignored and must not be committed.
+
+### Startup-latency measurement
+
+`scripts/perf.ps1` measures in-process paths; it cannot see process startup.
+`scripts/measure-startup.ps1` fills that gap: it launches a built or published
+exe and measures wall-clock time from process start to the application's own
+`TabDock startup complete.` log line, repeated over several runs, and writes a
+JSON report under `artifacts/perf/`. It is non-gating, like the rest of the
+performance tooling.
+
+```powershell
+.\scripts\measure-startup.ps1                                  # Debug build
+.\scripts\measure-startup.ps1 -Published -Configuration Release -Runs 5
+```
+
+Report the spread rather than a single run: the first launch after a build or
+publish can include cold file-cache effects. For reference, a warm 2026-09
+measurement on this repository's development machine was roughly 1.8 s for the
+JIT development build and 1.6 s for the self-contained ReadyToRun publish.
+
+The script opens the real launcher briefly and uses the real
+`%APPDATA%\TabDock` state, so it refuses to run while TabDock is already
+running or while `state.json` contains groups (a restored-then-force-killed
+container could disturb captured windows). Close TabDock normally first.
 
 ### Supervised visual evidence and multimodal review
 

@@ -23,7 +23,7 @@ Credentials, API keys, signing material, account logins, licensed assets, and ot
 - Git
 - .NET SDK 8.0.400 feature band (`global.json`)
 - Visual Studio/Build Tools with Windows desktop/.NET tooling
-- PowerShell
+- PowerShell 7+ (`pwsh`; CI and the canonical validation scripts run under pwsh)
 - Node.js/npm for pinned OpenSpec tooling
 
 **Task-dependent / optional tools**
@@ -64,8 +64,8 @@ The editor is optional; reliable language diagnostics are not.
 
 ```powershell
 dotnet build TabDock.sln -c Debug
-dotnet test tests\UnitTests\UnitTests.csproj -c Debug
-powershell -ExecutionPolicy Bypass -File scripts\validate.ps1
+dotnet test tests\UnitTests\TabDock.UnitTests.csproj -c Debug
+.\scripts\validate.ps1 -Configuration Release -Ci -Publish
 ```
 
 A fresh machine is **development-ready** when all applicable non-external gates pass. Hardware/device/signing/account gates may remain explicitly blocked when repository state already classifies them that way.
