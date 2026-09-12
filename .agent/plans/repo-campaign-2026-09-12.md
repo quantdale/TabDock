@@ -78,11 +78,33 @@ scrolls into view. Contract guard added.
 - Gate: Debug/Release 0 warnings/0 errors; 812/812 both configs;
   `validate.ps1 -Release -Ci -Publish` exit 0 (38/38); release tooling 179/179.
 
-### W5 — Security/robustness hazard sweep (NEXT, this branch)
+### W5 — Security/robustness hazard sweep (COMPLETE, this branch)
 
-Proportionate review of process execution, filesystem paths, network surface,
-and dangerous API usage in the product; fix anything concretely actionable and
-record evidence. Then final campaign validation matrix and report.
+Proportionate review of the product assembly for process execution, network
+surface, dangerous native APIs, deserialization, registry writes, and
+path/user-input handling. Evidence:
+
+- No `Process.Start`, shell execution, `HttpClient`/`WebClient`/`Socket`,
+  `WriteProcessMemory`/`VirtualAllocEx`/`CreateRemoteThread`, registry writes,
+  or reflection-based polymorphic deserialization anywhere in the product
+  (all process-spawning hits are ValidationDriver harness code).
+- State and journal JSON use the source-generated `TabDockJsonContext`;
+  the recovery resolution ledger reads only from the appdata recovery
+  directory and handles malformed input by failing closed with an error.
+- The `--doctor`/`--support-bundle`/diagnostic-hotkey exports write only to
+  user-directed or timestamped paths and are redacted in logs; support-bundle
+  privacy is additionally gated by tests and the validate.ps1 privacy smoke.
+- The elevation guard is explicitly fail-closed (an indeterminate elevation
+  probe blocks capture unless TabDock itself is elevated).
+
+No actionable finding; no code change required. Recorded as a verified
+negative so a future session does not re-run the same sweep by default.
+
+### Final validation matrix (NEXT)
+
+Re-run the strongest gates on the exact final commit of each branch
+(Debug/Release builds, unit tests, `validate.ps1`, release-tooling), push both
+review surfaces, and report exact-SHA results including the external CI block.
 
 ## Constraints
 
