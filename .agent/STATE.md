@@ -6,66 +6,67 @@ Git is authoritative for `HEAD`, branch, `origin/main`, worktree state, and
 worktrees. Resolve those values dynamically (`git rev-parse HEAD`, `git rev-parse origin/main`, `git status`, `git branch --show-current`); this file never embeds a
 self-referential SHA claiming to be the commit that contains this file. Embedded SHAs name historical or last-substantive implementation commits only. After a push, report final SHA and CI result in session output for independent verification.
 
-## Current state — REPOSITORY CAMPAIGN ACTIVE
+## Current state — REPOSITORY CAMPAIGN COMPLETE (LOCALLY)
 
 **Objective:** deep repository-wide engineering campaign (correctness, testing,
 reliability, accessibility, performance, architecture, DX, documentation).
 
-**Plan:** `.agent/plans/repo-campaign-2026-09-12.md` (source of truth;
-workstreams W1–W4 with status).
+**Status:** all discovered locally executable workstreams are complete and
+validated; two main-targeting review surfaces are pushed. Hosted CI remains
+externally blocked by a GitHub Actions billing failure.
 
-**Branch policy:** frontend-coupled work continues on
-`ui/refero-frontend-overhaul` (PR #13, main-targeting); non-UI work will use a
-separate main-based branch.
+### Branch map
 
-### Completed this session
+- `ui/refero-frontend-overhaul` (PR #13) — W1–W3 (frontend-coupled).
+- `campaign/runtime-perf-and-coverage-2026-09-12` (PR #14) — W4–W5 (non-UI)
+  and the superset campaign record `.agent/plans/repo-campaign-2026-09-12.md`.
+  There is no source overlap between the branches beyond that plan file; keep
+  the superset on integration.
 
-1. **W1 — runtime WPF binding-error elimination + binding diagnostics.**
-   Added opt-in `Infrastructure/BindingTraceDiagnostics`
-   (`TABDOCK_TRACE_BINDINGS=<log path>`), drove the real Release app through
-   launcher, picker, inline panel, container, menus, and split under trace:
-   13 binding errors found, all fixed (11 = inline panel resolving against the
-   container's `GroupViewModel` before its own view-model was injected;
-   2 = theme `ListBoxItem` alignment bindings evaluated before each list's
-   container style). Re-run logs **0 binding errors**.
-   Tests added: `BindingTraceDiagnosticsTests` (2),
-   `FrontendDesignContractTests` guards (2).
+### Completed workstreams
 
-2. **W2 — accessibility/keyboard runtime audit.** Named the capture lists,
-   added `GroupSelectedHelpText` + disabled-hover tooltips (admission first,
-   then selection), dropped the native content marker as a keyboard tab stop,
-   and aligned tooltip workspace terminology. Verified at runtime: Space
-   toggles a focused row and enables the primary action, Escape closes the
-   picker, the marker is gone from the tab-stop set.
-   Tests added: help-text unit coverage, accessibility contract test.
-   Full suite: 826/826 Debug+Release.
+1. **W1 — runtime WPF binding errors + diagnostics (PR #13).** Opt-in
+   `BindingTraceDiagnostics`; a real-app drive found 13 binding errors, all
+   fixed; the drive now logs zero.
+2. **W2 — accessibility/keyboard audit (PR #13).** Named capture lists,
+   self-explaining disabled primary action with disabled-hover tooltips,
+   removed the native content marker as a keyboard tab stop, aligned
+   workspace terminology; verified by keyboard at runtime.
+3. **W3 — dense tab strip (PR #13).** Eight tabs used to squeeze to 22 px with
+   clipped icons and the active tab off-screen; the strip now grows by the
+   scrollbar row and the active tab scrolls into view.
+4. **W4 — baseline verification + startup measurement + doc accuracy
+   (PR #14).** First local `--selftest all` replication (173/173 PASS);
+   `perf.ps1` baseline; startup measured (~1.6 s warm shipped R2R publish vs
+   ~1.8 s dev build; `PublishReadyToRun` already configured, no safe further
+   optimization); new `scripts/measure-startup.ps1`; fixed stale
+   `ONBOARDING.md`/`docs/TESTING.md` claims.
+5. **W5 — security/robustness sweep (PR #14).** No product-side process
+   execution, network, dangerous native APIs, registry writes, or polymorphic
+   deserialization; recovery reads are appdata-scoped and fail closed;
+   elevation guard is fail-closed. Verified negative, no change required.
 
-### Prior completed work (frontend overhaul, PR #13)
+### Validation (exact tips)
 
-Runtime visual qualification and eight rendering fixes: DWM dark chrome,
-templated system-themed controls (ComboBox/ScrollBar/MenuItem/ToolTip),
-airspace-safe empty-workspace popup, hover states, non-shifting focus. PR #13
-head is `2e3f885` plus this campaign's commits; hosted CI remains blocked by a
-GitHub Actions billing failure (external).
+- PR #13 `bc7df68`: Debug/Release builds 0 warnings/0 errors; 827/827 unit
+  tests both configs; `validate.ps1 -Configuration Release -Ci -Publish`
+  exit 0 (38/38); `release-tooling-tests.ps1` 179/179; runtime drive logs zero
+  binding errors.
+- PR #14 `e2c0397`: Debug/Release builds 0 warnings/0 errors; 812/812 unit
+  tests both configs (main baseline); `validate.ps1 -Release -Ci -Publish`
+  exit 0 (38/38); `release-tooling-tests.ps1` 179/179; driver
+  `--selftest all` 173/173 PASS.
 
-### Externally blocked (not product defects)
+### External / not product defects
 
-- Hosted CI runner allocation: GitHub Actions billing/spending limit.
-- 125%/150% DPI cells: single 96-DPI monitor on this host.
-- Pending-recovery and capture-admission-blocked runtime states require
-  manipulated journal/health state; structurally covered by tests.
-
-3. **W3 — dense tab-strip rendering.** With eight captured tabs the fixed
-   42px strip squeezed tabs to 22px (icons clipped) and the active tab sat
-   off-screen. The strip now uses `MinHeight="42"` so it grows by the
-   scrollbar row, and the active tab scrolls into view on change. Verified:
-   tabs 34px, strip 53px, scrollbar present, active tab visible.
-   Tests added: dense-strip contract guard. Full suite: 827/827.
+- **Hosted CI:** GitHub Actions refuses runner allocation ("recent account
+  payments have failed or your spending limit needs to be increased") for
+  every run on both branches; the identical canonical gates pass locally.
+- 125%/150% DPI visual cells are unavailable on this single 96-DPI host.
 
 ### Next action
 
-W4 — non-UI robustness/coverage/performance on a main-based branch
- selected from measurement, then final campaign validation and PR update.
-
-Update this file at each workstream completion, validation milestone, or
-blocker, and before final handoff.
+Human review and merge of PR #13 and PR #14; after integration, keep the
+superset campaign plan. No further locally executable workstream was found
+without speculation — a future campaign should target mixed-DPI hardware
+qualification or a new product direction, not the resolved items above.
