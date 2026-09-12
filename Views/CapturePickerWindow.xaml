@@ -5,10 +5,10 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="Capture windows — TabDock"
-        Height="620"
-        Width="700"
-        MinWidth="520"
-        MinHeight="420"
+        Height="650"
+        Width="760"
+        MinWidth="560"
+        MinHeight="460"
         MaxWidth="{x:Static SystemParameters.MaximizedPrimaryScreenWidth}"
         MaxHeight="{x:Static SystemParameters.MaximizedPrimaryScreenHeight}"
         WindowStartupLocation="CenterOwner"
@@ -18,182 +18,216 @@
         UseLayoutRounding="True"
         SnapsToDevicePixels="True">
 
-    <Grid Margin="24">
+    <Grid Margin="22,20,22,18">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Grid Grid.Row="0" Margin="0,0,0,18">
+        <!-- Compact header with refresh treated as a utility action. -->
+        <Grid Grid.Row="0" Margin="2,0,2,15">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <StackPanel>
-                <TextBlock Text="Capture windows" FontSize="22" FontWeight="SemiBold"
-                           Foreground="{StaticResource TdTextBrush}" />
-                <TextBlock Text="Choose the apps that belong together. Your selection survives refreshes while those windows still exist."
-                           Foreground="{StaticResource TdTextMutedBrush}" FontSize="11"
-                           TextWrapping="Wrap" Margin="0,5,16,0" />
+            <StackPanel Grid.Column="0">
+                <TextBlock Text="Capture windows" Style="{StaticResource TdHeading}" />
+                <TextBlock Text="Select the apps to keep together, then choose their destination workspace."
+                           Style="{StaticResource TdBodyMuted}"
+                           Margin="0,3,18,0" TextWrapping="Wrap" />
             </StackPanel>
-            <Button Grid.Column="1" Style="{StaticResource TdSecondaryButton}"
-                    Content="Refresh" Padding="12,6" MinHeight="34"
+            <Button Grid.Column="1" Style="{StaticResource TdToolbarButton}"
+                    Content="Refresh windows"
+                    VerticalAlignment="Center"
                     Command="{Binding RefreshCommand}"
                     AutomationProperties.AutomationId="CaptureRefresh"
                     AutomationProperties.Name="Refresh capturable windows" />
         </Grid>
 
-        <Grid Grid.Row="1" Margin="0,0,0,12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="14" />
-                <ColumnDefinition Width="260" />
-            </Grid.ColumnDefinitions>
-            <StackPanel Grid.Column="0">
-                <TextBlock Style="{StaticResource TdSectionLabel}" Text="SEARCH WINDOWS" Margin="1,0,0,6" />
-                <TextBox Style="{StaticResource TdTextBox}"
-                         Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
-                         AutomationProperties.Name="Search capturable windows"
-                         AutomationProperties.HelpText="Filter by window title, executable path, or window class"
-                         ToolTip="Filter by window title, executable path, or window class" />
-            </StackPanel>
-            <StackPanel Grid.Column="2">
-                <TextBlock Style="{StaticResource TdSectionLabel}" Text="DESTINATION" Margin="1,0,0,6" />
-                <ComboBox Style="{StaticResource TdComboBox}"
-                          ItemsSource="{Binding Groups}"
-                          SelectedItem="{Binding SelectedGroupOption}"
-                          AutomationProperties.Name="Destination group"
-                          AutomationProperties.HelpText="Choose an existing workspace or create a new group.">
-                    <ComboBox.ItemTemplate>
-                        <DataTemplate>
-                            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                        </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
-            </StackPanel>
-        </Grid>
-
-        <Grid Grid.Row="2" Margin="0,0,0,10">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Grid.Column="0" Text="{Binding SelectionSummary}"
-                       Foreground="{StaticResource TdTextMutedBrush}" FontSize="11"
-                       VerticalAlignment="Center"
-                       AutomationProperties.AutomationId="CaptureSelectionSummary" />
-            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                <Button Style="{StaticResource TdGhostButton}"
-                        Content="Select all visible" Padding="9,4" MinHeight="28"
-                        Command="{Binding SelectAllVisibleCommand}"
-                        AutomationProperties.Name="Select all visible windows" />
-                <Button Style="{StaticResource TdGhostButton}"
-                        Content="Clear" Padding="9,4" MinHeight="28" Margin="4,0,0,0"
-                        Command="{Binding ClearSelectionCommand}"
-                        AutomationProperties.Name="Clear window selection" />
-            </StackPanel>
-        </Grid>
-
-        <Border Grid.Row="3" Background="{StaticResource TdSurfaceBrush}"
-                BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="1"
-                CornerRadius="10" Padding="8">
+        <!-- Search and destination are one control band so the filtering and
+             routing decisions read as one coherent step. -->
+        <Border Grid.Row="1" Style="{StaticResource TdCard}" Padding="12" Margin="0,0,0,10">
             <Grid>
-                <ListBox x:Name="WindowsListBox"
-                         ItemsSource="{Binding FilteredWindows}"
-                         BorderThickness="0"
-                         Background="Transparent"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         ScrollViewer.VerticalScrollBarVisibility="Auto"
-                         VirtualizingPanel.IsVirtualizing="True"
-                         VirtualizingPanel.VirtualizationMode="Recycling">
-                    <ListBox.ItemContainerStyle>
-                        <Style TargetType="ListBoxItem">
-                            <Setter Property="Padding" Value="0" />
-                            <Setter Property="Margin" Value="0,0,0,4" />
-                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                            <Setter Property="Background" Value="Transparent" />
-                            <Setter Property="BorderThickness" Value="0" />
-                            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-                            <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
-                        </Style>
-                    </ListBox.ItemContainerStyle>
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <Border Padding="10,9" CornerRadius="7">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Background" Value="#0F151E" />
-                                        <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
-                                        <Setter Property="BorderThickness" Value="1" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                                <Setter Property="BorderBrush" Value="#B9CCFF" />
-                                                <Setter Property="BorderThickness" Value="2" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <CheckBox Grid.Column="0"
-                                              IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                              VerticalAlignment="Center" Margin="1,0,11,0"
-                                              AutomationProperties.Name="{Binding Title, StringFormat='Select {0}'}"
-                                              AutomationProperties.HelpText="Select this window for capture" />
-                                    <Border Grid.Column="1" Width="34" Height="34" CornerRadius="7"
-                                            Background="#17202C" Margin="0,0,10,0">
-                                        <Image Source="{Binding Icon}" Width="20" Height="20"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                    </Border>
-                                    <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding Title}" Foreground="{StaticResource TdTextBrush}"
-                                                   FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Text="{Binding ExePath}" Foreground="{StaticResource TdTextSubtleBrush}"
-                                                   FontSize="10" TextTrimming="CharacterEllipsis" Margin="0,3,0,0" />
-                                    </StackPanel>
-                                </Grid>
-                            </Border>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-
-                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
-                            MaxWidth="360" IsHitTestVisible="False">
-                    <StackPanel.Style>
-                        <Style TargetType="StackPanel">
-                            <Setter Property="Visibility" Value="Collapsed" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding HasFilteredWindows}" Value="False">
-                                    <Setter Property="Visibility" Value="Visible" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </StackPanel.Style>
-                    <TextBlock Text="No matches" Foreground="{StaticResource TdTextBrush}"
-                               FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" />
-                    <TextBlock Text="{Binding EmptyFilterText}" Foreground="{StaticResource TdTextMutedBrush}"
-                               FontSize="11" TextAlignment="Center" TextWrapping="Wrap" Margin="0,5,0,0" />
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MinWidth="220" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="250" MinWidth="190" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <TextBlock Style="{StaticResource TdSectionLabel}" Text="SEARCH WINDOWS" Margin="1,0,0,6" />
+                    <TextBox Style="{StaticResource TdTextBox}"
+                             Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.Name="Search capturable windows"
+                             AutomationProperties.HelpText="Filter by window title, executable path, or window class"
+                             ToolTip="Filter by window title, executable path, or window class" />
+                </StackPanel>
+                <StackPanel Grid.Column="2">
+                    <TextBlock Style="{StaticResource TdSectionLabel}" Text="DESTINATION" Margin="1,0,0,6" />
+                    <ComboBox Style="{StaticResource TdComboBox}"
+                              ItemsSource="{Binding Groups}"
+                              SelectedItem="{Binding SelectedGroupOption}"
+                              AutomationProperties.Name="Destination group"
+                              AutomationProperties.HelpText="Choose an existing workspace or create a new group.">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <Grid Grid.Row="4" Margin="0,14,0,0">
+        <!-- Primary selection surface. -->
+        <Border Grid.Row="2" Style="{StaticResource TdCard}" Padding="10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" Margin="2,0,2,9">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Available windows" Style="{StaticResource TdSubheading}" FontSize="14" />
+                        <Border Style="{StaticResource TdBadge}" Margin="9,0,0,0" Padding="7,2">
+                            <TextBlock Text="{Binding SelectionSummary}"
+                                       Foreground="{StaticResource TdTextMutedBrush}" FontSize="10"
+                                       AutomationProperties.AutomationId="CaptureSelectionSummary"
+                                       AutomationProperties.LiveSetting="Polite" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Style="{StaticResource TdGhostButton}"
+                                Content="Select visible" Padding="9,4" MinHeight="28"
+                                Command="{Binding SelectAllVisibleCommand}"
+                                AutomationProperties.Name="Select all visible windows" />
+                        <Button Style="{StaticResource TdGhostButton}"
+                                Content="Clear" Padding="9,4" MinHeight="28" Margin="2,0,0,0"
+                                Command="{Binding ClearSelectionCommand}"
+                                AutomationProperties.Name="Clear window selection" />
+                    </StackPanel>
+                </Grid>
+
+                <Grid Grid.Row="1">
+                    <ListBox x:Name="WindowsListBox"
+                             ItemsSource="{Binding FilteredWindows}"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="Margin" Value="0,0,0,5" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="BorderThickness" Value="0" />
+                                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Padding="11,9" CornerRadius="7">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="{StaticResource TdSurfaceRaisedBrush}" />
+                                            <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
+                                            <Setter Property="BorderThickness" Value="1" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource TdAccentSoftBrush}" />
+                                                    <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                    <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
+                                                    <Setter Property="BorderThickness" Value="2" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <CheckBox Grid.Column="0"
+                                                  Style="{StaticResource TdCheckBox}"
+                                                  IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                  VerticalAlignment="Center" Margin="1,0,11,0"
+                                                  AutomationProperties.Name="{Binding Title, StringFormat='Select {0}'}"
+                                                  AutomationProperties.HelpText="Select this window for capture" />
+                                        <Border Grid.Column="1" Width="36" Height="36" CornerRadius="7"
+                                                Background="{StaticResource TdSurfaceInteractiveBrush}"
+                                                BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="1"
+                                                Margin="0,0,11,0">
+                                            <Image Source="{Binding Icon}" Width="20" Height="20"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
+                                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Title}" Foreground="{StaticResource TdTextBrush}"
+                                                       FontWeight="SemiBold" FontSize="12"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding ExePath}" Foreground="{StaticResource TdTextSubtleBrush}"
+                                                       FontFamily="Cascadia Mono, Consolas" FontSize="9.5"
+                                                       TextTrimming="CharacterEllipsis" Margin="0,3,0,0" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                MaxWidth="360" IsHitTestVisible="False">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasFilteredWindows}" Value="False">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <Border Width="42" Height="42" CornerRadius="8"
+                                Background="{StaticResource TdSurfaceInteractiveBrush}"
+                                BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="1"
+                                HorizontalAlignment="Center" Margin="0,0,0,10">
+                            <TextBlock Text="⌕" FontSize="19"
+                                       Foreground="{StaticResource TdTextMutedBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <TextBlock Text="No matching windows" Style="{StaticResource TdSubheading}"
+                                   FontSize="14" HorizontalAlignment="Center" />
+                        <TextBlock Text="{Binding EmptyFilterText}" Style="{StaticResource TdBodyMuted}"
+                                   FontSize="11" TextAlignment="Center" TextWrapping="Wrap" Margin="0,5,0,0" />
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </Border>
+
+        <!-- Footer separates status from commit/cancel actions. -->
+        <Grid Grid.Row="3" Margin="2,12,2,0">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <TextBlock Grid.Row="0" Text="{Binding CaptureAdmissionReason}"
                        Foreground="{StaticResource TdWarningBrush}"
-                       TextWrapping="Wrap" Margin="0,0,0,9"
+                       TextWrapping="Wrap" Margin="0,0,0,8" FontSize="11"
                        AutomationProperties.AutomationId="CaptureAdmissionStatus"
                        AutomationProperties.Name="Capture admission status"
+                       AutomationProperties.LiveSetting="Assertive"
                        AutomationProperties.HelpText="Capture is disabled until the native guest-lifecycle monitor is healthy.">
                 <TextBlock.Style>
                     <Style TargetType="TextBlock">
@@ -212,21 +246,21 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0"
-                           Text="Tip: type part of an app name to narrow long desktop lists."
+                           Text="Search matches title, executable path, and window class."
                            Foreground="{StaticResource TdTextSubtleBrush}" FontSize="10"
-                           VerticalAlignment="Center" />
+                           VerticalAlignment="Center" Margin="0,0,14,0" />
                 <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button Style="{StaticResource TdSecondaryButton}"
+                            Content="Cancel" MinWidth="82" IsCancel="True"
+                            Command="{Binding CancelCommand}"
+                            AutomationProperties.AutomationId="CaptureCancel" />
                     <Button Style="{StaticResource TdPrimaryButton}"
-                            Content="Group selected" MinWidth="124" IsDefault="True"
+                            Content="Group selected" MinWidth="132" Margin="8,0,0,0" IsDefault="True"
                             Command="{Binding GroupSelectedCommand}"
                             IsEnabled="{Binding CaptureAllowed}"
                             AutomationProperties.AutomationId="CaptureGroupThese"
                             AutomationProperties.Name="Group selected windows"
                             AutomationProperties.HelpText="{Binding CaptureAdmissionReason}" />
-                    <Button Style="{StaticResource TdSecondaryButton}"
-                            Content="Cancel" MinWidth="82" Margin="9,0,0,0" IsCancel="True"
-                            Command="{Binding CancelCommand}"
-                            AutomationProperties.AutomationId="CaptureCancel" />
                 </StackPanel>
             </Grid>
         </Grid>
