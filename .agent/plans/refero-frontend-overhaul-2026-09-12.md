@@ -1,7 +1,7 @@
 # Plan: Refero-guided frontend overhaul
 
-**Status:** implementation complete; hosted CI blocked before runner allocation
-**Owner/session:** ChatGPT
+**Status:** implementation and supervised runtime visual QA complete; final exact-SHA hosted CI rerun pending
+**Owner/session:** OpenCode goal continuation (2026-09-12)
 **Updated:** 2026-09-12
 
 ## Objective
@@ -21,18 +21,6 @@ Refero MCP was used to inspect dense productivity/workspace interfaces rather th
 
 Primary reference patterns came from dark productivity/dashboard screens such as Mercury, Suno, and ElevenMusic in Refero. Decorative glass, large gradients, oversized cards, and web-style navigation shells were intentionally rejected because TabDock is a native desktop window manager and needs efficient chrome rather than a web dashboard imitation.
 
-## Baseline findings
-
-- UI is WPF on .NET 8; there is no browser frontend framework.
-- `App.xaml` is the correct shared design-system authority but previously exposed a relatively small token/style set.
-- `Views/MainWindow.xaml`, `Views/CapturePickerWindow.xaml`, and `Views/ContainerWindow.xaml` are the principal user-facing surfaces.
-- `ContainerWindow` has strict native geometry and automation contracts; visual work must not alter shepherding/native presentation semantics.
-- Existing automation IDs are consumed by the supervised validation driver and therefore are compatibility contracts.
-- The launcher's primary actions, workspace list, recovery state, and empty state competed for hierarchy.
-- Picker selection state was functionally correct but visually weak, with inconsistent row/check/focus treatment.
-- Container chrome used several hard-coded colors and locally divergent interaction styles.
-- Floating WPF surfaces such as context menus/tooltips could visually fall back toward system defaults instead of the product theme.
-
 ## Implementation
 
 - [x] Expand `App.xaml` into a compact shared design system: chrome/surface/input/focus tokens, cards, badges, toolbar buttons, checkbox template, typography styles, dark menus and tooltips.
@@ -43,44 +31,59 @@ Primary reference patterns came from dark productivity/dashboard screens such as
 - [x] Refresh `Views/ContainerWindow.xaml` chrome, tab states, split states, inline capture panel, empty state, and popup surfaces while preserving native marker/content ownership.
 - [x] Preserve stable UI Automation IDs including `LauncherCaptureButton`, `GroupSelector`, `WorkspaceTabs`, `SplitAffordance`, `SplitHalfLeft`, `SplitHalfRight`, `CaptureRefresh`, `CaptureGroupThese`, `CaptureAddSelected`, and `CaptureCancel`.
 - [x] Preserve the true-centered `* Auto *` title geometry and `CaptionHeight=38` contract in the container.
-- [x] Add `tests/UnitTests/FrontendDesignContractTests.cs` to lock the shared design tokens and key automation/presentation contracts against accidental regression.
+- [x] Add `tests/UnitTests/FrontendDesignContractTests.cs` to lock shared design tokens and key automation/presentation contracts against accidental regression.
 
-## UX rationale
+## Runtime visual qualification (2026-09-12)
 
-### Layout and navigation
+The redesign was validated on the real application (Release build, interactive Windows 11 desktop) by driving the actual WPF UI through UI Automation and capturing the rendered windows with vision review. Captured states:
 
-TabDock has a small number of primary workflows, so adding a permanent sidebar would increase chrome without improving orientation. The redesign instead uses local grouping: workspace actions live with the workspace list, capture filters live with capture results, and container-level actions stay in the title/tab chrome.
+- launcher: no-workspace empty state, populated 3-workspace list, primary-button hover, keyboard focus, minimum width (620), tall window;
+- picker: populated list, multiple selected, search with results, search with zero results, destination drop-down open, disabled commit action;
+- container: empty workspace, empty workspace with long name, one tab, two tabs, tab hover, tab keyboard focus, split engaged, right-half focus, workspace menu open, split menu open, split-active menu, inline Add-windows panel (empty and selected), narrow width (620).
 
-### Responsiveness
+### Defects found in runtime rendering and corrected
 
-The WPF windows retain their existing min-size behavior and scrollable collections. The redesign avoids fixed multi-column dashboards that would collapse badly at the application's current minimum widths.
+1. **System light/accent caption and border on standard windows.** `MainWindow` and `CapturePickerWindow` inherited the user's system title bar and border color, which clashed with the dark product surface. Added `Infrastructure/WindowChromeTheme.ApplyDarkChrome` (DWM immersive dark mode plus explicit caption/text/border colors) applied from both windows' `SourceInitialized`.
+2. **ComboBox leaked the system theme.** The default ComboBox template rendered a light accent-filled selection box and — with the custom template — then inherited a near-black system foreground, making the selected text unreadable. Replaced with a complete dark ComboBox/ComboBoxItem template (including `PART_Popup`, trim-safe width, and explicit `Foreground` propagation).
+3. **List scrollbars rendered with the system light theme.** Added compact dark `ScrollBar`/`Thumb` templates for both orientations.
+4. **Context-menu highlight used the system accent color.** Replaced the MenuItem template with a fully styled dark template (including submenu popup support and a dark `Separator`).
+5. **ToolTip fell back to system styling.** Added a dark ToolTip template.
+6. **Empty-workspace prompt was invisible and its CTA unclickable.** The native content marker is a child HWND and always paints above WPF siblings (airspace), so the empty-state panel could never render. Moved it into an activation-gated `Popup` overlay (`EmptyStateOverlay`) that also closes while the inline capture panel is open, and kept the native marker untouched.
+7. **No hover feedback on dense rows/tabs.** Added hover triggers to picker rows, inline-panel rows, tabs, and split halves.
+8. **Keyboard focus shifted content by one pixel.** Focus is now communicated by border color instead of border thickness for buttons, text boxes, rows, and tabs.
 
-### Accessibility
+### Known non-blocking observation
 
-Keyboard navigation, command bindings, stable automation IDs, focus borders, disabled states, and visible warning/status text are preserved. Important status surfaces use UI Automation live settings where appropriate. Selection no longer relies on subtle color alone: borders, check state, and row surfaces reinforce it.
+- A split-affordance menu overlapped by a guest window observed during scripted capture was reproduced as a harness artifact of the capture tool's temporary topmost manipulation; a clean interaction capture shows the menu above the guest. The container code-behind (z-order/presentation authority) is unchanged from `main`.
 
-### Visual consistency
+## Accessibility
 
-All principal windows consume the same shared surface, border, text, focus, action, warning, danger, and control styles. Hard-coded colors remain only where they communicate workspace-specific accent identity or specialized split-state emphasis.
+Keyboard navigation, command bindings, stable automation IDs, focus borders, disabled states, and visible warning/status text are preserved. Important status surfaces use UI Automation live settings where appropriate. Selection no longer relies on subtle color alone: borders, check state, and row surfaces reinforce it. Automation IDs required by `ValidationDriver` are covered by contract tests.
 
 ## Files changed
 
-- `App.xaml`
-- `Views/MainWindow.xaml`
-- `Views/CapturePickerWindow.xaml`
-- `Views/ContainerWindow.xaml`
-- `tests/UnitTests/FrontendDesignContractTests.cs`
-- `.agent/plans/refero-frontend-overhaul-2026-09-12.md`
+- `App.xaml` — shared design system, full dark templates for system-themed controls
+- `Views/MainWindow.xaml` / `Views/MainWindow.xaml.cs` — launcher redesign, dark DWM chrome
+- `Views/CapturePickerWindow.xaml` / `Views/CapturePickerWindow.xaml.cs` — picker redesign, dark DWM chrome
+- `Views/ContainerWindow.xaml` — container chrome, tabs, split, inline capture, popup empty state
+- `Infrastructure/WindowChromeTheme.cs` — DWM dark-chrome helper
+- `NativeMethods.cs` — DWM attribute constants
+- `tests/UnitTests/FrontendDesignContractTests.cs` — structural/design contracts
+- `.agent/plans/refero-frontend-overhaul-2026-09-12.md` — this record
 
 ## Validation
 
 - [x] Branch diff audited against `main` for frontend-only scope plus contract tests/documentation.
-- [x] Key automation IDs and native presentation structural contracts covered by new unit assertions.
+- [x] Key automation IDs and native presentation structural contracts covered by unit assertions.
+- [x] `dotnet build TabDock.sln` Debug and Release — 0 warnings, 0 errors.
+- [x] `dotnet test tests/UnitTests/TabDock.UnitTests.csproj` Debug and Release — 820/820 pass.
+- [x] `scripts/validate.ps1 -Configuration Release -Ci -Publish` — exit 0.
+- [x] `scripts/release-tooling-tests.ps1` — 179/179 pass.
+- [x] Runtime visual qualification on the real application (see above).
 - [x] PR #13 opened for review and hosted validation.
-- [ ] GitHub CI / build / test validation could not execute: workflow run `34698091147` created both Windows jobs, but both failed before any step ran. GitHub reports empty `steps`, `runner_id: 0`, and no runner name for both `windows-latest` and `windows-2022`, so this is a pre-runner infrastructure/account-capacity failure rather than evidence of a source/build failure.
-- [ ] Supervised visual validation on Windows remains appropriate before release because this environment cannot directly operate TabDock's native desktop UI.
+- [ ] Hosted CI for the final exact SHA (previous run `34698091147` failed before runner allocation: zero steps, no runner assigned — infrastructure, not a source failure). Rerun on the final commit.
 
 ## Handoff
 
-**Next action:** restore hosted Actions runner availability, rerun PR #13 CI, repair any actual build/test failure if one appears, then perform supervised visual qualification on a Windows desktop before merge/release.
-**Blockers:** hosted CI did not allocate a runner; native visual qualification also requires a Windows interactive desktop. Neither should be represented as a product failure or a PASS without execution.
+**Next action:** confirm hosted CI passes for the final commit SHA, then complete human review/merge.
+**Blockers:** hosted Actions runner availability (infrastructure). High-DPI (125%/150%) visual cells and pending-recovery/capture-blocked runtime states are not reproducible on this single 96-DPI environment; they remain supervised/manual qualification items.
