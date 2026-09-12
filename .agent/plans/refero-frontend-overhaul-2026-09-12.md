@@ -1,6 +1,6 @@
 # Plan: Refero-guided frontend overhaul
 
-**Status:** implementation complete; CI validation pending
+**Status:** implementation complete; hosted CI blocked before runner allocation
 **Owner/session:** ChatGPT
 **Updated:** 2026-09-12
 
@@ -76,10 +76,11 @@ All principal windows consume the same shared surface, border, text, focus, acti
 
 - [x] Branch diff audited against `main` for frontend-only scope plus contract tests/documentation.
 - [x] Key automation IDs and native presentation structural contracts covered by new unit assertions.
-- [ ] GitHub CI / build / test validation on PR head.
+- [x] PR #13 opened for review and hosted validation.
+- [ ] GitHub CI / build / test validation could not execute: workflow run `34698091147` created both Windows jobs, but both failed before any step ran. GitHub reports empty `steps`, `runner_id: 0`, and no runner name for both `windows-latest` and `windows-2022`, so this is a pre-runner infrastructure/account-capacity failure rather than evidence of a source/build failure.
 - [ ] Supervised visual validation on Windows remains appropriate before release because this environment cannot directly operate TabDock's native desktop UI.
 
 ## Handoff
 
-**Next action:** open PR, inspect CI, fix any failures, then perform supervised visual qualification on a Windows desktop before merge/release.
-**Blockers:** native visual qualification requires a Windows interactive desktop; it cannot be truthfully claimed from connector-only repository access.
+**Next action:** restore hosted Actions runner availability, rerun PR #13 CI, repair any actual build/test failure if one appears, then perform supervised visual qualification on a Windows desktop before merge/release.
+**Blockers:** hosted CI did not allocate a runner; native visual qualification also requires a Windows interactive desktop. Neither should be represented as a product failure or a PASS without execution.
