@@ -241,9 +241,11 @@ performance tooling.
 ```
 
 Report the spread rather than a single run: the first launch after a build or
-publish can include cold file-cache effects. For reference, a warm 2026-09
-measurement on this repository's development machine was roughly 1.8 s for the
-JIT development build and 1.6 s for the self-contained ReadyToRun publish.
+publish can include cold file-cache and single-file-extraction effects. For
+reference, 2026-09 measurements on this repository's development machine were
+roughly 1.4-1.9 s warm for JIT development builds and ~1.6 s warm for the
+self-contained ReadyToRun publish, with cold first launches several seconds
+slower.
 
 The script opens the real launcher briefly and uses the real
 `%APPDATA%\TabDock` state, so it refuses to run while TabDock is already
