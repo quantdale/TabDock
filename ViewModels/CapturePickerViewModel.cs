@@ -93,6 +93,18 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
     public string CaptureAdmissionReason => _manager.CaptureAdmissionReason;
     public bool CaptureAdmissionBlocked => !CaptureAllowed;
 
+    /// <summary>
+    /// Explains the primary capture action's current state for assistive
+    /// technology and for the disabled-hover tooltip: admission first, then
+    /// whether a selection exists.
+    /// </summary>
+    public string GroupSelectedHelpText
+        => !CaptureAllowed
+            ? $"Capture is unavailable: {CaptureAdmissionReason}"
+            : HasSelection
+                ? "Add the selected windows to the destination workspace."
+                : "Select at least one window first.";
+
     public ICommand RefreshCommand { get; }
     public ICommand GroupSelectedCommand { get; }
     public ICommand CancelCommand { get; }
@@ -392,6 +404,7 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(SelectedCount));
         OnPropertyChanged(nameof(SelectionSummary));
+        OnPropertyChanged(nameof(GroupSelectedHelpText));
         ((RelayCommand)GroupSelectedCommand).RaiseCanExecuteChanged();
         ((RelayCommand)SelectAllVisibleCommand).RaiseCanExecuteChanged();
         ((RelayCommand)ClearSelectionCommand).RaiseCanExecuteChanged();
@@ -557,6 +570,7 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(CaptureAllowed));
         OnPropertyChanged(nameof(CaptureAdmissionReason));
         OnPropertyChanged(nameof(CaptureAdmissionBlocked));
+        OnPropertyChanged(nameof(GroupSelectedHelpText));
         ((RelayCommand)GroupSelectedCommand).RaiseCanExecuteChanged();
     }
 

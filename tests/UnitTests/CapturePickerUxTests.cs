@@ -390,6 +390,53 @@ public sealed class CapturePickerUxTests
         }
     }
 
+    [Fact]
+    public void GroupSelectedHelpText_ExplainsTheActualDisabledReason_AndNotifies()
+    {
+        string root = CreateTempRoot();
+        try
+        {
+            using var log = new LoggingService(Path.Combine(root, "logs"));
+            var shepherd = new WindowShepherdService(log, Path.Combine(root, "hidden-windows.json"));
+            var persistence = new PersistenceService(log, Path.Combine(root, "state.json"));
+            var manager = new GroupManager(shepherd, persistence, log);
+            var icons = new IconService(log, _ => null);
+
+            using var picker = new CapturePickerViewModel(manager, icons, log, () => new[]
+            {
+                new CapturePickerViewModel.WindowInfo(new IntPtr(0x701), 701, "Editor", "Notes", string.Empty),
+            });
+
+            int helpNotifications = 0;
+            picker.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(CapturePickerViewModel.GroupSelectedHelpText))
+                    helpNotifications++;
+            };
+
+            // Nothing selected: the primary action explains that selection is missing.
+            Assert.Equal("Select at least one window first.", picker.GroupSelectedHelpText);
+
+            picker.Windows[0].IsSelected = true;
+            Assert.Equal("Add the selected windows to the destination workspace.", picker.GroupSelectedHelpText);
+            Assert.True(helpNotifications >= 1);
+
+            // Admission block wins over selection state and names the reason.
+            manager.SetCaptureAllowed(false, "WinEvent monitor installation is pending retry.");
+            Assert.Equal(
+                "Capture is unavailable: WinEvent monitor installation is pending retry.",
+                picker.GroupSelectedHelpText);
+            Assert.False(picker.GroupSelectedCommand.CanExecute(null));
+
+            manager.SetCaptureAllowed(true, "WinEvent monitor retry succeeded.");
+            Assert.Equal("Add the selected windows to the destination workspace.", picker.GroupSelectedHelpText);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
     private static string CreateTempRoot()
     {
         string root = Path.Combine(Path.GetTempPath(), "TabDock-picker-ux-" + Guid.NewGuid().ToString("N"));

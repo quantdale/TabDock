@@ -466,6 +466,8 @@
                 <Border Grid.Row="2" Style="{StaticResource TdCard}" Padding="6">
                     <Grid>
                         <ListBox ItemsSource="{Binding FilteredWindows}" MaxHeight="190"
+                                 AutomationProperties.Name="Capturable windows to add"
+                                 AutomationProperties.HelpText="Use Space or the row checkbox to select windows for this workspace."
                                  Background="Transparent" BorderThickness="0"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  VirtualizingPanel.IsVirtualizing="True"
@@ -585,16 +587,21 @@
                                 MinHeight="32" Padding="12,5"
                                 AutomationProperties.AutomationId="CaptureAddSelected"
                                 Command="{Binding GroupSelectedCommand}"
-                                AutomationProperties.HelpText="{Binding CaptureAdmissionReason}" />
+                                AutomationProperties.HelpText="{Binding GroupSelectedHelpText}"
+                                ToolTip="{Binding GroupSelectedHelpText}"
+                                ToolTipService.ShowOnDisabled="True" />
                     </StackPanel>
                 </Grid>
             </Grid>
         </Border>
 
-        <!-- The native marker remains the single content-area authority. -->
+        <!-- The native marker remains the single content-area authority. It is
+             deliberately not a keyboard tab stop: focusing the marker HWND
+             would park keyboard focus on a pane with no interactive behavior. -->
         <Border Grid.Row="3" Background="#07090D" x:Name="ContentBorder">
             <Grid>
                 <infra:NativeHwndHost x:Name="ContentHost"
+                                      Focusable="False"
                                       AutomationProperties.AutomationId="ContentHost" />
                 <!-- The marker is a real child HWND and always paints above WPF
                      siblings (airspace), so the empty-workspace prompt lives in a

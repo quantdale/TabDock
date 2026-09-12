@@ -183,6 +183,32 @@ public sealed class FrontendDesignContractTests
         Assert.Contains("VerticalContentAlignment\" Value=\"Stretch\"", listBoxItemStyle, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void AccessibilityContractsExposeNamesAndAvoidDeadTabStops()
+    {
+        string picker = Read("Views/CapturePickerWindow.xaml");
+        string container = Read("Views/ContainerWindow.xaml");
+
+        // The capture lists are critical controls and must be announced with a
+        // meaningful name, not a bare "list".
+        Assert.Contains("AutomationProperties.Name=\"Capturable windows\"", picker, StringComparison.Ordinal);
+        Assert.Contains("AutomationProperties.Name=\"Capturable windows to add\"", container, StringComparison.Ordinal);
+
+        // The native content marker must never be a keyboard tab stop: focusing
+        // it parks focus on a pane with no interactive behavior.
+        int host = container.IndexOf("x:Name=\"ContentHost\"", StringComparison.Ordinal);
+        Assert.True(host >= 0, "ContentHost not found");
+        Assert.Contains("Focusable=\"False\"", container.Substring(host, 200), StringComparison.Ordinal);
+
+        // The blocked/disabled primary action explains itself through help text
+        // and a disabled-hover tooltip.
+        Assert.Contains("AutomationProperties.HelpText=\"{Binding GroupSelectedHelpText}\"", picker, StringComparison.Ordinal);
+        Assert.Contains("ToolTipService.ShowOnDisabled=\"True\"", picker, StringComparison.Ordinal);
+        Assert.Contains("AutomationProperties.HelpText=\"{Binding GroupSelectedHelpText}\"", container, StringComparison.Ordinal);
+        Assert.Contains("ToolTipService.ShowOnDisabled=\"True\"", container, StringComparison.Ordinal);
+        Assert.Contains("ToolTipService.ShowOnDisabled=\"True\"", Read("Views/MainWindow.xaml"), StringComparison.Ordinal);
+    }
+
     private static string Slice(string text, string startMarker, string endMarker)
     {
         int start = text.IndexOf(startMarker, StringComparison.Ordinal);

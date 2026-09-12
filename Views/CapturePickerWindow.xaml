@@ -117,6 +117,8 @@
                 <Grid Grid.Row="1">
                     <ListBox x:Name="WindowsListBox"
                              ItemsSource="{Binding FilteredWindows}"
+                             AutomationProperties.Name="Capturable windows"
+                             AutomationProperties.HelpText="Use Space or the row checkbox to select windows for capture."
                              BorderThickness="0"
                              Background="Transparent"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -262,7 +264,9 @@
                             IsEnabled="{Binding CaptureAllowed}"
                             AutomationProperties.AutomationId="CaptureGroupThese"
                             AutomationProperties.Name="Group selected windows"
-                            AutomationProperties.HelpText="{Binding CaptureAdmissionReason}" />
+                            AutomationProperties.HelpText="{Binding GroupSelectedHelpText}"
+                            ToolTip="{Binding GroupSelectedHelpText}"
+                            ToolTipService.ShowOnDisabled="True" />
                 </StackPanel>
             </Grid>
         </Grid>

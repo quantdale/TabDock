@@ -29,7 +29,16 @@ separate main-based branch.
    2 = theme `ListBoxItem` alignment bindings evaluated before each list's
    container style). Re-run logs **0 binding errors**.
    Tests added: `BindingTraceDiagnosticsTests` (2),
-   `FrontendDesignContractTests` guards (2). Full suite: 824/824 Debug+Release.
+   `FrontendDesignContractTests` guards (2).
+
+2. **W2 — accessibility/keyboard runtime audit.** Named the capture lists,
+   added `GroupSelectedHelpText` + disabled-hover tooltips (admission first,
+   then selection), dropped the native content marker as a keyboard tab stop,
+   and aligned tooltip workspace terminology. Verified at runtime: Space
+   toggles a focused row and enables the primary action, Escape closes the
+   picker, the marker is gone from the tab-stop set.
+   Tests added: help-text unit coverage, accessibility contract test.
+   Full suite: 826/826 Debug+Release.
 
 ### Prior completed work (frontend overhaul, PR #13)
 
@@ -48,9 +57,8 @@ GitHub Actions billing failure (external).
 
 ### Next action
 
-W2 — accessibility/keyboard runtime audit against
-`openspec/specs/accessibility-keyboard-completeness`, then W3 (dense tab
-strip), then select the highest-value non-UI workstream.
+W3 — dense tab-strip rendering with many tabs at narrow widths, then select
+ the highest-value non-UI workstream (W4) on a main-based branch.
 
 Update this file at each workstream completion, validation milestone, or
 blocker, and before final handoff.

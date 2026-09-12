@@ -70,7 +70,7 @@ public sealed class ProductTrustInteractionIntegrationTests
         harness.Manager.SetCaptureAllowed(true, "WinEvent retry succeeded");
         Assert.True(vm.CaptureAllowed);
         Assert.True(groupVm.CaptureAllowed);
-        Assert.Equal("Add window to group", groupVm.AddWindowToolTip);
+        Assert.Equal("Add windows to this workspace", groupVm.AddWindowToolTip);
         groupVm.Detach();
     }
 

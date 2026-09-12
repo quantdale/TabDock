@@ -57,7 +57,36 @@ interactive element in launcher/picker/container with UIA; verify names, stable
 IDs, help text, disabled states, focus reachability, Enter/Space activation,
 Escape behavior, and logical tab order; fix gaps; add contract tests.
 
-### W3 — Dense tab-strip rendering
+### W2 — Accessibility/keyboard runtime audit (COMPLETE)
+
+Audited the real Release UI with UIA (`audit`, `tabwalk`, `focused`, `find`
+harness actions) against `openspec/specs/accessibility-keyboard-completeness`.
+
+Findings and fixes:
+
+- Capture lists had no accessible name (announced as bare "list"): added
+  `Capturable windows` / `Capturable windows to add` names and HelpText.
+- Disabled primary capture action used admission text as its HelpText
+  ("Capture admission is healthy." while disabled for no selection); added
+  `GroupSelectedHelpText` (admission first, then selection) and disabled-hover
+  tooltips (`ToolTipService.ShowOnDisabled`) on picker, inline panel, and
+  launcher capture actions.
+- The native content marker was a keyboard tab stop (`ContentHost` Pane); it
+  exposes no interactive behavior, so it is now `Focusable="False"`.
+- Tooltip terminology aligned with the product's workspace language
+  ("Add windows to this workspace").
+
+Verified at runtime: Space toggles a focused row checkbox and enables the
+primary action; Escape closes the standalone picker; the picker tab order covers
+header, filters, list, and footer; the container marker no longer appears in the
+tab-stop set. Container chrome tab traversal is deliberately exercised only via
+structural tests: the shepherd re-asserts the guest as foreground, so a
+SendKeys-based walk measures the guest, not the container.
+
+Tests: `GroupSelectedHelpText` unit coverage (3 states), accessibility contract
+test, tooltip-string assertion updated. Suite: 826/826 Debug and Release.
+
+### W3 — Dense tab-strip rendering (NEXT)
 
 Reproduce tab-strip overflow with many tabs at narrow widths; the 42px strip
 plus the custom 11px horizontal scrollbar may not coexist cleanly.

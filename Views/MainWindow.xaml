@@ -154,7 +154,8 @@
                                 AutomationProperties.AutomationId="LauncherCaptureButton"
                                 AutomationProperties.Name="{Binding CaptureButtonText}"
                                 AutomationProperties.HelpText="{Binding CaptureButtonToolTip}"
-                                ToolTip="{Binding CaptureButtonToolTip}">
+                                ToolTip="{Binding CaptureButtonToolTip}"
+                                ToolTipService.ShowOnDisabled="True">
                             <TextBlock Text="{Binding CaptureButtonText}"
                                        TextWrapping="Wrap"
                                        TextAlignment="Center"
@@ -254,7 +255,8 @@
                                     Command="{Binding CaptureCommand}"
                                     IsEnabled="{Binding CaptureAllowed}"
                                     AutomationProperties.Name="Capture windows for first workspace"
-                                    ToolTip="{Binding CaptureButtonToolTip}" />
+                                    ToolTip="{Binding CaptureButtonToolTip}"
+                                    ToolTipService.ShowOnDisabled="True" />
                         </StackPanel>
                     </StackPanel>
                 </Grid>

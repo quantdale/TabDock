@@ -83,7 +83,7 @@ public sealed class GroupViewModel : ViewModelBase
     public string CaptureAdmissionReason => _manager.CaptureAdmissionReason;
 
     public string AddWindowToolTip => CaptureAllowed
-        ? "Add window to group"
+        ? "Add windows to this workspace"
         : $"Capture unavailable: {CaptureAdmissionReason}";
 
     public ObservableCollection<TabViewModel> Tabs { get; } = new();
