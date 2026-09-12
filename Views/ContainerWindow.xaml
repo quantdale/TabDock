@@ -257,6 +257,11 @@
                         <Setter Property="Background" Value="Transparent" />
                         <Setter Property="BorderThickness" Value="0" />
                         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                        <!-- Explicit alignments override the theme style's
+                             FindAncestor ItemsControl binding, which logs a
+                             binding error while a container is being realized. -->
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="VerticalContentAlignment" Value="Stretch" />
                         <Setter Property="IsSelected" Value="{Binding IsActive, Mode=TwoWay}" />
                         <Setter Property="AutomationProperties.AutomationId" Value="{Binding AutomationId}" />
                         <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
@@ -406,8 +411,12 @@
         </Border>
 
         <!-- Inline capture uses the same hierarchy and selection treatment as
-             the modal capture picker, preventing the two workflows from drifting. -->
+             the modal capture picker, preventing the two workflows from drifting.
+             Its DataContext is injected by code only while the panel is open
+             (never inherited): binding its rows against the container's
+             GroupViewModel would log path errors before the panel is populated. -->
         <Border Grid.Row="2" x:Name="CapturePanel" Visibility="Collapsed"
+                DataContext="{x:Null}"
                 Background="{StaticResource TdSurfaceRaisedBrush}"
                 BorderBrush="{StaticResource TdBorderStrongBrush}"
                 BorderThickness="0,0,0,1" Padding="16" MaxHeight="360">

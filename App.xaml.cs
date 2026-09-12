@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Windows;
 using Microsoft.Win32;
+using TabDock.Infrastructure;
 using TabDock.Models;
 using TabDock.Services;
 using TabDock.ViewModels;
@@ -77,6 +78,9 @@ public partial class App : Application
 
     private void Application_Startup(object sender, StartupEventArgs e)
     {
+        // Opt-in local diagnostics: capture WPF binding warnings/errors to a
+        // file when TABDOCK_TRACE_BINDINGS names one. No-op otherwise.
+        BindingTraceDiagnostics.EnableIfRequested();
         try
         {
             if (DiagnosticCommandLine.TryParse(e.Args, out DiagnosticCommandRequest command, out string? commandError))

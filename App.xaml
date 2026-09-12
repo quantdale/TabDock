@@ -412,6 +412,16 @@
             </Setter>
         </Style>
 
+        <!-- Explicit defaults replace the theme ListBoxItem style's
+             FindAncestor ItemsControl bindings, which log one binding error per
+             realized item while a list container is being attached. Lists that
+             need richer rows supply their own ItemContainerStyle/TdListItem. -->
+        <Style TargetType="{x:Type ListBoxItem}">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        </Style>
+
         <Style x:Key="TdSectionLabel" TargetType="{x:Type TextBlock}">
             <Setter Property="Foreground" Value="{StaticResource TdTextMutedBrush}" />
             <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />

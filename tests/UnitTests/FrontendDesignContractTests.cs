@@ -148,6 +148,41 @@ public sealed class FrontendDesignContractTests
         Assert.Contains("IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}", container, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void InlineCapturePanelNeverInheritsAWorkspaceDataContext()
+    {
+        string xaml = Read("Views/ContainerWindow.xaml");
+
+        // The panel's rows bind to CapturePickerViewModel, which only exists
+        // while the panel is open. A local null DataContext keeps the initial
+        // load from resolving those paths against the container's GroupViewModel
+        // (one logged binding error per path otherwise).
+        int panel = xaml.IndexOf("x:Name=\"CapturePanel\"", StringComparison.Ordinal);
+        Assert.True(panel >= 0, "CapturePanel not found");
+        Assert.Contains("DataContext=\"{x:Null}\"", xaml.Substring(panel, 400), StringComparison.Ordinal);
+
+        // Explicit item alignments remove the theme style's FindAncestor
+        // ItemsControl binding, which logs an error during container realization.
+        string tabStrip = Slice(xaml, "x:Name=\"TabsListBox\"", "ListBox.Resources");
+        Assert.Contains("HorizontalContentAlignment\" Value=\"Stretch\"", tabStrip, StringComparison.Ordinal);
+        Assert.Contains("VerticalContentAlignment\" Value=\"Stretch\"", tabStrip, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AppLevelListBoxItemDefaultsOverrideThemeBindings()
+    {
+        string app = Read("App.xaml");
+
+        // The theme ListBoxItem style binds content alignment through
+        // FindAncestor ItemsControl; those bindings log an error per realized
+        // item before the list's own ItemContainerStyle applies. Explicit
+        // app-level defaults replace them (verified at runtime: a full drive of
+        // launcher, picker, and container logs zero WPF binding errors).
+        string listBoxItemStyle = Slice(app, "TargetType=\"{x:Type ListBoxItem}\"", "TdSectionLabel");
+        Assert.Contains("HorizontalContentAlignment\" Value=\"Stretch\"", listBoxItemStyle, StringComparison.Ordinal);
+        Assert.Contains("VerticalContentAlignment\" Value=\"Stretch\"", listBoxItemStyle, StringComparison.Ordinal);
+    }
+
     private static string Slice(string text, string startMarker, string endMarker)
     {
         int start = text.IndexOf(startMarker, StringComparison.Ordinal);
