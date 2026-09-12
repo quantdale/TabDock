@@ -65,7 +65,7 @@
 
         <Border Grid.Row="1" Margin="0,0,0,12" Padding="14,12"
                 Background="{StaticResource TdWarningSurfaceBrush}"
-                BorderBrush="#665224" BorderThickness="1" CornerRadius="8"
+                BorderBrush="{StaticResource TdWarningBorderBrush}" BorderThickness="1" CornerRadius="8"
                 AutomationProperties.AutomationId="PendingRecoveryBanner"
                 AutomationProperties.Name="{Binding PendingRecoveryBannerText}"
                 AutomationProperties.LiveSetting="Assertive"
@@ -86,7 +86,7 @@
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
                 <Border Grid.Column="0" Width="30" Height="30" CornerRadius="7"
-                        Background="#342B18" BorderBrush="#665224" BorderThickness="1"
+                        Background="{StaticResource TdWarningIconSurfaceBrush}" BorderBrush="{StaticResource TdWarningBorderBrush}" BorderThickness="1"
                         Margin="0,0,12,0">
                     <TextBlock Text="!" Foreground="{StaticResource TdWarningBrush}"
                                FontWeight="Bold" FontSize="15"

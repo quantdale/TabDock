@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
+using TabDock.Infrastructure;
 using TabDock.ViewModels;
 
 namespace TabDock.Views;
@@ -20,6 +21,9 @@ public partial class CapturePickerWindow : Window
         _viewModel = viewModel;
         InitializeComponent();
         DataContext = viewModel;
+        // The picker is a standard chrome window; keep its caption/border dark
+        // instead of inheriting the user's system theme and accent color.
+        SourceInitialized += (_, _) => WindowChromeTheme.ApplyDarkChrome(this);
 
         viewModel.GroupingRequested += OnGroupingRequested;
         viewModel.Canceled += OnCanceled;

@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using TabDock.Infrastructure;
 using TabDock.Models;
 using TabDock.ViewModels;
 
@@ -20,6 +21,9 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = viewModel;
         ViewModel = viewModel;
+        // Standard system chrome would otherwise render with the user's light
+        // theme/accent; keep the caption and border in the product palette.
+        SourceInitialized += (_, _) => WindowChromeTheme.ApplyDarkChrome(this);
         GroupsListView.MouseDoubleClick += OnGroupsListDoubleClick;
         GroupsListView.PreviewKeyDown += OnGroupsListKeyDown;
     }

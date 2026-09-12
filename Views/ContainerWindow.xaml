@@ -271,13 +271,15 @@
                                     <Setter Property="BorderBrush" Value="Transparent" />
                                     <Setter Property="BorderThickness" Value="1" />
                                     <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                            <Setter Property="Background" Value="{StaticResource TdSurfaceHoverBrush}" />
+                                        </DataTrigger>
                                         <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
                                             <Setter Property="Background" Value="{StaticResource TdAccentSoftBrush}" />
                                             <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
                                             <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
-                                            <Setter Property="BorderThickness" Value="2" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
@@ -334,9 +336,11 @@
                                                 <DataTrigger Binding="{Binding Left.IsActive}" Value="True">
                                                     <Setter Property="Background" Value="#2A3E68" />
                                                 </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                    <Setter Property="Background" Value="#22304F" />
+                                                </DataTrigger>
                                                 <Trigger Property="IsKeyboardFocusWithin" Value="True">
                                                     <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
-                                                    <Setter Property="BorderThickness" Value="2" />
                                                 </Trigger>
                                             </Style.Triggers>
                                         </Style>
@@ -373,9 +377,11 @@
                                                 <DataTrigger Binding="{Binding Right.IsActive}" Value="True">
                                                     <Setter Property="Background" Value="#2A3E68" />
                                                 </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                    <Setter Property="Background" Value="#22304F" />
+                                                </DataTrigger>
                                                 <Trigger Property="IsKeyboardFocusWithin" Value="True">
                                                     <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
-                                                    <Setter Property="BorderThickness" Value="2" />
                                                 </Trigger>
                                             </Style.Triggers>
                                         </Style>
@@ -470,21 +476,23 @@
                                 <DataTemplate>
                                     <Border Padding="8,6" CornerRadius="6">
                                         <Border.Style>
-                                            <Style TargetType="Border">
-                                                <Setter Property="Background" Value="{StaticResource TdSurfaceRaisedBrush}" />
-                                                <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
-                                                <Setter Property="BorderThickness" Value="1" />
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                        <Setter Property="Background" Value="{StaticResource TdAccentSoftBrush}" />
-                                                        <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
-                                                    </DataTrigger>
-                                                    <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                                        <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
-                                                        <Setter Property="BorderThickness" Value="2" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="{StaticResource TdSurfaceRaisedBrush}" />
+                                            <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
+                                            <Setter Property="BorderThickness" Value="1" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource TdSurfaceHoverBrush}" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource TdAccentSoftBrush}" />
+                                                    <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                    <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
                                         </Border.Style>
                                         <Grid>
                                             <Grid.ColumnDefinitions>
@@ -579,41 +587,60 @@
             <Grid>
                 <infra:NativeHwndHost x:Name="ContentHost"
                                       AutomationProperties.AutomationId="ContentHost" />
-                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
-                            MaxWidth="390">
-                    <StackPanel.Style>
-                        <Style TargetType="StackPanel">
-                            <Setter Property="Visibility" Value="Collapsed" />
+                <!-- The marker is a real child HWND and always paints above WPF
+                     siblings (airspace), so the empty-workspace prompt lives in a
+                     popup overlay instead of a sibling panel. -->
+                <Popup x:Name="EmptyStateOverlay" StaysOpen="True" AllowsTransparency="True"
+                       Focusable="False"
+                       PlacementTarget="{Binding ElementName=ContentBorder}" Placement="Center">
+                    <Popup.Style>
+                        <Style TargetType="Popup">
+                            <Setter Property="IsOpen" Value="False" />
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding Tabs.Count}" Value="0">
-                                    <Setter Property="Visibility" Value="Visible" />
-                                </DataTrigger>
+                                <!-- A popup is a real top-level window: it must not
+                                     float above unrelated applications while its
+                                     workspace is in the background. -->
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding Tabs.Count}" Value="0" />
+                                        <Condition Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="True" />
+                                        <Condition Binding="{Binding Visibility, ElementName=CapturePanel}" Value="Collapsed" />
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="IsOpen" Value="True" />
+                                </MultiDataTrigger>
                             </Style.Triggers>
                         </Style>
-                    </StackPanel.Style>
-                    <Border Width="48" Height="48" CornerRadius="8"
-                            Background="{StaticResource TdAccentSoftBrush}"
-                            BorderBrush="{StaticResource TdBorderStrongBrush}" BorderThickness="1"
-                            HorizontalAlignment="Center" Margin="0,0,0,11"
-                            IsHitTestVisible="False">
-                        <TextBlock Text="+" Foreground="{StaticResource TdAccentTextBrush}" FontSize="26"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Popup.Style>
+                    <Border Background="{StaticResource TdSurfaceRaisedBrush}"
+                            BorderBrush="{StaticResource TdBorderStrongBrush}"
+                            BorderThickness="1" CornerRadius="10"
+                            Padding="26,22" MaxWidth="390"
+                            SnapsToDevicePixels="True">
+                        <StackPanel>
+                            <Border Width="48" Height="48" CornerRadius="8"
+                                    Background="{StaticResource TdAccentSoftBrush}"
+                                    BorderBrush="{StaticResource TdBorderStrongBrush}" BorderThickness="1"
+                                    HorizontalAlignment="Center" Margin="0,0,0,11"
+                                    IsHitTestVisible="False">
+                                <TextBlock Text="+" Foreground="{StaticResource TdAccentTextBrush}" FontSize="26"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <TextBlock Text="This workspace is empty" Style="{StaticResource TdSubheading}"
+                                       HorizontalAlignment="Center" />
+                            <TextBlock Text="Capture one or more desktop windows to start working here."
+                                       Style="{StaticResource TdBodyMuted}" FontSize="11"
+                                       TextWrapping="Wrap" TextAlignment="Center" Margin="0,5,0,12" />
+                            <Button Style="{StaticResource TdPrimaryButton}"
+                                    Content="Add windows" MinWidth="112"
+                                    HorizontalAlignment="Center"
+                                    Click="AddWindow_Click"
+                                    IsEnabled="{Binding CaptureAllowed}"
+                                    ToolTip="{Binding AddWindowToolTip}"
+                                    AutomationProperties.Name="Add windows to empty workspace"
+                                    AutomationProperties.HelpText="{Binding AddWindowToolTip}" />
+                        </StackPanel>
                     </Border>
-                    <TextBlock Text="This workspace is empty" Style="{StaticResource TdSubheading}"
-                               HorizontalAlignment="Center" IsHitTestVisible="False" />
-                    <TextBlock Text="Capture one or more desktop windows to start working here."
-                               Style="{StaticResource TdBodyMuted}" FontSize="11"
-                               TextWrapping="Wrap" TextAlignment="Center" Margin="0,5,0,12"
-                               IsHitTestVisible="False" />
-                    <Button Style="{StaticResource TdPrimaryButton}"
-                            Content="Add windows" MinWidth="112"
-                            HorizontalAlignment="Center"
-                            Click="AddWindow_Click"
-                            IsEnabled="{Binding CaptureAllowed}"
-                            ToolTip="{Binding AddWindowToolTip}"
-                            AutomationProperties.Name="Add windows to empty workspace"
-                            AutomationProperties.HelpText="{Binding AddWindowToolTip}" />
-                </StackPanel>
+                </Popup>
             </Grid>
         </Border>
     </Grid>

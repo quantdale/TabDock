@@ -688,6 +688,10 @@ public static partial class NativeMethods
 
     public const uint DWMWA_CLOAKED = 14;
     public const uint DWMWA_TRANSITIONS_FORCEDISABLED = 3;
+    public const uint DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+    public const uint DWMWA_BORDER_COLOR = 34;
+    public const uint DWMWA_CAPTION_COLOR = 35;
+    public const uint DWMWA_TEXT_COLOR = 36;
 
     public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000;
     public const uint TOKEN_QUERY = 0x0008;

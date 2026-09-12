@@ -143,13 +143,15 @@
                                             <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
                                             <Setter Property="BorderThickness" Value="1" />
                                             <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource TdSurfaceHoverBrush}" />
+                                                </DataTrigger>
                                                 <DataTrigger Binding="{Binding IsSelected}" Value="True">
                                                     <Setter Property="Background" Value="{StaticResource TdAccentSoftBrush}" />
                                                     <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
                                                 </DataTrigger>
                                                 <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
                                                     <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
-                                                    <Setter Property="BorderThickness" Value="2" />
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
