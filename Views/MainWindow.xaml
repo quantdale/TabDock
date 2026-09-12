@@ -5,10 +5,10 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="TabDock"
-        Height="610"
-        Width="820"
+        Height="640"
+        Width="900"
         MinWidth="620"
-        MinHeight="460"
+        MinHeight="500"
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource TdWindowBackgroundBrush}"
         Foreground="{StaticResource TdTextBrush}"
@@ -16,7 +16,7 @@
         UseLayoutRounding="True"
         SnapsToDevicePixels="True">
 
-    <Grid Margin="28,24,28,22">
+    <Grid Margin="24,22,24,20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -24,60 +24,51 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- Product header: primary actions stay visible instead of being buried
-             below a potentially long group list. -->
-        <Grid Grid.Row="0" Margin="0,0,0,20">
+        <Grid Grid.Row="0" Margin="2,0,2,16">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <StackPanel Grid.Column="0">
-                <StackPanel Orientation="Horizontal">
-                    <Border Width="34" Height="34" CornerRadius="9"
-                            Background="{StaticResource TdAccentSoftBrush}"
-                            BorderBrush="{StaticResource TdAccentBrush}"
-                            BorderThickness="1" Margin="0,0,12,0">
-                        <TextBlock Text="T" Foreground="{StaticResource TdAccentTextBrush}"
-                                   FontWeight="Bold" FontSize="17"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Border>
-                    <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="TabDock" FontSize="24" FontWeight="SemiBold"
-                                   Foreground="{StaticResource TdTextBrush}" />
-                        <TextBlock Text="Your desktop apps, organized into focused workspaces."
-                                   Foreground="{StaticResource TdTextMutedBrush}" FontSize="12"
-                                   TextWrapping="Wrap" MaxWidth="260" />
-                    </StackPanel>
+            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                <Border Width="38" Height="38" CornerRadius="8"
+                        Background="{StaticResource TdAccentSoftBrush}"
+                        BorderBrush="{StaticResource TdAccentBrush}"
+                        BorderThickness="1" Margin="0,0,12,0">
+                    <Grid>
+                        <Border Width="12" Height="12" CornerRadius="3"
+                                Background="{StaticResource TdAccentBrush}"
+                                HorizontalAlignment="Left" VerticalAlignment="Top"
+                                Margin="8,8,0,0" />
+                        <Border Width="12" Height="12" CornerRadius="3"
+                                Background="{StaticResource TdAccentTextBrush}"
+                                HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                Margin="0,0,8,8" />
+                    </Grid>
+                </Border>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="TabDock" Style="{StaticResource TdHeading}" />
+                    <TextBlock Text="Desktop workspaces for the apps you already use."
+                               Style="{StaticResource TdBodyMuted}"
+                               Margin="0,2,0,0" />
                 </StackPanel>
             </StackPanel>
 
-            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                <Button Style="{StaticResource TdSecondaryButton}"
-                        Content="New group" MinWidth="104" Margin="0,0,10,0"
-                        Command="{Binding NewGroupCommand}"
-                        AutomationProperties.Name="Create a new group" />
-                <Button Style="{StaticResource TdPrimaryButton}"
-                        MinWidth="214"
-                        Command="{Binding CaptureCommand}"
-                        IsEnabled="{Binding CaptureAllowed}"
-                        AutomationProperties.AutomationId="LauncherCaptureButton"
-                        AutomationProperties.Name="{Binding CaptureButtonText}"
-                        AutomationProperties.HelpText="{Binding CaptureButtonToolTip}"
-                        ToolTip="{Binding CaptureButtonToolTip}">
-                    <TextBlock Text="{Binding CaptureButtonText}" TextWrapping="Wrap"
-                               TextAlignment="Center" MaxWidth="200" />
-                </Button>
-            </StackPanel>
+            <Border Grid.Column="1" Style="{StaticResource TdBadge}"
+                    VerticalAlignment="Center">
+                <TextBlock Text="WORKSPACE MANAGER"
+                           Style="{StaticResource TdSectionLabel}"
+                           FontSize="10"
+                           Foreground="{StaticResource TdTextSubtleBrush}" />
+            </Border>
         </Grid>
 
-        <!-- Pending recovery is operationally important, so it reads as a clear
-             warning card instead of a legacy yellow strip. -->
-        <Border Grid.Row="1" Margin="0,0,0,16" Padding="14,12"
+        <Border Grid.Row="1" Margin="0,0,0,12" Padding="14,12"
                 Background="{StaticResource TdWarningSurfaceBrush}"
-                BorderBrush="#6D5727" BorderThickness="1" CornerRadius="9"
+                BorderBrush="#665224" BorderThickness="1" CornerRadius="8"
                 AutomationProperties.AutomationId="PendingRecoveryBanner"
                 AutomationProperties.Name="{Binding PendingRecoveryBannerText}"
+                AutomationProperties.LiveSetting="Assertive"
                 AutomationProperties.HelpText="Inspect pending recovery from a terminal; native recovery is supervised and never automatic.">
             <Border.Style>
                 <Style TargetType="Border">
@@ -94,58 +85,82 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <Border Grid.Column="0" Width="30" Height="30" CornerRadius="15"
-                        Background="#3A301C" Margin="0,0,12,0">
+                <Border Grid.Column="0" Width="30" Height="30" CornerRadius="7"
+                        Background="#342B18" BorderBrush="#665224" BorderThickness="1"
+                        Margin="0,0,12,0">
                     <TextBlock Text="!" Foreground="{StaticResource TdWarningBrush}"
-                               FontWeight="Bold" FontSize="16"
+                               FontWeight="Bold" FontSize="15"
                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
                 <StackPanel Grid.Column="1">
                     <TextBlock Text="{Binding PendingRecoveryBannerText}"
                                Foreground="{StaticResource TdWarningBrush}"
-                               FontWeight="SemiBold"
+                               FontWeight="SemiBold" FontSize="12"
                                AutomationProperties.AutomationId="PendingRecoverySummary" />
-                    <TextBlock Text="Review: TabDock.exe --pending-recovery"
-                               Margin="0,5,0,0" Foreground="{StaticResource TdTextMutedBrush}"
-                               FontFamily="Cascadia Mono, Consolas" FontSize="11"
-                               AutomationProperties.AutomationId="PendingRecoveryInspectCommand" />
-                    <TextBlock Text="Recover: TabDock.exe --recover-pending"
-                               Foreground="{StaticResource TdTextMutedBrush}"
-                               FontFamily="Cascadia Mono, Consolas" FontSize="11"
-                               AutomationProperties.AutomationId="PendingRecoveryRecoverCommand" />
+                    <WrapPanel Margin="0,5,0,0">
+                        <TextBlock Text="Review: TabDock.exe --pending-recovery"
+                                   Margin="0,0,18,0"
+                                   Foreground="{StaticResource TdTextMutedBrush}"
+                                   FontFamily="Cascadia Mono, Consolas" FontSize="10"
+                                   AutomationProperties.AutomationId="PendingRecoveryInspectCommand" />
+                        <TextBlock Text="Recover: TabDock.exe --recover-pending"
+                                   Foreground="{StaticResource TdTextMutedBrush}"
+                                   FontFamily="Cascadia Mono, Consolas" FontSize="10"
+                                   AutomationProperties.AutomationId="PendingRecoveryRecoverCommand" />
+                    </WrapPanel>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <!-- Workspace card -->
-        <Border Grid.Row="2" Background="{StaticResource TdSurfaceBrush}"
-                BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="1"
-                CornerRadius="12" Padding="18">
+        <Border Grid.Row="2" Style="{StaticResource TdCard}" Padding="14">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <Grid Grid.Row="0" Margin="0,0,0,14">
+                <Grid Grid.Row="0" Margin="2,0,2,12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel>
-                        <TextBlock Text="Workspaces" FontSize="16" FontWeight="SemiBold"
-                                   Foreground="{StaticResource TdTextBrush}" />
-                        <TextBlock Text="Double-click a workspace or select it and press Enter to open."
-                                   Foreground="{StaticResource TdTextMutedBrush}" FontSize="11"
-                                   Margin="0,3,0,0" />
+
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Workspaces" Style="{StaticResource TdSubheading}"
+                                       VerticalAlignment="Center" />
+                            <Border Style="{StaticResource TdBadge}" Margin="9,0,0,0"
+                                    VerticalAlignment="Center" Padding="7,2">
+                                <TextBlock Foreground="{StaticResource TdTextMutedBrush}" FontSize="10">
+                                    <Run Text="{Binding Groups.Count, Mode=OneWay}" /><Run Text=" total" />
+                                </TextBlock>
+                            </Border>
+                        </StackPanel>
+                        <TextBlock Text="Open a workspace to bring its captured apps back together."
+                                   Style="{StaticResource TdBodyMuted}"
+                                   FontSize="11" Margin="0,3,12,0"
+                                   TextWrapping="Wrap" />
                     </StackPanel>
-                    <Border Grid.Column="1" VerticalAlignment="Center"
-                            Background="#0D131C" BorderBrush="{StaticResource TdBorderBrush}"
-                            BorderThickness="1" CornerRadius="12" Padding="10,4">
-                        <TextBlock Foreground="{StaticResource TdTextMutedBrush}" FontSize="11">
-                            <Run Text="{Binding Groups.Count, Mode=OneWay}" /><Run Text=" groups" />
-                        </TextBlock>
-                    </Border>
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Style="{StaticResource TdSecondaryButton}"
+                                Content="New workspace" MinWidth="120" Margin="0,0,8,0"
+                                Command="{Binding NewGroupCommand}"
+                                AutomationProperties.Name="Create a new workspace" />
+                        <Button Style="{StaticResource TdPrimaryButton}"
+                                MinWidth="210"
+                                Command="{Binding CaptureCommand}"
+                                IsEnabled="{Binding CaptureAllowed}"
+                                AutomationProperties.AutomationId="LauncherCaptureButton"
+                                AutomationProperties.Name="{Binding CaptureButtonText}"
+                                AutomationProperties.HelpText="{Binding CaptureButtonToolTip}"
+                                ToolTip="{Binding CaptureButtonToolTip}">
+                            <TextBlock Text="{Binding CaptureButtonText}"
+                                       TextWrapping="Wrap"
+                                       TextAlignment="Center"
+                                       MaxWidth="198" />
+                        </Button>
+                    </StackPanel>
                 </Grid>
 
                 <Grid Grid.Row="1">
@@ -162,7 +177,7 @@
                               VirtualizingPanel.VirtualizationMode="Recycling">
                         <ListView.ItemContainerStyle>
                             <Style TargetType="ListViewItem" BasedOn="{StaticResource TdListItem}">
-                                <Setter Property="Padding" Value="14,12" />
+                                <Setter Property="Padding" Value="13,11" />
                                 <Setter Property="AutomationProperties.Name" Value="{Binding Name, StringFormat='Workspace {0}'}" />
                                 <Setter Property="AutomationProperties.HelpText" Value="Press Enter or double-click to open this workspace." />
                             </Style>
@@ -174,32 +189,24 @@
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
 
-                                    <Border Grid.Column="0" Width="4" Height="42" CornerRadius="2"
+                                    <Border Grid.Column="0" Width="4" Height="38" CornerRadius="2"
                                             Background="{Binding AccentColor, Converter={StaticResource ColorToBrushConverter}}"
-                                            Margin="0,0,13,0" />
+                                            Margin="0,0,12,0" />
 
                                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold"
+                                        <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
                                                    Foreground="{StaticResource TdTextBrush}"
                                                    TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Margin="0,4,0,0" FontSize="11"
+                                        <TextBlock Margin="0,3,0,0" FontSize="11"
                                                    Foreground="{StaticResource TdTextMutedBrush}">
                                             <Run Text="{Binding Members.Count, Mode=OneWay}" /><Run Text=" captured windows" />
                                         </TextBlock>
                                     </StackPanel>
 
-                                    <Border Grid.Column="2" VerticalAlignment="Center" Margin="16,0"
-                                            Background="#0E141D" BorderBrush="{StaticResource TdBorderBrush}"
-                                            BorderThickness="1" CornerRadius="10" Padding="9,4">
-                                        <TextBlock Text="{Binding Members.Count, StringFormat='{}{0} tabs'}"
-                                                   Foreground="{StaticResource TdTextMutedBrush}" FontSize="10" />
-                                    </Border>
-
-                                    <Button Grid.Column="3" Style="{StaticResource TdGhostButton}"
-                                            Content="Open" MinWidth="64" Padding="10,5"
+                                    <Button Grid.Column="2" Style="{StaticResource TdToolbarButton}"
+                                            Content="Open" MinWidth="62" Margin="14,0,0,0"
                                             Command="{Binding DataContext.OpenSelectedGroupCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                             CommandParameter="{Binding}"
                                             AutomationProperties.Name="{Binding Name, StringFormat='Open {0} workspace'}"
@@ -210,7 +217,7 @@
                     </ListView>
 
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
-                                IsHitTestVisible="False" MaxWidth="360">
+                                MaxWidth="390">
                         <StackPanel.Style>
                             <Style TargetType="StackPanel">
                                 <Setter Property="Visibility" Value="Collapsed" />
@@ -221,32 +228,50 @@
                                 </Style.Triggers>
                             </Style>
                         </StackPanel.Style>
-                        <Border Width="48" Height="48" CornerRadius="14"
+                        <Border Width="44" Height="44" CornerRadius="8"
                                 Background="{StaticResource TdAccentSoftBrush}"
-                                HorizontalAlignment="Center" Margin="0,0,0,12">
+                                BorderBrush="{StaticResource TdBorderStrongBrush}"
+                                BorderThickness="1"
+                                HorizontalAlignment="Center" Margin="0,0,0,11">
                             <TextBlock Text="+" Foreground="{StaticResource TdAccentTextBrush}"
-                                       FontSize="26" FontWeight="Light"
+                                       FontSize="24" FontWeight="Light"
                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
-                        <TextBlock Text="Create your first workspace" FontSize="15" FontWeight="SemiBold"
-                                   Foreground="{StaticResource TdTextBrush}" HorizontalAlignment="Center" />
-                        <TextBlock Text="Start a group, then capture the windows you want to keep together."
-                                   Foreground="{StaticResource TdTextMutedBrush}" FontSize="11"
-                                   TextWrapping="Wrap" TextAlignment="Center" Margin="0,5,0,0" />
+                        <TextBlock Text="Build your first workspace"
+                                   Style="{StaticResource TdSubheading}"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock Text="Create an empty workspace or capture the windows already open on your desktop."
+                                   Style="{StaticResource TdBodyMuted}"
+                                   TextWrapping="Wrap" TextAlignment="Center"
+                                   Margin="0,5,0,13" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <Button Style="{StaticResource TdSecondaryButton}"
+                                    Content="New workspace" MinWidth="118"
+                                    Command="{Binding NewGroupCommand}"
+                                    AutomationProperties.Name="Create first workspace" />
+                            <Button Style="{StaticResource TdPrimaryButton}"
+                                    Content="Capture windows" MinWidth="132" Margin="8,0,0,0"
+                                    Command="{Binding CaptureCommand}"
+                                    IsEnabled="{Binding CaptureAllowed}"
+                                    AutomationProperties.Name="Capture windows for first workspace"
+                                    ToolTip="{Binding CaptureButtonToolTip}" />
+                        </StackPanel>
                     </StackPanel>
                 </Grid>
             </Grid>
         </Border>
 
-        <Grid Grid.Row="3" Margin="2,14,2,0">
+        <Grid Grid.Row="3" Margin="2,12,2,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <StackPanel Grid.Column="0">
+            <StackPanel Grid.Column="0" VerticalAlignment="Center">
                 <TextBlock Text="{Binding CaptureAdmissionReason}"
-                           Foreground="{StaticResource TdWarningBrush}" TextWrapping="Wrap"
-                           AutomationProperties.AutomationId="CaptureAdmissionStatus">
+                           Foreground="{StaticResource TdWarningBrush}"
+                           TextWrapping="Wrap" FontSize="11"
+                           AutomationProperties.AutomationId="CaptureAdmissionStatus"
+                           AutomationProperties.LiveSetting="Polite">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
                             <Setter Property="Visibility" Value="Collapsed" />
@@ -259,8 +284,8 @@
                     </TextBlock.Style>
                 </TextBlock>
                 <TextBlock Text="{Binding TabNavigationAvailabilityText}"
-                           Foreground="{StaticResource TdTextSubtleBrush}" FontSize="11"
-                           Margin="0,3,0,0"
+                           Foreground="{StaticResource TdTextSubtleBrush}" FontSize="10"
+                           Margin="0,2,0,0"
                            AutomationProperties.AutomationId="TabNavigationAvailability" />
             </StackPanel>
             <Button Grid.Column="1" Style="{StaticResource TdGhostButton}"
