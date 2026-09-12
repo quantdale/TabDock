@@ -75,6 +75,88 @@ public sealed class FrontendDesignContractTests
         Assert.Contains("Style=\"{StaticResource TdCheckBox}\"", xaml, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SharedDesignSystemTemplatesSystemThemedControls()
+    {
+        string app = Read("App.xaml");
+
+        // ComboBox, ContextMenu, MenuItem, ToolTip, and ScrollBar must be fully
+        // templated: the default templates leak the user's system theme/accent
+        // color into these surfaces on some desktops.
+        Assert.Contains("x:Key=\"TdFocusVisualStyle\"", app, StringComparison.Ordinal);
+        Assert.Contains("x:Key=\"TdScrollThumb\"", app, StringComparison.Ordinal);
+        Assert.Contains("x:Key=\"TdVerticalScrollBar\"", app, StringComparison.Ordinal);
+        Assert.Contains("x:Key=\"TdHorizontalScrollBar\"", app, StringComparison.Ordinal);
+        Assert.Contains("TargetType=\"{x:Type ScrollBar}\"", app, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"PART_Popup\"", Slice(app, "x:Key=\"TdComboBox\"", "x:Key=\"TdCheckBox\""), StringComparison.Ordinal);
+        Assert.Contains("TargetType=\"{x:Type ComboBoxItem}\"", app, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"PART_Popup\"", Slice(app, "TargetType=\"{x:Type MenuItem}\"", "TargetType=\"{x:Type Separator}\""), StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"SubmenuArrow\"", app, StringComparison.Ordinal);
+        Assert.Contains("TargetType=\"{x:Type ToolTip}\"", app, StringComparison.Ordinal);
+
+        // Keyboard focus is communicated by border color, never by growing the
+        // border thickness (which shifts content by a pixel).
+        Assert.DoesNotContain("TargetName=\"ButtonBorder\" Property=\"BorderThickness\"", app, StringComparison.Ordinal);
+        Assert.DoesNotContain("TargetName=\"InputBorder\" Property=\"BorderThickness\"", app, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StandardWindowsKeepDarkDwmChromeAgainstSystemTheme()
+    {
+        string native = Read("NativeMethods.cs");
+        string helper = Read("Infrastructure/WindowChromeTheme.cs");
+        string launcher = Read("Views/MainWindow.xaml.cs");
+        string picker = Read("Views/CapturePickerWindow.xaml.cs");
+
+        Assert.Contains("DWMWA_USE_IMMERSIVE_DARK_MODE = 20", native, StringComparison.Ordinal);
+        Assert.Contains("DWMWA_CAPTION_COLOR = 35", native, StringComparison.Ordinal);
+        Assert.Contains("DWMWA_BORDER_COLOR = 34", native, StringComparison.Ordinal);
+        Assert.Contains("DwmSetWindowAttribute", helper, StringComparison.Ordinal);
+        Assert.Contains("WindowChromeTheme.ApplyDarkChrome(this)", launcher, StringComparison.Ordinal);
+        Assert.Contains("WindowChromeTheme.ApplyDarkChrome(this)", picker, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ContainerEmptyStateLivesInAnAirspaceSafeOverlay()
+    {
+        string xaml = Read("Views/ContainerWindow.xaml");
+
+        Assert.Contains("<Popup x:Name=\"EmptyStateOverlay\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Placement=\"Center\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("<Condition Binding=\"{Binding Tabs.Count}\" Value=\"0\" />", xaml, StringComparison.Ordinal);
+
+        // The prompt must not be a WPF sibling of the native host: the child
+        // HWND always paints above siblings (airspace), hiding it entirely.
+        int hostIndex = xaml.IndexOf("x:Name=\"ContentHost\"", StringComparison.Ordinal);
+        int emptyTextIndex = xaml.IndexOf("This workspace is empty", StringComparison.Ordinal);
+        Assert.True(hostIndex >= 0 && emptyTextIndex > hostIndex, "empty-state copy must follow the content host");
+        Assert.Contains(
+            "<Popup x:Name=\"EmptyStateOverlay\"",
+            xaml.Substring(hostIndex, emptyTextIndex - hostIndex),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DenseRowsExposeHoverAndKeyboardFocusStates()
+    {
+        string picker = Read("Views/CapturePickerWindow.xaml");
+        string container = Read("Views/ContainerWindow.xaml");
+
+        Assert.Contains("IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}", picker, StringComparison.Ordinal);
+        Assert.Contains("IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}", container, StringComparison.Ordinal);
+        Assert.Contains("IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}", picker, StringComparison.Ordinal);
+        Assert.Contains("IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}", container, StringComparison.Ordinal);
+    }
+
+    private static string Slice(string text, string startMarker, string endMarker)
+    {
+        int start = text.IndexOf(startMarker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Start marker not found: {startMarker}");
+        int end = text.IndexOf(endMarker, start + startMarker.Length, StringComparison.Ordinal);
+        Assert.True(end > start, $"End marker not found after {startMarker}: {endMarker}");
+        return text.Substring(start, end - start);
+    }
+
     private static string FindRepoRoot()
     {
         string dir = AppContext.BaseDirectory;
