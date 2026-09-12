@@ -55,10 +55,17 @@ GitHub Actions billing failure (external).
 - Pending-recovery and capture-admission-blocked runtime states require
   manipulated journal/health state; structurally covered by tests.
 
+3. **W3 — dense tab-strip rendering.** With eight captured tabs the fixed
+   42px strip squeezed tabs to 22px (icons clipped) and the active tab sat
+   off-screen. The strip now uses `MinHeight="42"` so it grows by the
+   scrollbar row, and the active tab scrolls into view on change. Verified:
+   tabs 34px, strip 53px, scrollbar present, active tab visible.
+   Tests added: dense-strip contract guard. Full suite: 827/827.
+
 ### Next action
 
-W3 — dense tab-strip rendering with many tabs at narrow widths, then select
- the highest-value non-UI workstream (W4) on a main-based branch.
+W4 — non-UI robustness/coverage/performance on a main-based branch
+ selected from measurement, then final campaign validation and PR update.
 
 Update this file at each workstream completion, validation milestone, or
 blocker, and before final handoff.

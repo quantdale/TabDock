@@ -86,12 +86,25 @@ SendKeys-based walk measures the guest, not the container.
 Tests: `GroupSelectedHelpText` unit coverage (3 states), accessibility contract
 test, tooltip-string assertion updated. Suite: 826/826 Debug and Release.
 
-### W3 — Dense tab-strip rendering (NEXT)
+### W3 — Dense tab-strip rendering (COMPLETE)
 
-Reproduce tab-strip overflow with many tabs at narrow widths; the 42px strip
-plus the custom 11px horizontal scrollbar may not coexist cleanly.
+Reproduced with eight captured guests: the fixed 42px strip left tabs only
+22px once the horizontal scrollbar appeared — tab icons were clipped and the
+active tab sat beyond the right edge (measured `TabItem` height 22, strip 42).
 
-### W4 — Non-UI robustness/coverage/performance (branch off `main`)
+Fixes:
+
+- the strip Border is now `MinHeight="42"`, so it grows by the scrollbar row
+  when tabs overflow instead of squeezing tab content (verified: tabs 34px,
+  strip 53px, scrollbar thumb present, content marker compensates automatically);
+- the active tab scrolls into view on every active-tab change (skipped while a
+  strip drag owns the layout), so a newly captured or keyboard-navigated tab is
+  never off-screen.
+
+Tests: `DenseTabStripGrowsForOverflowInsteadOfSqueezingTabs` contract guard.
+Suite: 827/827 Debug+Release; binding audit still 0 errors.
+
+### W4 — Non-UI robustness/coverage/performance (NEXT)
 
 To be selected from measurement: startup/picker/capture latency baselines,
 identity-gate and persistence edge coverage, and any measured hotspot. Kept on

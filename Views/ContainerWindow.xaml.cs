@@ -429,6 +429,15 @@ public partial class ContainerWindow : Window
             if (_isDragging && (_draggedTab == null || !_viewModel.Tabs.Contains(_draggedTab)))
                 EndDrag();
             SyncShepherdActiveWindow();
+
+            // Keep the active tab visible when the strip overflows: a newly
+            // captured or keyboard-navigated tab can otherwise sit beyond the
+            // right edge, with the active guest hidden behind chrome the user
+            // cannot see or click. Skipped mid-drag, where the strip's own drag
+            // projection owns the layout.
+            TabViewModel? activeTab = _viewModel.ActiveTab;
+            if (!_isDragging && activeTab != null && TabsListBox.Items.Contains(activeTab))
+                TabsListBox.ScrollIntoView(activeTab);
         }
     }
 

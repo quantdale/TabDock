@@ -224,8 +224,10 @@
 
         <!-- Dense tab strip modeled after compact developer/productivity tools:
              tonal layering does most of the work, with accent reserved for the
-             active tab and keyboard focus. -->
-        <Border Grid.Row="1" Background="{StaticResource TdSurfaceBrush}" Height="42"
+             active tab and keyboard focus. MinHeight (not Height) lets the strip
+             grow by the horizontal-scrollbar height when tabs overflow, so tab
+             content is never squeezed or clipped. -->
+        <Border Grid.Row="1" Background="{StaticResource TdSurfaceBrush}" MinHeight="42"
                 BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="0,0,0,1">
             <ListBox x:Name="TabsListBox"
                      ItemsSource="{Binding DisplayTabs}"

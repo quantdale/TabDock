@@ -209,6 +209,23 @@ public sealed class FrontendDesignContractTests
         Assert.Contains("ToolTipService.ShowOnDisabled=\"True\"", Read("Views/MainWindow.xaml"), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void DenseTabStripGrowsForOverflowInsteadOfSqueezingTabs()
+    {
+        string xaml = Read("Views/ContainerWindow.xaml");
+        string code = Read("Views/ContainerWindow.xaml.cs");
+
+        // A fixed 42px strip leaves the tabs only 22px once the horizontal
+        // scrollbar appears (measured on the real app: icons clipped, active
+        // tab off-screen). MinHeight lets the strip grow by the scrollbar row.
+        string stripHeader = Slice(xaml, "Dense tab strip", "x:Name=\"TabsListBox\"");
+        Assert.Contains("MinHeight=\"42\"", stripHeader, StringComparison.Ordinal);
+        Assert.DoesNotContain(" Height=\"42\"", stripHeader, StringComparison.Ordinal);
+
+        // The active tab must be scrolled into view when the strip overflows.
+        Assert.Contains("TabsListBox.ScrollIntoView(activeTab)", code, StringComparison.Ordinal);
+    }
+
     private static string Slice(string text, string startMarker, string endMarker)
     {
         int start = text.IndexOf(startMarker, StringComparison.Ordinal);
