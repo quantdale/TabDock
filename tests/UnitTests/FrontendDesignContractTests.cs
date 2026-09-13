@@ -246,6 +246,7 @@ public sealed class FrontendDesignContractTests
 
         Assert.Contains("x:Key=\"TdSplitActiveBrush\"", app, StringComparison.Ordinal);
         Assert.Contains("x:Key=\"TdSplitHoverBrush\"", app, StringComparison.Ordinal);
+        Assert.Contains("x:Key=\"TdContentVoidBrush\"", app, StringComparison.Ordinal);
         Assert.Contains("x:Key=\"TdUiFont\"", app, StringComparison.Ordinal);
         Assert.Contains("x:Key=\"TdMonoFont\"", app, StringComparison.Ordinal);
         Assert.Contains("x:Key=\"TdIconFont\"", app, StringComparison.Ordinal);
@@ -254,6 +255,8 @@ public sealed class FrontendDesignContractTests
         // per-view literals that drift from the palette.
         Assert.Contains("{StaticResource TdSplitActiveBrush}", container, StringComparison.Ordinal);
         Assert.Contains("{StaticResource TdSplitHoverBrush}", container, StringComparison.Ordinal);
+        Assert.Contains("{StaticResource TdContentVoidBrush}", container, StringComparison.Ordinal);
+        Assert.DoesNotContain("#07090D", container, StringComparison.Ordinal);
         foreach (string view in new[] { launcher, picker, container })
         {
             Assert.DoesNotContain("Cascadia Mono", view, StringComparison.Ordinal);

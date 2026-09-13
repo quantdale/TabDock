@@ -600,7 +600,7 @@
         <!-- The native marker remains the single content-area authority. It is
              deliberately not a keyboard tab stop: focusing the marker HWND
              would park keyboard focus on a pane with no interactive behavior. -->
-        <Border Grid.Row="3" Background="#07090D" x:Name="ContentBorder">
+        <Border Grid.Row="3" Background="{StaticResource TdContentVoidBrush}" x:Name="ContentBorder">
             <Grid>
                 <infra:NativeHwndHost x:Name="ContentHost"
                                       Focusable="False"

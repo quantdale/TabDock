@@ -26,6 +26,7 @@
         <SolidColorBrush x:Key="TdSurfaceInteractiveBrush" Color="#1B212B" />
         <SolidColorBrush x:Key="TdSurfaceHoverBrush" Color="#222A36" />
         <SolidColorBrush x:Key="TdInputBrush" Color="#11151C" />
+        <SolidColorBrush x:Key="TdContentVoidBrush" Color="#07090D" />
         <SolidColorBrush x:Key="TdBorderBrush" Color="#272D38" />
         <SolidColorBrush x:Key="TdBorderStrongBrush" Color="#394252" />
         <SolidColorBrush x:Key="TdTextBrush" Color="#F7F8FA" />
