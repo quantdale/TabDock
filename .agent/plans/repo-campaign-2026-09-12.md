@@ -1,6 +1,7 @@
 # Plan: repository-wide engineering campaign (2026-09-12)
 
-**Status:** active
+**Status:** active — final validation matrix complete on both review surfaces;
+integration into `main` is the remaining step
 **Owner/session:** OpenCode goal continuation (overnight campaign)
 **Ground truth:** `git branch --show-current`, `git rev-parse HEAD`, `git status`
 (dynamic; never embed the self-referential SHA here)
@@ -100,11 +101,35 @@ path/user-input handling. Evidence:
 No actionable finding; no code change required. Recorded as a verified
 negative so a future session does not re-run the same sweep by default.
 
-### Final validation matrix (NEXT)
+### Final validation matrix (COMPLETE)
 
-Re-run the strongest gates on the exact final commit of each branch
-(Debug/Release builds, unit tests, `validate.ps1`, release-tooling), push both
-review surfaces, and report exact-SHA results including the external CI block.
+Exact-SHA gates on the final commit of each review surface — all steps
+`exit=0` (logs `tabdock-matrix-*`):
+
+- `campaign/runtime-perf-and-coverage-2026-09-12` @ `3c70ce0`: Debug/Release
+  builds 0 warnings; 812/812 unit Debug + 812/812 unit Release (inside
+  `validate.ps1`); `validate.ps1 -Release -Ci -Publish` exit 0 (OpenSpec 38/38,
+  publish smoke); release-tooling 179/179. Pushed to `origin`.
+- `ui/refero-frontend-overhaul` @ `105cb80` (PR #13): Debug/Release builds
+  0 warnings; 827/827 unit Debug + 827/827 unit Release; `validate.ps1
+  -Release -Ci -Publish` exit 0; release-tooling 179/179. Pushed to `origin`;
+  PR #13 head updated.
+
+The original matrix run at `4c0675d` was green on those same gates, but the
+review pass found the launcher redesign had broken the driver's
+`launcher-empty-state-hint` scenario (it matched the removed visible copy);
+the scenario is `includeInAll`, so the supervised scenario lane would have
+failed. Repaired at `105cb80`: the heading carries a stable
+`LauncherEmptyStateHeading` automation id located by the driver, and the
+picker scroll retry now locates `CaptureRefresh` by id (its exact `"Refresh"`
+name lookup never matched even on `main`). Verified on the real app:
+`launcher-empty-state-hint` PASS (UiAutomationRead lane).
+
+Hosted CI remains externally blocked: every run stops before any step
+(`build` and `native-abi-evidence` fail with 0 steps executed — Actions
+billing/runner allocation, not a source failure). The local exact-SHA gates
+above are the available qualification. Integration of both surfaces into
+`main` follows (plan-file conflict resolved to this superset version).
 
 ## Constraints
 
