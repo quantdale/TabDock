@@ -15,7 +15,7 @@
         ResizeMode="CanResize"
         Background="{StaticResource TdWindowBackgroundBrush}"
         Foreground="{StaticResource TdTextBrush}"
-        FontFamily="Segoe UI Variable Text, Segoe UI"
+        FontFamily="{StaticResource TdUiFont}"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
         Name="Root">
@@ -30,7 +30,7 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Width" Value="46" />
             <Setter Property="Height" Value="38" />
-            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets, Segoe UI Symbol" />
+            <Setter Property="FontFamily" Value="{StaticResource TdIconFont}" />
             <Setter Property="FontSize" Value="10" />
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True" />
@@ -341,10 +341,10 @@
                                             <Setter Property="BorderThickness" Value="1" />
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Left.IsActive}" Value="True">
-                                                    <Setter Property="Background" Value="#2A3E68" />
+                                                    <Setter Property="Background" Value="{StaticResource TdSplitActiveBrush}" />
                                                 </DataTrigger>
                                                 <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                                    <Setter Property="Background" Value="#22304F" />
+                                                    <Setter Property="Background" Value="{StaticResource TdSplitHoverBrush}" />
                                                 </DataTrigger>
                                                 <Trigger Property="IsKeyboardFocusWithin" Value="True">
                                                     <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
@@ -382,10 +382,10 @@
                                             <Setter Property="BorderThickness" Value="1" />
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Right.IsActive}" Value="True">
-                                                    <Setter Property="Background" Value="#2A3E68" />
+                                                    <Setter Property="Background" Value="{StaticResource TdSplitActiveBrush}" />
                                                 </DataTrigger>
                                                 <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                                    <Setter Property="Background" Value="#22304F" />
+                                                    <Setter Property="Background" Value="{StaticResource TdSplitHoverBrush}" />
                                                 </DataTrigger>
                                                 <Trigger Property="IsKeyboardFocusWithin" Value="True">
                                                     <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
@@ -529,7 +529,7 @@
                                                 <TextBlock Text="{Binding Title}" Foreground="{StaticResource TdTextBrush}"
                                                            FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                                                 <TextBlock Text="{Binding ExePath}" Foreground="{StaticResource TdTextSubtleBrush}"
-                                                           FontFamily="Cascadia Mono, Consolas" FontSize="9"
+                                                           FontFamily="{StaticResource TdMonoFont}" FontSize="9"
                                                            TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
                                             </StackPanel>
                                         </Grid>

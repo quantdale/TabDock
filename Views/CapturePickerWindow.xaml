@@ -14,7 +14,7 @@
         WindowStartupLocation="CenterOwner"
         Background="{StaticResource TdWindowBackgroundBrush}"
         Foreground="{StaticResource TdTextBrush}"
-        FontFamily="Segoe UI Variable Text, Segoe UI"
+        FontFamily="{StaticResource TdUiFont}"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True">
 
@@ -182,7 +182,7 @@
                                                        FontWeight="SemiBold" FontSize="12"
                                                        TextTrimming="CharacterEllipsis" />
                                             <TextBlock Text="{Binding ExePath}" Foreground="{StaticResource TdTextSubtleBrush}"
-                                                       FontFamily="Cascadia Mono, Consolas" FontSize="9.5"
+                                                       FontFamily="{StaticResource TdMonoFont}" FontSize="9.5"
                                                        TextTrimming="CharacterEllipsis" Margin="0,3,0,0" />
                                         </StackPanel>
                                     </Grid>

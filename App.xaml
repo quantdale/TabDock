@@ -11,6 +11,13 @@
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
         <converters:ColorToBrushConverter x:Key="ColorToBrushConverter" />
 
+        <!-- Shared font stacks: UI text, display headings, monospace diagnostics,
+             caption icon glyphs. -->
+        <FontFamily x:Key="TdUiFont">Segoe UI Variable Text, Segoe UI</FontFamily>
+        <FontFamily x:Key="TdDisplayFont">Segoe UI Variable Display, Segoe UI Variable Text, Segoe UI</FontFamily>
+        <FontFamily x:Key="TdMonoFont">Cascadia Mono, Consolas</FontFamily>
+        <FontFamily x:Key="TdIconFont">Segoe Fluent Icons, Segoe MDL2 Assets, Segoe UI Symbol</FontFamily>
+
         <!-- Compact, utility-first dark product palette. -->
         <SolidColorBrush x:Key="TdWindowBackgroundBrush" Color="#080A0E" />
         <SolidColorBrush x:Key="TdChromeBrush" Color="#0C0F14" />
@@ -31,6 +38,8 @@
         <SolidColorBrush x:Key="TdPrimaryFillBrush" Color="#486ED8" />
         <SolidColorBrush x:Key="TdPrimaryHoverBrush" Color="#557BE3" />
         <SolidColorBrush x:Key="TdPrimaryPressedBrush" Color="#3D5FBF" />
+        <SolidColorBrush x:Key="TdSplitActiveBrush" Color="#2A3E68" />
+        <SolidColorBrush x:Key="TdSplitHoverBrush" Color="#22304F" />
         <SolidColorBrush x:Key="TdWarningBrush" Color="#F2C45B" />
         <SolidColorBrush x:Key="TdWarningSurfaceBrush" Color="#282113" />
         <SolidColorBrush x:Key="TdWarningBorderBrush" Color="#665224" />
@@ -39,7 +48,6 @@
         <SolidColorBrush x:Key="TdDangerSurfaceBrush" Color="#301B21" />
         <SolidColorBrush x:Key="TdDangerBorderBrush" Color="#64303B" />
         <SolidColorBrush x:Key="TdDangerHoverBrush" Color="#3A2028" />
-        <SolidColorBrush x:Key="TdSuccessBrush" Color="#68D5A8" />
         <SolidColorBrush x:Key="TdScrollThumbBrush" Color="#2E3644" />
         <SolidColorBrush x:Key="TdScrollThumbHoverBrush" Color="#4A5468" />
 
@@ -61,11 +69,6 @@
             <Setter Property="CornerRadius" Value="8" />
         </Style>
 
-        <Style x:Key="TdRaisedCard" TargetType="{x:Type Border}" BasedOn="{StaticResource TdCard}">
-            <Setter Property="Background" Value="{StaticResource TdSurfaceRaisedBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource TdBorderStrongBrush}" />
-        </Style>
-
         <Style x:Key="TdBadge" TargetType="{x:Type Border}">
             <Setter Property="Background" Value="{StaticResource TdSurfaceInteractiveBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
@@ -81,7 +84,7 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="14,8" />
             <Setter Property="MinHeight" Value="38" />
-            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontFamily" Value="{StaticResource TdUiFont}" />
             <Setter Property="FontSize" Value="13" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Cursor" Value="Hand" />
@@ -187,7 +190,7 @@
             <Setter Property="MinHeight" Value="38" />
             <Setter Property="CaretBrush" Value="{StaticResource TdTextBrush}" />
             <Setter Property="SelectionBrush" Value="{StaticResource TdAccentBrush}" />
-            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontFamily" Value="{StaticResource TdUiFont}" />
             <Setter Property="FontSize" Value="13" />
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="Template">
@@ -221,7 +224,7 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="10,6" />
             <Setter Property="MinHeight" Value="38" />
-            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontFamily" Value="{StaticResource TdUiFont}" />
             <Setter Property="FontSize" Value="13" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="FocusVisualStyle" Value="{StaticResource TdFocusVisualStyle}" />
@@ -287,7 +290,7 @@
                                                                   ContentTemplate="{Binding SelectionBoxItemTemplate, RelativeSource={RelativeSource AncestorType={x:Type ComboBox}}}"
                                                                   ContentStringFormat="{Binding SelectionBoxItemStringFormat, RelativeSource={RelativeSource AncestorType={x:Type ComboBox}}}" />
                                                 <TextBlock Grid.Column="1" Text="&#xE70D;"
-                                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                           FontFamily="{StaticResource TdIconFont}"
                                                            FontSize="9" Margin="0,0,10,0"
                                                            VerticalAlignment="Center"
                                                            Foreground="{StaticResource TdTextMutedBrush}" />
@@ -424,25 +427,25 @@
 
         <Style x:Key="TdSectionLabel" TargetType="{x:Type TextBlock}">
             <Setter Property="Foreground" Value="{StaticResource TdTextMutedBrush}" />
-            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontFamily" Value="{StaticResource TdUiFont}" />
             <Setter Property="FontSize" Value="11" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <Style x:Key="TdHeading" TargetType="{x:Type TextBlock}">
             <Setter Property="Foreground" Value="{StaticResource TdTextBrush}" />
-            <Setter Property="FontFamily" Value="Segoe UI Variable Display, Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontFamily" Value="{StaticResource TdDisplayFont}" />
             <Setter Property="FontSize" Value="22" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <Style x:Key="TdSubheading" TargetType="{x:Type TextBlock}">
             <Setter Property="Foreground" Value="{StaticResource TdTextBrush}" />
-            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontFamily" Value="{StaticResource TdUiFont}" />
             <Setter Property="FontSize" Value="15" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <Style x:Key="TdBodyMuted" TargetType="{x:Type TextBlock}">
             <Setter Property="Foreground" Value="{StaticResource TdTextMutedBrush}" />
-            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontFamily" Value="{StaticResource TdUiFont}" />
             <Setter Property="FontSize" Value="12" />
         </Style>
 
@@ -456,7 +459,7 @@
             <Setter Property="BorderBrush" Value="{StaticResource TdBorderStrongBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="4" />
-            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontFamily" Value="{StaticResource TdUiFont}" />
             <Setter Property="FontSize" Value="12" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -476,7 +479,7 @@
             <Setter Property="Foreground" Value="{StaticResource TdTextBrush}" />
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Padding" Value="10,6" />
-            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontFamily" Value="{StaticResource TdUiFont}" />
             <Setter Property="FontSize" Value="12" />
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="Template">
@@ -501,7 +504,7 @@
                                                Foreground="{StaticResource TdTextSubtleBrush}"
                                                Margin="18,0,0,0" VerticalAlignment="Center" />
                                     <TextBlock x:Name="SubmenuArrow" Grid.Column="3" Text="&#xE76C;"
-                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                               FontFamily="{StaticResource TdIconFont}"
                                                FontSize="9" Margin="10,0,0,0"
                                                VerticalAlignment="Center" Visibility="Collapsed" />
                                 </Grid>
@@ -549,7 +552,7 @@
             <Setter Property="BorderBrush" Value="{StaticResource TdBorderStrongBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="8,5" />
-            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontFamily" Value="{StaticResource TdUiFont}" />
             <Setter Property="FontSize" Value="11" />
             <Setter Property="Template">
                 <Setter.Value>

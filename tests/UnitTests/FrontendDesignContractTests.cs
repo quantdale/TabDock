@@ -236,6 +236,52 @@ public sealed class FrontendDesignContractTests
         Assert.Contains("TabsListBox.ScrollIntoView(activeTab)", code, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SharedTokensReplaceRawPaletteAndFontLiteralsInViews()
+    {
+        string app = Read("App.xaml");
+        string launcher = Read("Views/MainWindow.xaml");
+        string picker = Read("Views/CapturePickerWindow.xaml");
+        string container = Read("Views/ContainerWindow.xaml");
+
+        Assert.Contains("x:Key=\"TdSplitActiveBrush\"", app, StringComparison.Ordinal);
+        Assert.Contains("x:Key=\"TdSplitHoverBrush\"", app, StringComparison.Ordinal);
+        Assert.Contains("x:Key=\"TdUiFont\"", app, StringComparison.Ordinal);
+        Assert.Contains("x:Key=\"TdMonoFont\"", app, StringComparison.Ordinal);
+        Assert.Contains("x:Key=\"TdIconFont\"", app, StringComparison.Ordinal);
+
+        // Split-half tints and font stacks resolve through shared tokens, not
+        // per-view literals that drift from the palette.
+        Assert.Contains("{StaticResource TdSplitActiveBrush}", container, StringComparison.Ordinal);
+        Assert.Contains("{StaticResource TdSplitHoverBrush}", container, StringComparison.Ordinal);
+        foreach (string view in new[] { launcher, picker, container })
+        {
+            Assert.DoesNotContain("Cascadia Mono", view, StringComparison.Ordinal);
+            Assert.DoesNotContain("Segoe UI Variable", view, StringComparison.Ordinal);
+            Assert.DoesNotContain("Segoe Fluent Icons", view, StringComparison.Ordinal);
+        }
+
+        // Removed speculative tokens stay removed until a consumer exists.
+        Assert.DoesNotContain("x:Key=\"TdSuccessBrush\"", app, StringComparison.Ordinal);
+        Assert.DoesNotContain("x:Key=\"TdRaisedCard\"", app, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DwmChromePaletteMatchesSharedTokenDefinitions()
+    {
+        string app = Read("App.xaml");
+        string helper = Read("Infrastructure/WindowChromeTheme.cs");
+
+        // WindowChromeTheme packs COLORREF values for DWM; keep them in lockstep
+        // with the App.xaml tokens the WPF window chrome renders with.
+        Assert.Contains("x:Key=\"TdChromeBrush\" Color=\"#0C0F14\"", app, StringComparison.Ordinal);
+        Assert.Contains("x:Key=\"TdTextBrush\" Color=\"#F7F8FA\"", app, StringComparison.Ordinal);
+        Assert.Contains("x:Key=\"TdBorderBrush\" Color=\"#272D38\"", app, StringComparison.Ordinal);
+        Assert.Contains("ToColorRef(0x0C, 0x0F, 0x14)", helper, StringComparison.Ordinal);
+        Assert.Contains("ToColorRef(0xF7, 0xF8, 0xFA)", helper, StringComparison.Ordinal);
+        Assert.Contains("ToColorRef(0x27, 0x2D, 0x38)", helper, StringComparison.Ordinal);
+    }
+
     private static string Slice(string text, string startMarker, string endMarker)
     {
         int start = text.IndexOf(startMarker, StringComparison.Ordinal);

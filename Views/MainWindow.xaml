@@ -12,7 +12,7 @@
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource TdWindowBackgroundBrush}"
         Foreground="{StaticResource TdTextBrush}"
-        FontFamily="Segoe UI Variable Text, Segoe UI"
+        FontFamily="{StaticResource TdUiFont}"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True">
 
@@ -101,11 +101,11 @@
                         <TextBlock Text="Review: TabDock.exe --pending-recovery"
                                    Margin="0,0,18,0"
                                    Foreground="{StaticResource TdTextMutedBrush}"
-                                   FontFamily="Cascadia Mono, Consolas" FontSize="10"
+                                   FontFamily="{StaticResource TdMonoFont}" FontSize="10"
                                    AutomationProperties.AutomationId="PendingRecoveryInspectCommand" />
                         <TextBlock Text="Recover: TabDock.exe --recover-pending"
                                    Foreground="{StaticResource TdTextMutedBrush}"
-                                   FontFamily="Cascadia Mono, Consolas" FontSize="10"
+                                   FontFamily="{StaticResource TdMonoFont}" FontSize="10"
                                    AutomationProperties.AutomationId="PendingRecoveryRecoverCommand" />
                     </WrapPanel>
                 </StackPanel>
