@@ -1535,7 +1535,9 @@ internal static partial class Scenarios
                     else
                     {
                         // Exhausted scrolling: re-enumerate via Refresh, reset scroll.
-                        AutomationElement? refreshBtn = Uia.FindDescendantByName(picker, ControlType.Button, "Refresh", null, out int rc);
+                        // Located by automation id: the button's UIA name is the
+                        // longer "Refresh capturable windows" (locale-proof).
+                        AutomationElement? refreshBtn = Uia.FindDescendantByAutomationId(picker, "CaptureRefresh", out int rc);
                         if (refreshBtn != null && rc == 1)
                         {
                             (int fx, int fy) = Uia.Center(refreshBtn);

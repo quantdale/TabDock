@@ -56,6 +56,24 @@ The redesign was validated on the real application (Release build, interactive W
 
 - A split-affordance menu overlapped by a guest window observed during scripted capture was reproduced as a harness artifact of the capture tool's temporary topmost manipulation; a clean interaction capture shows the menu above the guest. The container code-behind (z-order/presentation authority) is unchanged from `main`.
 
+## Driver contract repair (2026-09-13)
+
+The redesigned launcher changed the empty-state heading copy, but the
+ValidationDriver scenario still located the heading by its old visible text
+(`"Create your first workspace"`). `launcher-empty-state-hint` is
+`includeInAll: true`, so the supervised scenario lane would have failed — a
+regression the branch's unit-only validation never exercised.
+
+- The heading now carries a stable `AutomationProperties.AutomationId`
+  (`LauncherEmptyStateHeading`); the driver locates it by id and
+  `FrontendDesignContractTests` locks both the id and the visible copy.
+- `Scenarios.cs`'s picker-scroll retry now locates `CaptureRefresh` by its
+  automation id. Its previous exact-`"Refresh"` name lookup never matched even
+  on `main`, because the button's UIA name is `"Refresh capturable windows"`.
+- Verification on the real application (UiAutomationRead lane, no SendInput):
+  `launcher-empty-state-hint` PASS — unique-id discovery, visible with zero
+  groups, hidden after capture, docked guest, no log exceptions, clean teardown.
+
 ## Accessibility
 
 Keyboard navigation, command bindings, stable automation IDs, focus borders, disabled states, and visible warning/status text are preserved. Important status surfaces use UI Automation live settings where appropriate. Selection no longer relies on subtle color alone: borders, check state, and row surfaces reinforce it. Automation IDs required by `ValidationDriver` are covered by contract tests.
@@ -76,7 +94,8 @@ Keyboard navigation, command bindings, stable automation IDs, focus borders, dis
 - [x] Branch diff audited against `main` for frontend-only scope plus contract tests/documentation.
 - [x] Key automation IDs and native presentation structural contracts covered by unit assertions.
 - [x] `dotnet build TabDock.sln` Debug and Release — 0 warnings, 0 errors.
-- [x] `dotnet test tests/UnitTests/TabDock.UnitTests.csproj` Debug and Release — 820/820 pass.
+- [x] `dotnet test tests/UnitTests/TabDock.UnitTests.csproj` Debug and Release — 827/827 pass.
+- [x] ValidationDriver `launcher-empty-state-hint` scenario (real app, UiAutomationRead) — PASS after the driver-contract repair.
 - [x] `scripts/validate.ps1 -Configuration Release -Ci -Publish` — exit 0.
 - [x] `scripts/release-tooling-tests.ps1` — 179/179 pass.
 - [x] Runtime visual qualification on the real application (see above).

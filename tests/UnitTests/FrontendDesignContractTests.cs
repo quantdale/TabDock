@@ -42,6 +42,7 @@ public sealed class FrontendDesignContractTests
         Assert.Contains("AutomationProperties.AutomationId=\"PendingRecoverySummary\"", xaml, StringComparison.Ordinal);
         Assert.Contains("AutomationProperties.AutomationId=\"CaptureAdmissionStatus\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"GroupsListView\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("AutomationProperties.AutomationId=\"LauncherEmptyStateHeading\"", xaml, StringComparison.Ordinal);
         Assert.Contains("Build your first workspace", xaml, StringComparison.Ordinal);
     }
 
@@ -134,6 +135,15 @@ public sealed class FrontendDesignContractTests
             "<Popup x:Name=\"EmptyStateOverlay\"",
             xaml.Substring(hostIndex, emptyTextIndex - hostIndex),
             StringComparison.Ordinal);
+
+        // Declaration order alone is not nesting: the copy must live inside the
+        // popup, so reintroducing a WPF sibling (hidden by the native host's
+        // airspace) cannot satisfy this contract.
+        int popupStart = xaml.IndexOf("<Popup x:Name=\"EmptyStateOverlay\"", StringComparison.Ordinal);
+        int popupEnd = popupStart < 0 ? -1 : xaml.IndexOf("</Popup>", popupStart, StringComparison.Ordinal);
+        Assert.True(popupStart >= 0 && popupEnd > popupStart, "empty-state overlay popup must be closed");
+        Assert.True(emptyTextIndex > popupStart && emptyTextIndex < popupEnd,
+            "empty-state copy must be nested inside the airspace-safe popup");
     }
 
     [Fact]

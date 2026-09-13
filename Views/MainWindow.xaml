@@ -239,6 +239,7 @@
                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <TextBlock Text="Build your first workspace"
+                                   AutomationProperties.AutomationId="LauncherEmptyStateHeading"
                                    Style="{StaticResource TdSubheading}"
                                    HorizontalAlignment="Center" />
                         <TextBlock Text="Create an empty workspace or capture the windows already open on your desktop."

@@ -1537,20 +1537,21 @@ internal static partial class Scenarios
     // -------------------------------------------------------------------------
     // The launcher's empty-state hint must be visible with zero groups and
     // hidden once a group exists (MainWindow.xaml DataTrigger on Groups.Count).
-    // The redesigned empty state is headed "Create your first workspace"
-    // (MainWindow.xaml); match that stable heading. Pure UIA read — no input
-    // is ever sent to the hint element.
+    // The heading is located by its stable automation id so presentation copy
+    // changes cannot break the driver; the visible copy itself is guarded by
+    // FrontendDesignContractTests. Pure UIA read — no input is ever sent to the
+    // hint element.
     // -------------------------------------------------------------------------
     private static void LauncherEmptyStateHint(Ctx ctx, Options opt)
     {
-        const string emptyStateHeading = "Create your first workspace";
+        const string emptyStateHeadingId = "LauncherEmptyStateHeading";
         AutomationElement? mainEl = Uia.FromHwnd(ctx.MainHwnd);
         ctx.Check(mainEl != null, "launcher MainWindow UIA element available");
         int hintCount = 0;
         AutomationElement? hint = mainEl == null
             ? null
-            : Uia.FindDescendantByName(mainEl, ControlType.Text, null, emptyStateHeading, out hintCount);
-        ctx.Check(hint != null && hintCount == 1, $"launcher empty-state hint '{emptyStateHeading}' found uniquely (count={hintCount})");
+            : Uia.FindDescendantByAutomationId(mainEl, emptyStateHeadingId, out hintCount);
+        ctx.Check(hint != null && hintCount == 1, $"launcher empty-state hint '{emptyStateHeadingId}' found uniquely (count={hintCount})");
 
         bool hintVisible = false;
         if (hint != null)
@@ -1578,7 +1579,7 @@ internal static partial class Scenarios
         int hintCount2 = 0;
         AutomationElement? hint2 = mainEl2 == null
             ? null
-            : Uia.FindDescendantByName(mainEl2, ControlType.Text, null, emptyStateHeading, out hintCount2);
+            : Uia.FindDescendantByAutomationId(mainEl2, emptyStateHeadingId, out hintCount2);
         bool hintGone = false;
         try
         {
