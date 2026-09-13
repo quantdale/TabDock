@@ -1,7 +1,9 @@
 # Plan: repository-wide engineering campaign (2026-09-12)
 
-**Status:** complete — both review surfaces integrated into `main`; exact-SHA
-matrix green on each surface, integrated gates re-run on the merge commit
+**Status:** complete and closed (2026-09-13) — both review surfaces integrated
+into `main` (PRs #13/#14 merged); exact-SHA matrices green per surface, on the
+integration merge, and on the final code SHA after the post-integration
+successor passes. Remaining items are external blockers only.
 **Owner/session:** OpenCode goal continuation (overnight campaign)
 **Ground truth:** `git branch --show-current`, `git rev-parse HEAD`, `git status`
 (dynamic; never embed the self-referential SHA here)
@@ -180,6 +182,31 @@ Hosted CI remains externally blocked: every run stops before any step
 billing/runner allocation, not a source failure). The local exact-SHA gates
 above are the available qualification.
 
+## Closure (2026-09-13)
+
+Integration: both surfaces merged to `main` at `136f91c` (superset plan
+preserved); GitHub detected the merge and marked PRs #13 and #14 `MERGED`.
+Integrated gates at `136f91c`: all matrix steps exit 0, 827/827 both configs,
+`validate.ps1 -Release -Ci -Publish` exit 0, release-tooling 179/179,
+`--selftest all` 173/173, `launcher-empty-state-hint` PASS.
+
+Post-integration successor passes:
+
+1. Driver contract repair (delivered on the UI surface before merge).
+2. `docs/FRONTEND.md` maintainer guide, linked from `docs/ARCHITECTURE.md`.
+3. Design-token cleanup: split tints and font stacks tokenized, the container
+   content void tokenized, unused `TdSuccessBrush`/`TdRaisedCard` removed, and
+   new contract tests for token usage, literal absence, and
+   WindowChromeTheme/App.xaml palette lockstep.
+4. Repository hygiene: the accidentally-named generated artifact tree
+   (`AAAA…`, 44 directories) removed, temporary worktree and merged local
+   branches pruned, personal paths and the device-account email sanitized in
+   investigation records, README launcher label corrected.
+
+Final code SHA `d670c84` (tokenized views): full matrix all steps exit 0,
+829/829 both configs, runtime scenario PASS; later docs-only commits do not
+retag it. Working tree clean; no untracked artifacts remain.
+
 ## Constraints
 
 - Preserve the Shepherd/no-reparent architecture, automation IDs, and native
@@ -200,3 +227,8 @@ workstream.
 Campaign ends only when locally executable work is exhausted (Condition A),
 remaining work is externally blocked (Condition B), or further changes would be
 speculative (Condition C) — recorded here and in `.agent/STATE.md`.
+
+**Closed by Condition A + B:** every locally executable workstream (including
+the post-integration successor passes) is complete and validated; the
+remaining items are external — Actions billing/runner allocation, Authenticode
+signing material, and mixed/high-DPI hardware cells.
