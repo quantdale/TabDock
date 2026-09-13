@@ -37,13 +37,33 @@ executed — Actions billing/runner allocation, not a source failure).
   `CaptureRefresh`; `launcher-empty-state-hint` PASS on the real app
   (the redesign's visible-copy change had broken the old lookup).
 
-### Validation at integrated main `136f91c`
+### Validation at integrated main
 
-- Debug/Release builds 0 warnings; 827/827 unit Debug + 827/827 Release;
-  `validate.ps1 -Release -Ci -Publish` exit 0 (OpenSpec 38/38, publish smoke);
-  release-tooling 179/179; `--selftest all` 173/173; launcher scenario PASS.
+- `136f91c` (integration merge): all matrix steps exit 0; 827/827 both
+  configs; `validate.ps1 -Release -Ci -Publish` exit 0 (OpenSpec 38/38,
+  publish smoke); release-tooling 179/179; `--selftest all` 173/173;
+  `launcher-empty-state-hint` scenario PASS.
+- `0a47dab` (exact SHA for the tokenized views): all matrix steps exit 0;
+  829/829 both configs; the driver scenario renders launcher, picker, and
+  container successfully. Later docs-only commits do not retag it.
 - Per-surface exact-SHA matrices before merge: campaign `3c70ce0` (812/812),
   UI `105cb80` (827/827) — all steps exit 0 on both.
+
+### Post-integration successor passes (2026-09-13)
+
+1. Driver contract repair (on the UI surface before merge): launcher empty
+   state located by `LauncherEmptyStateHeading`, picker retry by
+   `CaptureRefresh`; scenario PASS on the real app.
+2. `docs/FRONTEND.md` maintainer guide (tokens, chrome, airspace rule,
+   automation-ID and binding-error contracts), linked from ARCHITECTURE.
+3. Design-token cleanup: split tints and font stacks tokenized; unused
+   `TdSuccessBrush`/`TdRaisedCard` removed; contract tests added for token
+   usage, literal absence, and WindowChromeTheme/App.xaml palette lockstep.
+4. Repository hygiene: the accidentally-named generated artifact tree
+   (`AAAA…`, 44 directories of reproducible publish/packet output with no
+   durable references) removed; temporary UI worktree removed; merged local
+   branches deleted; personal paths and the device-account email sanitized in
+   investigation records; README launcher label corrected.
 
 ### Qualification status (external gates unchanged)
 
@@ -62,8 +82,7 @@ executed — Actions billing/runner allocation, not a source failure).
 
 ### Next action
 
-Continue bounded successor passes discovered after integration (maintainer
-documentation for the frontend design system, review-finding drift cleanup,
-repository hygiene). Remaining known limitations are external — signing
-material, hosted CI billing, mixed-DPI hardware — or require new product
-direction; do not re-run resolved sweeps.
+No further locally executable workstream is identified. Remaining items are
+external (Authenticode signing material, hosted CI billing/runner allocation,
+mixed-DPI hardware for the blocked visual cells) or require new product
+direction. Do not re-run resolved sweeps.
