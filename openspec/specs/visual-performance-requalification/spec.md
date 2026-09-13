@@ -1,7 +1,7 @@
 # visual-performance-requalification Specification
 
 ## Purpose
-TBD - created by archiving change visual-evidence-closure-and-performance-requalification. Update Purpose after archive.
+Visual-evidence resource budgets and disabled-path overhead so resource-lifecycle qualification remains honest.
 ## Requirements
 ### Requirement: Visual overhead measurements SHALL be repeated, identity-bound, and distributional
 

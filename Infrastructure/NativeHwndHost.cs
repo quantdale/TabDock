@@ -47,9 +47,12 @@ public class NativeHwndHost : HwndHost
                 hInstance = hInstance,
                 hCursor = NativeMethods.LoadCursor(IntPtr.Zero, NativeMethods.IDC_ARROW),
                 // A brush handed to RegisterClassEx is owned by the system for the
-                // class's lifetime — it must never be DeleteObject'd. Matches the
-                // WPF ContentBorder background #1E1E1E so there is no visible seam.
-                hbrBackground = NativeMethods.CreateSolidBrush(0x001E1E1E),
+                // class's lifetime — it must never be DeleteObject'd. Must stay in
+                // lockstep with the WPF TdContentVoidBrush token (#07090D → COLORREF
+                // 0x000D0907): this child HWND paints above its WPF siblings
+                // (airspace), so the native fill is the visible void wherever a
+                // guest does not fully cover the content rect.
+                hbrBackground = NativeMethods.CreateSolidBrush(0x000D0907),
                 lpszClassName = WindowClass,
             };
 

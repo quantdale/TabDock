@@ -1,7 +1,7 @@
 # recovery-journal-compatibility Specification
 
 ## Purpose
-TBD - created by archiving change post-remediation-review-followup-2026-08-13. Update Purpose after archive.
+Hidden-window journal version compatibility and pending-recovery source-instance identity across journal generations.
 ## Requirements
 ### Requirement: Recovery journal schema changes SHALL be explicit
 

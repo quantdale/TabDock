@@ -1,29 +1,8 @@
 # test-tooling-safety
 
 ## Purpose
-Captures the ownership-validation, guarded-spawn compliance, and portability semantics of the Spike and ValidationDriver test tooling.
+ValidationDriver ownership, spawn, isolation, shard, and input-identity safety for real-input qualification. The experimental reparent Spike is not a live target.
 ## Requirements
-### Requirement: The Spike only reparents a window it spawned itself
-`FindCmdWindow` SHALL verify, via `GetWindowThreadProcessId`, that a candidate console window belongs to the `cmd.exe` process the orchestrator spawned before returning it. A window that merely matches class or title (e.g. a pre-existing console the user owns) SHALL be skipped and the retry loop continued.
-
-#### Scenario: A pre-existing console window is never touched
-- **WHEN** the Spike runs while the user already has a console (or a window titled "...cmd.exe") open
-- **THEN** that window is never `SetParent`'d, restyled, hidden, or killed by the Spike - only the orchestrator's own spawned `cmd.exe` window is used
-
-### Requirement: Every Spike process spawn routes through the guarded-spawn pattern
-All `Process.Start` call sites in the Spike - including the internal `taskkill` - SHALL go through `SpawnGuarded` (spawn cap, tracking, `KillAllTracked` on exit/timeout), per `docs/internal/guarded-spawn-pattern.md`.
-
-#### Scenario: A failed Spike run kills every process it started
-- **WHEN** the Spike aborts on timeout, failure, or Ctrl+C after spawning processes
-- **THEN** every spawned process, including the `taskkill` helper, was counted against the cap and is tracked and killed by the guardrails
-
-### Requirement: Spike child modes validate their HWND/PID arguments
-The `--host` and `--checker` entry points SHALL validate that a parsed HWND is a real window (`IsWindow`) of the expected class and owning process before any `SetParent`/restyle, and SHALL exit with a clear error on malformed arguments instead of an unhandled `FormatException`.
-
-#### Scenario: A bogus --host HWND is refused
-- **WHEN** the Spike is invoked as `--host <hwnd>` where `<hwnd>` is not a window owned by the expected process
-- **THEN** it exits with a clear error and performs no reparenting or restyling
-
 ### Requirement: The ValidationDriver is portable across machines
 The driver SHALL resolve `TabDockExe`/`PigExe` relative to its own assembly location and SHALL locate browsers by probing well-known install paths / PATH, rather than hardcoded absolute paths under a specific developer's machine.
 
@@ -81,3 +60,30 @@ unrelated user state.
 - **WHEN** the user's primary is isolated and a stale valid backup exists
 - **THEN** the scenario starts with no persisted groups and cleanup restores the
   original primary and backup files
+
+### Requirement: Live tooling SHALL NOT present the deleted Spike as current
+Canonical live agent instructions, the testing playbook, the agent guide
+solution map, the qualification-script synopsis, and the optional performance
+build matrix SHALL describe only projects that exist in the repository: the
+main application, UnitTests, ValidationDriver, GuineaPig, and the
+compile-only Performance harness. They SHALL NOT list `Spike/TabDock.Spike`
+as a solution member, a qualification build target, or a live safety
+obligation. Guarded-spawn documentation MAY retain the historical Spike
+incident as provenance without instructing operators to build or run Spike.
+Historical audit records MAY mention Spike as past tense.
+
+#### Scenario: Qualification docs match the solution
+- **WHEN** an operator reads `AGENTS.md`, `docs/TESTING.md`, or the
+  `validate.ps1` synopsis
+- **THEN** those texts do not claim that the solution or canonical
+  qualification build compiles Spike
+
+#### Scenario: Performance matrix does not compile a missing Spike project
+- **WHEN** `scripts/perf.ps1` is invoked with its build-matrix switch
+- **THEN** it restores and compiles only in-repo projects and does not invoke
+  `dotnet build` on `Spike\TabDock.Spike\TabDock.Spike.csproj`
+
+#### Scenario: Test-tooling spec no longer obligates a reparent Spike
+- **WHEN** an implementer applies `test-tooling-safety`
+- **THEN** no remaining requirement asks them to spawn, reparent, or
+  HWND-validate a Spike process

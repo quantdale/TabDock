@@ -59,14 +59,16 @@ release and whenever a dependency is added.
 ```
 TabDock.sln
 ├── TabDock.csproj                    Main WPF application
-└── Spike/TabDock.Spike/              Experimental survival spike
+└── tests/UnitTests/                  xUnit behavioral suite
 
 tests/ValidationDriver/               Not in TabDock.sln — build/run by project path
 ├── TabDock.ValidationDriver/         Real-input (SendInput) validation harness
 └── TabDock.GuineaPig/                Disposable WinForms target app it spawns
+
+tests/Performance/                    Not in TabDock.sln — compile-only engineering harness
 ```
 
-The main csproj excludes `bin/**`, `obj/**`, `Spike/**`, `tests/**`, and `docs/**` from its default item globs. The ValidationDriver project compiles the main project's `NativeMethods.cs` into itself via a `<Compile Include="..\..\..\NativeMethods.cs" Link="..."/>` item — edits to `NativeMethods.cs` affect both.
+The main csproj excludes `bin/**`, `obj/**`, `tests/**`, `docs/**`, and `Spike/**` from its default item globs; the Spike exclusion is a guard so a recreated experimental tree can never be compiled into the product. The ValidationDriver project compiles the main project's `NativeMethods.cs` into itself via a `<Compile Include="..\..\..\NativeMethods.cs" Link="..."/>` item — edits to `NativeMethods.cs` affect both.
 
 ### Main project code organization
 
@@ -91,7 +93,7 @@ The main csproj excludes `bin/**`, `obj/**`, `Spike/**`, `tests/**`, and `docs/*
 | `GuestLifecycleService` | The single consumer of `WinEventMonitor` events. Owns all WinEvent policy: destroy/hide teardown (guest-initiated-hide classification, empty-group container close), minimize restore, move/size re-glue routing, foreground z-order pairing, and the 250 ms name-change debounce. Interface is one `Attach(WinEventMonitor)` call; member resolution goes through `GroupManager.TryGetCapturedMember` |
 | `PersistenceService` | Version-2 metadata persistence with v1 migration, future-version preservation, corrupt-vs-unreadable classification, valid-backup recovery only when safe, durable atomic writes, fail-safe overwrite blocking, and no accumulation/restoration of unmaterialized zero-tab shells |
 | `WinEventMonitor` | Out-of-process `SetWinEventHook` wrapper for destroy/rename/minimize/foreground/move-size events on captured windows. Filters by direct member-HWND match — never by `GetAncestor`, which cannot see an already-destroyed window's ancestors. Hook installation is a bounded transaction with injected failure tests; capture admission is disabled while unhealthy and captured guests are released after retry exhaustion |
-| `HotkeyService` | Registers global `Ctrl+Alt+G` hotkey (with `MOD_NOREPEAT`, so holding the key does not stack capture pickers) |
+| `HotkeyService` | Registers the global hotkeys: `Ctrl+Alt+G` capture picker (with `MOD_NOREPEAT`, so holding the key does not stack pickers), `Ctrl+Alt+Shift+D` diagnostic support-bundle export, and `Ctrl+Alt+PageUp`/`Ctrl+Alt+PageDown` foreground-guest-scoped tab navigation |
 | `IconService` | Extracts executable icons for tab thumbnails, cached per (case-insensitive) exe path |
 | `LoggingService` | Rotating file logger in `%APPDATA%\TabDock\logs\TabDock.log`. Callers only enqueue; a background thread batches queued lines through one persistent append handle. If storage is unavailable it keeps a bounded memory-only tail and reports the degraded capability |
 
@@ -119,7 +121,7 @@ Run the app:
 dotnet build TabDock.sln
 ```
 
-Note this builds only the main app and the Spike — the ValidationDriver/GuineaPig projects are not in the solution and must be built by project path.
+Note this builds the main app and the UnitTests suite — the ValidationDriver/GuineaPig projects and the compile-only Performance harness are not in the solution and must be built by project path.
 
 ### Publish a single-file executable
 
@@ -182,10 +184,6 @@ The `README.md` contains a detailed manual checklist covering:
 
 Use this checklist before considering a build ready for use.
 
-### Survival spike
-
-`Spike/TabDock.Spike` is an experimental console app that reparents a Command Prompt into a throwaway host and then force-kills the host to observe whether the child HWND survives. It is not part of normal CI; run it only when investigating OS-level reparenting behavior.
-
 ---
 
 ## Code style guidelines
@@ -214,7 +212,7 @@ Any code that calls `Process.Start` must follow the guardrails in `docs/internal
 6. Visible, flushed console logging for every spawn/check/kill.
 7. Manual confirmation for one-off destructive tests.
 
-The pattern was made mandatory after a runaway self-recursion incident in `Spike/TabDock.Spike`.
+The pattern was made mandatory after a historical runaway self-recursion incident in the experimental reparent Spike, which was removed with the Shepherd migration.
 
 ### Performance-sensitive paths
 

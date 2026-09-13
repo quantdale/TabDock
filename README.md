@@ -433,9 +433,10 @@ attestation -> schema-3 external evidence -> publish THE SAME retained bytes
   authorities, plus `main-only-build-qualifies-main` coverage), and static workflow
   guarantees; no real certificates, no publishing, no provider contact).
   The suite is an exact-SHA hosted-CI gate in `build.yml`.
-  Split presentation and render budgets are now deterministically gated in
-  hosted CI via `SplitInteractionPolicy` / `PresentationOperationBudget` unit
-  tests (in addition to supervised `ValidationDriver` real-input coverage).
+  Split presentation is deterministically gated in hosted CI by the
+  `SplitInteractionPolicy`, `SplitPresentationController`, and Wave 3
+  transition (`SplitControllerTransitionBehaviorTests` and related) unit
+  tests, in addition to supervised `ValidationDriver` real-input coverage.
 
 ### Signing policy
 

@@ -1,7 +1,7 @@
 # diagnostic-privacy Specification
 
 ## Purpose
-TBD - created by archiving change deep-audit-remediation-2026-08-13. Update Purpose after archive.
+Redaction of window titles, profile paths, and credential-like values in logs, doctor output, and support bundles.
 ## Requirements
 ### Requirement: Support-bundle text SHALL not contain personal paths or secrets
 Every support-bundle entry, including doctor text, JSON, trace, and recent-log

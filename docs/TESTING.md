@@ -58,7 +58,7 @@ project path. The CI-safe entry point is:
 .\scripts\validate.ps1 -Configuration Release -Ci -Publish
 ```
 
-It performs audited restore, solution/app/Spike/driver/GuineaPig Release
+It performs audited restore, solution/app/driver/GuineaPig/Performance Release
 builds, the headless xUnit behavioral suite, the bounded headless
 resource-lifecycle gate, the native-ABI self-test, `--version`, `--doctor`,
 support-bundle ZIP inspection, OpenSpec validation, and a self-contained

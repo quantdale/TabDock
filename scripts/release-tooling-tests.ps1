@@ -2884,15 +2884,21 @@ try {
     }
 
     New-TestCase 'release-workflow-checkouts-have-no-unnecessary-persisted-credentials' {
-        foreach ($wf in @('.github\workflows\publish-release.yml', '.github\workflows\prepare-release-candidate.yml', '.github\workflows\qualify-candidate.yml', '.github\workflows\build.yml')) {
-            $yml = [IO.File]::ReadAllText((Join-Path $repoRoot $wf))
+        # Enumerate every workflow, not a four-file allowlist: a generated
+        # Copilot/coding-agent setup file must not skip the credential gate.
+        $workflows = @(Get-ChildItem -Path (Join-Path $repoRoot '.github\workflows') -Filter '*.yml' | Sort-Object Name)
+        Assert-True ($workflows.Count -ge 4) "expected the release workflows to exist (found $($workflows.Count))"
+        $checkoutCount = 0
+        foreach ($wf in $workflows) {
+            $yml = [IO.File]::ReadAllText($wf.FullName)
             $checkouts = @(Get-CheckoutSteps $yml)
-            Assert-True ($checkouts.Count -ge 1) "$wf must contain at least one checkout step"
+            $checkoutCount += $checkouts.Count
             foreach ($step in $checkouts) {
-                Assert-True ($step -match 'persist-credentials: false') "checkout in $wf must not persist credentials: $step"
+                Assert-True ($step -match 'persist-credentials: false') "checkout in $($wf.Name) must not persist credentials: $step"
             }
-            Assert-True ($yml -notmatch 'persist-credentials: true') "no workflow may enable credential persistence: $wf"
+            Assert-True ($yml -notmatch 'persist-credentials: true') "no workflow may enable credential persistence: $($wf.Name)"
         }
+        Assert-True ($checkoutCount -ge 4) "expected the release workflows' checkout steps to be discovered (found $checkoutCount)"
     }
 
     New-TestCase 'stage-b-final-hash-and-signature-gates-remain-present' {
@@ -2927,12 +2933,10 @@ try {
         # publication trust boundary; every actions/* use must be a full 40-char
         # SHA with a trailing human-readable `# vX` comment. build.yml is also
         # pinned (non-production but hosted-CI sensitive) and is covered here.
-        $workflows = @(
-            '.github/workflows/build.yml',
-            '.github/workflows/prepare-release-candidate.yml',
-            '.github/workflows/publish-release.yml',
-            '.github/workflows/qualify-candidate.yml'
-        )
+        # Enumerate every workflow under .github/workflows, not a four-file
+        # allowlist, so a generated Copilot/setup file cannot skip the pin gate.
+        $workflows = @(Get-ChildItem -Path (Join-Path $repoRoot '.github\workflows') -Filter '*.yml' | Sort-Object Name)
+        Assert-True ($workflows.Count -ge 4) "expected the release workflows to exist (found $($workflows.Count))"
         $expected = @{
             'actions/checkout'          = '3d3c42e5aac5ba805825da76410c181273ba90b1'
             'actions/setup-dotnet'      = 'a98b56852c35b8e3190ac28c8c2271da59106c68'
@@ -2941,15 +2945,15 @@ try {
             'actions/download-artifact' = '37930b1c2abaa49bbe596cd826c3c89aef350131'
         }
         foreach ($wf in $workflows) {
-            $yml = [IO.File]::ReadAllText((Join-Path $repoRoot $wf))
-            Assert-True ($yml -notmatch 'uses: actions/[^@\s]+@v\d') "mutable actions/* tag remains in $wf"
+            $yml = [IO.File]::ReadAllText($wf.FullName)
+            Assert-True ($yml -notmatch 'uses: actions/[^@\s]+@v\d') "mutable actions/* tag remains in $($wf.Name)"
             foreach ($line in ($yml -split "`r?`n" | Where-Object { $_ -match '^\s*uses: actions/' })) {
-                Assert-True ($line -match 'uses: actions/[^@]+@[0-9a-f]{40}\s+#\s*v\d') "pinned actions/* line must carry a human-readable version comment: $wf : $line"
+                Assert-True ($line -match 'uses: actions/[^@]+@[0-9a-f]{40}\s+#\s*v\d') "pinned actions/* line must carry a human-readable version comment: $($wf.Name) : $line"
                 if ($line -match 'uses: (actions/[^@]+)@([0-9a-f]{40})') {
                     $action = $Matches[1]
                     $sha = $Matches[2]
                     if ($expected.ContainsKey($action)) {
-                        Assert-True ($sha -eq $expected[$action]) "$wf : $action SHA $sha != expected $($expected[$action])"
+                        Assert-True ($sha -eq $expected[$action]) "$($wf.Name) : $action SHA $sha != expected $($expected[$action])"
                     }
                 }
             }

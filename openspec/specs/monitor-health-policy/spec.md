@@ -1,7 +1,7 @@
 # monitor-health-policy Specification
 
 ## Purpose
-TBD - created by archiving change deep-audit-remediation-2026-08-13. Update Purpose after archive.
+WinEvent hook health, capture-admission blocking, and fail-closed guest release after retry exhaustion when monitoring cannot be established.
 ## Requirements
 ### Requirement: Captured guests SHALL require a healthy complete WinEvent monitor
 Capture admission SHALL be disabled while the complete WinEvent hook set is not

@@ -1,7 +1,7 @@
 # startup-group-visibility Specification
 
 ## Purpose
-TBD - created by archiving change startup-group-visibility. Update Purpose after archive.
+Restored groups open their containers on startup; a container-open failure is skipped rather than aborting the session.
 ## Requirements
 ### Requirement: User-initiated startup surfaces the restored group
 When the user launches TabDock and one or more persisted (empty layout-intent)

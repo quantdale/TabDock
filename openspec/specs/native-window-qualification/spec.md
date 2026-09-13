@@ -1,7 +1,7 @@
 # native-window-qualification Specification
 
 ## Purpose
-TBD - created by archiving change deep-audit-remediation-2026-08-13. Update Purpose after archive.
+Capture admission qualifications (elevation, identity, DPI context) before Shepherd installs a capture token.
 ## Requirements
 ### Requirement: Deferred window positioning SHALL chain HDWP handles
 The native `DeferWindowPos` declaration SHALL return the updated HDWP handle.

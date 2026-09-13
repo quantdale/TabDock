@@ -1,7 +1,7 @@
 # production-diagnostics Specification
 
 ## Purpose
-TBD - created by archiving change production-diagnostics-foundation. Update Purpose after archive.
+Read-only doctor, support-bundle, build identity, native snapshot, and diagnostic-trace supportability without Shepherd write authority.
 ## Requirements
 ### Requirement: Distributed binaries expose authoritative identity
 Every built TabDock executable SHALL expose a structured identity containing product name, semantic version, informational version, source commit when available, build configuration, runtime identifier when available, process/OS architecture, executable path, and a best-effort executable SHA-256 in diagnostic output. Identity SHALL be derived from build metadata and generated assembly metadata; runtime SHALL not require Git, a checkout, or a network. Missing values SHALL be reported as unavailable rather than fabricated.

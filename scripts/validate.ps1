@@ -2,9 +2,9 @@
 .SYNOPSIS
     One-command validation entry point for TabDock.
 .DESCRIPTION
-    Builds the solution once (covering the main app and Spike) plus the
-    ValidationDriver, GuineaPig, and non-gating Performance projects, then runs
-    the headless xUnit suite (the hermetic behavioral authority) plus the
+    Builds the solution once (the main app and UnitTests) plus the
+    ValidationDriver, GuineaPig, and compile-only Performance projects, then
+    runs the headless xUnit suite (the hermetic behavioral authority) plus the
     executable native-ABI probe and real process/command smokes. Real-input
     ValidationDriver execution is opt-in and remains supervised.
 .PARAMETER Configuration

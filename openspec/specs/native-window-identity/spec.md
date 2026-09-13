@@ -1,7 +1,7 @@
 # native-window-identity Specification
 
 ## Purpose
-TBD - created by archiving change post-remediation-review-followup-2026-08-13. Update Purpose after archive.
+Per-capture HWND generation tokens that reject recycled same-process HWNDs on delayed callbacks and crash rescue.
 ## Requirements
 ### Requirement: Slow native guest mutations SHALL require process-instance identity
 

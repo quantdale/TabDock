@@ -1,7 +1,7 @@
 # recovery-concurrency-closure Specification
 
 ## Purpose
-TBD - created by archiving change post-remediation-review-followup-2026-08-13. Update Purpose after archive.
+Product-mutation lease exclusion between live TabDock and supervised recover-pending, plus concurrent recovery refusal.
 ## Requirements
 ### Requirement: Supervised recovery has a durable resumable transaction
 `--recover-pending` SHALL persist a versioned transaction record containing a

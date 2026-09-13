@@ -93,6 +93,14 @@ inline capture panel is open). A sibling `Grid` child is invisible at runtime
 even though the XAML designer renders it; `FrontendDesignContractTests` guards
 the nesting.
 
+Because the marker paints above siblings, its native class background is the
+visible void wherever a guest does not cover the content rect (empty workspace,
+tab-switch gaps, layout gaps). `NativeHwndHost` MUST register that brush with
+the same RGB as `TdContentVoidBrush` (`#07090D` → COLORREF `0x000D0907`); a
+palette change is incomplete until both sides move together.
+`FrontendDesignContractTests.NativeContentHostFillMatchesSharedContentVoidToken`
+locks the token, the packed COLORREF, and the discovery class name.
+
 ## Automation contracts
 
 The ValidationDriver locates controls by automation ID first; removing or

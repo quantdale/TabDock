@@ -1,7 +1,7 @@
 # monitor-dpi-probing Specification
 
 ## Purpose
-TBD - created by archiving change post-remediation-review-followup-2026-08-13. Update Purpose after archive.
+Per-monitor effective DPI probing through the contract-correct Per-Monitor v2 helper, with fail-closed behavior on unknown or zero values.
 ## Requirements
 ### Requirement: Effective monitor DPI SHALL be queried through a DPI-aware API
 

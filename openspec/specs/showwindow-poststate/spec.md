@@ -1,7 +1,7 @@
 # showwindow-poststate Specification
 
 ## Purpose
-TBD - created by archiving change post-remediation-review-followup-2026-08-13. Update Purpose after archive.
+ShowWindow hide/show post-state classification for shepherded guests, including iconic and recovery-pending outcomes.
 ## Requirements
 ### Requirement: ShowWindow success SHALL be determined from resulting native state
 

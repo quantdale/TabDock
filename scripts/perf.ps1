@@ -75,9 +75,6 @@ try {
         $buildMeasurements += Measure-CommandDuration "build-app-$Configuration" {
             dotnet build (Join-Path $repoRoot 'TabDock.csproj') -c $Configuration --no-restore --nologo | Out-Host
         }
-        $buildMeasurements += Measure-CommandDuration "build-spike-$Configuration" {
-            dotnet build (Join-Path $repoRoot 'Spike\TabDock.Spike\TabDock.Spike.csproj') -c $Configuration --no-restore --nologo | Out-Host
-        }
         $buildMeasurements += Measure-CommandDuration "build-validation-driver-$Configuration" {
             dotnet build (Join-Path $repoRoot 'tests\ValidationDriver\TabDock.ValidationDriver\TabDock.ValidationDriver.csproj') -c $Configuration --no-restore --nologo | Out-Host
         }

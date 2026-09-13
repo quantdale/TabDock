@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace TabDock.UnitTests;
@@ -267,6 +268,27 @@ public sealed class FrontendDesignContractTests
         // Removed speculative tokens stay removed until a consumer exists.
         Assert.DoesNotContain("x:Key=\"TdSuccessBrush\"", app, StringComparison.Ordinal);
         Assert.DoesNotContain("x:Key=\"TdRaisedCard\"", app, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NativeContentHostFillMatchesSharedContentVoidToken()
+    {
+        string app = Read("App.xaml");
+        string native = Read("Infrastructure/NativeHwndHost.cs");
+
+        // Airspace: the child HWND paints above WPF siblings, so the native
+        // class background is the visible void wherever a guest does not cover
+        // the content rect. Its COLORREF (0x00BBGGRR) must stay in lockstep
+        // with the shared WPF token; a channel-swapped pack such as
+        // 0x0007090D must fail this contract.
+        Assert.Contains("x:Key=\"TdContentVoidBrush\" Color=\"#07090D\"", app, StringComparison.Ordinal);
+        Match brush = Regex.Match(native, @"hbrBackground\s*=\s*NativeMethods\.CreateSolidBrush\((0x[0-9A-Fa-f]{8})\)");
+        Assert.True(brush.Success, "NativeHwndHost must register a class background brush");
+        Assert.Equal("0x000D0907", brush.Groups[1].Value);
+
+        // The class name is the discovery contract for the container geometry
+        // query and the ValidationDriver; renaming it is a driver break.
+        Assert.Contains("WindowClass = \"TabDockContentHost\"", native, StringComparison.Ordinal);
     }
 
     [Fact]

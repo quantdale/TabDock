@@ -4,7 +4,7 @@ This is the repository’s compact, harness-neutral agent entrypoint. Harness-sp
 
 ## Orient quickly
 
-TabDock is a Windows desktop utility built with C# 12, .NET 8, WPF, and P/Invoke. It is a single-project repository (the solution also contains an experimental Spike); `tests/ValidationDriver/` is a separate real-input validation harness. The application uses the Shepherd model: captured windows remain independent top-level windows and are positioned over the container rather than reparented.
+TabDock is a Windows desktop utility built with C# 12, .NET 8, WPF, and P/Invoke. `TabDock.sln` contains the WPF app and its xUnit suite; `tests/ValidationDriver/` is a separate real-input validation harness, and the GuineaPig target and compile-only Performance harness are built by project path rather than as solution members. The application uses the Shepherd model: captured windows remain independent top-level windows and are positioned over the container rather than reparented.
 
 Important areas:
 

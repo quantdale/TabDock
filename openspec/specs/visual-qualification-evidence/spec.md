@@ -1,7 +1,7 @@
 # visual-qualification-evidence Specification
 
 ## Purpose
-TBD - created by archiving change 2026-08-31-visual-evidence-ai-review. Update Purpose after archive.
+Visual evidence capture, privacy classes, packets, hashing, and review vocabulary without treating synthetic captures as physical PASS.
 ## Requirements
 ### Requirement: ValidationDriver SHALL retain bounded visual checkpoints as verifiable artifacts
 
