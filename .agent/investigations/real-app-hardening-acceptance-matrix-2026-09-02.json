@@ -173,7 +173,7 @@
     },
     {
       "app": "Windows 11 Notepad",
-      "executable": "C:\\Windows\\System32\\notepad.exe + C:\\Users\\palac\\AppData\\Local\\Microsoft\\WindowsApps\\notepad.exe (packaged)",
+      "executable": "C:\\Windows\\System32\\notepad.exe + %USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps\\notepad.exe (packaged)",
       "observedArchitecture": {
         "hwndClass": "Notepad",
         "owner": "0x0 (observed: owner 0x0, but Windows 11 single-instance tab host means multiple Notepad HWNDs share same PID)",
@@ -212,7 +212,7 @@
     },
     {
       "app": "Windows Terminal",
-      "executable": "C:\\Users\\palac\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe (alias) -> actual host WindowsTerminal.exe (monarch)",
+      "executable": "%USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe (alias) -> actual host WindowsTerminal.exe (monarch)",
       "observedArchitecture": {
         "launcherProcess": "wt.exe PID (spawns, then may exit immediately if existing host present)",
         "monarchProcess": "WindowsTerminal.exe (persistent) owns visible CASCADIA_HOSTING_WINDOW_CLASS HWND; not wt.exe",

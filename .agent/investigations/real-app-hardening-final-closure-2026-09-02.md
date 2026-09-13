@@ -88,7 +88,7 @@ the exact binding reason (or produce packets).
   topology binding `snapshotId 92790d2a`; `syntheticTopology=false`;
   captures 20/20 succeeded; `derivedArtifactFailures=[]`. **PRIVACY DEFECT**:
   Edge's implicit sign-in to the OS Microsoft account surfaced the device
-  account email (`palacamichaeldale16@outlook.com`) and Edge's sync prompt
+  account email (`<redacted: device account email>`) and Edge's sync prompt
   text ("passwords, history, credentials") in the captured imagery, which
   violates TEST_OWNED/no-logged-in-accounts. Harness fix: added
   `--disable-sync --disable-features=msImplicitSignin,msEdgeFirstRunExperience`

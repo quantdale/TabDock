@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "generation": "dpi-topology-hardening-acceptance-matrix-2026-09-01",
   "sourceMatrixRecovered": true,
-  "sourcePath": "C:/Users/palac/AppData/Local/Temp/TabDock-Validation/acceptance-matrix-dc22ff3.json [REDACTED: temp evidence, not durable]",
+  "sourcePath": "%USERPROFILE%/AppData/Local/Temp/TabDock-Validation/acceptance-matrix-dc22ff3.json [REDACTED: temp evidence, not durable]",
   "sanitization": "Machine-specific absolute paths, user profile paths, and temp run roots were not present in source; executable/driver paths are already hash-bound; no secrets or screenshots retained.",
   "generatedUtc": "2026-09-01T16:52:29.058732Z",
   "candidateSha": "dc22ff3ab408d6aae84412f9cf418e8fed7aada8",

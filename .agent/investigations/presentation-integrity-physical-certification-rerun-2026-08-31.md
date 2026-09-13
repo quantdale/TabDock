@@ -232,7 +232,7 @@ attempt was therefore actionable and is retained as a valid product failure.
 - Guest: isolated `chrome-normal`
 - Candidate at action time: `b0975b2a724f0cf9551c4e106dfc6449c8643002`
 - Raw artifact:
-  `C:\Users\palac\AppData\Local\Temp\TabDock-Validation\runs\7f5ba57faf6e491e81aab33bd8229471\browser-fullscreen-contained.json`
+  `%USERPROFILE%\AppData\Local\Temp\TabDock-Validation\runs\7f5ba57faf6e491e81aab33bd8229471\browser-fullscreen-contained.json`
 - Raw result: `FAIL_PRODUCT`
 - Qualification: exact browser HWND/PID/start identity, active lease,
   `WindowFromPoint` → `GA_ROOT`, exact foreground, real F11 `SendInput`, and
@@ -312,13 +312,13 @@ settle/duplicate guard. Brave passed two cycles in
 Raw browser artifacts:
 
 - Chrome failure:
-  `C:\Users\palac\AppData\Local\Temp\TabDock-Validation\runs\7f5ba57faf6e491e81aab33bd8229471\browser-fullscreen-contained.json`
+  `%USERPROFILE%\AppData\Local\Temp\TabDock-Validation\runs\7f5ba57faf6e491e81aab33bd8229471\browser-fullscreen-contained.json`
 - Chrome requalification:
-  `C:\Users\palac\AppData\Local\Temp\TabDock-Validation\runs\71656457b55542cea782b4947f33f292\browser-fullscreen-contained.json`
+  `%USERPROFILE%\AppData\Local\Temp\TabDock-Validation\runs\71656457b55542cea782b4947f33f292\browser-fullscreen-contained.json`
 - Edge qualifier failure:
-  `C:\Users\palac\AppData\Local\Temp\TabDock-Validation\runs\0e55962746f5463c9560ec64913fb3d0\browser-fullscreen-contained.json`
+  `%USERPROFILE%\AppData\Local\Temp\TabDock-Validation\runs\0e55962746f5463c9560ec64913fb3d0\browser-fullscreen-contained.json`
 - Edge intermediate failure:
-  `C:\Users\palac\AppData\Local\Temp\TabDock-Validation\runs\443624df51bb4801a8ad249b498302b5\browser-fullscreen-contained.json`
+  `%USERPROFILE%\AppData\Local\Temp\TabDock-Validation\runs\443624df51bb4801a8ad249b498302b5\browser-fullscreen-contained.json`
 
 ## Continuation — remaining physical matrix cells
 

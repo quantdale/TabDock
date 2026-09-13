@@ -149,10 +149,10 @@ WPF relies on COM activation, reflection emit, and other runtime features that a
 ## How to use
 
 1. Launch `TabDock.exe`. The main launcher window appears.
-2. Click **New group**. From an open group, use **Add window** to open the inline
-   capture surface; press **Ctrl+Alt+G** when no group is selected to use the
-   standalone capture picker.
-3. In the picker, select the windows you want to group and choose whether to add them to a new group or an existing one.
+2. Click **New workspace**. From an open workspace, use the **+** button in its
+   title bar to open the inline capture surface; press **Ctrl+Alt+G** when no
+   workspace is selected to use the standalone capture picker.
+3. In the picker, select the windows you want to group and choose whether to add them to a new workspace or an existing one.
    Once a group is open, use its Workspace ▾ menu to switch between open groups or
    create another group without returning to the launcher.
 4. The container window shows a tab for each captured window. Click tabs to switch, drag tabs to reorder, or drag a tab out of the strip to release it back to a standalone window.
