@@ -23,8 +23,9 @@ chrome-pill, and tab-close styles).
 
 ## Design tokens (`App.xaml`)
 
-Colors are `SolidColorBrush` resources, all prefixed `Td`. Use tokens in views;
-the only remaining literals are the container's split-half tints.
+Colors are `SolidColorBrush` resources, all prefixed `Td`. Views consume tokens
+only; the design-contract tests fail if a raw font stack or split tint
+reappears in a view.
 
 Surfaces, in elevation order: `TdWindowBackgroundBrush` (#080A0E),
 `TdChromeBrush` (#0C0F14), `TdSurfaceBrush` (#0F1217),
