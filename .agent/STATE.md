@@ -12,9 +12,10 @@ self-referential SHA claiming to be the commit that contains this file. Embedded
 planning pass, validate, review, and close their task lists. The change
 artifacts were the contract; no new scope was added.
 
-**Status:** all three changes archived and committed. Previously applied
+**Status:** all three changes archived, committed, and pushed to `main`.
+Commit `410b23200d2d1e111859bcd4a784f03bd8b06500`. Previously applied
 changes (8/8, 9/9, 14/14 tasks) are now archived under `openspec/changes/archive/`
-and specs updated. Working tree clean of source changes pending commit; harness
+and specs updated. Working tree clean of source changes; harness
 noise excluded from commit per close-change non-goals.
 
 ### Archived changes
@@ -65,7 +66,8 @@ new product direction. Do not re-run resolved sweeps.
 now carries the frontend overhaul (W1–W3), runtime/documentation work (W4),
 the security sweep (W5), and the validation closure.
 
-**Status (2026-09-13):** both review surfaces merged to `main` at `136f91c`
+**Status (2026-09-14):** three OpenSpec changes archived and pushed to `main`
+at `410b232`. Prior review surfaces remain at `136f91c`.
 (UI `105cb80` + campaign `0178390`); the plan-file conflict was resolved to the
 superset record. PRs #13 and #14 are `MERGED` (GitHub detected the integration
 merge commit). Hosted CI remains externally blocked (jobs fail with 0 steps
