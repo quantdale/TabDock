@@ -43,9 +43,10 @@ executed — Actions billing/runner allocation, not a source failure).
   configs; `validate.ps1 -Release -Ci -Publish` exit 0 (OpenSpec 38/38,
   publish smoke); release-tooling 179/179; `--selftest all` 173/173;
   `launcher-empty-state-hint` scenario PASS.
-- `0a47dab` (exact SHA for the tokenized views): all matrix steps exit 0;
-  829/829 both configs; the driver scenario renders launcher, picker, and
-  container successfully. Later docs-only commits do not retag it.
+- `d670c84` (final code SHA: tokenized views, including the container
+  content void): all matrix steps exit 0; 829/829 both configs; the driver
+  scenario renders launcher, picker, and container successfully. Later
+  docs-only commits do not retag it.
 - Per-surface exact-SHA matrices before merge: campaign `3c70ce0` (812/812),
   UI `105cb80` (827/827) — all steps exit 0 on both.
 
