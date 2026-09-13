@@ -853,6 +853,7 @@ Rules:
 
 - `AGENTS.md` — build/publish commands, code style, guarded process-spawn pattern, perf invariants.
 - `docs/TESTING.md` — ValidationDriver/GuineaPig harness reference, scenario list, repro techniques.
+- `docs/FRONTEND.md` — design system, window chrome, airspace rule, automation-ID and binding-error contracts.
 - `docs/internal/perf-2026-07-25.md` — the `PERF25-NN` pass and its four invariants
   (index resolution, hook gating, cheap `SHEPHERD[position]`, held-open log file).
 - `docs/internal/deep-audit-2026-07-17.md` — Shepherd migration rationale (section 6, §6.5:
