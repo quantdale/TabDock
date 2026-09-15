@@ -57,6 +57,24 @@ public partial class ContainerWindow
         // via its own hit-test; it is not a handledEventsToo recovery path.
         _viewModel.DisplayTabs.CollectionChanged += SplitDisplayTabs_CollectionChanged;
         _splitInteractionHooksAttached = true;
+
+        // The capture picker can create/show a container and immediately begin
+        // admitting guests before WPF reaches its first rendered frame. In that
+        // window, ActiveTab can already change and SyncShepherdActiveWindow can
+        // select the right logical guest while the native content marker is not
+        // yet ready for a durable PositionAndShow pass. The result is a valid tab
+        // strip over an empty/black content area until a later transition (split,
+        // resize, etc.) happens to force another layout.
+        //
+        // ContentRendered is the first lifecycle boundary where the container
+        // and HwndHost geometry are settled. Reconcile the logical active guest
+        // once here, then require a final Render-priority relayout. This also
+        // covers a pre-populated GroupViewModel whose ActiveTab was selected
+        // before ContainerWindow subscribed to PropertyChanged. The operation is
+        // idempotent: if the controller already names the active guest, Sync is a
+        // no-op and the final pass simply reasserts the current presentation.
+        SyncShepherdActiveWindow();
+        RequestRelayout(ensureFinalPass: true);
     }
 
     protected override void OnClosed(EventArgs e)
