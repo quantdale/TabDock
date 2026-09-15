@@ -1,180 +1,87 @@
 # Repository Protection Policy
 
-## Applied (2026-08-15, session with admin scope)
+## Current authority and verification
 
-### Ruleset: `release-tags` (id 20878779, active, target: tag)
+`main` is the sole integration and release authority. Temporary topic or
+review branches target `main`; an explicitly authorized direct push is also
+supported. This document does not authorize a commit, push, or settings change.
+See [AGENTS.md](../../AGENTS.md).
 
-- Patterns: `refs/tags/v*`
-- Rules:
-  - **Deletion blocked** — a `v*` release tag cannot be deleted.
-  - **Non-fast-forward blocked** — a `v*` release tag cannot be force-pushed
-    or moved.
+The 2026-08-15 record reported an active `release-tags` ruleset (id 20878779)
+blocking deletion and non-fast-forward updates to `refs/tags/v*`. That is
+historical evidence, not proof of current enforcement. On 2026-09-15, read-only
+queries for repository rulesets and classic `main` protection both returned
+HTTP 403 with “Upgrade to GitHub Pro or make this repository public to enable
+this feature.” Current protection settings could not be verified.
 
-Rationale: release tags are the immutable pointer from a published release to
-its exact qualified source commit. Nothing in this ruleset touches `main` or
-the solo/autonomous-agent direct-push workflow: a push to `main` still runs
-the canonical `build` workflow, and validated changes continue to reach `main`
-directly. The production release path is additionally gated by the
-dispatch-only Stage B `publish-release.yml` workflow — the ONLY workflow that
-creates releases and `v*` tags (`gh release create`) — which re-verifies
-artifact provenance, `SHA256SUMS.txt` consistency, the external evidence
-record, and the Authenticode signature before publishing (see
-`docs/release/publication-gates.md`; `qualify-candidate.yml` is RC-qualification-only
-and has no publication path).
+Recheck live settings before relying on them:
 
-## Branch model — main authority with finite review branches
-
-`main` is the sole development-integration and release authority. A
-short-lived topic, development, or draft-review branch may be used when it
-provides a safer isolated implementation or a main-targeting review surface,
-but it is not a parallel staging authority and must not become a permanent
-promotion tier. There is no `agent/staging` branch and no `promote-staging`
-workflow.
-
-- Every branch intended for integration ultimately targets `main` through a
-  main-targeting pull request or an explicitly authorized direct push.
-- `main` is qualified directly on push by `build.yml` (exact-SHA hosted-CI
-  gates: Release build, native/geometry/diagnostics/persistence self-tests,
-  doctor/version/bundle privacy checks, OpenSpec validation, and the
-  release-tooling regression suite).
-- Pull requests targeting `main` are also qualified by `build.yml`.
-- Future autonomous agents MUST NOT recreate `agent/staging` or any permanent
-  staging hierarchy, and MUST NOT add a `promote-staging` (or similarly named)
-  promotion workflow. `main` remains authoritative; qualification occurs on
-  the exact SHA under review or pushed to `main`.
-
-### Autonomous agents push directly to `main`
-
-This repository permits autonomous agents to push validated changes directly
-to `main` when the task and repository policy explicitly authorize that path.
-A main-targeting draft or ready pull request is the normal review surface when
-independent review is required. When direct integration is authorized, a
-direct `git push origin HEAD:main` remains supported:
-
-- The canonical `build` workflow qualifies every pushed SHA on `main`.
-- Direct pushes are visible in the audit log (`git log --first-parent`,
-  `gh run list --branch main`).
-- The exact-SHA qualification gate runs in `build.yml` on every push, so
-  unqualified code does not silently ship.
-
-## Branch Protection on `main` — Recommended Ruleset
-
-### Why not yet enforced
-
-This repository intentionally uses autonomous agents that push validated
-changes directly. A required-status-check branch ruleset without a bypass
-would deadlock that workflow (the push would be blocked before the check it
-triggers could run). Until the ruleset below is enabled with a bypass, the
-workflow-level exact-SHA gate in `build.yml` provides the qualification
-property when the main-only path is used.
-
-### Exact ruleset to enable (when GitHub settings can be modified)
-
-Create a branch ruleset targeting `main` (or a classic branch protection
-rule) with:
-
-- **Require status checks to pass:** `build` (the `build.yml` workflow) must
-  be `success`. `build.yml` already re-qualifies the exact SHA on push, so
-  the required check is the authoritative gate.
-- **Block force pushes** and **block deletions** on `main`.
-- **Require linear history** (optional, recommended) — preserves a clean,
-  auditable `main` history.
-- **Do not require pull requests** — agents push directly to `main`; `main`
-  is the integration point.
-- **Bypass list (critical to avoid deadlock):** allow bypass for the actor
-  that runs `build` (and, if used, the release publisher):
-  - Ruleset bypass: add `github-actions[bot]` (the `GITHUB_TOKEN` actor) or
-    the specific GitHub App to the ruleset's **Bypass actors** with `Bypass`
-    permission, or
-  - Classic protection: enable **Allow specified actors to bypass required
-    pull requests / Allow GitHub Apps to bypass** and list the relevant app.
-  Without this, the qualification workflow and release publisher could be
-  blocked by the rule they are meant to satisfy.
-
-Example `gh` creation (requires admin scope; adjust actor IDs for your org):
-
-```bash
-gh api repos/{owner}/{repo}/rulesets --method POST --input - <<'JSON'
-{
-  "name": "main-protection-gate",
-  "target": "branch",
-  "enforcement": "active",
-  "conditions": { "ref_name": { "include": ["refs/heads/main"], "exclude": [] } },
-  "rules": [
-    { "type": "deletion" },
-    { "type": "non_fast_forward" },
-    { "type": "required_linear_history" },
-    { "type": "required_status_checks", "parameters": {
-        "strict_required_status_checks_policy": true,
-        "required_status_checks": [
-          { "context": "build" }
-        ]
-      }
-    }
-  ],
-  "bypass_actors": [
-    { "actor_id": 1, "actor_type": "OrganizationAdmin", "bypass_mode": "always" },
-    { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }
-  ]
-}
-JSON
+```powershell
+gh api repos/{owner}/{repo}/rulesets
+gh api repos/{owner}/{repo}/branches/main/protection
 ```
 
-Replace `bypass_actors` with the actual App/bot that executes the verification
-workflows (use `gh api repos/{owner}/{repo}/rulesets --method GET` on an
-existing ruleset to discover IDs). Test on a non-production branch first.
+A failed query does not prove that a particular ruleset is enabled or absent.
 
-### Fallback when repository settings cannot be changed
+## Repository-enforced qualification
 
-If the GitHub API/UI cannot create the ruleset from this environment (no
-admin scope, no `repo` ruleset permission), the repository remains with only
-the `release-tags` ruleset. In that case:
+- `.github/workflows/build.yml` runs on pushes to `main` and pull requests
+  targeting `main`. Its `build` job runs Release qualification, including
+  headless xUnit tests, resource/visual synthetic evidence, native ABI and
+  diagnostic smokes, OpenSpec checks, and release-tooling regression tests.
+- The separate `native-abi-evidence` job exercises the ABI contract on
+  `windows-2022`. Both jobs must be assessed for the exact candidate SHA.
+- Build jobs have read-only repository contents permission and do not push
+  `main`. Running checks does not itself require a branch-rule bypass.
+- A post-push check detects failures after integration. It does not prevent
+  an unqualified commit from reaching `main`.
+- Production publication is separately controlled by
+  `prepare-release-candidate.yml` and `publish-release.yml`: immutable
+  retained bytes, exact source/hash bindings, approved signing, external
+  evidence, and trusted-policy verification. `qualify-candidate.yml` is
+  qualification-only. See [publication gates](publication-gates.md).
 
-- `build.yml` still provides exact-SHA qualification **when used** — it is the
-  documented, auditable gate that runs on every push to `main`.
-- Direct pushes to `main` remain possible and are the expected path; they are
-  auditable via `git log --first-parent` and `gh run list --branch main`.
-- Re-attempt ruleset creation when admin scope is available; no code change
-  is needed — `build.yml` is already the sole push-time qualification gate.
+## Settings guidance
 
-### Required status checks on `v*` tags
+When an administrator is authorized to configure protection:
 
-Not applied. No workflow runs on tag pushes, so a required check on `v*`
-tags would block `gh release create` entirely. The workflow-internal
-verification is the effective gate.
+1. Protect release tags against deletion and force updates.
+2. Protect `main` against deletion and force updates. Choose the integration
+   rule consistently with the authorized PR or direct-push workflow.
+3. For required checks, select actual emitted job/check names and their trusted
+   source. The current workflow defines `build` and `native-abi-evidence`;
+   verify the names in live check results before configuring them.
+4. If direct integration needs a bypass, scope it to the actor that actually
+   updates the protected ref. Do not grant a broad bypass merely because an
+   actor runs a read-only qualification job.
+5. Keep any release-tag permission separate from branch integration authority.
+   Do not invent actor IDs or copy an organization-admin bypass example.
 
-## Recovery — When `main` Qualification Fails
+GitHub documents [required checks and bypass rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets)
+and [check-name matching](https://docs.github.com/en/enterprise-cloud%40latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/troubleshooting-rules).
+Configuration is an administrative action; these instructions do not perform it.
 
-All recovery instructions are embedded as comments and error messages in
-`build.yml` and the release workflows.
+If settings cannot be inspected or changed, record the limitation and retain
+the exact-SHA workflow evidence. Do not describe workflow checks as enforced
+branch protection.
 
-| Failure | Cause | Recovery |
-| --------- | ------- | ---------- |
-| Build failure on push to `main` | The pushed SHA does not pass `build.yml` qualification (build, self-tests, OpenSpec, release-tooling suite, or privacy checks). | Fix the issue on `main` (commit + push); the corrected SHA is re-qualified automatically. For emergencies, amend/history-safe corrective commits are preferred over force-push. |
-| `No successful completed build.yml run found for SHA ...` | The exact SHA has no `success` build. | Push again or re-run the build via the GitHub UI (Actions → build → Re-run) for that commit. |
-| `422 Reference update failed` | A push raced while another push advanced `main`. | Fetch, rebase your local `main` onto `origin/main`, resolve conflicts, and push again. |
+## When qualification fails
 
-General development loop:
+| Evidence | Next action |
+| --- | --- |
+| Product/build/test failure | Make a corrective commit through the authorized integration path and qualify its exact SHA. Preserve shared history. |
+| Runner/allocation failure before any step executes | Record the infrastructure failure; rerun the existing run when capacity is available. Do not infer a product PASS. |
+| No successful completed run for the candidate SHA | Inspect that SHA's runs and obtain a successful qualification before release. A no-change push is not evidence of a new run. |
+| Remote `main` advanced | Fetch and reconcile current changes without discarding work; validate the integrated result before an authorized push. |
 
-```bash
-git fetch origin
-git switch main
-git pull --ff-only origin main
-# make changes, then:
-git commit -m "..."
-git push origin main
-# build.yml qualifies the pushed SHA on main
-gh run list --workflow build.yml --branch main --json conclusion,status
+Read-only status inspection:
+
+```powershell
+git rev-parse HEAD
+git rev-parse origin/main
+git status --short
+gh run list --workflow build.yml --branch main --json headSha,conclusion,status,url
 ```
 
-## Recommended GitHub UI settings (equivalent, if rulesets are edited by hand)
-
-1. Settings → Rules → Rulesets: `release-tags` (active, tag target,
-   `refs/tags/v*`): enable "Block deletions" and "Block force pushes".
-2. Settings → Rules → Rulesets: `main-protection-gate` (active, branch target,
-   `refs/heads/main`): enable "Block deletions", "Block force pushes",
-   "Require linear history" (optional), "Require status checks" (`build`), and
-   add a **Bypass** for `github-actions[bot]` / the relevant App so the
-   qualification and release workflows can run without deadlocking.
-3. Never add a required-status-check rule to tag rulesets unless a workflow
-   that reports checks on tag pushes exists.
+Match the reported `headSha` to the candidate. A green run for an earlier
+commit does not qualify a later commit.

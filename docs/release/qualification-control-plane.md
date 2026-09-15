@@ -7,8 +7,9 @@ workflow. It does not replace the detailed human procedures in
 `final-smoke.md`, `mixed-dpi-qualification.md`, or
 `compatibility-matrix.md`.
 
-Current status: the deterministic and offline control plane is implemented and
-verified on this host. Physical SendInput, real mixed-DPI hardware, Windows 10
+The deterministic and offline control plane is implemented; qualification
+evidence must be bound to the candidate being assessed. Physical SendInput,
+real mixed-DPI hardware, Windows 10
 qualification, production signing, and the final human smoke remain external
 gates. Synthetic topology is never eligible for the physical mixed-DPI gate.
 
@@ -36,7 +37,7 @@ The policy checkout is the trusted authority for the publication decision.
 
 | Record | Current version/generation | Accepted policy |
 | --- | ---: | --- |
-| Scenario catalog | `scenario-catalog-2026-08-24-v1` | Exact generation for new qualification runs |
+| Scenario catalog | `scenario-catalog-2026-09-01-v2` | Exact generation for new qualification runs; authority: `ScenarioCatalog.Generation` |
 | Direct/shard/parent run manifest | `2` | New manifests emit v2; older records are diagnostic-only unless a migration explicitly verifies them |
 | Qualification bundle | `1` | Exact current schema; future/unsupported versions fail closed |
 | Independent-machine handoff package | `1` | Exact current schema; all indexed files are rehashed |

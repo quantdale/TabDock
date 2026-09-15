@@ -1,8 +1,6 @@
 ---
 name: goal
 description: Resume the repository's planner-generated or native development campaign.
-type: prompt
-whenToUse: When asked to continue, resume, execute, or finish the current development goal.
-disableModelInvocation: false
 ---
-Read applicable `AGENTS.md`, `.agent/PLANNER_HANDOFF.md`, `.agent/EXECUTION_PROMPT.md` if present, and native state. Reconcile current Git with Planned-From. Resume an ACTIVE prompt from the first incomplete requirement through validation/state/commit/push; otherwise use native continuation or require planning.
+
+Read `AGENTS.md`, `.agent/STATE.md`, `.agent/PLANNER_HANDOFF.md`, and `.agent/EXECUTION_PROMPT.md` if present. Reconcile the active plan with current Git. Resume the first incomplete requirement of an ACTIVE prompt or the user's native goal, validate, and update state. Commit or push only with explicit user authorization. Do not require a new planning campaign when the current goal already supplies direction.

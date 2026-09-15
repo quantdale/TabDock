@@ -172,7 +172,7 @@ artifacts/
 .artifacts/
 
 # ------------------------------------------------------------------------------
-# Node.js tooling (defensive; no Node projects in the repo today)
+# Node.js tooling (pinned OpenSpec CLI lives under tools/openspec)
 # ------------------------------------------------------------------------------
 node_modules/
 

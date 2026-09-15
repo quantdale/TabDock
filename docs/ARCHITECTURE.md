@@ -47,10 +47,12 @@ rectangles beside the actual guest rectangles.
 `DiagnosticTrace` is a lock-protected 1024-entry ring. Selected foreground,
 reorder, move-size, activation, group/split, guest lifecycle, and repair events
 carry monotonic sequence numbers and callback/dispatch context where useful.
-There is no global `EVENT_OBJECT_LOCATIONCHANGE` subscription and no periodic
-health poll. The existing `WindowShepherdService` remains the only native
-write authority; diagnostic instrumentation records its existing actions but
-does not add a repair loop.
+`WinEventMonitor` subscribes to `EVENT_OBJECT_LOCATIONCHANGE`, filters for
+captured members, and revalidates their identity before dispatch.
+`GuestLifecycleService` routes these events to the container's bounded
+presentation-drift reconciliation. There is no periodic health poll.
+`WindowShepherdService` remains the native write authority; diagnostic
+instrumentation records existing actions and does not add a repair loop.
 
 Reports and support ZIPs redact paths under the current user profile, omit raw
 window titles, and include only a filtered/sanitized log tail. Nothing is
@@ -85,6 +87,22 @@ Synthetic resource PASS is deliberately not an OS-version, mixed-DPI,
 physical-input, signing, or human-smoke PASS.
 
 ---
+
+## Initial guest presentation
+
+`ContainerWindow_ContentRendered` uses
+`InitialPresentationReconciliationPolicy` to reconcile an active guest once
+after WPF's first render. It re-reads single/split presentation authority and
+requests a coalesced final layout; `Loaded` alone is too early to establish
+the final guest/container z-order.
+
+For an explicit single-tab selection, `SyncShepherdActiveWindow` restores an
+incoming iconic guest through the identity-checked Shepherd operation before
+hiding the outgoing guest. A pending restore or hide rolls back selection.
+Passive relayout still skips iconic guests, and split presentation retains its
+own existing path. See `InitialCapturePresentationTests` and the September 15
+investigations under `.agent/investigations/`; automated coverage does not
+close the separate eventually-recovering physical presentation report.
 
 ## 1. Startup sequence
 
@@ -851,7 +869,7 @@ Rules:
 
 ## 7. Deeper docs
 
-- `AGENTS.md` — build/publish commands, code style, guarded process-spawn pattern, perf invariants.
+- `AGENTS.md` — canonical agent instructions and workflow entrypoint; `docs/internal/AGENT_GUIDE.md` — detailed build, style, process-spawn, and performance guidance.
 - `docs/TESTING.md` — ValidationDriver/GuineaPig harness reference, scenario list, repro techniques.
 - `docs/FRONTEND.md` — design system, window chrome, airspace rule, automation-ID and binding-error contracts.
 - `docs/internal/perf-2026-07-25.md` — the `PERF25-NN` pass and its four invariants

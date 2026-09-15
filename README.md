@@ -4,6 +4,9 @@ A universal window tab-grouping tool for Windows. Merge multiple independent app
 
 Built with C# / .NET 8 / WPF, using only P/Invoke for native interop.
 
+For development, start with [onboarding](ONBOARDING.md) and the
+[documentation map](docs/README.md).
+
 ## Requirements
 
 - Windows 10 (recent builds) or Windows 11
@@ -39,7 +42,7 @@ winget install Microsoft.DotNet.SDK.8
 ### Development build
 
 ```powershell
-dotnet build TabDock.csproj
+dotnet build TabDock.sln
 ```
 
 `global.json` pins the .NET 8 SDK feature band (roll-forward stays within
@@ -70,7 +73,7 @@ The resulting single executable is at:
 ### Full qualification
 
 `scripts/validate.ps1` is the canonical one-command qualification: audited
-restore, Release build, native/geometry/diagnostics self-tests, doctor and
+restore, Release builds, headless xUnit behavioral tests, native ABI self-test, doctor and
 support-bundle privacy checks, OpenSpec validation, and the self-contained
 single-file publish smoke test.
 
@@ -280,7 +283,7 @@ Use this checklist to verify a build before considering it ready.
 
 ## Known limitations
 
-- **Guest self-maximize:** if you maximize the docked window itself (not the container), it fills the whole monitor, breaking the docked look — there's no reliable signal that distinguishes this from an ordinary interactive resize, so nothing corrects it automatically. Not a rendering or input bug, just a cosmetic gap.
+- **Guest presentation drift:** TabDock detects guest self-maximize and geometry drift and requests a bounded correction through Shepherd. Identity checks, minimize handling, and native-operation refusals still apply; physical behavior must be qualified with the actual guest and monitor setup. See [the testing playbook](docs/TESTING.md).
 
 - **Elevated windows:** A non-elevated TabDock cannot capture a window owned by an elevated process due to UIPI (it can't position/foreground it either, not just reparent it). TabDock ships as a standard-user app and asks the user to run elevated if they need to group elevated windows.
 
@@ -355,8 +358,9 @@ attestation -> schema-3 external evidence -> publish THE SAME retained bytes
 - `scripts/release-qualify.ps1` enforces the exact SHA, refuses dirty
   worktrees, publishes once, qualifies the published executable (embedded
   source commit must equal the candidate SHA; the executable's self-reported
-  SHA-256 must equal `Get-FileHash`; geometry + diagnostics + native-ABI
-  self-tests run on that binary), and writes `release-manifest.json` +
+  SHA-256 must equal `Get-FileHash`; the native ABI self-test runs on that
+  binary, while geometry and diagnostics behavior is covered by the headless
+  xUnit suite), and writes `release-manifest.json` +
   `SHA256SUMS.txt`. Hash semantics: `unsignedQualifiedSha256` is the
   pre-sign provenance hash, `finalSignedSha256` is the post-sign hash (when
   signing changed the bytes), and `artifactSha256` + `SHA256SUMS.txt` always

@@ -1,4 +1,5 @@
 ---
 description: Resume the planner-generated or native active campaign
 ---
-Read `AGENTS.md`, `.agent/PLANNER_HANDOFF.md`, `.agent/EXECUTION_PROMPT.md` if present, and native state. Reconcile `$ARGUMENTS` with current Git. Resume an ACTIVE prompt from the first incomplete requirement through completion; otherwise use native continuation or require planning. Preserve stricter local rules.
+
+Reconcile `$ARGUMENTS` with the current goal. Read `AGENTS.md`, `.agent/STATE.md`, `.agent/PLANNER_HANDOFF.md`, and `.agent/EXECUTION_PROMPT.md` if present. Reconcile the active plan with current Git. Resume the first incomplete requirement of an ACTIVE prompt or the user's native goal, validate, and update state. Commit or push only with explicit user authorization. Do not require a new planning campaign when the current goal already supplies direction.

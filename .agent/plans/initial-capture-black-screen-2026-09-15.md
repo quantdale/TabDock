@@ -34,7 +34,7 @@ integrate all intended work into `main` and remove obsolete branch/PR scaffoldin
 - A disposable WPF/HwndHost probe showed `Loaded` before `Show()` returns but
   `ContentRendered` later; a guest/container z-order pair established before
   the first render was not preserved at the `ContentRendered` observation.
-- Current `ContainerWindow` has no `ContentRendered` reconciliation; its
+- Before the fix, `ContainerWindow` had no `ContentRendered` reconciliation; its
   `LayoutUpdated` handler suppresses unchanged content rectangles.
 - The red-first policy tests failed 2 assertions before the implementation and
   pass 4/4 after it. The final hook is conditional on an active guest and

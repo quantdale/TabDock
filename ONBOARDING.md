@@ -6,10 +6,10 @@ This is the canonical bootstrap entry point for a new workstation or a fresh cod
 
 1. Clone the repository and enter its root.
 2. Confirm the intended repository/branch and fetch current `origin/main`.
-3. Read the repository control-plane documents before changing code: `AGENTS.md`, `CLAUDE.md`, `README.md`, `KNOWN_ISSUES.md`, `.agent/`, active OpenSpec/release state.
+3. Read `AGENTS.md`, `.agent/STATE.md`, and its active plan. Use `README.md` for product guidance and load focused architecture, testing, OpenSpec, or release references as the task needs them. `KNOWN_ISSUES.md` is historical evidence, not the current backlog.
 4. Install/verify the machine prerequisites below.
 5. Enable the committed agent integrations and repository-local skills.
-6. Restore dependencies from lockfiles/pins; do not casually upgrade them during bootstrap.
+6. Restore .NET dependencies normally under the SDK pin; install OpenSpec from its npm lockfile. Do not upgrade dependencies during bootstrap.
 7. Run the baseline validation commands.
 8. Only then begin a development campaign. If a prerequisite cannot be satisfied, record it as an environment blocker rather than weakening a gate.
 
@@ -21,12 +21,12 @@ Credentials, API keys, signing material, account logins, licensed assets, and ot
 
 **Required machine tools**
 - Git
-- .NET SDK 8.0.400 feature band (`global.json`)
-- Visual Studio/Build Tools with Windows desktop/.NET tooling
+- .NET 8 SDK, feature band 8.0.4xx or later within .NET 8 (`global.json`)
 - PowerShell 7+ (`pwsh`; CI and the canonical validation scripts run under pwsh)
 - Node.js/npm for pinned OpenSpec tooling
 
 **Task-dependent / optional tools**
+- Visual Studio 2022 with Windows desktop/.NET tooling, or another C#/XAML editor
 - Repowise CLI for the committed repository-intelligence MCP
 - Windows UI Automation/browser installs for qualification lanes
 - approved signing provider credentials only for production release Stage A
@@ -35,7 +35,7 @@ Credentials, API keys, signing material, account logins, licensed assets, and ot
 ## 3. Agent setup
 
 - Load repository instructions before acting. Prefer committed repository state over chat history.
-- Repository-local skills: `goal`.
+- Repository-local skills include `goal` and the OpenSpec workflows; use the skills exposed by your harness for the current task.
 - Discover and use committed agent adapter/config directories in-place; do not duplicate them globally unless the harness cannot load repository-local configuration.
 - Relevant committed agent surfaces: `.agent/`, `.agents/`, `.claude/`, `.cline/`, `.codex/`, `.cursor/`, `.kilocode/`, `.kimi*/`, `.opencode/`.
 - MCP policy: Use committed `.mcp.json`: `repowise mcp . --transport stdio`. Install the Repowise CLI if absent; it is codebase intelligence only and does not replace builds/tests/release evidence.
@@ -72,4 +72,4 @@ A fresh machine is **development-ready** when all applicable non-external gates 
 
 ## 7. Fresh-agent instruction
 
-> Read `ONBOARDING.md` first. Set up every applicable prerequisite, repository-local skill, MCP/plugin, dependency, browser/device/runtime tool, and validation gate described there. Then read the repository's durable agent state and only start implementation after preflight is green or a genuine environment blocker is recorded. Do not replace pinned tooling, skip gates, or invent work to compensate for a missing machine capability.
+> Start with `AGENTS.md`, `.agent/STATE.md`, and its active plan. On a fresh machine, use `ONBOARDING.md` to set up the prerequisites relevant to the task. Read `docs/TESTING.md` before validation. Record unavailable capabilities explicitly; do not replace pinned tooling or weaken gates. Routine documentation work does not require installing optional desktop, signing, or release tooling.

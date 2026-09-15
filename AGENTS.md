@@ -18,7 +18,7 @@ Important areas:
 
 For a fresh session, read this file, `.agent/STATE.md`, and the referenced active plan (if any). Keep `STATE.md` concise: objective, status, current phase, completed work, important facts, validation, blockers, and next action. Update it at milestones, after investigations or decisions, after meaningful validation, on blockers/strategy changes, before handoff or likely compaction, and before ending incomplete work. Record durable facts, not a command transcript.
 
-Use the templates in `.agent/` for plans, decisions, and investigations. Make the plan the source of truth for multi-step work and link it from `STATE.md`.
+Use `.agent/plans/TEMPLATE.md`, `.agent/decisions/TEMPLATE.md`, and `.agent/investigations/TEMPLATE.md` for durable records. Make the plan the source of truth for multi-step work and link it from `STATE.md`.
 
 ## Git authority and self-reference rule
 
@@ -63,6 +63,6 @@ For architecture, ownership, callers, dependencies, history, implementations, an
 
 Codex uses `.codex/config.toml` and `.codex/hooks.json`; Claude Code uses the small root `CLAUDE.md` adapter; Cline uses `.clinerules/agent-layer.md`. Kimi Code, OpenCode, and other AGENTS-aware harnesses consume this file directly. Shared MCP registration is in `.mcp.json`; harness-specific settings remain outside this canonical file.
 
-WARNING: the per-harness skill/instruction files under `.claude/`, `.codex/`, `.clinerules/`, and their siblings are generated/synchronized copies (see `scripts/sync-agent-configs.ps1`). Do not hand-edit them — the sync silently overwrites non-canonical copies. Change this canonical `AGENTS.md` (or the generator) instead.
+Repository-wide instructions belong in this `AGENTS.md`; harness adapters point here. OpenSpec workflow customization has a separate canonical source: `.claude/skills/openspec-*/` and `.claude/commands/opsx/`. Do not hand-edit their generated mirrors. `scripts/sync-agent-configs.ps1` lists all synchronized targets, applies tool-specific invocation syntax, and owns the small goal/GitHub adapter templates. It does not generate unrelated harness configuration. Run it with PowerShell 7; use `-Check` for a read-only drift check. See `docs/internal/AGENT_GUIDE.md` under “Spec-driven changes (OpenSpec)” before regenerating workflows.
 
 When a detailed procedure is needed, load the relevant `.agent/workflows/` file and then the project reference it names. Use the smallest capable model/worker for reconnaissance and routine verification; reserve deeper reasoning for architecture, risky changes, ambiguous requirements, and final decisions.

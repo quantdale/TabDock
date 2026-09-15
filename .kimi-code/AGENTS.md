@@ -1,2 +1,5 @@
-# Goal Adapter
-For `/goal continue`, preserve local `AGENTS.md`; read `.agent/PLANNER_HANDOFF.md`, `.agent/EXECUTION_PROMPT.md` if present, and native state; reconcile current Git; resume an ACTIVE prompt from the first incomplete requirement through validation/state/commit/push. Otherwise use native continuation or require planning.
+# Goal adapter
+
+For goal continuation, follow this repository's root instructions.
+
+Read `AGENTS.md`, `.agent/STATE.md`, `.agent/PLANNER_HANDOFF.md`, and `.agent/EXECUTION_PROMPT.md` if present. Reconcile the active plan with current Git. Resume the first incomplete requirement of an ACTIVE prompt or the user's native goal, validate, and update state. Commit or push only with explicit user authorization. Do not require a new planning campaign when the current goal already supplies direction.

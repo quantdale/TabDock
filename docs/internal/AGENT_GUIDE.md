@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 0.7 seconds
-Output:
 # TabDock — Detailed Agent Reference
 
 This is the detailed, progressively-loaded reference for AI coding agents working on the TabDock repository. The compact, canonical entrypoint is the root `AGENTS.md`; load this file when a task needs the project’s detailed architecture, testing, safety, or coding rules. It reflects the actual project contents; do not assume conventions that are not documented here.
@@ -161,9 +158,25 @@ messages it receives; its command-line switches (`--title`, `--color`,
 `--self-close-after`, `--click-counter-button`, `--text-box`) let scenarios
 exercise specific guest behaviors deterministically.
 
-Since a Shepherd guest is never reparented, "is this guest captured/released" can no longer be read off `WS_CHILD`/`GetParent` (both are permanently unchanged) — scenarios instead compare the guest's `GetWindowRect` against the container's content-area marker (`IsDocked`/`IsReleasedAndShown`/`IsReleasedAndHidden` helpers in `Scenarios.cs`). Notable scenarios beyond the general capture/release/tab-switch coverage: `dragout-by-titlebar` (drag the guest's own native title bar past/under the pop-out threshold), `directclick-foreground-pairing` (click the guest directly, bypassing TabDock's own UI, and verify z-order re-pairing), `crashkill-rescue` (force-kill TabDock with a hidden tab captured, relaunch, verify the crash-recovery journal restores it), `realapp-multi-render` (real apps, `PrintWindow`-verified live rendering, byte-identical placement/style/exstyle/parent before vs. after capture+release — this replaced the old, Reparent-only `tests/CaptureReleaseTest` project, since a `PrintWindow` capture of a GPU-rendered guest reads its own back-buffer directly and isn't affected by whatever else is on top of it on screen, unlike a `BitBlt`-based screen-region capture), and `keyboardinput-*-altswitch` (the direct regression test for the originally-reported "keyboard input stops after switching to another app and back" bug). The `expand-e2e-coverage` change added eight pig-only scenarios to `all` — `container-minimize-retains-tabs` (H6), `hotkey-hold-single-picker`, `popout-inactive-keeps-active`, `double-capture-refused`, `persist-active-tab-index`, `restored-group-survives-member-reclose`, `selfminimize-timer-vs-teardown`, `launcher-empty-state-hint` — hardened `dragreorder`/`browser-dragreorder` with the H2 oscillation bound (flip-back-pair + churn-ceiling assertions on `Reordered tab` lines), extended `browser-tabswitch-hidesafety` with per-switch `PrintWindow` live-render checks (H4), and enforced the rule that no scenario may assert on log instrumentation absent from committed source.
+Since a Shepherd guest is never reparented, `WS_CHILD` and `GetParent` cannot
+prove capture or release. Scenarios compare observed guest geometry, visibility,
+identity, and container state. The historically named `dragout-by-titlebar`
+scenario verifies that both small and large native title-bar moves return the
+guest to its pane; they never pop out a tab. Pop-out is a TabDock tab-strip or
+explicit command operation.
 
-The test requires interactive confirmation, spawns real applications, and kills them on completion or failure. Because it sends real input, do not touch the mouse or keyboard during a run, and do not run it unattended on a production machine. Known harness limitation: scenarios that must programmatically acquire foreground (`ForceForeground`) are flaky when the suite is driven from inside another foreground-holding interactive session (see `KNOWN_ISSUES.md`); treat such failures observed in that context as unverified until re-run standalone.
+Use the scenario catalog and `docs/TESTING.md` for current coverage. Render
+probes such as `PrintWindow` provide guest-specific evidence and may fail or
+return black for some renderers; they do not by themselves prove on-screen
+visibility or physical interaction. A scenario must not assert on log
+instrumentation absent from the current source.
+
+Real-input runs require supervision and a valid desktop qualification lease.
+Cleanup may terminate only processes proven to be run-owned; adopted external
+windows are never cleanup-owned. Foreground interference invalidates the lease
+and must be recorded through the current outcome contract. Do not relabel a
+valid first-attempt product failure as a harness flake or erase it with a later
+passing rerun; see `docs/TESTING.md`.
 
 The two legacy PowerShell e2e scripts (`tests/e2e-capture-release.ps1`, `tests/e2e-stress-and-drag.ps1`) were removed: their Reparent-era assertions are invalid under the Shepherd never-reparent model (e.g. a vacuous `GetParent == 0` check), they hardcoded machine paths, and the ValidationDriver harness above supersedes them.
 
@@ -249,7 +262,25 @@ One-line short imperative summary; no bare URLs and no `progress`/`WIP` placehol
 
 ### Spec-driven changes (OpenSpec)
 
-The `openspec/` directory holds an OpenSpec workflow (`schema: spec-driven` in `openspec/config.yaml`). Current capability specs include `capture-picker-icons`, `container-activation-timers`, `crash-shutdown-coherence`, `diagnostics-logging`, `e2e-input-safety`, `e2e-scenario-coverage`, `elevation-guard`, `group-color-picker`, `hidden-window-journal`, `persistence-resilience`, `test-tooling-safety`, and `ui-ux-hardening`; the active `deep-audit-remediation-2026-08-13` change records the recovery, lifecycle, privacy, and qualification contracts until it is archived. When making a behavior-level change, check whether a spec or change proposal covers that area and keep it in sync. The OpenSpec workflow skills/commands are vendored across the agent-tool directories (`.claude/`, `.cursor/`, `.cline/`/`.clinerules/`, `.codex/`, `.kimi/`, `.kimi-code/`, `.kilocode/`, `.opencode/`) and are regenerated by the `openspec` CLI — do not hand-edit a single copy. The canonical copies live in `.claude/skills/` and `.claude/commands/opsx/`; every other copy is machine-generated output. After each `openspec` CLI regeneration, re-mirror them with `scripts\sync-agent-configs.ps1`, which applies each tool's filename/frontmatter convention and rewrites `/opsx:` references to `/opsx-` for the dash-form tools (`.cursor`, `.opencode`). Hand-edits to any non-`.claude` copy will be overwritten — edit `.claude` instead.
+The `openspec/` directory uses `schema: spec-driven` in `openspec/config.yaml`.
+Read the relevant current capability under `openspec/specs/` and discover active
+changes with the pinned CLI (`tools/openspec/node_modules/.bin/openspec.cmd list
+--json`). Completed changes live under `openspec/changes/archive/`; do not treat
+an old campaign name as an active change. Behavior changes must keep the
+relevant specifications in sync.
+
+The canonical OpenSpec workflow customizations live in
+`.claude/skills/openspec-*/` and `.claude/commands/opsx/`. After CLI regeneration,
+run `pwsh -File scripts\sync-agent-configs.ps1` for the targets listed in that
+script. It preserves each harness's command/skill invocation syntax,
+frontmatter, prompt extension, and argument placeholders. Its adapter templates
+also refresh goal continuation and the GitHub OpenSpec agent.
+Use `pwsh -File scripts\sync-agent-configs.ps1 -Check` to detect drift without
+writing files. The CLI dependency remains pinned under `tools/openspec/`;
+`generatedBy` skill metadata is generator provenance, not an upgrade request.
+Do not hand-edit generated mirrors. Root `AGENTS.md` remains the authority for
+repository instructions; adapters and harness configuration are separate from
+these OpenSpec workflow copies.
 
 ### Issue history documents
 
@@ -275,7 +306,7 @@ The intended distribution artifact is the self-contained single-file executable 
 
 ## Known limitations
 
-- **Guest self-maximize is a cosmetic gap.** If the user maximizes the docked guest itself (not via TabDock's own maximize), it fills the whole monitor, breaking the docked look — there is no reliable WinEvent signal that distinguishes a programmatic/self-maximize from the interactive move/size loop, so nothing corrects it. Not an input-correctness bug; out of scope for now.
+- **Guest presentation drift:** `EVENT_OBJECT_LOCATIONCHANGE` routes captured-member drift to `ContainerWindow.ReconcilePresentationDrift` and the pure `GuestPresentationDriftPolicy`. Correction uses existing Shepherd positioning with identity, visibility, minimize, move-size, and pane-containment guards. It is bounded and does not guarantee that every external guest accepts correction; see `docs/TESTING.md` for deterministic and supervised coverage.
 - **Elevated windows** cannot be captured by a non-elevated TabDock instance.
 - **Task Manager force-kill:** captured guest processes/windows survive a
   `taskkill /F` against TabDock (they were never reparented into its window

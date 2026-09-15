@@ -157,7 +157,7 @@ The reusable headless profiles cover:
 Presentation-integrity deterministic coverage (no supervised desktop required):
 
 ```powershell
-dotnet test tests/UnitTests/TabDock.UnitTests.csproj -c Release -k "GuestPresentationDriftPolicyTests or CaptionCenteringTests or PresentationChromeIntegrityTests"
+dotnet test tests/UnitTests/TabDock.UnitTests.csproj -c Release --filter "FullyQualifiedName~GuestPresentationDriftPolicyTests|FullyQualifiedName~CaptionCenteringTests|FullyQualifiedName~PresentationChromeIntegrityTests"
 ```
 
 New suites: `GuestPresentationDriftPolicyTests` (10 cases for zoom/geometry/visibility/bounded refusal), `CaptionCenteringTests` (2, `* Auto *` structural), `PresentationChromeIntegrityTests` (6, `WinEventRoutingPolicy.Decide` for `LOCATIONCHANGE` and drift purity). The harness adds `guest-maximize-contained` (`core-lifecycle`, synthetic `SW_SHOWMAXIMIZED` → `LOCATIONCHANGE` → `SHEPHERD[drift-reconcile]`) — it is `includeInAll` and requires a supervised lease like the other `SendInput` scenarios; without a lease it reports `BLOCKED_ENVIRONMENT` honestly rather than vacuously passing.
@@ -1065,10 +1065,14 @@ The project has a standing safety rule: **do not run synthesized mouse/keyboard 
 1. Create a throwaway console helper that writes a large JSON payload to `test.json` using `File.WriteAllText` in a loop with an artificial delay.
 2. While it is running, execute `taskkill /F /T /IM helper.exe`.
 3. Inspect `test.json`: it is truncated mid-content and invalid JSON.
-4. Copy the torn file over `%APPDATA%\TabDock\hidden-windows.json` (or `state.json`).
-5. Launch TabDock; observe `LoadJournal` throw and crash recovery become permanently disabled.
+4. Supply the torn file to the relevant persistence/journal test seam in a disposable fixture directory. Never overwrite the user's `%APPDATA%\TabDock` files. A process-level repro must use isolated application data and run-owned windows.
+5. Assert the current corruption classification and evidence-preservation behavior. The historical crash described by this example is a pre-fix observation, not expected behavior in the current app.
 
-**Fix verification:** repeat the same kill-mid-write against the fixed code (write to `.tmp`, then `File.Move(tmp, path, overwrite: true)`). The destination file is either the old content or the new content, never torn. Then hand-corrupt a journal file and confirm launch no longer throws — the corrupt file is renamed to `.corrupt.<timestamp>` and an empty journal is used instead.
+**Fix verification:** use disposable fixtures to interrupt the current atomic
+write path and check that the primary remains a complete old or new record.
+For corrupt input, assert the persistence/journal service's current quarantine,
+backup, pending-evidence, and admission behavior. An empty result alone does
+not prove safe recovery; verify that unresolved evidence is preserved.
 
 ### Pattern 2: Reproduce an event/state-transition bug programmatically
 

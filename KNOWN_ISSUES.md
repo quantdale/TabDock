@@ -1,5 +1,10 @@
 # TabDock — Known Issues (H-series summary)
 
+This is a historical bug-hunt log, not the current issue backlog. Session
+limitations and implementation descriptions below apply to their recorded
+dates. For current work see [.agent/STATE.md](.agent/STATE.md); for current
+product limitations see [README.md](README.md#known-limitations).
+
 ## Session 4 (2026-07-25): static bug-hunt pass over the app code
 
 A read-only audit of the whole main project (no runtime validation available in

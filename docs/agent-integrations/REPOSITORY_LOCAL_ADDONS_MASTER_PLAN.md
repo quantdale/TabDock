@@ -9,14 +9,18 @@ This document is retained as a future repository-local integration plan. The
 authorize implementation, package installation, or configuration changes.
 The original planning branch is historical provenance only.
 
-Current main already protects the root `.mcp.json` Repowise registration,
-`.vscode/mcp.json`, the committed harness adapter/skill surfaces, `AGENTS.md`,
+The preserved inventory includes the root `.mcp.json` Repowise registration,
+the committed harness adapter/skill surfaces, `AGENTS.md`,
 `ONBOARDING.md`, validation scripts, CI workflows, and `.agent/` state. No
 Microsoft Learn or Context7 registration/package was found in those inspected
 surfaces. Revalidate the recommendation, upstream identity, advisories,
 version/toolchain compatibility, and repository-local scope in a separately
 authorized implementation campaign. Do not retroactively treat this
 consolidation as add-on acceptance.
+
+Inventory correction (2026-09-15): `.vscode/mcp.json` is local/ignored, not a
+committed integration. Use `.mcp.json` and `.codex/config.toml` for the portable
+tracked registrations; do not copy a machine-specific VS Code path into Git.
 
 ## Repository assessment
 
