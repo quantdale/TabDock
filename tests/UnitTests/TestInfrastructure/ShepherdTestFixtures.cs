@@ -277,11 +277,14 @@ internal sealed class ShepherdFakeIdentityApi : IWindowIdentityNativeApi
 internal sealed class ShepherdFakeReleaseApi : IWindowReleaseNativeApi
 {
     private readonly Dictionary<IntPtr, bool> _visible = new();
+    private readonly Dictionary<IntPtr, bool> _iconic = new();
+    private readonly Dictionary<IntPtr, bool> _zoomed = new();
     public int MutationCount { get; private set; }
     public int PlacementCount { get; private set; }
     public int ShowWindowCount { get; private set; }
     public int ForegroundCount { get; private set; }
     public int TransitionCount { get; private set; }
+    public int? LastShowCommand { get; private set; }
     public Action? AfterPlacement { get; set; }
     public Action? AfterTransitions { get; set; }
     public bool SetWindowPlacement(IntPtr hwnd, ref NativeMethods.WINDOWPLACEMENT placement)
@@ -301,12 +304,25 @@ internal sealed class ShepherdFakeReleaseApi : IWindowReleaseNativeApi
     {
         MutationCount++;
         ShowWindowCount++;
+        LastShowCommand = command;
         bool previous = !_visible.TryGetValue(hwnd, out bool visible) || visible;
         _visible[hwnd] = command != NativeMethods.SW_HIDE;
+        if (command == NativeMethods.SW_RESTORE)
+        {
+            _iconic[hwnd] = false;
+            _zoomed[hwnd] = false;
+        }
         return previous;
     }
     public bool IsWindowVisible(IntPtr hwnd)
         => !_visible.TryGetValue(hwnd, out bool visible) || visible;
+    public bool IsIconic(IntPtr hwnd)
+        => _iconic.TryGetValue(hwnd, out bool iconic) && iconic;
+    public bool IsZoomed(IntPtr hwnd)
+        => _zoomed.TryGetValue(hwnd, out bool zoomed) && zoomed;
+    public void SetVisible(IntPtr hwnd, bool visible) => _visible[hwnd] = visible;
+    public void SetIconic(IntPtr hwnd, bool iconic) => _iconic[hwnd] = iconic;
+    public void SetZoomed(IntPtr hwnd, bool zoomed) => _zoomed[hwnd] = zoomed;
     public bool SetForegroundWindow(IntPtr hwnd)
     {
         MutationCount++;

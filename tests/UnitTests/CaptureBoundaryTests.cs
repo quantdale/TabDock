@@ -209,6 +209,8 @@ public class CaptureBoundaryTests
         public bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags) => true;
         public bool ShowWindow(IntPtr hwnd, int command) => false;
         public bool IsWindowVisible(IntPtr hwnd) => true;
+        public bool IsIconic(IntPtr hwnd) => false;
+        public bool IsZoomed(IntPtr hwnd) => false;
         public bool SetForegroundWindow(IntPtr hwnd) => true;
         public IntPtr GetForegroundWindow() => IntPtr.Zero;
         public int SetTransitionsDisabled(IntPtr hwnd, int value) => 0;

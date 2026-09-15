@@ -44,6 +44,8 @@ internal interface IWindowReleaseNativeApi
     bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
     bool ShowWindow(IntPtr hwnd, int command);
     bool IsWindowVisible(IntPtr hwnd);
+    bool IsIconic(IntPtr hwnd);
+    bool IsZoomed(IntPtr hwnd);
     bool SetForegroundWindow(IntPtr hwnd);
     IntPtr GetForegroundWindow();
     int SetTransitionsDisabled(IntPtr hwnd, int value);
@@ -80,6 +82,12 @@ internal sealed class NativeWindowReleaseNativeApi : IWindowReleaseNativeApi
 
     public bool IsWindowVisible(IntPtr hwnd)
         => NativeMethods.IsWindowVisible(hwnd);
+
+    public bool IsIconic(IntPtr hwnd)
+        => NativeMethods.IsIconic(hwnd);
+
+    public bool IsZoomed(IntPtr hwnd)
+        => NativeMethods.IsZoomed(hwnd);
 
     public bool SetForegroundWindow(IntPtr hwnd)
         => NativeMethods.SetForegroundWindow(hwnd);
@@ -1013,8 +1021,8 @@ public sealed class WindowShepherdService
         bool restored = ShowWindowSemantics.RestoreSucceeded(
             previouslyVisible,
             visibleAfter: _releaseApi.IsWindowVisible(window.Hwnd),
-            iconicAfter: NativeMethods.IsIconic(window.Hwnd),
-            zoomedAfter: NativeMethods.IsZoomed(window.Hwnd));
+            iconicAfter: _releaseApi.IsIconic(window.Hwnd),
+            zoomedAfter: _releaseApi.IsZoomed(window.Hwnd));
         if (!restored)
             LogPositioningFailureOnce(window.Hwnd, $"ShowWindow(SW_RESTORE) [{operation}]");
         return restored;

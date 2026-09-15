@@ -6,6 +6,37 @@ Git is authoritative for `HEAD`, branch, `origin/main`, worktree state, and
 worktrees. Resolve those values dynamically (`git rev-parse HEAD`, `git rev-parse origin/main`, `git status`, `git branch --show-current`); this file never embeds a
 self-referential SHA claiming to be the commit that contains this file. Embedded SHAs name historical or last-substantive implementation commits only. After a push, report final SHA and CI result in session output for independent verification.
 
+## Current state — 2026-09-15 RESIDUAL MULTI-CAPTURE REPAIR
+
+**Objective:** implement the confirmed pre-minimized incoming-guest
+presentation repair from
+`.agent/investigations/residual-multi-capture-black-screen-2026-09-15.md`.
+
+**Status:** implementation complete in the working tree; not committed. The
+repair restores an explicitly selected iconic guest through the existing
+identity-checked Shepherd path before hiding the outgoing guest, while keeping
+the passive iconic relayout guard and split authority unchanged. The broader
+user-reported eventual bad-to-good sequence remains physically unverified
+because supervised desktop input was unavailable.
+
+### Validation
+
+- Release focused presentation tests: 8/8 passed.
+- Release solution tests: 838/838 passed.
+- Debug solution tests: 838/838 passed.
+- Release build: 0 warnings, 0 errors.
+- `scripts/validate.ps1 -Configuration Release -Ci -Publish`: completed
+  successfully (resource/visual synthetic gate PASS, OpenSpec 38/38, publish
+  smoke PASS).
+- Read-only doctor and native ABI self-test: PASS.
+
+### Next action
+
+Review the bounded diff and, if desired, commit only the source/test,
+investigation, and state records. A supervised physical first-presentation run
+is still required before claiming closure of the separate eventually-recovering
+report.
+
 ## Current state — 2026-09-15 INITIAL-CAPTURE FIX AND CONSOLIDATION
 
 **Objective:** independently diagnose and fix the initial-capture black

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using TabDock.Services;
+using TabDock.UnitTests.TestInfrastructure;
 using Xunit;
 
 namespace TabDock.UnitTests;
@@ -99,5 +100,36 @@ public sealed class InitialCapturePresentationTests
 
         Assert.False(gate.ShouldReconcileAfterFirstContentRendered(hasActiveGuest: false));
         Assert.False(gate.ShouldReconcileAfterFirstContentRendered(hasActiveGuest: true));
+    }
+
+    [Theory]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, false)]
+    public void IncomingIconicGuest_RestoreIsRequiredOnlyForNormalContainer(
+        bool containerMinimized,
+        bool guestIconic,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            Views.ContainerWindow.RequiresExplicitIncomingRestore(
+                containerMinimized
+                    ? System.Windows.WindowState.Minimized
+                    : System.Windows.WindowState.Normal,
+                guestIconic));
+    }
+
+    [Fact]
+    public void PreMinimizedCapturedGuest_RestoreMinimizedClearsIconicState()
+    {
+        using var fixture = ReleaseTestFixture.Create();
+        fixture.Native.SetVisible(fixture.Captured.Hwnd, visible: false);
+        fixture.Native.SetIconic(fixture.Captured.Hwnd, iconic: true);
+
+        Assert.True(fixture.Service.RestoreMinimized(fixture.Captured));
+        Assert.Equal(NativeMethods.SW_RESTORE, fixture.Native.LastShowCommand);
+        Assert.True(fixture.Native.IsWindowVisible(fixture.Captured.Hwnd));
+        Assert.False(fixture.Native.IsIconic(fixture.Captured.Hwnd));
     }
 }

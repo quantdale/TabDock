@@ -2347,6 +2347,47 @@ public partial class ContainerWindow : Window
             return;
         }
 
+        // An incoming guest can already be minimized before capture admission
+        // (or before the user selects it again). In that case no
+        // EVENT_SYSTEM_MINIMIZESTART is generated while TabDock owns it, so the
+        // ordinary minimize-recovery timer never arms. Restore the explicit
+        // incoming selection before hiding the current guest; passive relayout
+        // keeps its iconic guard so a guest that is minimizing toward a
+        // tray-style hide is not resurrected by a background frame.
+        if (newWindow != null
+            && NativeMethods.IsWindow(newWindow.Hwnd)
+            && RequiresExplicitIncomingRestore(
+                WindowState,
+                NativeMethods.IsIconic(newWindow.Hwnd)))
+        {
+            bool restored = _shepherd.RestoreMinimized(newWindow);
+            DiagnosticRuntime.Record(
+                "presentation.active-member",
+                _containerHwnd,
+                newWindow.Hwnd,
+                group: Group.Id.ToString("N"),
+                action: "restore-incoming",
+                result: restored ? "restored" : "recovery-pending");
+            _log.Log($"SHEPHERD[active-restore] guest=0x{newWindow.Hwnd.ToInt64():X} result={(restored ? "restored" : "recovery-pending")}");
+            if (!restored)
+            {
+                // The outgoing guest has not been hidden yet, so restoring the
+                // logical selection is sufficient to keep the old presentation
+                // authoritative. If the native restore partially changed the
+                // incoming HWND, make one guarded rollback hide attempt; an
+                // unverifiable HWND remains fail-closed under Shepherd's normal
+                // identity rules.
+                if (NativeMethods.IsWindowVisible(newWindow.Hwnd)
+                    && _shepherd.IsCurrentCapturedWindow(newWindow))
+                {
+                    LogHidePending(newWindow, _shepherd.Hide(newWindow));
+                }
+
+                RestorePreviousActiveTab(oldWindow);
+                return;
+            }
+        }
+
         bool oldWindowHidden = false;
         if (oldWindow != null
             && newWindow != null
@@ -2361,6 +2402,17 @@ public partial class ContainerWindow : Window
                 TabViewModel? oldTab = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, oldWindow));
                 if (oldTab != null)
                     _viewModel.SetActiveTab(oldTab);
+
+                // An incoming iconic guest was restored before this hide so the
+                // transition could fail without stranding the old guest. If the
+                // old hide is recovery-pending, roll that incoming presentation
+                // back before returning to the old logical selection.
+                if (NativeMethods.IsWindow(newWindow.Hwnd)
+                    && NativeMethods.IsWindowVisible(newWindow.Hwnd)
+                    && _shepherd.IsCurrentCapturedWindow(newWindow))
+                {
+                    LogHidePending(newWindow, _shepherd.Hide(newWindow));
+                }
                 return;
             }
             oldWindowHidden = true;
@@ -2398,6 +2450,40 @@ public partial class ContainerWindow : Window
 
         if (oldWindow != null && !oldWindowHidden && _viewModel.Tabs.Any(t => t.Model == oldWindow))
             LogHidePending(oldWindow, _shepherd.Hide(oldWindow));
+    }
+
+    /// <summary>
+    /// An iconic guest needs an explicit restore only when a normal container
+    /// is deliberately selecting it. The minimized-container path owns its
+    /// hidden guest set and restores through the existing post-layout flow;
+    /// passive relayout and activation callbacks must not revive a guest that
+    /// is in the middle of a minimize-then-hide lifecycle.
+    /// </summary>
+    internal static bool RequiresExplicitIncomingRestore(WindowState containerState, bool guestIsIconic)
+        => containerState != WindowState.Minimized && guestIsIconic;
+
+    private void RestorePreviousActiveTab(CapturedWindow? oldWindow)
+    {
+        if (oldWindow == null)
+            return;
+
+        TabViewModel? oldTab = _viewModel.Tabs.FirstOrDefault(t => ReferenceEquals(t.Model, oldWindow));
+        if (oldTab == null)
+            return;
+
+        _viewModel.SetActiveTab(oldTab);
+        _constraintDirty = true;
+        _paneContainment.InvalidateAll();
+
+        // SyncShepherdActiveWindow is intentionally a no-op here because the
+        // controller still owns oldWindow. Re-glue it explicitly after the
+        // logical rollback so a successfully hidden old guest is visible again.
+        if (ReferenceEquals(ShepherdActiveWindow, oldWindow)
+            && NativeMethods.IsWindow(oldWindow.Hwnd)
+            && WindowState != WindowState.Minimized)
+        {
+            LayoutShepherdActiveWindow(forceZOrder: true);
+        }
     }
 
     /// <summary>
