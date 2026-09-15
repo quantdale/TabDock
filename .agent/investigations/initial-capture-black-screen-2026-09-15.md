@@ -110,3 +110,25 @@ explicit batch is the distinguishing repair operation.
   description of an experimental reparent backend that conflicts with the
   current Shepherd canonical instructions, so it is documentation-only and
   intentionally rejected after inspection.
+
+## Final disposition
+
+The validated implementation was committed as `17ebbbdfa7674dd4f252f31f44036753b7757513`
+and pushed to `main` before cleanup. The following dispositions preserve the
+useful-work decision made from the baseline inventory:
+
+| Surface | Disposition | Unique work reaching `main` |
+| --- | --- | --- |
+| PR #15 / `fix/initial-capture-presentation` | Closed as superseded | None; its admission-time hook and source-only test were replaced by the post-`ContentRendered` policy and behavioral tests |
+| PR #16 / `fix/initial-capture-black-presentation` | Closed as superseded | None verbatim; its first-render boundary hypothesis was retained and hardened in `17ebbbd` |
+| PR #14 / campaign branch | Already merged; remote branch deleted after reachability verification | All desired work was already reachable from `main` |
+| PR #13 / UI branch | Already merged; remote branch deleted after reachability verification | All desired work was already reachable from `main` |
+| `stash@{0}` | Inspected, classified redundant/outdated documentation, then dropped | None |
+| Disposable WPF/HwndHost probe | Evidence-only diagnostic artifact, removed from `D:\Temp` | None |
+
+The final cleanup commands verified that the remote has only `refs/heads/main`,
+the local branch list has only `main`, the stash list is empty, and the
+repository has one primary worktree. PRs #15 and #16 were closed with comments
+linking their supersession to the validated mainline fix. Hosted CI run
+`34925077671` failed with zero executed steps in both jobs; local validation is
+green and this is recorded as an external runner/allocation failure.

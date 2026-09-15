@@ -12,10 +12,11 @@ self-referential SHA claiming to be the commit that contains this file. Embedded
 presentation defect, add behavior-level regression coverage, validate the
 integrated result, and consolidate the repository to `main`.
 
-**Status:** the implementation and regression seam are complete in the working
-tree. The historical base is `main`/`origin/main` `5868707`; no final
-implementation SHA is embedded here because this file is part of the pending
-change. The durable plan is
+**Status:** complete on `main`. The historical base is `main`/`origin/main`
+`5868707`; the last substantive implementation commit is `17ebbbd`
+(`fix: reconcile initial captured guest presentation`). Resolve the final
+`HEAD` and `origin/main` dynamically; this file does not embed the SHA of its
+own closure commit. The durable plan is
 `.agent/plans/initial-capture-black-screen-2026-09-15.md` and the preservation
 inventory/evidence is `.agent/investigations/initial-capture-black-screen-2026-09-15.md`.
 
@@ -35,6 +36,11 @@ inventory/evidence is `.agent/investigations/initial-capture-black-screen-2026-0
   no-reparent, split, and z-order authorities remain unchanged.
 - Red regression observed on the pre-fix code (2 failing assertions); the fixed
   seam now passes 4/4.
+- Reviewed all baseline branches and PRs: campaign/UI tips were already in
+  `main`; black-screen PRs #15 and #16 were superseded and closed; their remote
+  branches were removed after unique-commit classification.
+- Inspected and dropped the one redundant documentation stash. The disposable
+  WPF probe was removed from `D:\Temp` after evidence capture.
 
 ### Validation so far
 
@@ -42,15 +48,20 @@ inventory/evidence is `.agent/investigations/initial-capture-black-screen-2026-0
 - Focused presentation/lifecycle tests: 85/85 passed.
 - Full Release solution tests: 834/834 passed.
 - `scripts/validate.ps1 -Configuration Release -Ci -Publish`: exit 0 on the
-  pending source tree; Release builds, driver/GuineaPig/performance compile,
-  834/834 tests, resource lifecycle, native ABI, smokes, OpenSpec 38/38, and
-  publish/version smoke all passed.
+  committed implementation SHA `17ebbbd`; Release builds,
+  driver/GuineaPig/performance compile, 834/834 tests, resource lifecycle,
+  native ABI, smokes, OpenSpec 38/38, and publish/version smoke all passed.
+- Debug solution tests: 834/834 passed. Release tooling tests: 179/179
+  passed. The Release build had 0 warnings and 0 errors.
 - Real-input visual qualification was not run: the current CUA surface exposes
   no native apps, and `docs/TESTING.md` forbids unattended synthesized input.
-  Hosted CI is an external allocation/billing gate, not a code failure.
+  Headless synthetic lifecycle coverage passed but cannot replace that gate.
+  Hosted run `34925077671` failed with both jobs reporting zero executed
+  steps, an external runner/allocation failure rather than a code failure.
 
-**Current phase:** commit the validated result, revalidate on integrated
-`main`, then close superseded PRs and remove only classified obsolete refs.
+**Current phase:** handoff. Final dynamic Git verification must confirm the
+closure commit is pushed, `main` equals `origin/main`, the working tree is
+clean, and only the canonical branch/worktree remain.
 
 ---
 
