@@ -127,6 +127,7 @@ public partial class ContainerWindow : Window
     // — the same coalescing scheduler the deterministic layout/budget tests exercise —
     // so there is a single relayout authority (no scheduler logic duplicated only in tests).
     private readonly PresentationLayoutCoordinator _layoutCoordinator = new();
+    private readonly InitialPresentationReconciliationPolicy _initialPresentationReconciliation = new();
     private bool _hasObservedContentRect;
     private NativeMethods.RECT _lastObservedContentRect;
 
@@ -324,6 +325,7 @@ public partial class ContainerWindow : Window
         _paneContainment = new PaneContainmentCoordinator(message => _log.Log(message));
         DataContext = viewModel;
         InitializeComponent();
+        ContentRendered += ContainerWindow_ContentRendered;
         Loaded += ContainerWindow_Loaded;
         Closing += ContainerWindow_Closing;
         Closed += ContainerWindow_Closed;
@@ -340,6 +342,25 @@ public partial class ContainerWindow : Window
         _viewModel.EmptiedByPopOut += ViewModel_EmptiedByPopOut;
         _viewModel.DeleteGroupRequested += ViewModel_DeleteGroupRequested;
         ColorContextMenu.Closed += ColorContextMenu_Closed;
+    }
+
+    private void ContainerWindow_ContentRendered(object? sender, EventArgs e)
+    {
+        if (!_initialPresentationReconciliation.ShouldReconcileAfterFirstContentRendered(
+                hasActiveGuest: _viewModel.ActiveTab?.Model != null))
+        {
+            return;
+        }
+
+        // A new container can admit and synchronously present a guest after
+        // Show() returns but before WPF raises ContentRendered. Re-read the
+        // authoritative active tab at this boundary, then queue one final
+        // Render-priority pass so the independent top-level guest is reconciled
+        // after WPF has settled its first native composition/z-order state.
+        // SyncShepherdActiveWindow is idempotent when the controller already
+        // names the active guest; the coordinator coalesces any pending pass.
+        SyncShepherdActiveWindow();
+        RequestRelayout(ensureFinalPass: true);
     }
 
     private void ViewModel_EmptiedByPopOut(object? sender, EventArgs e)
@@ -1018,6 +1039,7 @@ public partial class ContainerWindow : Window
         // OnClosed in ContainerWindow.Split.cs calls the same helper — both
         // sites are deliberately idempotent because Closed cannot assume
         // partial OnClosed ordering; this is the ONLY disarm path.
+        ContentRendered -= ContainerWindow_ContentRendered;
         DisarmSplitPresentationSettle();
         _activateReassertTimer.Cancel();
         CloseCapturePanel();

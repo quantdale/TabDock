@@ -6,56 +6,51 @@ Git is authoritative for `HEAD`, branch, `origin/main`, worktree state, and
 worktrees. Resolve those values dynamically (`git rev-parse HEAD`, `git rev-parse origin/main`, `git status`, `git branch --show-current`); this file never embeds a
 self-referential SHA claiming to be the commit that contains this file. Embedded SHAs name historical or last-substantive implementation commits only. After a push, report final SHA and CI result in session output for independent verification.
 
-## Current state — 2026-09-14 OPENSPEC APPLY COMPLETE
+## Current state — 2026-09-15 INITIAL-CAPTURE FIX AND CONSOLIDATION
 
-**Objective:** apply all three pending OpenSpec changes from the prior
-planning pass, validate, review, and close their task lists. The change
-artifacts were the contract; no new scope was added.
+**Objective:** independently diagnose and fix the initial-capture black
+presentation defect, add behavior-level regression coverage, validate the
+integrated result, and consolidate the repository to `main`.
 
-**Status:** all three changes archived, committed, and pushed to `main`.
-Commit `410b23200d2d1e111859bcd4a784f03bd8b06500`. Previously applied
-changes (8/8, 9/9, 14/14 tasks) are now archived under `openspec/changes/archive/`
-and specs updated. Working tree clean of source changes; harness
-noise excluded from commit per close-change non-goals.
+**Status:** the implementation and regression seam are complete in the working
+tree. The historical base is `main`/`origin/main` `5868707`; no final
+implementation SHA is embedded here because this file is part of the pending
+change. The durable plan is
+`.agent/plans/initial-capture-black-screen-2026-09-15.md` and the preservation
+inventory/evidence is `.agent/investigations/initial-capture-black-screen-2026-09-15.md`.
 
-### Archived changes
+### Completed
 
-All three changes archived via `openspec archive -y` on 2026-09-14:
+- Recorded branch, reachability, PR, worktree, stash, and untracked-file
+  inventory before cleanup.
+- Reconstructed capture → `Show`/`Loaded` → `ContentRendered` → native guest
+  presentation, including single and split paths; a disposable WPF/HwndHost
+  probe confirmed the first-render timing boundary.
+- Reviewed PRs #15 and #16 independently. #16's first-render boundary is
+  directionally correct; both existing source-text-only regression guards are
+  replaced by behavior-level tests.
+- Added a one-shot `InitialPresentationReconciliationPolicy` and a conditional
+  `ContainerWindow` `ContentRendered` hook that re-reads the existing active
+  guest authority and queues one coalesced final relayout. Shepherd identity,
+  no-reparent, split, and z-order authorities remain unchanged.
+- Red regression observed on the pre-fix code (2 failing assertions); the fixed
+  seam now passes 4/4.
 
-- `2026-09-14-align-native-content-host-void` → specs updated (`ui-ux-hardening`)
-- `2026-09-14-close-generated-workflow-trust-hole` → specs updated (`ci-tooling`,
-  `release-engineering`)
-- `2026-09-14-retire-obsolete-spike-surface` → specs updated (`ci-tooling`,
-  `test-tooling-safety`)
+### Validation so far
 
-### Pre-existing working-tree noise (out of scope, untouched)
+- `dotnet build TabDock.sln -c Release --no-restore`: 0 warnings, 0 errors.
+- Focused presentation/lifecycle tests: 85/85 passed.
+- Full Release solution tests: 834/834 passed.
+- `scripts/validate.ps1 -Configuration Release -Ci -Publish`: exit 0 on the
+  pending source tree; Release builds, driver/GuineaPig/performance compile,
+  834/834 tests, resource lifecycle, native ABI, smokes, OpenSpec 38/38, and
+  publish/version smoke all passed.
+- Real-input visual qualification was not run: the current CUA surface exposes
+  no native apps, and `docs/TESTING.md` forbids unattended synthesized input.
+  Hosted CI is an external allocation/billing gate, not a code failure.
 
-An OpenSpec 1.9 CLI run left dirty skill/command mirrors across harness
-directories (`.claude/`, `.cursor/`, `.clinerules/`, `.kilocode/`,
-`.kimi-code/`, `.kimi/` deletions, `.opencode/`) plus untracked
-`.agent/skills`, `.agent/workflows/opsx-*.md`, `.agents/skills/`, `.codebuddy/`,
-`.commandcode/`, `.github/{agents,prompts,skills}/`, `.omp/`, `.pi/`. The
-close-change non-goals declare these out of scope; excluded from this commit.
-These remain in the working tree for harness use only.
-
-### Validation (all green, 2026-09-14)
-
-- `validate.ps1 -Configuration Release -Ci -Publish`: exit 0 — audited
-  restores, Release builds, unit tests 830/830, headless resource-lifecycle
-  gate PASS, native-ABI self-test PASS, version/doctor/pending-recovery/
-  supervised-recovery smokes PASS, support-bundle privacy PASS, OpenSpec
-  41/41, publish smoke + published `--version` PASS.
-- Pinned OpenSpec 1.8.0 `validate --all --strict --no-interactive`: 41/41
-  (38 specs + 3 changes); each change strict-valid; `openspec list` shows all
-  three `✓ Complete`.
-- Release `dotnet build TabDock.sln`: 0 warnings, 0 errors; solution compiles
-  only `TabDock` + `TabDock.UnitTests`. `scripts/perf.ps1` has zero `Spike`
-  matches and was not executed.
-
-**Next action:** no further locally executable workstream is identified.
-Remaining items are external (Authenticode signing material, hosted CI billing/
-runner allocation, mixed-DPI hardware for the blocked visual cells) or require
-new product direction. Do not re-run resolved sweeps.
+**Current phase:** commit the validated result, revalidate on integrated
+`main`, then close superseded PRs and remove only classified obsolete refs.
 
 ---
 
