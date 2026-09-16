@@ -1,8 +1,8 @@
 # Investigation: beta feedback baseline on the current executable
 
 **Date:** 2026-09-17
-**Status:** candidate fixes validated; exact final Release physical qualification pending
-**Build:** baseline `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`; candidate executable is the current working tree and will receive its final source SHA after integration
+**Status:** candidate fixes and exact candidate Release physical qualification validated; final post-documentation Release rebuild pending
+**Build:** baseline `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`; candidate source commit `4f4998ffed1c9cbfd7f760ff48b54f48f2143ed1`; the post-documentation integration commit will receive the final Release artifact identity
 **Branch:** `main`
 
 ## Question
@@ -35,6 +35,12 @@ current product boundaries, if any, are responsible?
   OpenSpec 38/38, and single-file publish/version smoke. Those pre-integration
   Release binaries report the baseline source revision because the candidate
   was not committed yet.
+- Candidate Release identity used for physical qualification: the single-file
+  artifact at `artifacts/release-final-4f4998ff\TabDock.exe`, version `1.1.0`,
+  source SHA `4f4998ffed1c9cbfd7f760ff48b54f48f2143ed1`, file SHA-256
+  `3225289BF6A3EB28B9941D0B93F5C38694B53C5E5D81A30F3890A1B417F06CE1`,
+  180,310,748 bytes. Its native ABI self-test exited 0 with
+  `placementContract=PASS placementRoundTrip=PASS`.
 
 ## Findings
 
@@ -72,7 +78,11 @@ guest and race the hide provenance, and an active-tab switch can observe the
 just-hidden old guest as foreground. The candidate preserves the hide ledger
 until the matching hide event and transfers foreground only for a verified
 TabDock-owned transition. Fresh Debug capture/split trials showed bright guest
-content immediately; exact final Release physical verification remains open.
+content immediately. The exact candidate Release artifact repeated this path
+with two GuineaPig guests: single presentation and switching were bright,
+split presentation measured the native order `[guest-A, guest-B, Group]`, and
+Group and accent context menus remained bright while open. The final
+post-documentation artifact still requires a release-identity smoke pass.
 
 ### Report B — Spotify could not be opened/captured
 
@@ -89,8 +99,10 @@ capture failure; no blank or failed capture was observed.
 
 The candidate retained the generic identity and minimum-size paths; no
 Spotify-name branch or allowlist was added. The installed executable and
-distribution topology remain the supported case observed here. Final Release
-artifact repetition is pending.
+distribution topology remain the supported case observed here. The exact
+candidate Release artifact repeated capture, switch-away/back, maximize/
+restore, minimize/restore, overlap activation, guest activation, and release
+with the installed Spotify window; its UI remained visible throughout.
 
 ### Report C — clicking TabDock while overlapped
 
@@ -113,9 +125,15 @@ both panes bright. Maximizing the overlay and activating TabDock produced the
 same local order; activating the overlay again produced
 `[overlay, guest-A, guest-B, Group]`, with all captured windows at their normal
 extended style and below the unrelated foreground window. The ValidationDriver
-version of this scenario was also attempted but fail-closed before input when
-the occupied desktop could not satisfy its foreground lease; that run is not a
-product pass.
+version of this scenario was also attempted against both Debug and the exact
+candidate Release artifact but fail-closed before input when the occupied
+desktop could not satisfy its foreground lease; that run is not a product
+pass. The exact candidate Release artifact nevertheless completed the same
+manual overlay matrix with native measurements: overlay foreground was
+`[overlay, guest, Group]`; clicking exposed Group chrome gave
+`[guest, Group, overlay]` with Group foreground; reactivating the overlay
+restored `[overlay, guest, Group]`; clicking the exposed guest gave
+`[guest, Group, overlay]`. Captured windows retained normal extended styles.
 
 ### Report D — clipped textbox/content
 
@@ -125,7 +143,21 @@ TabDock’s capture search/rename controls were fully visible at the earlier
 125%/100% monitor trial, normal and maximized, after capture, and after
 repeated move/resize transitions. No clipping defect was reproduced, so no
 arbitrary margin or padding change was justified. The current one-monitor
-desktop cannot repeat the mixed-DPI portion for the final artifact.
+desktop cannot repeat the mixed-DPI portion for the final artifact. The exact
+candidate Release artifact captured a Release GuineaPig textbox, showed the
+full control in the guest, accepted real `TEXT-RELEASE` input, and exposed the
+typed value through the guest accessibility tree without clipping.
+
+## Candidate Release stress and lifecycle evidence
+
+The exact candidate Release artifact was also exercised with four real
+Release GuineaPig windows captured into one workspace. The workspace remained
+visibly populated at four guests. Sixteen real tab switches (four complete
+rounds) measured 406–503 ms per switch, mean 428 ms, with no blank guest,
+stale hidden-window presentation, or responsiveness failure observed. The
+workspace was closed with the release-windows option, each campaign-owned
+GuineaPig exited gracefully, and the TabDock process exited through its own
+Exit control.
 
 ## Hypotheses tested
 
@@ -170,9 +202,11 @@ desktop cannot repeat the mixed-DPI portion for the final artifact.
 
 The baseline had one confirmed current product defect: popup-open local z-order
 could cover a live guest. The candidate fixes that transition and the adjacent
-foreground/minimize races, with 847/847 automated tests and fresh Debug native
-measurements passing. Spotify capture and the reported clipping symptom were
-not reproducible on this machine. The final record remains open until the
-committed exact Release artifact is physically qualified, the available
-foreground/geometry/stress matrix is repeated, and the environment-blocked
-ValidationDriver result is recorded honestly.
+foreground/minimize races, with 847/847 automated tests and fresh Debug/native
+measurements passing. The exact candidate Release artifact also passed the
+available physical A-D/core matrix and the four-guest soak. Spotify capture and
+the reported clipping symptom were not failures on this machine. The final
+record remains open only for the post-documentation artifact rebuild/identity
+check, authorized mainline integration, and exact-SHA CI verification.
+Mixed-DPI physical qualification and the ValidationDriver foreground lease
+remain explicitly unverified/external limitations.
