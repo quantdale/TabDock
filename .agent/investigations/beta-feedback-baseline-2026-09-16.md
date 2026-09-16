@@ -1,8 +1,8 @@
 # Investigation: beta feedback baseline on the current executable
 
 **Date:** 2026-09-17
-**Status:** candidate fixes and exact candidate Release physical qualification validated; final post-documentation Release rebuild pending
-**Build:** baseline `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`; candidate source commit `4f4998ffed1c9cbfd7f760ff48b54f48f2143ed1`; the post-documentation integration commit will receive the final Release artifact identity
+**Status:** candidate fixes, exact Release physical qualification, and evidence closure validated; final-tree integration and external CI remain
+**Build:** baseline `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`; application source commit `4f4998ffed1c9cbfd7f760ff48b54f48f2143ed1`; documentation evidence closure `3e72a94ce4f79dddd41147f04e2909474f80fd6e`
 **Branch:** `main`
 
 ## Question
@@ -81,8 +81,8 @@ TabDock-owned transition. Fresh Debug capture/split trials showed bright guest
 content immediately. The exact candidate Release artifact repeated this path
 with two GuineaPig guests: single presentation and switching were bright,
 split presentation measured the native order `[guest-A, guest-B, Group]`, and
-Group and accent context menus remained bright while open. The final
-post-documentation artifact still requires a release-identity smoke pass.
+Group and accent context menus remained bright while open. The exact Release
+artifact from the evidence-closure tree repeated the same behavior.
 
 ### Report B — Spotify could not be opened/captured
 
@@ -143,10 +143,10 @@ TabDock’s capture search/rename controls were fully visible at the earlier
 125%/100% monitor trial, normal and maximized, after capture, and after
 repeated move/resize transitions. No clipping defect was reproduced, so no
 arbitrary margin or padding change was justified. The current one-monitor
-desktop cannot repeat the mixed-DPI portion for the final artifact. The exact
-candidate Release artifact captured a Release GuineaPig textbox, showed the
-full control in the guest, accepted real `TEXT-RELEASE` input, and exposed the
-typed value through the guest accessibility tree without clipping.
+desktop cannot repeat the mixed-DPI portion. The exact Release artifact from
+the evidence-closure tree captured a Release GuineaPig textbox, showed the
+full control in the guest, accepted real `TEXT-FINAL-3E72` input, and exposed
+the typed value through the guest accessibility tree without clipping.
 
 ## Candidate Release stress and lifecycle evidence
 
@@ -206,7 +206,8 @@ foreground/minimize races, with 847/847 automated tests and fresh Debug/native
 measurements passing. The exact candidate Release artifact also passed the
 available physical A-D/core matrix and the four-guest soak. Spotify capture and
 the reported clipping symptom were not failures on this machine. The final
-record remains open only for the post-documentation artifact rebuild/identity
-check, authorized mainline integration, and exact-SHA CI verification.
-Mixed-DPI physical qualification and the ValidationDriver foreground lease
-remain explicitly unverified/external limitations.
+record is closed for the available local evidence. The remaining operations
+are final-tree artifact publication, authorized mainline integration, and
+exact-SHA CI verification. Mixed-DPI physical qualification and the
+ValidationDriver foreground lease remain explicitly unverified/external
+limitations.
