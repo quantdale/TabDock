@@ -73,7 +73,7 @@ public sealed class GuestLifecycleService
     {
         monitor.WindowDestroyed += (_, args) => OnWindowDestroyed(args.Hwnd);
         monitor.WindowHidden += (_, args) => OnWindowHidden(args.Hwnd, args.VisibleAtCallback, args.EventTime);
-        monitor.WindowMinimized += (_, args) => OnWindowMinimized(args.Hwnd);
+        monitor.WindowMinimized += (_, args) => OnWindowMinimized(args.Hwnd, args.EventTime);
         monitor.WindowMoveSizeStarted += (_, args) => OnGuestMoveSize(args.Hwnd, started: true);
         monitor.WindowMoveSizeEnded += (_, args) => OnGuestMoveSize(args.Hwnd, started: false);
         monitor.WindowForegroundChanged += OnForegroundChanged;
@@ -158,10 +158,24 @@ public sealed class GuestLifecycleService
         RemoveDeadMember(group, match, show: false);
     }
 
-    private void OnWindowMinimized(IntPtr hwnd)
+    private void OnWindowMinimized(IntPtr hwnd, uint eventTime)
     {
         if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match))
             return;
+
+        bool guestVisible = NativeMethods.IsWindowVisible(hwnd);
+        bool matchingExpectedHide = _hideProvenance.MatchesExpectedHide(hwnd, match, eventTime);
+        if (GuestMinimizeRecoveryPolicy.ShouldSuppressRestore(matchingExpectedHide, guestVisible))
+        {
+            // SW_HIDE can produce a queued MINIMIZESTART for the same HWND on
+            // Windows. Recovery here races the intentional hide and can leave
+            // an iconic guest behind the minimized container. Keep the hide
+            // expectation intact so the subsequent EVENT_OBJECT_HIDE still
+            // consumes it; a genuine guest minimize has no matching ledger
+            // entry and continues through the normal recovery path.
+            _log.Log($"WinEvent: captured window 0x{hwnd.ToInt64():X} minimize matched TabDock's invisible shepherd-hide; suppressing guest restore.");
+            return;
+        }
 
         _log.Log($"WinEvent: captured window 0x{hwnd.ToInt64():X} minimized; restoring it inside its tab.");
         if (_containers.TryGetValue(group.Id, out var container))

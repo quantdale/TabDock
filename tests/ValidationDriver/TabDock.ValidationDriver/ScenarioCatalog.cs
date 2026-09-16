@@ -346,6 +346,7 @@ internal static class ScenarioCatalog
         Add("split-drag-release-render-stability", "SplitDragReleaseRenderStability", "split-render", includeInAll: true);
         Add("drag-release-render-stability", "DragReleaseRenderStability", "split-render", includeInAll: true);
         Add("split-directclick", "SplitDirectClick", "split-focus", includeInAll: true);
+        Add("split-workspace-foreground-pairing", "SplitWorkspaceForegroundPairing", "split-focus", includeInAll: true);
         Add("split-repeat-cycles", "SplitRepeatCycles", "split-focus", includeInAll: true);
         Add("contextmenu-render-stability", "ContextMenuRenderStability", "drag-z-order", includeInAll: true);
         Add("chrome-click-render-stability", "ChromeClickRenderStability", "drag-z-order", includeInAll: true);

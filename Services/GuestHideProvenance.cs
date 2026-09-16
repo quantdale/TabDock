@@ -96,6 +96,21 @@ public sealed class GuestHideProvenance
         return true;
     }
 
+    /// <summary>
+    /// Checks whether an event belongs to the current captured generation
+    /// without consuming the expectation. The minimize lifecycle may arrive
+    /// before the corresponding hide event; that event still needs the
+    /// one-shot expectation so it can be classified and consumed normally.
+    /// </summary>
+    public bool MatchesExpectedHide(IntPtr hwnd, CapturedWindow member, uint eventTime)
+    {
+        ArgumentNullException.ThrowIfNull(member);
+        return _expectedHides.TryGetValue(hwnd, out ExpectedHide expected)
+            && member.WindowIdentityToken != 0
+            && expected.CaptureToken == member.WindowIdentityToken
+            && IsWithinTolerance(expected.RegisteredAtEventTime, eventTime);
+    }
+
     /// <summary>True while an unconsumed expectation exists for this HWND.</summary>
     public bool HasExpectedHide(IntPtr hwnd) => _expectedHides.ContainsKey(hwnd);
 

@@ -17,6 +17,162 @@ public sealed class InteractionSourceContractTests
     private static readonly string RepoRoot = FindRepoRoot();
 
     [Fact]
+    public void ChromePopupOpenPaths_ReassertLocalGuestPresentationAfterOpening()
+    {
+        string code = Read("Views/ContainerWindow.xaml.cs");
+
+        // Regression baseline: opening a WPF ContextMenu can activate/raise the
+        // opaque container after the guest was positioned. The popup-open path
+        // must restore only the local visual stack; it must not use the
+        // foreground-grant authority, which would close the menu or steal input.
+        Assert.Contains("private void ChromeContextMenu_Opened", code);
+        Assert.Contains("private void ReassertChromePopupPresentation(ContextMenu menu)", code);
+        string helper = Slice(
+            code,
+            "private void ReassertChromePopupPresentation(ContextMenu menu)",
+            "private void BeginChromePopup");
+        Assert.Contains("PresentationSource.FromVisual(menu)", helper);
+        Assert.Contains("LayoutShepherdActiveWindow(forceZOrder: true);", helper);
+        Assert.Contains("LayoutSplitPanes();", helper);
+        Assert.Contains("PairGuestsBelowPopup", helper);
+        Assert.DoesNotContain("BringToFront(", helper);
+        Assert.DoesNotContain("SetForeground(", helper);
+        Assert.DoesNotContain("SetForegroundWindow(", helper);
+
+        var popupPaths = new (string Start, string End, string OpenStatement)[]
+        {
+            ("private void TabsListBox_PreviewMouseRightButtonDown", "private void TabContextMenu_Closed", "menu.IsOpen = true;"),
+            ("private void TabsListBox_PreviewKeyDown", "private void InlineCapture_Canceled", "menu.IsOpen = true;"),
+            ("private void SplitAffordance_Click", "private void SplitAffordanceMenuItem_Click", "menu.IsOpen = true;"),
+        };
+
+        foreach ((string start, string end, string openStatement) in popupPaths)
+        {
+            string handler = Slice(code, start, end);
+            Assert.Contains("menu.Opened -= ChromeContextMenu_Opened;", handler);
+            Assert.Contains("menu.Opened += ChromeContextMenu_Opened;", handler);
+            Assert.Contains(openStatement, handler);
+        }
+
+        Assert.Contains("ColorContextMenu.Opened += ChromeContextMenu_Opened;", code);
+        Assert.Contains("GroupContextMenu.Opened += ChromeContextMenu_Opened;", code);
+
+        string shepherd = Read("Services/WindowShepherdService.cs");
+        string popupPair = Slice(
+            shepherd,
+            "public void PairGuestsBelowPopup(",
+            "private bool IsVerifiedOwnedPopup");
+        Assert.Contains("IsVerifiedOwnedPopup", popupPair);
+        Assert.Contains("SetGuestBelowPopup", popupPair);
+        Assert.Contains("SetGuestBelow(bottomGuest, topGuest.Hwnd)", popupPair);
+        Assert.DoesNotContain("SetForegroundWindow(", popupPair);
+    }
+
+    [Fact]
+    public void MinimizeRecovery_PreservesHideProvenanceBeforeRestoringGuests()
+    {
+        string lifecycle = Read("Services/GuestLifecycleService.cs");
+        Assert.Contains(
+            "monitor.WindowMinimized += (_, args) => OnWindowMinimized(args.Hwnd, args.EventTime);",
+            lifecycle);
+
+        string handler = Slice(
+            lifecycle,
+            "private void OnWindowMinimized(IntPtr hwnd, uint eventTime)",
+            "private void ArmMinimizeHideProbe");
+        Assert.Contains("MatchesExpectedHide(hwnd, match, eventTime)", handler);
+        Assert.Contains("GuestMinimizeRecoveryPolicy.ShouldSuppressRestore", handler);
+        Assert.Contains("return;", handler);
+        Assert.Contains("container.RestoreMinimizedWindow(match);", handler);
+    }
+
+    [Fact]
+    public void ActiveSwitch_TransfersForegroundWhenTheHiddenOldGuestStillOwnsIt()
+    {
+        string code = Read("Views/ContainerWindow.xaml.cs");
+        string handler = Slice(
+            code,
+            "private void SyncShepherdActiveWindow",
+            "internal static bool RequiresExplicitIncomingRestore");
+
+        Assert.Contains("foreground == oldWindow.Hwnd", handler);
+        Assert.Contains("!NativeMethods.IsWindowVisible(oldWindow.Hwnd)", handler);
+        Assert.Contains("_shepherd.IsCurrentCapturedWindow(oldWindow)", handler);
+        Assert.Contains("_shepherd.SetForeground(newWindow);", handler);
+    }
+
+    [Fact]
+    public void ForegroundSplitReassertion_RestoresTheWholeLocalStack()
+    {
+        string code = Read("Views/ContainerWindow.xaml.cs");
+        string focus = Slice(
+            code,
+            "private void FocusSplitMember",
+            "private void RefreshSizeConstraint");
+        Assert.Contains("LayoutSplitPanes(forceZOrder: true);", focus);
+
+        string layout = Slice(
+            code,
+            "private void LayoutSplitPanes",
+            "private void EnterSplit");
+        Assert.Contains("bool forceZOrder = false", layout);
+        Assert.Contains("PairVisibleGuestsInOrder(containerHwnd, top, bottom)", layout);
+
+        string settle = Read("Views/ContainerWindow.Split.cs");
+        string rendering = Slice(
+            settle,
+            "private void SplitPresentationSettle_Rendering",
+            "private void DisarmSplitPresentationSettle");
+        Assert.Contains("LayoutSplitPanes(forceZOrder: true);", rendering);
+        int settleForegroundRead = rendering.IndexOf("NativeMethods.GetForegroundWindow()", StringComparison.Ordinal);
+        int settleForce = rendering.IndexOf("LayoutSplitPanes(forceZOrder: true);", StringComparison.Ordinal);
+        Assert.True(settleForegroundRead >= 0 && settleForce > settleForegroundRead,
+            "split settle must verify workspace foreground ownership before raising the local stack");
+        Assert.Contains("result: \"skipped-background\"", rendering);
+        Assert.Contains("result: \"changed-during-layout\"", rendering);
+
+        int delayedForegroundGuard = code.IndexOf(
+            "IsWorkspaceForegroundForReassert(activeWindow)",
+            StringComparison.Ordinal);
+        int delayedForegroundAction = delayedForegroundGuard < 0
+            ? -1
+            : code.IndexOf(
+                "FocusSplitMember(activeTab)",
+                delayedForegroundGuard,
+                StringComparison.Ordinal);
+        Assert.True(delayedForegroundGuard >= 0 && delayedForegroundAction > delayedForegroundGuard,
+            "delayed WM_ACTIVATE reassert must verify workspace foreground ownership before native presentation work");
+
+        string reassert = Slice(
+            code,
+            "private void ReconcileAfterTransientChromeClosed",
+            "private void ColorMenuItem_Click");
+        int foregroundGuard = reassert.IndexOf("if (!containerOwnsForeground", StringComparison.Ordinal);
+        int splitLayout = reassert.IndexOf("LayoutSplitPanes(forceZOrder: true);", StringComparison.Ordinal);
+        Assert.True(foregroundGuard >= 0 && splitLayout > foregroundGuard,
+            "popup-close split reassert must verify TabDock still owns foreground before raising its stack");
+
+        string shepherd = Read("Services/WindowShepherdService.cs");
+        string pair = Slice(
+            shepherd,
+            "public bool PairVisibleGuestsInOrder(",
+            "public void PairGuestsBelowPopup(");
+        Assert.Equal(3, Regex.Matches(pair, @"NativeMethods\s*\.\s*SetWindowPos\s*\(").Count);
+        Assert.DoesNotContain("DeferredWindowPositionBatch.Apply", pair);
+        Assert.Contains("NativeMethods.HWND_TOP", pair);
+        Assert.Contains("bottomGuest.Hwnd", pair);
+        Assert.Contains("SWP_NOACTIVATE", pair);
+        Assert.Contains("result: \"skipped-background\"", pair);
+        Assert.Contains("private static bool IsForegroundWithinWorkspace", shepherd);
+
+        string direct = Slice(
+            code,
+            "public void PairZOrderBehindGuest",
+            "private static bool IsWindowAbove");
+        Assert.Contains("NativeMethods.GetForegroundWindow() != foregroundHwnd", direct);
+    }
+
+    [Fact]
     public void CtrlTab_UsesAuthoritativeActiveTabBinding_NotDisplayTabsIndexWrites()
     {
         string code = Read("Views/ContainerWindow.xaml.cs");

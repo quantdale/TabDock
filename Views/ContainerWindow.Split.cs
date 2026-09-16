@@ -315,8 +315,43 @@ public partial class ContainerWindow
             return;
         }
 
+        // Split entry is normally initiated by a TabDock popup, but the
+        // dispatcher callback can run after another application has taken the
+        // real foreground.  A generation match alone does not grant
+        // foreground ownership: do not raise either guest or call
+        // SetForeground when the workspace is already in the background.
+        // The owned-popup case is covered by IsContainerChromeInteractionActive
+        // above; the root-owner check keeps this guard correct for any other
+        // TabDock-owned transient HWND.
+        IntPtr foreground = NativeMethods.GetForegroundWindow();
+        bool foregroundBelongsToWorkspace = foreground == _containerHwnd
+            || foreground == _splitController.Left?.Hwnd
+            || foreground == _splitController.Right?.Hwnd
+            || (foreground != IntPtr.Zero
+                && NativeMethods.GetAncestor(foreground, NativeMethods.GA_ROOTOWNER) == _containerHwnd);
+        if (!foregroundBelongsToWorkspace)
+        {
+            DisarmSplitPresentationSettle();
+            DiagnosticRuntime.Record("split.settled", _containerHwnd, focused.Hwnd,
+                group: Group.Id.ToString("N"), action: "foreground-guard", result: "skipped-background");
+            return;
+        }
+
         DisarmSplitPresentationSettle();
-        LayoutSplitPanes();
+        // Split entry changes the visible top-level window set from one guest
+        // to two.  The ordinary geometry-preserving pass intentionally avoids
+        // z-order churn, but that weaker predicate cannot detect an unrelated
+        // HWND (or the container itself) interleaved between the new panes.
+        // This is the one-shot foreground-owned settle, so reassert the whole
+        // local stack before handing real foreground to the initiating member.
+        LayoutSplitPanes(forceZOrder: true);
+        if (NativeMethods.GetForegroundWindow() != _containerHwnd
+            && NativeMethods.GetForegroundWindow() != focused.Hwnd)
+        {
+            DiagnosticRuntime.Record("split.settled", _containerHwnd, focused.Hwnd,
+                group: Group.Id.ToString("N"), action: "foreground-guard", result: "changed-during-layout");
+            return;
+        }
         if (IsSplitPresented
             && _splitController.SettleGeneration == _splitController.Generation
             && IsSplitMember(focused))

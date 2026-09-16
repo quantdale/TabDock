@@ -82,6 +82,34 @@ public class GuestHideProvenanceTests
     }
 
     [Fact]
+    public void MinimizeEvent_MatchesCurrentHideWithoutConsumingIt()
+    {
+        var provenance = new GuestHideProvenance();
+        CapturedWindow a = Window(1, token: 1001);
+        provenance.RegisterExpectedHide(a, "container-minimize", eventTime: 4_000);
+
+        Assert.True(provenance.MatchesExpectedHide(a.Hwnd, a, eventTime: 4_100));
+        Assert.True(provenance.HasExpectedHide(a.Hwnd));
+        Assert.True(provenance.TryConsumeExpectedHide(a.Hwnd, a, eventTime: 4_200, out string operation));
+        Assert.Equal("container-minimize", operation);
+    }
+
+    [Theory]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    public void MinimizeRecoveryPolicy_SuppressesOnlyInvisibleIntentionalHides(
+        bool matchingExpectedHide,
+        bool guestVisible,
+        bool expectedSuppression)
+    {
+        Assert.Equal(
+            expectedSuppression,
+            GuestMinimizeRecoveryPolicy.ShouldSuppressRestore(matchingExpectedHide, guestVisible));
+    }
+
+    [Fact]
     public void GenuineTrayClose_NoRegistration_NotConsumed()
     {
         var provenance = new GuestHideProvenance();

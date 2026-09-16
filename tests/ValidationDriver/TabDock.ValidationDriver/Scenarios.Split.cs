@@ -1977,6 +1977,125 @@ internal static partial class Scenarios
     }
 
     // -------------------------------------------------------------------------
+    // split-workspace-foreground-pairing: a real external window is deliberately
+    // inserted between the two visible split guests. Clicking a TabDock tab must
+    // restore the complete local stack (A, B, container), not merely prove that
+    // A is somewhere above the container. The final assertion also verifies the
+    // inverse invariant: when the unrelated window becomes foreground, no guest
+    // remains above it like an always-on-top window.
+    // -------------------------------------------------------------------------
+    private static void SplitWorkspaceForegroundPairing(Ctx ctx, Options opt)
+    {
+        GuestInfo pigA = SpawnPig(ctx, "SWFPA", "--color", "red");
+        GuestInfo pigB = SpawnPig(ctx, "SWFPB", "--color", "blue");
+        (IntPtr container, IntPtr host) = CaptureIntoGroup(ctx, pigA, pigB);
+
+        EnterSplitTwo(ctx, container, pigA);
+        AssertSplitPanes(ctx, host, pigA, pigB, "split-workspace-foreground-pairing enter");
+
+        // This pig is deliberately NOT captured. It is the unrelated desktop
+        // window that exposes the non-adjacent z-order defect.
+        GuestInfo blocker = SpawnPig(ctx, "SWFPC", "--color", "yellow");
+        if (blocker.Identity is not WindowIdentity blockerIdentity
+            || pigA.Identity is not WindowIdentity leftIdentity
+            || pigB.Identity is not WindowIdentity rightIdentity)
+        {
+            throw new InvalidOperationException("Split z-order regression lost a stable guest identity before native setup.");
+        }
+
+        if (!Input.ForceForegroundRoot(blocker.Hwnd))
+            throw new InvalidOperationException("Could not establish the unrelated blocker as foreground before the split z-order setup.");
+
+        NativeMethods.RECT hostRect = Discover.GetClientScreenRect(host);
+        int blockerWidth = Math.Max(240, Math.Min(360, hostRect.Width / 2));
+        int blockerHeight = Math.Max(220, Math.Min(360, hostRect.Height / 2));
+        int blockerX = hostRect.left + 24;
+        int blockerY = hostRect.top + 24;
+        if (!VerifiedWindowOps.SetWindowPos(
+                leftIdentity,
+                NativeMethods.HWND_TOP,
+                0, 0, 0, 0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE)
+            || !VerifiedWindowOps.SetWindowPos(
+                blockerIdentity,
+                pigA.Hwnd,
+                blockerX, blockerY, blockerWidth, blockerHeight,
+                NativeMethods.SWP_NOACTIVATE,
+                leftIdentity)
+            || !VerifiedWindowOps.SetWindowPos(
+                rightIdentity,
+                blocker.Hwnd,
+                0, 0, 0, 0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE,
+                blockerIdentity)
+            || !VerifiedWindowOps.SetWindowPos(
+                GetRememberedContainerIdentity(ctx, container),
+                pigB.Hwnd,
+                0, 0, 0, 0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE,
+                rightIdentity))
+        {
+            throw new InvalidOperationException("Could not establish the identity-verified interleaved split z-order setup.");
+        }
+
+        ctx.Check(Util.WaitUntil(
+                () => NextVisibleWindow(pigA.Hwnd) == blocker.Hwnd
+                    && NextVisibleWindow(blocker.Hwnd) == pigB.Hwnd
+                    && NextVisibleWindow(pigB.Hwnd) == container,
+                1500),
+            "unrelated foreground window is physically interleaved between the split members before the real click");
+        if (NativeMethods.GetForegroundWindow() != blocker.Hwnd)
+            throw new InvalidOperationException("The interleaved split setup lost the unrelated foreground window before input.");
+
+        AutomationElement? tab = FindTabText(container, pigA.Title, out int tabCount);
+        if (tab == null || tabCount != 1)
+            throw new InvalidOperationException($"Tab for '{pigA.Title}' was not uniquely available for the foreground-pairing click (count={tabCount}).");
+        (int x, int y) = Uia.Center(tab);
+        IntPtr pointRoot = NativeMethods.GetAncestor(
+            NativeMethods.WindowFromPoint(new NativeMethods.POINT { x = x, y = y }),
+            NativeMethods.GA_ROOT);
+        if (pointRoot != container)
+            throw new InvalidOperationException($"Split tab click point was obstructed by 0x{pointRoot.ToInt64():X}; refusing to click the wrong window.");
+
+        GuardedProc.Log($"  SplitWorkspaceForegroundPairing: clicking TabDock tab at ({x},{y}) while blocker 0x{blocker.Hwnd.ToInt64():X} is foreground.");
+        Input.ClickAt(x, y);
+        ctx.Check(Util.WaitUntil(
+                () => NextVisibleWindow(pigA.Hwnd) == pigB.Hwnd
+                    && NextVisibleWindow(pigB.Hwnd) == container,
+                2000),
+            "clicking TabDock restores the complete split stack above the unrelated window");
+        ctx.Check(Util.WaitUntil(
+                () => NativeMethods.GetForegroundWindow() == pigA.Hwnd,
+                2000),
+            "the clicked split member becomes the real foreground window");
+        ctx.Check(IsInPane(pigA.Hwnd, host, true) && IsInPane(pigB.Hwnd, host, false),
+            "the foreground repair leaves both guests in their assigned panes");
+
+        if (!Input.ForceForegroundRoot(blocker.Hwnd))
+            throw new InvalidOperationException("Could not restore the unrelated blocker as foreground for the inverse z-order assertion.");
+        ctx.Check(Util.WaitUntil(() => NativeMethods.GetForegroundWindow() == blocker.Hwnd, 1500),
+            "unrelated window becomes foreground for the inverse z-order assertion");
+        ctx.Check(Util.WaitUntil(
+                () => !IsAboveInZOrder(pigA.Hwnd, blocker.Hwnd)
+                    && !IsAboveInZOrder(pigB.Hwnd, blocker.Hwnd)
+                    && !IsAboveInZOrder(container, blocker.Hwnd),
+                1500),
+            "captured guests and their container remain below the unrelated foreground window");
+    }
+
+    private static bool IsAboveInZOrder(IntPtr upper, IntPtr lower)
+    {
+        if (upper == IntPtr.Zero || lower == IntPtr.Zero || upper == lower)
+            return false;
+        for (IntPtr current = upper; current != IntPtr.Zero; current = NativeMethods.GetWindow(current, NativeMethods.GW_HWNDNEXT))
+        {
+            if (current == lower)
+                return true;
+        }
+        return false;
+    }
+
+    // -------------------------------------------------------------------------
     // split-repeat-cycles: repeatedly enter split (both panes), exit split (one
     // full-width, the other hidden), asserting no EXCEPTION and no stale split state
     // per cycle.
@@ -2193,6 +2312,18 @@ internal static partial class Scenarios
                 ctx.Check(topPid == ctx.TabDockPid,
                     $"cycle {cycle}: menu point is not covered by another window (top=0x{top.ToInt64():X} pid={topPid})");
             }
+            ctx.Check(Util.WaitUntil(() =>
+            {
+                NativeMethods.RECT hostRect = Discover.GetClientScreenRect(host);
+                IntPtr top = NativeMethods.WindowFromPoint(new NativeMethods.POINT
+                {
+                    x = hostRect.left + hostRect.Width / 2,
+                    y = hostRect.top + hostRect.Height / 2,
+                });
+                NativeMethods.GetWindowThreadProcessId(top, out uint topPid);
+                return topPid == pig.Pid;
+            }, 3000),
+                $"cycle {cycle}: guest is the top window at the content center while the menu is open");
             Thread.Sleep(300);
             ctx.Check(IsDocked(pig.Hwnd, host), $"cycle {cycle}: guest still docked while the menu is open");
             Input.SendKey(Input.VK_ESCAPE);

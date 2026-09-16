@@ -342,6 +342,8 @@ public partial class ContainerWindow : Window
         _viewModel.EmptiedByPopOut += ViewModel_EmptiedByPopOut;
         _viewModel.DeleteGroupRequested += ViewModel_DeleteGroupRequested;
         ColorContextMenu.Closed += ColorContextMenu_Closed;
+        ColorContextMenu.Opened += ChromeContextMenu_Opened;
+        GroupContextMenu.Opened += ChromeContextMenu_Opened;
     }
 
     private void ContainerWindow_ContentRendered(object? sender, EventArgs e)
@@ -513,7 +515,8 @@ public partial class ContainerWindow : Window
                     if (ShepherdActiveWindow == activeWindow
                         && !NativeMethods.IsIconic(activeWindow.Hwnd)
                         && NativeMethods.IsWindowVisible(activeWindow.Hwnd)
-                        && !_inNativeMoveLoop && !_isDragging && !IsContainerChromeInteractionActive())
+                        && !_inNativeMoveLoop && !_isDragging && !IsContainerChromeInteractionActive()
+                        && IsWorkspaceForegroundForReassert(activeWindow))
                     {
                         if (IsSplitPresented && IsSplitMember(activeWindow))
                         {
@@ -1091,8 +1094,13 @@ public partial class ContainerWindow : Window
         }
         _viewModel.DeleteGroupRequested -= ViewModel_DeleteGroupRequested;
         ColorContextMenu.Closed -= ColorContextMenu_Closed;
+        ColorContextMenu.Opened -= ChromeContextMenu_Opened;
+        GroupContextMenu.Opened -= ChromeContextMenu_Opened;
         foreach (ContextMenu menu in _trackedTabContextMenus)
+        {
+            menu.Opened -= ChromeContextMenu_Opened;
             menu.Closed -= TabContextMenu_Closed;
+        }
         _trackedTabContextMenus.Clear();
         _popupChromeDepth = 0;
 
@@ -1362,6 +1370,8 @@ public partial class ContainerWindow : Window
                 _openTabContextMenu = menu;
                 if (_trackedTabContextMenus.Add(menu))
                     menu.Closed += TabContextMenu_Closed;
+                menu.Opened -= ChromeContextMenu_Opened;
+                menu.Opened += ChromeContextMenu_Opened;
                 _log.Log("CHROME[tab-menu-open-request]");
                 BeginChromePopup();
                 menu.IsOpen = true;
@@ -1378,6 +1388,7 @@ public partial class ContainerWindow : Window
         // TabViewModel its items root) until container close.
         if (sender is ContextMenu closedMenu)
         {
+            closedMenu.Opened -= ChromeContextMenu_Opened;
             closedMenu.Closed -= TabContextMenu_Closed;
             _trackedTabContextMenus.Remove(closedMenu);
         }
@@ -1522,6 +1533,8 @@ public partial class ContainerWindow : Window
         }
 
         menu.Closed += SplitAffordanceContextMenu_Closed;
+        menu.Opened -= ChromeContextMenu_Opened;
+        menu.Opened += ChromeContextMenu_Opened;
         _splitAffordanceContextMenu = menu;
         e.Handled = true;
         Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
@@ -1608,7 +1621,10 @@ public partial class ContainerWindow : Window
     private void SplitAffordanceContextMenu_Closed(object? sender, RoutedEventArgs e)
     {
         if (sender is ContextMenu menu)
+        {
+            menu.Opened -= ChromeContextMenu_Opened;
             menu.Closed -= SplitAffordanceContextMenu_Closed;
+        }
         if (ReferenceEquals(_splitAffordanceContextMenu, sender))
             _splitAffordanceContextMenu = null;
         EndChromePopup();
@@ -1637,6 +1653,28 @@ public partial class ContainerWindow : Window
         // WindowFromPoint at the Yes button resolves to the guest).
         if (_closePromptOpen) return true;
         return false;
+    }
+
+    /// <summary>
+    /// Returns true while a delayed presentation reassert still belongs to
+    /// this TabDock workspace. The foreground may be the container, either
+    /// visible split member, the selected single guest, or an owned WPF
+    /// transient; any unrelated HWND means the delayed callback is stale and
+    /// must not raise or foreground a guest.
+    /// </summary>
+    private bool IsWorkspaceForegroundForReassert(CapturedWindow activeWindow)
+    {
+        IntPtr foreground = NativeMethods.GetForegroundWindow();
+        if (foreground == _containerHwnd
+            || foreground == activeWindow.Hwnd
+            || (IsSplitPresented
+                && (foreground == _splitController.Left?.Hwnd
+                    || foreground == _splitController.Right?.Hwnd)))
+        {
+            return true;
+        }
+
+        return IsCurrentForegroundContext(foreground);
     }
 
     /// <summary>
@@ -1803,7 +1841,10 @@ public partial class ContainerWindow : Window
         // together with the GroupContextMenu.IsOpen check in
         // IsContainerChromeInteractionActive this keeps the 120ms WM_ACTIVATE
         // reassert from stealing foreground from the guest while the menu is open.
-        Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => GroupContextMenu.IsOpen = true));
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+        {
+            GroupContextMenu.IsOpen = true;
+        }));
     }
 
     private void GroupMenuItem_Click(object sender, RoutedEventArgs e)
@@ -1830,8 +1871,60 @@ public partial class ContainerWindow : Window
     /// container-wide raise (which blanked the content area) with a scoped
     /// popup-only elevation model. The depth counter handles nested/overlapping
     /// chrome (e.g. a tab menu opening while the split menu is still closing)
-    /// without premature restore.
+    /// without premature restore. When the popup closes, the guest receives a
+    /// foreground handoff only if the container is still the foreground window;
+    /// a close caused by another application taking focus must not steal it back.
     /// </summary>
+    private void ChromeContextMenu_Opened(object? sender, RoutedEventArgs e)
+    {
+        if (sender is ContextMenu menu)
+            ReassertChromePopupPresentation(menu);
+    }
+
+    private void ReassertChromePopupPresentation(ContextMenu menu)
+    {
+        if (_popupChromeDepth <= 0
+            || _closePromptOpen
+            || _containerHwnd == IntPtr.Zero
+            || !menu.IsOpen)
+            return;
+
+        // Opened fires after WPF has created and shown the ContextMenu HWND. Use
+        // that HWND as the native insertion anchor: the popup remains above the
+        // normal-band guests, while the guests remain above the opaque
+        // foreground container without receiving foreground activation.
+        HwndSource? popupSource = PresentationSource.FromVisual(menu) as HwndSource;
+        IntPtr popupHwnd = popupSource?.Handle ?? IntPtr.Zero;
+        if (popupHwnd == IntPtr.Zero)
+        {
+            _log.Log("CHROME[popup-presentation] popup HWND unavailable at Opened; presentation left unchanged.");
+            return;
+        }
+
+        if (IsSplitPresented)
+        {
+            LayoutSplitPanes();
+            CapturedWindow? left = _splitController.Left;
+            CapturedWindow? right = _splitController.Right;
+            if (left == null || right == null)
+                return;
+
+            CapturedWindow top = _splitController.Foreground ?? right;
+            if (!ReferenceEquals(top, left) && !ReferenceEquals(top, right))
+                top = right;
+            CapturedWindow bottom = ReferenceEquals(top, left) ? right : left;
+            _shepherd.PairGuestsBelowPopup(_containerHwnd, popupHwnd, top, bottom);
+            return;
+        }
+
+        if (ShepherdActiveWindow is { } active
+            && NativeMethods.IsWindowVisible(active.Hwnd))
+        {
+            LayoutShepherdActiveWindow(forceZOrder: true);
+            _shepherd.PairGuestsBelowPopup(_containerHwnd, popupHwnd, active);
+        }
+    }
+
     private void BeginChromePopup()
     {
         if (_popupChromeDepth == 0)
@@ -1849,18 +1942,68 @@ public partial class ContainerWindow : Window
         _log.Log("CHROME[popup-closed-restore-request]");
         // Let WPF finish destroying/closing the popup HWND before reconciling the
         // guest stack. This is one explicit transition, not a repair timer.
-        // The reconciliation keeps the guest above the opaque content host; the
-        // popup HWND itself (not the container) was the only surface that needed
-        // elevation, so no container topmost manipulation is required.
-        Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(ReconcileAfterTransientChromeClosed));
+    }
+
+    private void ReconcileAfterTransientChromeClosed()
+    {
+        if (_popupChromeDepth != 0 || _closePromptOpen || _containerHwnd == IntPtr.Zero)
+            return;
+
+        // The popup can close because the user clicked another application. In
+        // that case the foreground transition is intentional and TabDock must
+        // remain behind that application. Only repair foreground when the
+        // container still owns it after WPF has destroyed the popup HWND.
+        bool containerOwnsForeground = NativeMethods.GetForegroundWindow() == _containerHwnd;
+
+        if (IsSplitPresented)
         {
-            if (_popupChromeDepth != 0 || _closePromptOpen || _containerHwnd == IntPtr.Zero)
+            if (!containerOwnsForeground || NativeMethods.GetForegroundWindow() != _containerHwnd)
                 return;
-            if (IsSplitPresented)
-                LayoutSplitPanes();
-            else
-                LayoutShepherdActiveWindow(forceZOrder: true);
-        }));
+
+            LayoutSplitPanes(forceZOrder: true);
+
+            // Native z-order writes are synchronous, but the desktop can still
+            // change between the ownership check and the foreground handoff.
+            // Revalidate after layout so a late unrelated activation cannot be
+            // overwritten by SetForeground.
+            if (NativeMethods.GetForegroundWindow() != _containerHwnd)
+                return;
+
+            CapturedWindow? active = _splitController.Foreground;
+            if (active != null
+                && IsSplitMember(active)
+                && NativeMethods.IsWindowVisible(active.Hwnd))
+            {
+                _shepherd.SetForeground(active);
+            }
+
+            return;
+        }
+
+        if (!containerOwnsForeground
+            || NativeMethods.GetForegroundWindow() != _containerHwnd
+            || ShepherdActiveWindow is not { } activeWindow
+            || !NativeMethods.IsWindowVisible(activeWindow.Hwnd))
+        {
+            return;
+        }
+
+        LayoutShepherdActiveWindow(forceZOrder: true);
+
+        // See the split branch above: never turn a stale popup-close callback
+        // into a foreground steal after the native layout has completed.
+        if (NativeMethods.GetForegroundWindow() != _containerHwnd)
+            return;
+
+        if (TryGetContentAreaScreenRect(out NativeMethods.RECT contentRect))
+        {
+            _shepherd.BringToFront(activeWindow, _containerHwnd, contentRect);
+        }
+        else
+        {
+            _log.Log("LAYOUT[skip] popup-close foreground handoff: content marker bounds were unavailable.");
+        }
     }
 
     private void ColorMenuItem_Click(object sender, RoutedEventArgs e)
@@ -2076,6 +2219,8 @@ public partial class ContainerWindow : Window
 
         ConfigureSplitMenuItems(menu, tab);
         _openTabContextMenu = menu;
+        menu.Opened -= ChromeContextMenu_Opened;
+        menu.Opened += ChromeContextMenu_Opened;
         BeginChromePopup();
         menu.PlacementTarget = owner;
         menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
@@ -2441,8 +2586,26 @@ public partial class ContainerWindow : Window
             // release qualification: zero SHEPHERD[bring-to-front] lines and
             // every foreground assertion failing). Guarded so background or
             // programmatic switches never steal focus from other apps.
-            if (!IsContainerChromeInteractionActive()
-                && NativeMethods.GetForegroundWindow() == _containerHwnd)
+            IntPtr foreground = NativeMethods.GetForegroundWindow();
+            bool foregroundBelongsToTransition = foreground == _containerHwnd;
+            if (!foregroundBelongsToTransition
+                && oldWindow != null
+                && !ReferenceEquals(oldWindow, newWindow)
+                && foreground == oldWindow.Hwnd
+                && !NativeMethods.IsWindowVisible(oldWindow.Hwnd)
+                && _shepherd.IsCurrentCapturedWindow(oldWindow))
+            {
+                // Hiding a foreground guest does not synchronously transfer
+                // USER32 foreground ownership. A capture batch or a tab switch
+                // can therefore reach this point with the just-hidden old guest
+                // still foreground. It is still TabDock-owned transition state,
+                // so handing foreground to the newly selected guest is safe;
+                // arbitrary foreground applications remain protected by the
+                // ownership check above.
+                foregroundBelongsToTransition = true;
+            }
+
+            if (!IsContainerChromeInteractionActive() && foregroundBelongsToTransition)
             {
                 _shepherd.SetForeground(newWindow);
             }
@@ -2529,7 +2692,7 @@ public partial class ContainerWindow : Window
             DiagnosticRuntime.Record("split.focus", _containerHwnd, member.Model.Hwnd,
                 group: Group.Id.ToString("N"), action: "focus", result: "logical-state-updated");
         }
-        LayoutSplitPanes();
+        LayoutSplitPanes(forceZOrder: true);
         // Give the clicked member REAL foreground after the panes are laid out
         // (strip clicks never raise a guest natively, so without this the
         // focused member stays behind the container's chrome and keystrokes
@@ -2821,6 +2984,16 @@ public partial class ContainerWindow : Window
     /// </summary>
     public void PairZOrderBehindGuest(IntPtr foregroundHwnd)
     {
+        // The WinEvent callback is posted to the UI thread and may be stale by
+        // the time it runs. Never let an old captured-guest event raise or
+        // reorder the workspace after an unrelated application has become the
+        // real foreground window.
+        if (foregroundHwnd == IntPtr.Zero
+            || NativeMethods.GetForegroundWindow() != foregroundHwnd)
+        {
+            return;
+        }
+
         // Foreground/reorder WinEvents can arrive while the owned close-group
         // confirmation dialog is open. Re-pairing here would raise a docked guest
         // above that dialog and cover its buttons; the popup-close path (which
@@ -2945,7 +3118,7 @@ public partial class ContainerWindow : Window
     /// positioned each time the pair is not already exactly glued, which keeps
     /// the z-order deterministic regardless of prior state.
     /// </summary>
-    private void LayoutSplitPanes()
+    private void LayoutSplitPanes(bool forceZOrder = false)
     {
         if (!IsSplitPresented)
             return;
@@ -2985,6 +3158,12 @@ public partial class ContainerWindow : Window
 
         if (!NeedsPanePosition(top, topRect) && !NeedsPanePosition(bottom, bottomRect))
         {
+            if (forceZOrder)
+            {
+                _shepherd.PairVisibleGuestsInOrder(containerHwnd, top, bottom);
+                return;
+            }
+
             // Both guests already cover their panes exactly. Do NOT re-position
             // them (that would churn z-order mid-gesture), but DO re-assert the
             // "container below both" invariant: activating the container (e.g.

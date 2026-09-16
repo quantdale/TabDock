@@ -1,41 +1,47 @@
 # TabDock agent state
 
-## Objective and status — 2026-09-15
+## Objective and status — 2026-09-17
 
-Refresh stale agent instructions, documentation, Markdown, and related non-code
-guidance. Completed plan: `.agent/plans/documentation-refresh-2026-09-15.md`.
-Status: complete in the working tree, uncommitted. Audit evidence:
-`.agent/investigations/documentation-refresh-2026-09-15.md`.
+Release-finalize TabDock from the four beta observations using current
+Windows evidence. Implementation and automated qualification are complete in
+the campaign working tree; exact post-commit Release physical qualification,
+documentation closure, and mainline integration remain.
+Active plan: `.agent/plans/release-finalization-beta-feedback-2026-09-16.md`.
+Investigation: `.agent/investigations/beta-feedback-baseline-2026-09-16.md`.
 
 ## Important facts
 
-- Resolve HEAD, branch, `origin/main`, and worktree state dynamically with Git.
-  Do not treat an embedded historical SHA as the commit containing this file.
-- The preceding iconic-guest repair is committed in `ea1ad43`. Its investigation
-  is `.agent/investigations/residual-multi-capture-black-screen-2026-09-15.md`.
-- Initial-capture reconciliation and consolidation are complete; see
-  `.agent/plans/initial-capture-black-screen-2026-09-15.md`.
-- Prior checkpoint details and validation are preserved in
-  `.agent/investigations/checkpoint-history-2026-09-15.md`.
-- The broader eventually-recovering presentation report still needs supervised
-  physical verification. Historical local tests do not close that report.
-- Signing, physical mixed-DPI/Windows qualification, and human release gates
-  still require their own evidence. Historical hosted runner failures do not
-  establish the status of a new CI run.
+- Starting Git state was clean on `main` at
+  `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`, equal to `origin/main`; the
+  pre-existing `.codex/config.toml` change is preserved and excluded from the
+  campaign implementation.
+- Baseline physical evidence confirmed popup-open guest coverage by the opaque
+  container. Spotify capture/release and the reported clipping were not
+  reproduced. A fresh Debug overlap sequence passed native foreground,
+  z-order, point-ownership, and inverse always-on-top checks.
+- Candidate source fixes cover popup-local z-order reconciliation, hide/minimize
+  provenance ordering, active-switch foreground ownership, measured split
+  stack reassertion, and stale delayed foreground callbacks. Shepherd remains
+  never-reparent.
+- Current desktop state is one 1920x1080 monitor at 96 DPI. The earlier mixed
+  120/96-DPI topology is unavailable for final repetition. ValidationDriver
+  split foreground qualification was attempted and correctly blocked by its
+  occupied-desktop foreground lease; it is not a product pass.
 
 ## Completed and validation
 
-- Refreshed entrypoints, onboarding, architecture/testing/release guidance,
-  historical boundaries, and generated agent workflows; added `docs/README.md`.
-- Synchronizer covers 142 generated files; `-Check` reports zero drift.
-- Focused presentation tests: 26/26; release-tooling tests: 179/179;
-  OpenSpec validation: 38/38. No active OpenSpec changes.
-- Markdown link/source-reference audit and `git diff --check` passed, with the
-  preserved vendor research link exception documented in the audit.
-- Live GitHub protection queries returned a plan-related 403; protection
-  enforcement is unverified, not assumed from historical records.
+- Debug solution, ValidationDriver, and GuineaPig builds: 0 warnings/errors.
+- Full Debug xUnit: 847/847. Targeted hide-provenance and interaction source
+  contracts: 25/25.
+- Canonical pre-integration Release/CI/publish gate: NuGet audit clean,
+  Release builds clean, xUnit 847/847, headless resource lifecycle pass,
+  native ABI/CLI/support-bundle privacy pass, OpenSpec 38/38, and single-file
+  publish/version smoke pass.
+- `repowise update` reports the local index current; `git diff --check` passes
+  with only the repository's LF-to-CRLF normalization warnings.
 
 ## Next action
 
-Hand off the completed documentation and agent-tooling diff. No further
-documentation work is identified. No commit or push is authorized.
+Inspect the final diff, commit only campaign files, publish the exact
+post-commit Release artifact, physically qualify the available A-D and core
+workflow matrix, then update this state with facts before pushing `main`.

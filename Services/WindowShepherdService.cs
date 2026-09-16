@@ -1408,15 +1408,18 @@ public sealed class WindowShepherdService
     }
 
     /// <summary>
-    /// Positions both split guests and re-pins the container in a single
-    /// compositor transaction (BeginDeferWindowPos / DeferWindowPos /
-    /// EndDeferWindowPos) instead of three separate SetWindowPos calls. The
-    /// atomic batch removes the visible pane separation that occurred between
-    /// the individual writes (the top pane moved while the bottom pane was
-    /// still at its old position). Falls back to per-guest PositionGuest +
-    /// PairZOrderBehind if the deferred handle cannot be created. The container
-    /// is inserted below the bottom (partner) guest, preserving the local
-    /// top -> partner -> container z-order invariant.
+    /// Positions both split guests and requests the container's local z-order
+    /// in a single compositor transaction (BeginDeferWindowPos /
+    /// DeferWindowPos / EndDeferWindowPos) instead of three separate writes.
+    /// The atomic batch removes the visible pane separation that can occur
+    /// between individual geometry writes (the top pane moving while the
+    /// bottom pane is still at its old position). Falls back to per-guest
+    /// PositionGuest + PairZOrderBehind if the deferred handle cannot be
+    /// created. A foreground-owned split-entry settle may subsequently use
+    /// PairVisibleGuestsInOrder: Windows can report a deferred batch as applied
+    /// before its relative z-order is observable, so that explicit boundary
+    /// reassertion measures and repairs the local top -> partner -> container
+    /// order without changing the normal geometry path.
     /// </summary>
     public void PositionGuestsDeferred(CapturedWindow top, NativeMethods.RECT topRect, CapturedWindow bottom, NativeMethods.RECT bottomRect, IntPtr containerHwnd)
     {
@@ -1587,6 +1590,243 @@ public sealed class WindowShepherdService
             return;
 
         PairZOrderBehindCore(containerHwnd, guest.Hwnd, guest);
+    }
+
+    /// <summary>
+    /// Reasserts the complete local stack for a visible split presentation:
+    /// <paramref name="topGuest"/>, <paramref name="bottomGuest"/>, then the
+    /// container. This is intentionally a z-order-only transaction. It is used
+    /// when TabDock has just regained foreground ownership and an unrelated
+    /// window may have been inserted between the two guests; the weaker
+    /// guest-above-container predicate cannot detect that interleaving.
+    ///
+    /// The three writes are deliberately ordered <c>SetWindowPos</c> calls,
+    /// rather than one <c>DeferWindowPos</c> batch. On the supported Windows
+    /// desktop the later insertion anchors must observe the preceding z-order
+    /// write; a deferred geometry batch can report success while leaving the
+    /// container between the two guests. Each write is still generation-gated
+    /// and the resulting order is measured before this method reports success.
+    /// </summary>
+    public bool PairVisibleGuestsInOrder(
+        IntPtr containerHwnd,
+        CapturedWindow topGuest,
+        CapturedWindow bottomGuest)
+    {
+        RuntimeTelemetry.Instance.RecordSetWindowPos();
+        if (!NativeMethods.IsWindow(containerHwnd)
+            || !IsCurrentCapturedWindow(topGuest, "workspace-z-order", verifyExecutable: false, verifyProcessInstance: false)
+            || !IsCurrentCapturedWindow(bottomGuest, "workspace-z-order", verifyExecutable: false, verifyProcessInstance: false)
+            || !NativeMethods.IsWindowVisible(topGuest.Hwnd)
+            || !NativeMethods.IsWindowVisible(bottomGuest.Hwnd)
+            || NativeMethods.IsIconic(topGuest.Hwnd)
+            || NativeMethods.IsIconic(bottomGuest.Hwnd))
+        {
+            return false;
+        }
+
+        // This method is only a foreground-owned reassertion. A queued split
+        // settle or focus callback can outlive the input turn that scheduled
+        // it; if another application won the desktop in the meantime, moving
+        // either guest to HWND_TOP would make the captured workspace behave
+        // like an always-on-top window. The owned-popup case is handled by the
+        // separate popup path and is not a reason to raise the normal stack.
+        IntPtr foreground = NativeMethods.GetForegroundWindow();
+        if (!IsForegroundWithinWorkspace(foreground, containerHwnd, topGuest.Hwnd, bottomGuest.Hwnd))
+        {
+            DiagnosticRuntime.Record(
+                "repair.workspace-z-order",
+                containerHwnd,
+                topGuest.Hwnd,
+                foreground: foreground,
+                action: "PairVisibleGuestsInOrder",
+                result: "skipped-background");
+            return false;
+        }
+
+        const uint zOrderOnlyFlags = NativeMethods.SWP_NOMOVE
+            | NativeMethods.SWP_NOSIZE
+            | NativeMethods.SWP_NOACTIVATE;
+        bool topPlaced = IsCurrentMutationGeneration(topGuest, "workspace-z-order-before-top")
+            && NativeMethods.SetWindowPos(
+                topGuest.Hwnd,
+                NativeMethods.HWND_TOP,
+                0, 0, 0, 0,
+                zOrderOnlyFlags);
+        bool bottomPlaced = topPlaced
+            && IsCurrentMutationGeneration(bottomGuest, "workspace-z-order-before-bottom")
+            && NativeMethods.SetWindowPos(
+                bottomGuest.Hwnd,
+                topGuest.Hwnd,
+                0, 0, 0, 0,
+                zOrderOnlyFlags);
+        bool containerPlaced = bottomPlaced
+            && NativeMethods.IsWindow(containerHwnd)
+            && NativeMethods.SetWindowPos(
+                containerHwnd,
+                bottomGuest.Hwnd,
+                0, 0, 0, 0,
+                zOrderOnlyFlags);
+
+        bool topAboveBottom = ZOrder.IsOrderedAbove(
+            topGuest.Hwnd,
+            bottomGuest.Hwnd,
+            h => NativeMethods.GetWindow(h, NativeMethods.GW_HWNDNEXT));
+        bool bottomAboveContainer = IsContainerBelowGuest(containerHwnd, bottomGuest.Hwnd);
+        bool ordered = topPlaced && bottomPlaced && containerPlaced
+            && topAboveBottom
+            && bottomAboveContainer;
+        DiagnosticRuntime.Record(
+            "repair.workspace-z-order",
+            containerHwnd,
+            topGuest.Hwnd,
+            action: "PairVisibleGuestsInOrder",
+            result: ordered ? "success" : "failed",
+            data: new Dictionary<string, string>
+            {
+                ["bottomGuest"] = DiagnosticEnvironmentService.FormatHwnd(bottomGuest.Hwnd),
+                ["topPlaced"] = topPlaced.ToString(),
+                ["bottomPlaced"] = bottomPlaced.ToString(),
+                ["containerPlaced"] = containerPlaced.ToString(),
+                ["topAboveBottom"] = topAboveBottom.ToString(),
+                ["containerBelowBottom"] = bottomAboveContainer.ToString(),
+            });
+        if (!ordered)
+            LogPositioningFailureOnce(containerHwnd, "workspace z-order pair");
+        return ordered;
+    }
+
+    /// <summary>
+    /// Places one or two visible guests in the normal z-order band below a
+    /// verified TabDock popup. A popup is topmost while it is open, so using its
+    /// HWND as the insertion anchor lets a non-foreground guest remain above
+    /// the foreground container without changing the guest's topmost style or
+    /// foreground ownership. This is the visual-stack exception required for
+    /// ContextMenu interaction; the popup-close path restores ordinary pairing.
+    /// </summary>
+    public void PairGuestsBelowPopup(
+        IntPtr containerHwnd,
+        IntPtr popupHwnd,
+        CapturedWindow topGuest,
+        CapturedWindow? bottomGuest = null)
+    {
+        RuntimeTelemetry.Instance.RecordSetWindowPos();
+        if (!IsVerifiedOwnedPopup(containerHwnd, popupHwnd)
+            || !IsCurrentCapturedWindow(topGuest, "popup-z-order", verifyExecutable: false, verifyProcessInstance: false)
+            || (bottomGuest != null
+                && !IsCurrentCapturedWindow(bottomGuest, "popup-z-order", verifyExecutable: false, verifyProcessInstance: false)))
+        {
+            return;
+        }
+
+        IntPtr foreground = NativeMethods.GetForegroundWindow();
+        if (!IsForegroundWithinWorkspace(
+                foreground,
+                containerHwnd,
+                topGuest.Hwnd,
+                bottomGuest?.Hwnd ?? IntPtr.Zero,
+                popupHwnd))
+        {
+            DiagnosticRuntime.Record(
+                "repair.popup-guest-z-order",
+                containerHwnd,
+                topGuest.Hwnd,
+                foreground: foreground,
+                action: "PairGuestsBelowPopup",
+                result: "skipped-background");
+            return;
+        }
+
+        if (!SetGuestBelowPopup(topGuest, popupHwnd))
+            return;
+
+        if (bottomGuest != null)
+        {
+            // The foreground member remains directly below the popup and the
+            // partner is inserted below it, preserving top -> bottom ->
+            // container just as PositionGuestsDeferred does in the ordinary
+            // normal-band path.
+            if (!SetGuestBelow(bottomGuest, topGuest.Hwnd))
+                return;
+        }
+
+        PairZOrderBehindCore(
+            containerHwnd,
+            (bottomGuest ?? topGuest).Hwnd,
+            bottomGuest ?? topGuest);
+    }
+
+    private bool IsVerifiedOwnedPopup(IntPtr containerHwnd, IntPtr popupHwnd)
+    {
+        if (!NativeMethods.IsWindow(containerHwnd)
+            || !NativeMethods.IsWindow(popupHwnd)
+            || !NativeMethods.IsWindowVisible(popupHwnd))
+        {
+            return false;
+        }
+
+        NativeMethods.GetWindowThreadProcessId(popupHwnd, out uint popupPid);
+        if (popupPid != NativeMethods.CurrentProcessId)
+            return false;
+
+        IntPtr directOwner = NativeMethods.GetWindow(popupHwnd, NativeMethods.GW_OWNER);
+        IntPtr rootOwner = NativeMethods.GetAncestor(popupHwnd, NativeMethods.GA_ROOTOWNER);
+        return directOwner == containerHwnd || rootOwner == containerHwnd;
+    }
+
+    private bool SetGuestBelowPopup(CapturedWindow guest, IntPtr popupHwnd)
+        => SetGuestBelow(guest, popupHwnd);
+
+    private bool SetGuestBelow(CapturedWindow guest, IntPtr insertAfter)
+    {
+        if (!IsCurrentMutationGeneration(guest, "z-order-before-guest-pair"))
+            return false;
+
+        if (!NativeMethods.SetWindowPos(
+                guest.Hwnd,
+                insertAfter,
+                0, 0, 0, 0,
+                NativeMethods.SWP_NOMOVE
+                    | NativeMethods.SWP_NOSIZE
+                    | NativeMethods.SWP_NOACTIVATE))
+        {
+            LogPositioningFailureOnce(guest.Hwnd, "SetWindowPos(guest-below-popup)");
+            DiagnosticRuntime.Record(
+                "repair.popup-guest-z-order",
+                insertAfter,
+                guest.Hwnd,
+                action: "SetWindowPos(guest-below-popup)",
+                result: "failed");
+            return false;
+        }
+
+        DiagnosticRuntime.Record(
+            "repair.popup-guest-z-order",
+            insertAfter,
+            guest.Hwnd,
+            action: "SetWindowPos(guest-below-popup)",
+            result: "success");
+        return true;
+    }
+
+    private static bool IsForegroundWithinWorkspace(
+        IntPtr foreground,
+        IntPtr containerHwnd,
+        IntPtr firstGuestHwnd,
+        IntPtr secondGuestHwnd = default,
+        IntPtr ownedPopupHwnd = default)
+    {
+        if (foreground == IntPtr.Zero)
+            return false;
+        if (foreground == containerHwnd
+            || foreground == firstGuestHwnd
+            || (secondGuestHwnd != IntPtr.Zero && foreground == secondGuestHwnd)
+            || (ownedPopupHwnd != IntPtr.Zero && foreground == ownedPopupHwnd))
+        {
+            return true;
+        }
+
+        return NativeMethods.IsWindow(foreground)
+            && NativeMethods.GetAncestor(foreground, NativeMethods.GA_ROOTOWNER) == containerHwnd;
     }
 
     private void PairZOrderBehindCore(IntPtr containerHwnd, IntPtr guestHwnd, CapturedWindow? capturedGuest = null)
