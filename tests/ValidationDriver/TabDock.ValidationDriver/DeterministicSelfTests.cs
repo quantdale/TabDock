@@ -533,8 +533,8 @@ internal static class DeterministicSelfTests
     private static IEnumerable<(string Id, Func<bool> Test)> CatalogTests()
     {
         yield return ("CAT01-catalog-generation-is-stable", () =>
-            ScenarioCatalog.Generation == "scenario-catalog-2026-09-01-v2"
-            && ScenarioCatalog.All.Count == 135);
+            ScenarioCatalog.Generation == "scenario-catalog-2026-09-17-v3"
+            && ScenarioCatalog.All.Count == 136);
 
         yield return ("CAT02-catalog-validates-without-errors", () =>
         {

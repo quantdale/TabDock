@@ -19,7 +19,9 @@ current product boundaries, if any, are responsible?
 - Current repository root: `D:\Documents\tryPython\TabDock`.
 - `dotnet build TabDock.sln -c Debug`: passed, 0 warnings/errors.
 - `dotnet test TabDock.sln -c Debug --no-build`: passed, 838/838.
-- ValidationDriver catalog: `scenario-catalog-2026-09-01-v2`, 135 scenarios.
+- ValidationDriver catalog: `scenario-catalog-2026-09-17-v3`, 136 scenarios (the
+  foreground-pairing regression scenario added during this campaign is included
+  in the current catalog).
 - The supervised baseline `capture-inline-ui` run was fail-closed by
   `ForegroundQualification`: existing Chrome and Windows Terminal covered the
   required points. It launched and cleaned its own TabDock process, so this is

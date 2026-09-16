@@ -67,7 +67,7 @@ internal sealed record ScenarioShardDefinition(
 /// </summary>
 internal static class ScenarioCatalog
 {
-    public const string Generation = "scenario-catalog-2026-09-01-v2";
+    public const string Generation = "scenario-catalog-2026-09-17-v3";
 
     private static readonly IReadOnlyList<ScenarioShardDefinition> Shards =
         new[]

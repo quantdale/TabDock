@@ -37,7 +37,7 @@ The policy checkout is the trusted authority for the publication decision.
 
 | Record | Current version/generation | Accepted policy |
 | --- | ---: | --- |
-| Scenario catalog | `scenario-catalog-2026-09-01-v2` | Exact generation for new qualification runs; authority: `ScenarioCatalog.Generation` |
+| Scenario catalog | `scenario-catalog-2026-09-17-v3` | Exact generation for new qualification runs; authority: `ScenarioCatalog.Generation` |
 | Direct/shard/parent run manifest | `2` | New manifests emit v2; older records are diagnostic-only unless a migration explicitly verifies them |
 | Qualification bundle | `1` | Exact current schema; future/unsupported versions fail closed |
 | Independent-machine handoff package | `1` | Exact current schema; all indexed files are rehashed |
