@@ -1,6 +1,6 @@
 # Plan: TabDock release finalization from beta feedback
 
-**Status:** active — implementation, automated qualification, documentation closure, exact Release physical qualification, and final-tree artifact smoke complete; mainline integration remains
+**Status:** complete for the available desktop — implementation, automated qualification, documentation closure, exact Release physical qualification, final-tree artifact smoke, mainline integration, and exact-SHA hosted checks complete; mixed-DPI and the ValidationDriver foreground lease remain external limitations
 **Owner:** Codex
 **Started:** 2026-09-16
 
@@ -50,7 +50,8 @@ Release artifact before integrating it into `main`.
 6. Reconcile current documentation/state with verified reality, inspect the
    complete diff, commit coherent changes, rebuild the exact resulting Release
    artifact, push `main` without force, and independently verify remote SHA and
-   CI status.
+   CI status. (Done; the implementation is integrated and the exact-SHA
+   hosted checks passed.)
 
 ## Evidence and decisions
 
@@ -71,5 +72,7 @@ Release artifact before integrating it into `main`.
 
 ## Handoff
 
-The next action is the authorized mainline push followed by independent
-remote/CI verification.
+The campaign is complete for the available desktop. `main` and `origin/main`
+are aligned at the verified implementation tree. The mixed-DPI physical repeat
+and the supervised ValidationDriver foreground lease remain external,
+fail-closed limitations rather than product passes.

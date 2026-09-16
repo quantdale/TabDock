@@ -1,8 +1,8 @@
 # Investigation: beta feedback baseline on the current executable
 
 **Date:** 2026-09-17
-**Status:** candidate fixes, exact Release physical qualification, evidence closure, and final-tree artifact smoke validated; mainline integration and external CI remain
-**Build:** baseline `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`; application source commit `4f4998ffed1c9cbfd7f760ff48b54f48f2143ed1`; documentation evidence closure `3e72a94ce4f79dddd41147f04e2909474f80fd6e`; final documentation tree was rebuilt and smoke-qualified as the release artifact
+**Status:** complete for the available desktop; implementation, exact Release physical qualification, evidence closure, mainline integration, and exact-SHA hosted checks validated; mixed-DPI repeat and the ValidationDriver foreground lease remain external limitations
+**Build:** baseline `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`; implementation commit `6172595cffcce2e2eee506c3eb9ea1791afa7fa8`; final documentation closure is non-executable and was requalified through the applicable Release gates
 **Branch:** `main`
 
 ## Question
@@ -203,12 +203,13 @@ Exit control.
 ## Conclusion
 
 The baseline had one confirmed current product defect: popup-open local z-order
-could cover a live guest. The candidate fixes that transition and the adjacent
-foreground/minimize races, with 847/847 automated tests and fresh Debug/native
-measurements passing. The exact candidate Release artifact also passed the
-available physical A-D/core matrix and the four-guest soak. Spotify capture and
-the reported clipping symptom were not failures on this machine. The final
-record is closed for the available local evidence. The remaining operations
-are authorized mainline integration and exact-SHA CI verification. Mixed-DPI
-physical qualification and the ValidationDriver foreground lease remain
-explicitly unverified/external limitations.
+could cover a live guest. The implementation in commit `6172595` fixes that
+transition and the adjacent foreground/minimize races, with 847/847 automated
+tests and fresh Debug/native measurements passing. The exact Release artifact
+built from the integrated tree passed the available physical A-D/core matrix,
+the four-guest soak, and the final launch/capture/release/exit smoke. Spotify
+capture and the reported clipping symptom were not failures on this machine.
+Exact-SHA hosted CI run `35138318079` passed both its build and native ABI
+check-runs. The final record is closed for the available local evidence.
+Mixed-DPI physical qualification and the ValidationDriver foreground lease
+remain explicitly unverified/external limitations.
