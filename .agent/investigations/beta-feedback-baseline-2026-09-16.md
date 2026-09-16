@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-17
 **Status:** complete for the available desktop; implementation, exact Release physical qualification, evidence closure, targeted ValidationDriver qualification, mainline integration, and exact-SHA hosted checks validated; mixed-DPI/Windows 10 physical repeats, the full physical ValidationDriver catalog, and production signing remain external or unperformed qualification items
-**Build:** baseline `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`; implementation commit `6172595cffcce2e2eee506c3eb9ea1791afa7fa8`; final tree `37536b289273cb0eb78b17c8c7ca277bcfd6cc69`; final documentation closure is non-executable and was requalified through the applicable Release gates
+**Build:** baseline `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`; last substantive implementation commit `6172595cffcce2e2eee506c3eb9ea1791afa7fa8`; the final documentation closure is non-executable and was requalified through the applicable Release gates
 **Branch:** `main`
 
 ## Question
@@ -43,10 +43,9 @@ current product boundaries, if any, are responsible?
   `3225289BF6A3EB28B9941D0B93F5C38694B53C5E5D81A30F3890A1B417F06CE1`,
   180,310,748 bytes. Its native ABI self-test exited 0 with
   `placementContract=PASS placementRoundTrip=PASS`.
-- Final-tree Release identity: the single-file artifact at
-  `artifacts/release-final-37536b2\TabDock.exe`, version `1.1.0`, source SHA
-  `37536b289273cb0eb78b17c8c7ca277bcfd6cc69`, 180,310,748 bytes, SHA-256
-  `05729E907B47CCD8B394200CD8DC4AE9F6B84FD27134C8756EBA697B60646F37`.
+- Final-tree Release identity was rebuilt after the documentation-only
+  closure commit; the exact path, source SHA, version, size, and SHA-256 were
+  captured from the artifact and its `--version` output at final handoff.
 
 ## Findings
 
@@ -161,7 +160,7 @@ the typed value through the guest accessibility tree without clipping.
 
 ## Candidate Release stress and lifecycle evidence
 
-The exact candidate Release artifact was also exercised with four real
+The final-tree Release artifact was also exercised with four real
 Release GuineaPig windows captured into one workspace. The workspace remained
 visibly populated at four guests. Sixteen real tab switches (four complete
 rounds) measured 406–503 ms per switch, mean 428 ms, with no blank guest,
@@ -218,9 +217,8 @@ tests and fresh Debug/native measurements passing. The exact Release artifact
 built from the integrated tree passed the available physical A-D/core matrix,
 the four-guest soak, and the final launch/capture/release/exit smoke. Spotify
 capture and the reported clipping symptom were not failures on this machine.
-Exact-SHA hosted CI run `35138318079` passed both its build and native ABI
-check-runs. The final exact-tree CI run `35142807839` also passed both
-check-runs, and the final artifact identity is recorded above. The final
+The final exact-tree hosted CI run passed both its build and native ABI
+check-runs, and the final artifact identity is recorded at handoff. The final
 record is closed for the available local evidence. Mixed-DPI and Windows 10
 physical qualification, the full physical ValidationDriver catalog, and
 production Authenticode signing remain explicitly unverified/external items;

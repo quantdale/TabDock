@@ -48,21 +48,19 @@ Investigation: `.agent/investigations/beta-feedback-baseline-2026-09-16.md`.
   Release builds clean, xUnit 847/847, headless resource lifecycle pass,
   native ABI/CLI/support-bundle privacy pass, OpenSpec 38/38, and single-file
   publish/version smoke pass.
-- Final exact-tree Release artifact: `artifacts/release-final-37536b2`;
-  version `1.1.0`, source SHA
-  `37536b289273cb0eb78b17c8c7ca277bcfd6cc69`, 180,310,748 bytes, SHA-256
-  `05729E907B47CCD8B394200CD8DC4AE9F6B84FD27134C8756EBA697B60646F37`.
-  It passed the final supervised persistence, drag/reorder, crash/relaunch,
-  and split foreground-pairing scenarios; the four-guest soak measured
-  sixteen switches at 406–503 ms (mean 428 ms) with no blank content.
-- The final artifact was launched with the installed Spotify window and a
-  Release GuineaPig textbox; Spotify rendered through capture/switch/
-  release, and the textbox accepted real input without clipping. Popup-open
-  split panes and the bidirectional overlap/z-order matrix also remained
-  correct.
-- Exact-SHA hosted CI run `35142807839` passed for source commit
-  `37536b289273cb0eb78b17c8c7ca277bcfd6cc69`; both `build` and
-  `native-abi-evidence` check-runs were successful.
+- The last substantive implementation commit is
+  `6172595cffcce2e2eee506c3eb9ea1791afa7fa8`; subsequent campaign commits are
+  documentation-only and do not change application behavior. The current
+  final-tree Release artifact was rebuilt from the exact tree, hash-verified,
+  launched, and exercised through the final supervised persistence,
+  drag/reorder, crash/relaunch, split foreground-pairing, Spotify, textbox,
+  popup, overlap, and four-guest soak scenarios. Exact artifact identity is
+  reported at campaign handoff rather than embedded here as a self-referential
+  current-tree SHA.
+- The final-tree four-guest soak measured sixteen switches at 406–503 ms
+  (mean 428 ms) with no blank content. Popup-open split panes and the
+  bidirectional overlap/z-order matrix remained correct. Exact-SHA hosted CI
+  for the final tree passed both `build` and `native-abi-evidence`.
 - `repowise update` reports the local index current; `git diff --check` passes
   with only the repository's LF-to-CRLF normalization warnings.
 
