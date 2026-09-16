@@ -4,10 +4,10 @@
 
 Release-finalize TabDock from the four beta observations using current
 Windows evidence. The implementation, automated gates, exact Release
-physical qualification, final-tree artifact smoke, mainline integration, and
-exact-SHA hosted checks are complete for the available single-monitor desktop.
-The remaining items are external qualification limitations only: a mixed-DPI
-repeat and the supervised ValidationDriver foreground lease.
+physical qualification, supervised ValidationDriver scenarios, final-tree
+artifact smoke, mainline integration, and exact-SHA hosted checks are complete
+for the available single-monitor desktop. The remaining items are external
+qualification limitations only: a mixed-DPI repeat and production signing.
 Active plan: `.agent/plans/release-finalization-beta-feedback-2026-09-16.md`.
 Investigation: `.agent/investigations/beta-feedback-baseline-2026-09-16.md`.
 
@@ -31,9 +31,11 @@ Investigation: `.agent/investigations/beta-feedback-baseline-2026-09-16.md`.
   transitions, textbox input, minimize/restore, maximize/restore, and a
   four-guest switching soak.
 - Current desktop state is one 1920x1080 monitor at 96 DPI. The earlier mixed
-  120/96-DPI topology is unavailable for final repetition. ValidationDriver
-  split foreground qualification was attempted and correctly blocked by its
-  occupied-desktop foreground lease; it is not a product pass.
+  120/96-DPI topology is unavailable for final repetition. An earlier
+  ValidationDriver attempt was correctly fail-closed by the occupied-desktop
+  lease, but the exact final Release artifact later passed the targeted
+  split-workspace foreground-pairing, persistence, drag-reorder, and
+  crash/relaunch scenarios.
 
 ## Completed and validation
 
@@ -70,4 +72,6 @@ Investigation: `.agent/investigations/beta-feedback-baseline-2026-09-16.md`.
 
 Campaign complete for the evidence available on this desktop. `main` and
 `origin/main` are aligned at the verified implementation tree, and the
-pre-existing `.codex/config.toml` edit remains preserved and excluded.
+pre-existing `.codex/config.toml` edit remains preserved and excluded. A
+mixed-DPI physical repeat and production Authenticode signing remain external
+release-qualification items.

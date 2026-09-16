@@ -129,13 +129,18 @@ same local order; activating the overlay again produced
 extended style and below the unrelated foreground window. The ValidationDriver
 version of this scenario was also attempted against both Debug and the exact
 candidate Release artifact but fail-closed before input when the occupied
-desktop could not satisfy its foreground lease; that run is not a product
-pass. The exact candidate Release artifact nevertheless completed the same
+desktop could not satisfy its foreground lease; that earlier run was not a
+product pass. The exact candidate Release artifact nevertheless completed the same
 manual overlay matrix with native measurements: overlay foreground was
 `[overlay, guest, Group]`; clicking exposed Group chrome gave
 `[guest, Group, overlay]` with Group foreground; reactivating the overlay
 restored `[overlay, guest, Group]`; clicking the exposed guest gave
 `[guest, Group, overlay]`. Captured windows retained normal extended styles.
+The later exact final Release run passed `split-workspace-foreground-pairing`
+with real input and native assertions: the split stack was restored above an
+interleaved unrelated window, the clicked member became foreground, pane
+geometry remained assigned, and the inverse assertion kept all TabDock windows
+below the unrelated foreground window.
 
 ### Report D — clipped textbox/content
 
@@ -211,5 +216,7 @@ the four-guest soak, and the final launch/capture/release/exit smoke. Spotify
 capture and the reported clipping symptom were not failures on this machine.
 Exact-SHA hosted CI run `35138318079` passed both its build and native ABI
 check-runs. The final record is closed for the available local evidence.
-Mixed-DPI physical qualification and the ValidationDriver foreground lease
-remain explicitly unverified/external limitations.
+Mixed-DPI physical qualification and production Authenticode signing remain
+explicitly unverified/external limitations; the previously blocked
+ValidationDriver foreground-pairing lane was subsequently qualified by the
+exact final Release run.

@@ -21,7 +21,8 @@ Release artifact before integrating it into `main`.
 - Do not add arbitrary timing, application-name exceptions, or foreground
   stealing. Native desktop claims require physical evidence.
 - A fail-closed ValidationDriver lease is an environment limitation, not a
-  product pass.
+  product pass; a later lease-qualified run is recorded as a real product
+  result.
 
 ## Steps
 
@@ -33,8 +34,8 @@ Release artifact before integrating it into `main`.
    transitions. (Done.)
 3. Extend the supervised ValidationDriver group-menu scenario to assert native
    point ownership while the menu is open, and add an identity-verified split
-   foreground-pairing scenario. (Done; the latter is currently blocked by the
-   occupied desktop lease.)
+   foreground-pairing scenario. (Done; the exact final Release run passed the
+   real-input/native inverse z-order assertions.)
 4. Run targeted and full automated validation, refresh the Repowise map, and
    reproduce the original popup, overlap, Spotify, switching, and geometry
    workflows on rebuilt Debug/Release candidates. (Done. The exact candidate
@@ -45,8 +46,7 @@ Release artifact before integrating it into `main`.
    mixed-DPI geometry, z-order matrix, multi-guest stress, persistence, and
    lifecycle checks that the available desktop permits. (Candidate Release
    gate and physical matrix done. The final-tree artifact identity/smoke also
-   passed; mixed-DPI and the ValidationDriver lease remain unavailable
-   limitations.)
+   passed; mixed-DPI remains unavailable on the current desktop.)
 6. Reconcile current documentation/state with verified reality, inspect the
    complete diff, commit coherent changes, rebuild the exact resulting Release
    artifact, push `main` without force, and independently verify remote SHA and
@@ -74,5 +74,4 @@ Release artifact before integrating it into `main`.
 
 The campaign is complete for the available desktop. `main` and `origin/main`
 are aligned at the verified implementation tree. The mixed-DPI physical repeat
-and the supervised ValidationDriver foreground lease remain external,
-fail-closed limitations rather than product passes.
+and production Authenticode signing remain external qualification items.
