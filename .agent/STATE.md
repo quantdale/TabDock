@@ -4,9 +4,9 @@
 
 Release-finalize TabDock from the four beta observations using current
 Windows evidence. The candidate implementation, automated gates, and exact
-Release physical qualification are complete for the available single-monitor
-desktop. The evidence records are closed; the remaining operations are the
-final exact-tree Release rebuild/smoke, authorized mainline push, and
+Release physical qualification and the final-tree Release artifact smoke are
+complete for the available single-monitor desktop. The evidence records are
+closed; the remaining operations are the authorized mainline push and
 independent remote/CI verification.
 Active plan: `.agent/plans/release-finalization-beta-feedback-2026-09-16.md`.
 Investigation: `.agent/investigations/beta-feedback-baseline-2026-09-16.md`.
@@ -53,11 +53,15 @@ Investigation: `.agent/investigations/beta-feedback-baseline-2026-09-16.md`.
   bright, overlap foreground/z-order invariants held in both directions, and
   the Release textbox accepted real input without clipping. The application
   implementation is unchanged from source commit `4f4998ff`.
+- The final evidence-closure tree was rebuilt as a self-contained single-file
+  Release artifact, launched, captured Spotify and a real GuineaPig guest,
+  rendered Spotify, kept it visible under the Group popup, and exited cleanly.
+  The final artifact's exact source SHA and file hash are recorded in the
+  release handoff.
 - `repowise update` reports the local index current; `git diff --check` passes
   with only the repository's LF-to-CRLF normalization warnings.
 
 ## Next action
 
-Rebuild and exercise the exact final-tree Release artifact, push `main`
-without force, and independently verify remote SHA and CI status. The
-pre-existing `.codex/config.toml` edit remains preserved and excluded.
+Push `main` without force and independently verify remote SHA and CI status.
+The pre-existing `.codex/config.toml` edit remains preserved and excluded.

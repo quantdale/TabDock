@@ -1,8 +1,8 @@
 # Investigation: beta feedback baseline on the current executable
 
 **Date:** 2026-09-17
-**Status:** candidate fixes, exact Release physical qualification, and evidence closure validated; final-tree integration and external CI remain
-**Build:** baseline `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`; application source commit `4f4998ffed1c9cbfd7f760ff48b54f48f2143ed1`; documentation evidence closure `3e72a94ce4f79dddd41147f04e2909474f80fd6e`
+**Status:** candidate fixes, exact Release physical qualification, evidence closure, and final-tree artifact smoke validated; mainline integration and external CI remain
+**Build:** baseline `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`; application source commit `4f4998ffed1c9cbfd7f760ff48b54f48f2143ed1`; documentation evidence closure `3e72a94ce4f79dddd41147f04e2909474f80fd6e`; final documentation tree was rebuilt and smoke-qualified as the release artifact
 **Branch:** `main`
 
 ## Question
@@ -207,7 +207,6 @@ measurements passing. The exact candidate Release artifact also passed the
 available physical A-D/core matrix and the four-guest soak. Spotify capture and
 the reported clipping symptom were not failures on this machine. The final
 record is closed for the available local evidence. The remaining operations
-are final-tree artifact publication, authorized mainline integration, and
-exact-SHA CI verification. Mixed-DPI physical qualification and the
-ValidationDriver foreground lease remain explicitly unverified/external
-limitations.
+are authorized mainline integration and exact-SHA CI verification. Mixed-DPI
+physical qualification and the ValidationDriver foreground lease remain
+explicitly unverified/external limitations.
