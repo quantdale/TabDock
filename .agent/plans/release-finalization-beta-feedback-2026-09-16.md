@@ -1,6 +1,6 @@
 # Plan: TabDock release finalization from beta feedback
 
-**Status:** complete for the available desktop — implementation, automated qualification, documentation closure, exact Release physical qualification, final-tree artifact smoke, mainline integration, and exact-SHA hosted checks complete; mixed-DPI and the ValidationDriver foreground lease remain external limitations
+**Status:** complete for the available desktop — implementation, automated qualification, documentation closure, exact Release physical qualification, targeted ValidationDriver qualification, final-tree artifact smoke, mainline integration, and exact-SHA hosted checks complete; mixed-DPI/Windows 10 physical repeats, the full physical ValidationDriver catalog, and production signing remain external or unperformed qualification items
 **Owner:** Codex
 **Started:** 2026-09-16
 
@@ -73,5 +73,6 @@ Release artifact before integrating it into `main`.
 ## Handoff
 
 The campaign is complete for the available desktop. `main` and `origin/main`
-are aligned at the verified implementation tree. The mixed-DPI physical repeat
-and production Authenticode signing remain external qualification items.
+are aligned at the verified final tree. Mixed-DPI and Windows 10 physical
+repeats, the full physical ValidationDriver catalog, and production
+Authenticode signing remain unverified or external qualification items.

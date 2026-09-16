@@ -1,8 +1,8 @@
 # Investigation: beta feedback baseline on the current executable
 
 **Date:** 2026-09-17
-**Status:** complete for the available desktop; implementation, exact Release physical qualification, evidence closure, mainline integration, and exact-SHA hosted checks validated; mixed-DPI repeat and the ValidationDriver foreground lease remain external limitations
-**Build:** baseline `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`; implementation commit `6172595cffcce2e2eee506c3eb9ea1791afa7fa8`; final documentation closure is non-executable and was requalified through the applicable Release gates
+**Status:** complete for the available desktop; implementation, exact Release physical qualification, evidence closure, targeted ValidationDriver qualification, mainline integration, and exact-SHA hosted checks validated; mixed-DPI/Windows 10 physical repeats, the full physical ValidationDriver catalog, and production signing remain external or unperformed qualification items
+**Build:** baseline `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`; implementation commit `6172595cffcce2e2eee506c3eb9ea1791afa7fa8`; final tree `37536b289273cb0eb78b17c8c7ca277bcfd6cc69`; final documentation closure is non-executable and was requalified through the applicable Release gates
 **Branch:** `main`
 
 ## Question
@@ -43,6 +43,10 @@ current product boundaries, if any, are responsible?
   `3225289BF6A3EB28B9941D0B93F5C38694B53C5E5D81A30F3890A1B417F06CE1`,
   180,310,748 bytes. Its native ABI self-test exited 0 with
   `placementContract=PASS placementRoundTrip=PASS`.
+- Final-tree Release identity: the single-file artifact at
+  `artifacts/release-final-37536b2\TabDock.exe`, version `1.1.0`, source SHA
+  `37536b289273cb0eb78b17c8c7ca277bcfd6cc69`, 180,310,748 bytes, SHA-256
+  `05729E907B47CCD8B394200CD8DC4AE9F6B84FD27134C8756EBA697B60646F37`.
 
 ## Findings
 
@@ -215,8 +219,10 @@ built from the integrated tree passed the available physical A-D/core matrix,
 the four-guest soak, and the final launch/capture/release/exit smoke. Spotify
 capture and the reported clipping symptom were not failures on this machine.
 Exact-SHA hosted CI run `35138318079` passed both its build and native ABI
-check-runs. The final record is closed for the available local evidence.
-Mixed-DPI physical qualification and production Authenticode signing remain
-explicitly unverified/external limitations; the previously blocked
-ValidationDriver foreground-pairing lane was subsequently qualified by the
-exact final Release run.
+check-runs. The final exact-tree CI run `35142807839` also passed both
+check-runs, and the final artifact identity is recorded above. The final
+record is closed for the available local evidence. Mixed-DPI and Windows 10
+physical qualification, the full physical ValidationDriver catalog, and
+production Authenticode signing remain explicitly unverified/external items;
+the previously blocked ValidationDriver foreground-pairing lane was
+subsequently qualified by the exact final Release run.
