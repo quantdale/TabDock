@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-17
 **Status:** complete for the available desktop; implementation, exact Release physical qualification, evidence closure, targeted ValidationDriver qualification, mainline integration, and exact-SHA hosted checks validated; mixed-DPI/Windows 10 physical repeats, the full physical ValidationDriver catalog, and production signing remain external or unperformed qualification items
-**Build:** baseline `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`; last substantive implementation commit `6172595cffcce2e2eee506c3eb9ea1791afa7fa8`; the final documentation closure is non-executable and was requalified through the applicable Release gates
+**Build:** baseline `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`; last application-behavior implementation commit `4f4998ffed1c9cbfd7f760ff48b54f48f2143ed1`; later commit `6172595cffcce2e2eee506c3eb9ea1791afa7fa8` only refreshed validation-catalog identity; the final documentation closure is non-executable and was requalified through the applicable Release gates
 **Branch:** `main`
 
 ## Question
@@ -211,7 +211,7 @@ Exit control.
 ## Conclusion
 
 The baseline had one confirmed current product defect: popup-open local z-order
-could cover a live guest. The implementation in commit `6172595` fixes that
+could cover a live guest. The implementation in commit `4f4998f` fixes that
 transition and the adjacent foreground/minimize races, with 847/847 automated
 tests and fresh Debug/native measurements passing. The exact Release artifact
 built from the integrated tree passed the available physical A-D/core matrix,

@@ -15,15 +15,15 @@ Investigation: `.agent/investigations/beta-feedback-baseline-2026-09-16.md`.
 
 ## Important facts
 
-- Starting Git state was clean on `main` at
-  `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`, equal to `origin/main`; the
-  pre-existing `.codex/config.toml` change is preserved and excluded from the
-  campaign implementation.
+- Starting Git state was on `main` at
+  `9b84a2a3f16b8cccf3bf18f6cc8fe045e0967229`, equal to `origin/main`, with one
+  pre-existing modification to `.codex/config.toml` preserved and excluded from
+  the campaign implementation.
 - Baseline physical evidence confirmed popup-open guest coverage by the opaque
   container. Spotify capture/release and the reported clipping were not
   reproduced. A fresh Debug overlap sequence passed native foreground,
   z-order, point-ownership, and inverse always-on-top checks.
-- The implementation commit `6172595cffcce2e2eee506c3eb9ea1791afa7fa8` covers
+- The implementation commit `4f4998ffed1c9cbfd7f760ff48b54f48f2143ed1` covers
   popup-local z-order reconciliation, hide/minimize provenance ordering,
   active-switch foreground ownership, measured split stack reassertion, and
   stale delayed foreground callbacks. Shepherd remains never-reparent. Exact
@@ -48,9 +48,11 @@ Investigation: `.agent/investigations/beta-feedback-baseline-2026-09-16.md`.
   Release builds clean, xUnit 847/847, headless resource lifecycle pass,
   native ABI/CLI/support-bundle privacy pass, OpenSpec 38/38, and single-file
   publish/version smoke pass.
-- The last substantive implementation commit is
-  `6172595cffcce2e2eee506c3eb9ea1791afa7fa8`; subsequent campaign commits are
-  documentation-only and do not change application behavior. The current
+- The last application-behavior implementation commit is
+  `4f4998ffed1c9cbfd7f760ff48b54f48f2143ed1`; the only later non-documentation
+  commit, `6172595cffcce2e2eee506c3eb9ea1791afa7fa8`, refreshed
+  validation-catalog identity, and no subsequent campaign commit changes
+  application behavior. The current
   final-tree Release artifact was rebuilt from the exact tree, hash-verified,
   launched, and exercised through the final supervised persistence,
   drag/reorder, crash/relaunch, split foreground-pairing, Spotify, textbox,
