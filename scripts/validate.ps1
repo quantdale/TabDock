@@ -85,62 +85,10 @@ function Invoke-Executable {
     }
 }
 
-function Invoke-RecoveryProcessSmoke {
-    param([string]$Path, [string]$IsolatedAppData)
-
-    Write-Host ''
-    Write-Host '==> Supervised recovery redirected-process smoke' -ForegroundColor Cyan
-    $psi = [Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $Path
-    # Use the string Arguments property (available on both .NET Framework 4.8
-    # / Windows PowerShell 5.1 and .NET / PowerShell 7). ProcessStartInfo.
-    # ArgumentList exists only on .NET and is null under Windows PowerShell 5.1.
-    $psi.Arguments = '--recover-pending'
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardInput = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.WorkingDirectory = $RepoRoot
-    $psi.Environment['APPDATA'] = $IsolatedAppData
-    $process = [Diagnostics.Process]::new()
-    $process.StartInfo = $psi
-    try {
-        if (-not $process.Start()) {
-            throw 'Could not start the recovery executable.'
-        }
-        # EOF is intentional: the isolated directory is empty, so the real
-        # WinExe must print its no-pending result and exit without WPF startup
-        # or an interactive ReadLine hang.
-        $process.StandardInput.Close()
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit(30000)) {
-            $process.Kill()
-            throw 'Recovery process did not exit within 30 seconds.'
-        }
-        # .Result is an instance property available on both Windows PowerShell
-        # 5.1 and PowerShell 7; the extension-method GetAwaiter() used earlier
-        # is not bound by Windows PowerShell 5.1 and returns null there.
-        $stdout = $stdoutTask.Result
-        $stderr = $stderrTask.Result
-        if ($process.ExitCode -ne 0) {
-            throw "Recovery process exited with code $($process.ExitCode). stderr=$stderr"
-        }
-        if ($stdout -notmatch '(?i)no unresolved pending recovery entries') {
-            throw "Recovery process did not emit the expected no-pending result. stdout=$stdout"
-        }
-        Write-Host 'Redirected WinExe lifecycle, isolated APPDATA, EOF input, output, and exit code: PASS' -ForegroundColor Green
-    }
-    finally {
-        # Never leave a launched copy of the executable holding a lock on the
-        # build output (which would break a subsequent publish). Kill it if it
-        # did not already exit.
-        if ($process -and -not $process.HasExited) {
-            try { $process.Kill() } catch { }
-        }
-        $process.Dispose()
-    }
-}
+# A02 validation-storage proof and cleanup semantics live in
+# scripts/ValidationStorage.ps1 (shared with the maintained script-level
+# safety tests); this script must not carry a second copy of the protocol.
+. (Join-Path $PSScriptRoot 'ValidationStorage.ps1')
 
 function Assert-SupportBundlePrivacy {
     param([string]$BundlePath)
@@ -203,6 +151,9 @@ function Assert-SupportBundlePrivacy {
     }
 }
 
+$script:ValidationProductRoot = $null
+$script:ValidationRunId = $null
+$script:ValidationCandidate = $null
 New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null
 Push-Location $RepoRoot
 try {
@@ -278,9 +229,7 @@ try {
         throw 'Pending-recovery discovery did not create its requested output file.'
     }
 
-    $isolatedAppData = Join-Path $TempRoot 'isolated-appdata\Roaming'
-    New-Item -ItemType Directory -Path $isolatedAppData -Force | Out-Null
-    Invoke-RecoveryProcessSmoke $AppExe $isolatedAppData
+    Invoke-RecoveryProcessSmoke $AppExe $TempRoot
 
     $bundlePath = Join-Path $TempRoot 'support-bundle.zip'
     Invoke-Executable "Support-bundle privacy smoke ($Configuration)" $AppExe @('--support-bundle', '--output', $bundlePath)
@@ -368,7 +317,13 @@ try {
 }
 finally {
     Pop-Location
-    if (Test-Path -LiteralPath $TempRoot) {
-        Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    # S2: cleanup runs through the single ownership-checked authority on every
+    # exit path (probe failure, child error, timeout, sentinel failure, normal
+    # completion). A local product-root refusal retains the whole tree; this
+    # outer finally can never bypass it with a broader recursive delete.
+    Remove-RunOwnedTempTree `
+        -TempRoot $TempRoot `
+        -ProductRoot $script:ValidationProductRoot `
+        -RunId $script:ValidationRunId `
+        -CandidatePath $script:ValidationCandidate | Out-Null
 }

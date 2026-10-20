@@ -5,13 +5,15 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
+using TabDock.Services;
 
 namespace TabDock.ValidationDriver;
 
 /// <summary>
 /// Entry point for the safe resource qualification command. The default local
-/// mode starts only the freshly selected TabDock artifact with an isolated
-/// APPDATA and never sends input. --resource-headless runs the same lifecycle
+/// mode starts only the freshly selected TabDock artifact inside a verified
+/// run-owned validation storage root (never the production profile) and never
+/// sends input. --resource-headless runs the same lifecycle
 /// profiles with deterministic synthetic snapshots for ordinary CI.
 /// </summary>
 internal static class ResourceSoakRunner
@@ -47,6 +49,9 @@ internal static class ResourceSoakRunner
             Array.Empty<ResourceSnapshot>());
         Process? targetProcess = null;
         bool synthetic = options.ResourceHeadless;
+        string? validationRunId = null;
+        string validationCandidate = Path.GetFullPath(Scenarios.TabDockExe);
+        string? validationRoot = null;
         string target = synthetic
             ? "headless deterministic lifecycle fixtures"
             : "run-owned TabDock process";
@@ -54,6 +59,10 @@ internal static class ResourceSoakRunner
         VisualMeasurementReport? visualMeasurements = null;
 
         TestRunProvenance.BeginRun();
+        // The run identity is minted by BeginRun; capture it only afterwards so
+        // the storage marker, child proof and run manifest all bind the SAME
+        // current run ID (capturing first produced the pre-init empty GUID).
+        validationRunId = TestRunProvenance.RunId;
         QualificationResultWriter.BeginRun();
         GuardedProc.ResetScenarioBudget();
         try
@@ -78,10 +87,31 @@ internal static class ResourceSoakRunner
             }
             else
             {
+                // A02 storage isolation: create a fresh run-owned product
+                // directory with an ownership marker, then obtain matching
+                // read-only root/candidate/run proof from the exact child
+                // candidate BEFORE any mutating child is started. A missing,
+                // stale or mismatched proof refuses the launch here — before
+                // normal application startup — and never authorizes any
+                // production-profile cleanup.
+                validationRoot = ValidationStorageProof.CreateRunOwnedRoot(
+                    temporaryRoot, validationRunId, validationCandidate);
+                string? proofRefusal = ValidationStorageProof.VerifyChildProof(
+                    Scenarios.TabDockExe, validationRoot, validationRunId, validationCandidate);
+                if (proofRefusal != null)
+                    throw new InvalidOperationException(
+                        $"storage isolation preflight refused the mutating launch ({proofRefusal})");
+                // Marker/proof/manifest identity agreement, verified before any
+                // child starts and without launching the UI soak.
+                if (!string.Equals(validationRunId, TestRunProvenance.RunId, StringComparison.Ordinal))
+                    throw new InvalidOperationException(
+                        "storage isolation run identity drifted from the initialized run manifest");
                 snapshots = CaptureProcessSeries(
                     options,
                     cycles,
                     temporaryRoot,
+                    validationRoot,
+                    validationRunId,
                     out targetProcess);
             }
 
@@ -186,7 +216,7 @@ internal static class ResourceSoakRunner
         }
         finally
         {
-            TryDeleteTemporaryRoot(temporaryRoot);
+            TryDeleteTemporaryRoot(temporaryRoot, validationRoot, validationRunId, validationCandidate);
         }
     }
 
@@ -194,20 +224,27 @@ internal static class ResourceSoakRunner
         Options options,
         int cycles,
         string temporaryRoot,
+        string validationRoot,
+        string validationRunId,
         out Process? targetProcess)
     {
         if (HasUnownedTabDockProcess())
             throw new InvalidOperationException("an unowned TabDock process is already running");
 
-        string appData = Path.Combine(temporaryRoot, "appdata", "Roaming");
-        Directory.CreateDirectory(appData);
         var startInfo = new ProcessStartInfo(Scenarios.TabDockExe)
         {
             UseShellExecute = false,
             WorkingDirectory = Path.GetDirectoryName(Scenarios.TabDockExe)!,
         };
-        startInfo.Environment["APPDATA"] = appData;
+        // The paired validation inputs are the authoritative isolation (A02):
+        // the child revalidates its own root and fail-closes on any mismatch.
+        // The APPDATA/LOCALAPPDATA redirects below are defense in depth only
+        // and are never accepted as isolation proof.
+        startInfo.Environment[ValidationStorageProof.RootEnvironmentVariable] = validationRoot;
+        startInfo.Environment[ValidationStorageProof.RunIdEnvironmentVariable] = validationRunId;
+        startInfo.Environment["APPDATA"] = Path.Combine(temporaryRoot, "appdata", "Roaming");
         startInfo.Environment["LOCALAPPDATA"] = Path.Combine(temporaryRoot, "appdata", "Local");
+        Directory.CreateDirectory(Path.Combine(temporaryRoot, "appdata", "Roaming"));
         targetProcess = GuardedProc.SpawnGuarded(startInfo);
         if (!TestRunProvenance.RegisterLaunchedProcess(
                 targetProcess,
@@ -331,16 +368,50 @@ internal static class ResourceSoakRunner
         Console.WriteLine($"artifact directory: {outputRoot}");
     }
 
-    private static void TryDeleteTemporaryRoot(string root)
+    /// <summary>
+    /// Run-owned cleanup (A02): recursive deletion of the temporary tree is
+    /// authorized only while the ownership marker in the validation product
+    /// root still identifies this run. Lost or ambiguous ownership retains the
+    /// tree for review and never broadens the cleanup scope; a failed preflight
+    /// never authorizes any production-profile cleanup. Internal and
+    /// result-returning so the maintained self-tests can drive this exact
+    /// outer cleanup boundary.
+    /// </summary>
+    internal static bool TryDeleteTemporaryRoot(string root, string? validationRoot, string? validationRunId, string validationCandidate)
     {
         try
         {
+            if (validationRoot != null)
+            {
+                // R2: a RECORDED root must re-prove current ownership even
+                // when it no longer exists (missing, renamed, replaced). The
+                // enclosing tree may hold the moved evidence; it is retained
+                // for review instead of being deleted by parent cleanup.
+                if (!Directory.Exists(validationRoot)
+                    || !ValidationStorageProof.TryCleanupRunOwnedRoot(
+                        validationRoot, validationRunId ?? string.Empty, validationCandidate, out string? refusalReason))
+                {
+                    GuardedProc.Log(
+                        "Resource soak retained ambiguous validation storage for review; no recursive cleanup was performed.");
+                    return false;
+                }
+            }
+            // R1: never delete through a changed boundary — the enclosing
+            // cleanup path must still be free of reparse components.
+            if (ProductStorage.HasReparsePointComponent(root))
+            {
+                GuardedProc.Log(
+                    "Resource soak retained its temporary tree: a cleanup path component is a reparse point.");
+                return false;
+            }
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
+            return true;
         }
         catch (Exception ex)
         {
             GuardedProc.Log($"Resource soak temporary cleanup left residue: {ex.GetType().Name}");
+            return false;
         }
     }
 }

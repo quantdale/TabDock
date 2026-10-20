@@ -327,6 +327,7 @@ public partial class ContainerWindow : Window
         InitializeComponent();
         ContentRendered += ContainerWindow_ContentRendered;
         Loaded += ContainerWindow_Loaded;
+        MotionProfile.PlayEntrance((FrameworkElement)Content);
         Closing += ContainerWindow_Closing;
         Closed += ContainerWindow_Closed;
         StateChanged += ContainerWindow_StateChanged;

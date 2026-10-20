@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <Compile Include="..\..\..\NativeMethods.cs" Link="NativeMethods.cs" />
+    <Compile Include="..\..\..\Services\ProductStorage.cs" Link="ProductStorage.cs" />
     <Compile Include="..\..\..\Services\MonitorDpiService.cs" Link="MonitorDpiService.cs" />
     <Compile Include="..\..\..\Services\WinEventRoutingPolicy.cs" Link="WinEventRoutingPolicy.cs" />
     <Compile Include="..\..\..\Services\NativeInteractionReplay.cs" Link="NativeInteractionReplay.cs" />

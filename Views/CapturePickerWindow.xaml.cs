@@ -27,6 +27,7 @@ public partial class CapturePickerWindow : Window
 
         viewModel.GroupingRequested += OnGroupingRequested;
         viewModel.Canceled += OnCanceled;
+        MotionProfile.PlayEntrance((FrameworkElement)Content);
     }
 
     private void OnGroupingRequested(object? sender, EventArgs e)

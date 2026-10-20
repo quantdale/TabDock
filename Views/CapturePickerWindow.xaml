@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:infra="clr-namespace:TabDock.Infrastructure"
         mc:Ignorable="d"
         Title="Capture windows — TabDock"
         Height="650"
@@ -137,21 +138,18 @@
                             </Style>
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <Border Padding="11,9" CornerRadius="7">
+                                <DataTemplate>
+                                    <Border Padding="11,9" CornerRadius="7"
+                                            infra:MotionProfile.EnableBorderStates="True"
+                                            infra:MotionProfile.HoverBackground="{StaticResource TdSurfaceHoverBrush}"
+                                            infra:MotionProfile.SelectedBackground="{StaticResource TdAccentSoftBrush}"
+                                            infra:MotionProfile.SelectedBorder="{StaticResource TdAccentBrush}">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Background" Value="{StaticResource TdSurfaceRaisedBrush}" />
                                             <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
                                             <Setter Property="BorderThickness" Value="1" />
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                                    <Setter Property="Background" Value="{StaticResource TdSurfaceHoverBrush}" />
-                                                </DataTrigger>
-                                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                    <Setter Property="Background" Value="{StaticResource TdAccentSoftBrush}" />
-                                                    <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
-                                                </DataTrigger>
                                                 <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
                                                     <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
                                                 </DataTrigger>

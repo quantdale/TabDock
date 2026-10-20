@@ -66,11 +66,11 @@ Read-only diagnostic commands SHALL remain usable without this lease.
   `--support-bundle` can still perform their existing read-only contract
 
 ### Requirement: Primary state classification SHALL control backup recovery
-`PersistenceService.Load` SHALL distinguish missing, valid, supported-legacy,
-unsupported-future, corrupt, and unreadable primary state. A valid backup MAY
-be used only when the primary is missing or has been proven corrupt and safely
-quarantined/preserved. Unreadable and future-version primary files SHALL remain
-in place and SHALL block later overwrites.
+State restore SHALL distinguish missing, valid, supported-legacy, unsupported-future, corrupt, and unreadable primary state. A valid backup SHALL be used only when the primary is missing or has been proven corrupt and safely quarantined/preserved. Unreadable and future-version primary files SHALL remain in place and SHALL block later overwrites.
+
+An absent Version SHALL retain supported legacy-version semantics. A present Version SHALL be a positive 32-bit JSON integer token; strings, null, booleans, objects, arrays, fractional numbers, out-of-range numbers, and nonpositive integers SHALL be classified corrupt without escaping the load boundary as type-conversion exceptions. A representable future integer version SHALL remain unsupported rather than corrupt.
+
+If corruption cannot be preserved or a usable backup cannot be established, subsequent synchronous, asynchronous, emergency, and exit saves SHALL NOT overwrite unresolved primary/backup evidence with empty restored state. Unexpected load failures SHALL also leave later saves protected until an authoritative restore has been established. A successful backup restore SHALL preserve recovered group/tab intent through cleanup saves.
 
 #### Scenario: Malformed primary recovers a valid backup
 - **WHEN** `state.json` is malformed, is quarantined successfully, and `state.json.bak` is valid
@@ -83,6 +83,22 @@ in place and SHALL block later overwrites.
 #### Scenario: A future version is preserved
 - **WHEN** the primary contains a syntactically valid unsupported future schema version
 - **THEN** it is reported as unsupported, neither it nor its state is rewritten, and no older backup silently replaces it
+
+#### Scenario: Wrong-type Version cannot destroy a valid backup during cleanup
+- **WHEN** the primary Version is each of a string, null, boolean, object, and array, a valid materialized backup exists, and emergency/exit saves follow restore
+- **THEN** no type-conversion exception escapes, corrupt input is preserved before fallback, and recovered group/tab intent remains available rather than being replaced with an empty primary and malformed backup
+
+#### Scenario: Invalid numeric versions are corruption
+- **WHEN** Version is fractional, nonpositive, or outside the schema-integer range
+- **THEN** restore classifies corruption and follows the same preservation and backup rules as malformed JSON
+
+#### Scenario: Preservation failure blocks later saves
+- **WHEN** malformed primary evidence cannot be quarantined or preserved and cleanup requests a save
+- **THEN** the primary and existing backup remain unchanged and the failure is reported without an empty-state replacement
+
+#### Scenario: Missing Version retains legacy compatibility
+- **WHEN** an otherwise supported state file has no Version property
+- **THEN** it restores under the supported legacy rules and retains its materialized metadata on the next save
 
 ### Requirement: Supported older state SHALL migrate explicitly
 The current schema version SHALL be explicit; supported older versions SHALL
@@ -143,3 +159,22 @@ classification/quarantine rules are unaffected.
 #### Scenario: Backup staging failure is recoverable by retry
 - **WHEN** any backup-stage boundary fails once and the fault is removed
 - **THEN** the next save completes the full transaction (backup installed, primary installed) without requiring a restart
+
+### Requirement: Latest admitted save intent SHALL survive unchanged-content optimization
+Every admitted immutable save snapshot SHALL participate in request ordering even when it equals the last completed disk content. After admitted writes settle successfully, the primary SHALL contain the latest requested snapshot, including when an older different snapshot was queued or already committing. An unchanged optimization SHALL skip I/O only when no earlier admitted work can leave different final content. Synchronous safety saves SHALL return only after their request has passed the serialized durability decision; async settlement SHALL observe the latest admitted request. Failed writes SHALL preserve complete evidence and remain retryable rather than being marked saved on enqueue.
+
+#### Scenario: A synchronous return to A supersedes an in-flight B
+- **WHEN** A is durably saved, async B is held inside its write transaction, and a newer synchronous A is requested before B finishes
+- **THEN** after the writer gate is released and the synchronous save returns, the primary contains A rather than B
+
+#### Scenario: An asynchronous return to A supersedes an in-flight B
+- **WHEN** A is durably saved, async B is held in flight, and a newer async A is requested
+- **THEN** awaiting the latest admitted settlement after release leaves A on disk
+
+#### Scenario: Idle unchanged state performs no replacement transaction
+- **WHEN** A is already durably saved and no different write can remain in flight when A is requested again
+- **THEN** the completed primary/backup set remains unchanged without a redundant replacement transaction
+
+#### Scenario: The latest snapshot remains retryable after failure
+- **WHEN** the final admitted write fails at a staged backup or primary boundary and the same snapshot is requested after the fault is removed
+- **THEN** prior evidence remains complete during failure and the retry durably installs the requested state

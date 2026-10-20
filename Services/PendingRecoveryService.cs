@@ -62,14 +62,19 @@ internal static class PendingRecoveryService
         }
     }
 
+    /// <summary>
+    /// Pure read-only discovery of pending recovery evidence. It never
+    /// mutates the product directory: no temp hygiene, no sidecar retirement,
+    /// no native recovery. Eligible stale-temp hygiene lives only in
+    /// <see cref="RunTemporaryFileHygiene"/> for explicit lease-held mutating
+    /// paths, so doctor, support export, the pending CLI report, launcher
+    /// attention and count projections all preserve evidence as-is.
+    /// </summary>
     internal static PendingRecoveryCatalog Discover(
         string? directory = null,
-        IPendingRecoveryNativeApi? api = null,
-        bool cleanupTemporaryFiles = true)
+        IPendingRecoveryNativeApi? api = null)
     {
-        string root = directory ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "TabDock");
+        string root = directory ?? ProductStorage.Current.EffectiveDirectory;
         var catalog = new PendingRecoveryCatalog(root);
         string[] paths;
         try
@@ -81,8 +86,6 @@ internal static class PendingRecoveryService
             }
             if (!Directory.Exists(root))
                 return catalog;
-            if (cleanupTemporaryFiles)
-                SweepOrphanedTemporaryFiles(root);
             paths = GetPendingPaths(root).ToArray();
         }
         catch (UnauthorizedAccessException ex)
@@ -112,7 +115,7 @@ internal static class PendingRecoveryService
 
     internal static int CountActivePendingFiles(string directory)
     {
-        PendingRecoveryCatalog catalog = Discover(directory, cleanupTemporaryFiles: false);
+        PendingRecoveryCatalog catalog = Discover(directory);
         return catalog.Files.Count(file => file.HasUnresolvedEvidence);
     }
 
@@ -126,10 +129,7 @@ internal static class PendingRecoveryService
     /// </summary>
     internal static PendingRecoveryAttention GetLauncherAttention(string? directory = null)
     {
-        PendingRecoveryCatalog catalog = Discover(
-            directory,
-            api: null,
-            cleanupTemporaryFiles: false);
+        PendingRecoveryCatalog catalog = Discover(directory);
         int pendingFileCount = catalog.Files.Count(file => file.HasUnresolvedEvidence);
         return new PendingRecoveryAttention(
             pendingFileCount,
@@ -181,9 +181,12 @@ internal static class PendingRecoveryService
         Func<string, bool>? faultInjector = null)
     {
         IPendingRecoveryNativeApi native = api ?? NativePendingRecoveryNativeApi.Instance;
-        string root = directory ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "TabDock");
+        string root = directory ?? ProductStorage.Current.EffectiveDirectory;
+        // This supervised session is an explicitly mutating, lease-held path
+        // (the caller acquires the product-mutation lease before invoking it),
+        // so it is the discovery-adjacent place where eligible stale-temp
+        // hygiene belongs. Read-only callers never reach this line.
+        RunTemporaryFileHygiene(root);
         PendingRecoveryCatalog catalog = Discover(directory, api);
         output.WriteLine("TabDock supervised pending recovery");
         output.WriteLine("This command is user-initiated. Startup never performs tokenless legacy recovery.");
@@ -1520,14 +1523,22 @@ internal static class PendingRecoveryService
     }
 
     /// <summary>
-    /// Best-effort hygiene sweep for orphaned recovery temp files. A
-    /// <c>*.tmp</c> fragment exists only when a process died between the
-    /// durable temp write and the atomic move; it is an incomplete write, not
-    /// evidence. Only files matching the pending-prefix/".tmp" shape and older
-    /// than the bounded age are removed, so a concurrently in-flight write is
-    /// never deleted. Real pending and ledger files are never touched here.
+    /// Best-effort hygiene sweep for orphaned recovery temp files and the
+    /// ONLY temp-fragment hygiene entry point. A <c>*.tmp</c> fragment exists
+    /// only when a process died between the durable temp write and the atomic
+    /// move; it is an incomplete write, not evidence. Only files matching the
+    /// pending-prefix/".tmp" shape and older than the bounded age are removed,
+    /// so a concurrently in-flight write is never deleted. Real pending and
+    /// ledger files are never touched here.
+    ///
+    /// This MUTATES the product directory. Callers must be explicit mutating
+    /// startup or supervised-recovery paths that already resolved their
+    /// storage root and acquired the product-mutation lease. Read-only
+    /// discovery and every inspection caller never invoke it; a refused
+    /// root/lease coordination simply never reaches this method and there is
+    /// no fallback cleanup behind it.
     /// </summary>
-    private static void SweepOrphanedTemporaryFiles(string root)
+    internal static void RunTemporaryFileHygiene(string root)
     {
         try
         {

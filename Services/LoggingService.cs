@@ -81,9 +81,8 @@ public sealed class LoggingService : IDisposable
 
     public LoggingService(string? logDirectory = null)
     {
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         _logDirectory = string.IsNullOrWhiteSpace(logDirectory)
-            ? Path.Combine(appData, "TabDock", "logs")
+            ? Path.Combine(ProductStorage.Current.EffectiveDirectory, "logs")
             : Path.GetFullPath(logDirectory);
         _logFile = Path.Combine(_logDirectory, "TabDock.log");
         try

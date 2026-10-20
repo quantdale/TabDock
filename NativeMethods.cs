@@ -318,6 +318,18 @@ public static partial class NativeMethods
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern uint GetFileType(IntPtr hFile);
 
+    // A02 storage-identity verification: alternate Win32 spellings (8.3 short
+    // names) must converge on one verified directory identity before any
+    // production-overlap or ownership decision. Used by ProductStorage.
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern uint GetLongPathName(string lpszShortPath, StringBuilder lpszLongPath, uint cchBuffer);
+
+    // Test fixture support: construct an 8.3 spelling to prove short-name
+    // aliases of production storage are rejected. Returns 0 when the volume
+    // has no short names (8.3 generation disabled).
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern uint GetShortPathName(string lpszLongPath, StringBuilder lpszShortPath, uint cchBuffer);
+
     public delegate bool MONITORENUMPROC(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);
 
     /// <summary>MONITORINFOF_PRIMARY — the monitor is the primary display.</summary>

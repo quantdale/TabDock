@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using TabDock.Models;
 using TabDock.Services;
 
@@ -50,9 +51,11 @@ internal static class DeterministicSelfTests
             tests.AddRange(ForegroundTests());
         if (normalized is "all" or "resource" or "deterministic")
             tests.AddRange(ResourceTests());
+        if (normalized is "all" or "storage" or "deterministic")
+            tests.AddRange(StorageProofTests());
         if (tests.Count == 0)
         {
-            Console.WriteLine($"Unknown self-test suite '{suite}'. Use split, identity, foreground, manifest, visual, resource, or all.");
+            Console.WriteLine($"Unknown self-test suite '{suite}'. Use split, identity, foreground, manifest, visual, resource, storage, or all.");
             return 2;
         }
 
@@ -1920,6 +1923,586 @@ internal static class DeterministicSelfTests
                     throw new InvalidOperationException($"identity mismatch at index={i} seed=20260824");
             }
             return true;
+        });
+    }
+
+    private static IEnumerable<(string Id, Func<bool> Test)> StorageProofTests()
+    {
+        const string runId = "selftest-run-2026-10-20";
+        string candidate = Path.Combine(Path.GetTempPath(), "TabDock-candidate.exe");
+
+        // Complete real proof protocol by default; each negative fixture
+        // removes or corrupts exactly the aspect it proves.
+        static string Proof(
+            string root,
+            string id,
+            string candidatePath,
+            string status = "ok",
+            int schema = ProductStorage.MarkerSchemaVersion,
+            bool? isValidationRoot = true,
+            string[]? roles = null,
+            bool includeSchema = true,
+            bool includeIsValidationRoot = true,
+            bool includeRoles = true)
+        {
+            var json = new JsonObject
+            {
+                ["Status"] = status,
+                ["EffectiveRoot"] = root,
+                ["RunId"] = id,
+                ["CandidatePath"] = candidatePath,
+            };
+            if (includeSchema)
+                json["ProbeSchema"] = schema;
+            if (includeIsValidationRoot)
+                json["IsValidationRoot"] = isValidationRoot;
+            if (includeRoles)
+            {
+                var array = new JsonArray();
+                foreach (string role in roles ?? ProductStorage.StorageRoles)
+                    array.Add(role);
+                json["Roles"] = array;
+            }
+            return json.ToJsonString();
+        }
+
+        static string NewRoot(string name)
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "TabDock-proof-" + name + "-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            return root;
+        }
+
+        static void Retain(string root)
+        {
+            try
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, recursive: true);
+            }
+            catch { }
+        }
+
+        static void MakeJunction(string linkPath, string targetPath)
+        {
+            var psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))
+            {
+                Arguments = "/c mklink /J \"" + linkPath + "\" \"" + targetPath + "\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            using Process? process = Process.Start(psi);
+            if (process == null || !process.WaitForExit(10_000) || process.ExitCode != 0
+                || !Directory.Exists(linkPath))
+                throw new InvalidOperationException("junction fixture could not be created");
+        }
+
+        static void RemoveJunction(string linkPath)
+        {
+            try
+            {
+                // Deleting a directory reparse point removes the link only,
+                // never the relocated target content.
+                if (Directory.Exists(linkPath))
+                    Directory.Delete(linkPath);
+            }
+            catch
+            {
+                try
+                {
+                    var psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))
+                    {
+                        Arguments = "/c rmdir \"" + linkPath + "\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                    };
+                    using Process? process = Process.Start(psi);
+                    process?.WaitForExit(10_000);
+                }
+                catch { }
+            }
+        }
+
+        yield return ("storage-proof.missing-proof-refuses-launch", () =>
+            ValidationStorageProof.VerifyProof(null, @"C:\run-owned", runId, candidate)
+                == ValidationStorageProof.Refusal.ProofMissing
+            && ValidationStorageProof.VerifyProof("   ", @"C:\run-owned", runId, candidate)
+                == ValidationStorageProof.Refusal.ProofMissing);
+
+        yield return ("storage-proof.malformed-proof-refuses-launch", () =>
+            ValidationStorageProof.VerifyProof("not-json", @"C:\run-owned", runId, candidate)
+                == ValidationStorageProof.Refusal.ProofMalformed
+            && ValidationStorageProof.VerifyProof("[]", @"C:\run-owned", runId, candidate)
+                == ValidationStorageProof.Refusal.ProofMalformed);
+
+        yield return ("storage-proof.refused-proof-refuses-launch", () =>
+            ValidationStorageProof.VerifyProof(
+                    Proof(@"C:\run-owned", runId, candidate, status: "refused"), @"C:\run-owned", runId, candidate)
+                == ValidationStorageProof.Refusal.ProofRefused);
+
+        yield return ("storage-proof.root-mismatch-refuses-launch", () =>
+            ValidationStorageProof.VerifyProof(
+                    Proof(@"C:\elsewhere", runId, candidate), @"C:\run-owned", runId, candidate)
+                == ValidationStorageProof.Refusal.RootMismatch);
+
+        yield return ("storage-proof.stale-run-id-refuses-launch", () =>
+            ValidationStorageProof.VerifyProof(
+                    Proof(@"C:\run-owned", "a-different-run", candidate), @"C:\run-owned", runId, candidate)
+                == ValidationStorageProof.Refusal.RunIdMismatch);
+
+        yield return ("storage-proof.candidate-mismatch-refuses-launch", () =>
+            ValidationStorageProof.VerifyProof(
+                    Proof(@"C:\run-owned", runId, @"C:\other\TabDock.exe"), @"C:\run-owned", runId, candidate)
+                == ValidationStorageProof.Refusal.CandidateMismatch);
+
+        yield return ("storage-proof.unsupported-schema-refuses-launch", () =>
+            ValidationStorageProof.VerifyProof(
+                    Proof(@"C:\run-owned", runId, candidate, schema: ProductStorage.MarkerSchemaVersion + 998),
+                    @"C:\run-owned", runId, candidate)
+                == ValidationStorageProof.Refusal.ProofSchemaMismatch);
+
+        yield return ("storage-proof.missing-schema-refuses-launch", () =>
+            ValidationStorageProof.VerifyProof(
+                    Proof(@"C:\run-owned", runId, candidate, includeSchema: false),
+                    @"C:\run-owned", runId, candidate)
+                == ValidationStorageProof.Refusal.ProofSchemaMismatch);
+
+        yield return ("storage-proof.non-validation-root-flag-refuses-launch", () =>
+            ValidationStorageProof.VerifyProof(
+                    Proof(@"C:\run-owned", runId, candidate, isValidationRoot: false),
+                    @"C:\run-owned", runId, candidate)
+                == ValidationStorageProof.Refusal.ProofContractInvalid);
+
+        yield return ("storage-proof.missing-validation-root-flag-refuses-launch", () =>
+            ValidationStorageProof.VerifyProof(
+                    Proof(@"C:\run-owned", runId, candidate, includeIsValidationRoot: false),
+                    @"C:\run-owned", runId, candidate)
+                == ValidationStorageProof.Refusal.ProofContractInvalid);
+
+        yield return ("storage-proof.missing-roles-refuses-launch", () =>
+            ValidationStorageProof.VerifyProof(
+                    Proof(@"C:\run-owned", runId, candidate, includeRoles: false),
+                    @"C:\run-owned", runId, candidate)
+                == ValidationStorageProof.Refusal.ProofContractInvalid);
+
+        yield return ("storage-proof.partial-roles-refuses-launch", () =>
+            ValidationStorageProof.VerifyProof(
+                    Proof(@"C:\run-owned", runId, candidate, roles: new[] { "state", "logs" }),
+                    @"C:\run-owned", runId, candidate)
+                == ValidationStorageProof.Refusal.ProofContractInvalid);
+
+        yield return ("storage-proof.wrong-field-types-stably-refuse-launch", () =>
+        {
+            string escapedCandidate = candidate.Replace("\\", "\\\\");
+            string[] badProofs =
+            {
+                "{\"ProbeSchema\":\"1\",\"Status\":\"ok\",\"EffectiveRoot\":\"C:\\\\run-owned\",\"RunId\":\"" + runId + "\",\"CandidatePath\":\"" + escapedCandidate + "\",\"IsValidationRoot\":true,\"Roles\":[]}",
+                "{\"ProbeSchema\":1,\"Status\":true,\"EffectiveRoot\":\"C:\\\\run-owned\",\"RunId\":\"" + runId + "\",\"CandidatePath\":\"" + escapedCandidate + "\",\"IsValidationRoot\":true,\"Roles\":[]}",
+                "{\"ProbeSchema\":1,\"Status\":\"ok\",\"EffectiveRoot\":3,\"RunId\":\"" + runId + "\",\"CandidatePath\":\"" + escapedCandidate + "\",\"IsValidationRoot\":true,\"Roles\":[]}",
+                "{\"ProbeSchema\":1,\"Status\":\"ok\",\"EffectiveRoot\":\"C:\\\\run-owned\",\"RunId\":\"" + runId + "\",\"CandidatePath\":\"" + escapedCandidate + "\",\"IsValidationRoot\":\"yes\",\"Roles\":[]}",
+                "{\"ProbeSchema\":1,\"Status\":\"ok\",\"EffectiveRoot\":\"C:\\\\run-owned\",\"RunId\":\"" + runId + "\",\"CandidatePath\":\"" + escapedCandidate + "\",\"IsValidationRoot\":true,\"Roles\":\"state\"}",
+            };
+            foreach (string proof in badProofs)
+            {
+                string? result = ValidationStorageProof.VerifyProof(proof, @"C:\run-owned", runId, candidate);
+                if (result == null
+                    || result == ValidationStorageProof.Refusal.RootMismatch
+                    || result == ValidationStorageProof.Refusal.RunIdMismatch
+                    || result == ValidationStorageProof.Refusal.CandidateMismatch)
+                    return false;
+            }
+            return true;
+        });
+
+        yield return ("storage-proof.complete-protocol-authorizes-launch", () =>
+            ValidationStorageProof.VerifyProof(
+                    Proof(@"C:\run-owned", runId, candidate), @"C:\run-owned", runId, candidate)
+                == null);
+
+        yield return ("storage-cleanup.incomplete-marker-retains-tree", () =>
+        {
+            string root = NewRoot("incomplete");
+            try
+            {
+                File.WriteAllText(
+                    Path.Combine(root, ProductStorage.MarkerFileName),
+                    "{\"RunId\":\"" + runId + "\"}");
+                File.WriteAllText(Path.Combine(root, "evidence.bin"), "keep");
+                bool deleted = ValidationStorageProof.TryCleanupRunOwnedRoot(
+                    root, runId, candidate, out string? reason);
+                return !deleted
+                    && reason == ValidationStorageProof.Refusal.MarkerOwnershipLost
+                    && File.Exists(Path.Combine(root, "evidence.bin"));
+            }
+            finally { Retain(root); }
+        });
+
+        yield return ("storage-cleanup.copied-marker-from-another-root-retains-tree", () =>
+        {
+            string root = NewRoot("copied-target");
+            string other = NewRoot("copied-source");
+            try
+            {
+                ProductStorage.WriteRunMarker(other, runId, candidate);
+                File.Copy(
+                    Path.Combine(other, ProductStorage.MarkerFileName),
+                    Path.Combine(root, ProductStorage.MarkerFileName));
+                File.WriteAllText(Path.Combine(root, "evidence.bin"), "keep");
+                bool deleted = ValidationStorageProof.TryCleanupRunOwnedRoot(
+                    root, runId, candidate, out string? reason);
+                return !deleted
+                    && reason == ValidationStorageProof.Refusal.MarkerOwnershipLost
+                    && File.Exists(Path.Combine(root, "evidence.bin"));
+            }
+            finally
+            {
+                Retain(root);
+                Retain(other);
+            }
+        });
+
+        yield return ("storage-cleanup.wrong-candidate-marker-retains-tree", () =>
+        {
+            string root = NewRoot("wrong-candidate");
+            try
+            {
+                ProductStorage.WriteRunMarker(root, runId, Path.Combine(Path.GetTempPath(), "other-candidate.exe"));
+                File.WriteAllText(Path.Combine(root, "evidence.bin"), "keep");
+                bool deleted = ValidationStorageProof.TryCleanupRunOwnedRoot(
+                    root, runId, candidate, out string? reason);
+                return !deleted
+                    && reason == ValidationStorageProof.Refusal.MarkerOwnershipLost
+                    && File.Exists(Path.Combine(root, "evidence.bin"));
+            }
+            finally { Retain(root); }
+        });
+
+        yield return ("storage-cleanup.unsupported-schema-marker-retains-tree", () =>
+        {
+            string root = NewRoot("schema");
+            try
+            {
+                ProductStorage.WriteRunMarker(root, runId, candidate);
+                string markerPath = Path.Combine(root, ProductStorage.MarkerFileName);
+                File.WriteAllText(
+                    markerPath,
+                    File.ReadAllText(markerPath).Replace(
+                        "\"SchemaVersion\": 1", "\"SchemaVersion\": 999"));
+                File.WriteAllText(Path.Combine(root, "evidence.bin"), "keep");
+                bool deleted = ValidationStorageProof.TryCleanupRunOwnedRoot(
+                    root, runId, candidate, out string? reason);
+                return !deleted
+                    && reason == ValidationStorageProof.Refusal.MarkerOwnershipLost
+                    && File.Exists(Path.Combine(root, "evidence.bin"));
+            }
+            finally { Retain(root); }
+        });
+
+        yield return ("storage-cleanup.lost-marker-ownership-retains-tree", () =>
+        {
+            string root = NewRoot("lost");
+            try
+            {
+                ProductStorage.WriteRunMarker(root, "some-other-run", candidate);
+                File.WriteAllText(Path.Combine(root, "evidence.bin"), "keep");
+                bool deleted = ValidationStorageProof.TryCleanupRunOwnedRoot(
+                    root, runId, candidate, out string? reason);
+                return !deleted
+                    && reason == ValidationStorageProof.Refusal.MarkerOwnershipLost
+                    && File.Exists(Path.Combine(root, "evidence.bin"));
+            }
+            finally { Retain(root); }
+        });
+
+        yield return ("storage-cleanup.deleted-marker-retains-tree", () =>
+        {
+            string root = NewRoot("deleted");
+            try
+            {
+                ProductStorage.WriteRunMarker(root, runId, candidate);
+                File.Delete(Path.Combine(root, ProductStorage.MarkerFileName));
+                File.WriteAllText(Path.Combine(root, "evidence.bin"), "keep");
+                bool deleted = ValidationStorageProof.TryCleanupRunOwnedRoot(
+                    root, runId, candidate, out string? reason);
+                return !deleted
+                    && reason == ValidationStorageProof.Refusal.MarkerOwnershipLost
+                    && File.Exists(Path.Combine(root, "evidence.bin"));
+            }
+            finally { Retain(root); }
+        });
+
+        yield return ("storage-cleanup.proven-ownership-deletes-only-run-root", () =>
+        {
+            string root = NewRoot("owned");
+            string sibling = NewRoot("sibling");
+            try
+            {
+                ProductStorage.WriteRunMarker(root, runId, candidate);
+                File.WriteAllText(Path.Combine(root, "scratch.bin"), "delete");
+                File.WriteAllText(Path.Combine(sibling, "outside.bin"), "keep");
+                bool deleted = ValidationStorageProof.TryCleanupRunOwnedRoot(
+                    root, runId, candidate, out string? reason);
+                return deleted
+                    && reason == null
+                    && !Directory.Exists(root)
+                    && File.Exists(Path.Combine(sibling, "outside.bin"));
+            }
+            finally
+            {
+                Retain(root);
+                Retain(sibling);
+            }
+        });
+
+        yield return ("storage-root.create-refuses-reuse", () =>
+        {
+            string parent = NewRoot("parent");
+            try
+            {
+                string created = ValidationStorageProof.CreateRunOwnedRoot(parent, runId, candidate);
+                if (!File.Exists(Path.Combine(created, ProductStorage.MarkerFileName)))
+                    return false;
+                try
+                {
+                    ValidationStorageProof.CreateRunOwnedRoot(parent, runId, candidate);
+                    return false; // reuse must be refused
+                }
+                catch (InvalidOperationException)
+                {
+                    return true;
+                }
+            }
+            finally { Retain(parent); }
+        });
+
+        yield return ("storage-run-id.marker-proof-bind-the-same-current-run-id", () =>
+        {
+            // The run manifest identity is TestRunProvenance.RunId (minted by
+            // BeginRun). Marker and proof must bind that same current ID; the
+            // ResourceSoakRunner preflight carries a runtime identity guard for
+            // the same agreement, all verified without launching the UI soak.
+            string currentRunId = TestRunProvenance.RunId;
+            if (string.IsNullOrEmpty(currentRunId)
+                || currentRunId == Guid.Empty.ToString("D"))
+                return false;
+            string parent = NewRoot("runid");
+            try
+            {
+                string created = ValidationStorageProof.CreateRunOwnedRoot(parent, currentRunId, candidate);
+                string markerJson = File.ReadAllText(Path.Combine(created, ProductStorage.MarkerFileName));
+                var marker = JsonNode.Parse(markerJson)!;
+                if (marker["RunId"]?.GetValue<string>() != currentRunId)
+                    return false;
+                string proof = Proof(Path.GetFullPath(created), currentRunId, candidate);
+                return ValidationStorageProof.VerifyProof(
+                           proof, Path.GetFullPath(created), currentRunId, candidate)
+                       == null;
+            }
+            finally { Retain(parent); }
+        });
+
+        yield return ("storage-cleanup.replaced-ancestor-junction-retains-relocated-evidence", () =>
+        {
+            // R1: move the recorded root's ancestor to another disposable
+            // fixture directory and replace the original ancestor with a
+            // junction. The complete marker still binds the original spelling,
+            // but cleanup must refuse to follow it into relocated evidence.
+            string baseDir = NewRoot("r1");
+            string runTree = Path.Combine(baseDir, "run");
+            string product = Path.Combine(runTree, "validation-product");
+            string movedTree = Path.Combine(baseDir, "moved-run");
+            Directory.CreateDirectory(product);
+            ProductStorage.WriteRunMarker(product, runId, candidate);
+            File.WriteAllText(Path.Combine(product, "evidence.bin"), "keep");
+            File.WriteAllText(Path.Combine(runTree, "sibling.bin"), "keep");
+            Directory.Move(runTree, movedTree);
+            MakeJunction(runTree, movedTree);
+            try
+            {
+                // The bootstrap refuses the replaced ancestor outright.
+                var bootstrap = ProductStorage.Resolve(
+                    product, runId, candidate, Path.Combine(baseDir, "production"));
+                if (bootstrap.RefusalReason != "reparse-point-component")
+                    return false;
+
+                bool deleted = ValidationStorageProof.TryCleanupRunOwnedRoot(
+                    product, runId, candidate, out string? reason);
+                string relocatedEvidence = Path.Combine(movedTree, "validation-product", "evidence.bin");
+                return !deleted
+                    && reason == ValidationStorageProof.Refusal.MarkerOwnershipLost
+                    && File.Exists(relocatedEvidence)
+                    && File.ReadAllText(relocatedEvidence) == "keep"
+                    && File.Exists(Path.Combine(movedTree, "sibling.bin"))
+                    && Directory.Exists(movedTree);
+            }
+            finally
+            {
+                RemoveJunction(runTree);
+                Retain(baseDir);
+            }
+        });
+
+        yield return ("storage-cleanup.outer-boundary-refuses-replaced-ancestor-junction", () =>
+        {
+            // R1 at the outer cleanup boundary: TryDeleteTemporaryRoot must
+            // not delete the enclosing tree through the replaced ancestor.
+            string baseDir = NewRoot("r1outer");
+            string runTree = Path.Combine(baseDir, "run");
+            string product = Path.Combine(runTree, "validation-product");
+            string movedTree = Path.Combine(baseDir, "moved-run");
+            Directory.CreateDirectory(product);
+            ProductStorage.WriteRunMarker(product, runId, candidate);
+            File.WriteAllText(Path.Combine(product, "evidence.bin"), "keep");
+            Directory.Move(runTree, movedTree);
+            MakeJunction(runTree, movedTree);
+            try
+            {
+                bool deleted = ResourceSoakRunner.TryDeleteTemporaryRoot(
+                    baseDir, product, runId, candidate);
+                string relocatedEvidence = Path.Combine(movedTree, "validation-product", "evidence.bin");
+                return !deleted
+                    && Directory.Exists(baseDir)
+                    && File.Exists(relocatedEvidence);
+            }
+            finally
+            {
+                RemoveJunction(runTree);
+                Retain(baseDir);
+            }
+        });
+
+        yield return ("storage-cleanup.renamed-recorded-root-retains-enclosing-tree", () =>
+        {
+            // R2: once a product root was recorded, its disappearance (rename,
+            // move, replacement) is lost ownership — the enclosing tree must be
+            // retained, never deleted by the parent cleanup.
+            string tempRoot = NewRoot("r2");
+            try
+            {
+                string product = ValidationStorageProof.CreateRunOwnedRoot(tempRoot, runId, candidate);
+                File.WriteAllText(Path.Combine(product, "evidence.bin"), "keep");
+                string renamed = Path.Combine(tempRoot, "renamed-product");
+                Directory.Move(product, renamed);
+                bool deleted = ResourceSoakRunner.TryDeleteTemporaryRoot(
+                    tempRoot, product, runId, candidate);
+                return !deleted
+                    && Directory.Exists(tempRoot)
+                    && File.Exists(Path.Combine(renamed, "evidence.bin"));
+            }
+            finally { Retain(tempRoot); }
+        });
+
+        yield return ("storage-cleanup.no-recorded-root-still-cleans-owned-scratch", () =>
+        {
+            // R2 guard: headless/synthetic runs never establish a product
+            // root; their plain scratch cleanup stays available.
+            string tempRoot = NewRoot("r2b");
+            try
+            {
+                File.WriteAllText(Path.Combine(tempRoot, "scratch.bin"), "delete");
+                bool deleted = ResourceSoakRunner.TryDeleteTemporaryRoot(
+                    tempRoot, validationRoot: null, runId, candidate);
+                return deleted && !Directory.Exists(tempRoot);
+            }
+            finally { Retain(tempRoot); }
+        });
+
+        yield return ("storage-probe.valid-proof-with-exit-4-refuses", () =>
+        {
+            // R3: a success-looking payload from a process that reports
+            // failure must never authorize the mutating launch.
+            string fixtureDir = NewRoot("r3");
+            try
+            {
+                string proofFile = Path.Combine(fixtureDir, "proof.json");
+                File.WriteAllText(proofFile, Proof(@"C:\run-owned", runId, candidate));
+                string? result = ValidationStorageProof.VerifyChildProof(
+                    Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                    @"C:\run-owned",
+                    runId,
+                    candidate,
+                    timeoutMs: 15_000,
+                    probeArguments: "/c type \"" + proofFile + "\" & exit /b 4");
+                return result == ValidationStorageProof.Refusal.ProbeFailed;
+            }
+            finally { Retain(fixtureDir); }
+        });
+
+        yield return ("storage-probe.invalid-proof-with-exit-0-refuses", () =>
+        {
+            string fixtureDir = NewRoot("r3b");
+            try
+            {
+                string proofFile = Path.Combine(fixtureDir, "proof.json");
+                File.WriteAllText(proofFile, "not-json");
+                string? result = ValidationStorageProof.VerifyChildProof(
+                    Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                    @"C:\run-owned",
+                    runId,
+                    candidate,
+                    timeoutMs: 15_000,
+                    probeArguments: "/c type \"" + proofFile + "\" & exit /b 0");
+                return result == ValidationStorageProof.Refusal.ProofMalformed;
+            }
+            finally { Retain(fixtureDir); }
+        });
+
+        yield return ("storage-probe.valid-proof-with-exit-0-authorizes", () =>
+        {
+            string fixtureDir = NewRoot("r3c");
+            try
+            {
+                string proofFile = Path.Combine(fixtureDir, "proof.json");
+                File.WriteAllText(proofFile, Proof(@"C:\run-owned", runId, candidate));
+                string? result = ValidationStorageProof.VerifyChildProof(
+                    Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                    @"C:\run-owned",
+                    runId,
+                    candidate,
+                    timeoutMs: 15_000,
+                    probeArguments: "/c type \"" + proofFile + "\" & exit /b 0");
+                return result == null;
+            }
+            finally { Retain(fixtureDir); }
+        });
+
+        yield return ("storage-proof.held-open-stdout-child-is-terminated-at-budget", () =>
+        {
+            // A child that writes nothing and never exits (stdout held open)
+            // must not outlive the process budget; the pre-fix helper blocked
+            // in ReadToEnd before ever reaching its timeout.
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            string? result = ValidationStorageProof.VerifyChildProof(
+                Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                @"C:\run-owned",
+                runId,
+                candidate,
+                timeoutMs: 1000,
+                probeArguments: "/c ping -n 60 127.0.0.1 >nul");
+            watch.Stop();
+            return result == ValidationStorageProof.Refusal.ProbeFailed
+                && watch.Elapsed < TimeSpan.FromSeconds(15);
+        });
+
+        yield return ("storage-proof.stderr-flood-child-does-not-deadlock", () =>
+        {
+            // Serial stream draining deadlocks when the unread pipe fills;
+            // concurrent draining must complete without hanging.
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            string? result = ValidationStorageProof.VerifyChildProof(
+                Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                @"C:\run-owned",
+                runId,
+                candidate,
+                timeoutMs: 15_000,
+                probeArguments: "/c for /L %i in (1,1,2000) do @echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 1>&2");
+            watch.Stop();
+            return result != null
+                && watch.Elapsed < TimeSpan.FromSeconds(15);
         });
     }
 

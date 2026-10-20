@@ -15,6 +15,7 @@ public enum DiagnosticCommandKind
     SelfTestNativeAbi,
     PendingRecovery,
     RecoverPending,
+    ValidationStorageProbe,
 }
 
 public sealed class DiagnosticCommandRequest
@@ -45,6 +46,12 @@ public static class DiagnosticCommandLine
             "--selftest-native-abi" => DiagnosticCommandKind.SelfTestNativeAbi,
             "--pending-recovery" => DiagnosticCommandKind.PendingRecovery,
             "--recover-pending" => DiagnosticCommandKind.RecoverPending,
+            // Qualification-only read-only storage proof (A02): runs the same
+            // bootstrap storage validation as a mutating child and prints a
+            // machine-readable effective-root/run/candidate report. It creates
+            // no logs or state, installs no hooks, takes no mutation lease and
+            // performs no recovery work.
+            "--validation-storage-probe" => DiagnosticCommandKind.ValidationStorageProbe,
             _ => DiagnosticCommandKind.None,
         };
         if (kind == DiagnosticCommandKind.None)
@@ -93,6 +100,14 @@ public static class DiagnosticCommandLine
         {
             switch (request.Kind)
             {
+                case DiagnosticCommandKind.ValidationStorageProbe:
+                    // Storage refusal is reported, not thrown: the parent
+                    // compares this proof before ever launching a mutating
+                    // child, and an invalid override never falls back to the
+                    // production profile.
+                    ProductStorage storage = ProductStorage.Current;
+                    Write(storage.FormatProbeReport());
+                    return storage.IsUsable ? 0 : 4;
                 case DiagnosticCommandKind.Version:
                     Write(DiagnosticReportService.FormatVersion(BuildIdentity.Capture(includeHash: true)));
                     return 0;

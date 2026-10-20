@@ -95,19 +95,26 @@ public sealed class PersistenceService
         _writeDurableBytes = writeDurableBytes ?? WriteDurableBytes;
         _writeDurableText = writeDurableText ?? WriteDurableText;
         _atomicMove = atomicMove ?? ((sourcePath, destinationPath) => File.Move(sourcePath, destinationPath, overwrite: true));
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        if (string.IsNullOrWhiteSpace(statePath) && string.IsNullOrWhiteSpace(appData))
+        if (string.IsNullOrWhiteSpace(statePath))
         {
-            // An empty AppData path would silently relocate durable state to a
-            // process-relative (CWD-dependent) location. Fail closed instead.
-            _statePath = Path.Combine("TabDock", "state.json");
-            _storageAvailable = false;
-            _storageFailureReason = "The AppData folder path is unavailable; refusing to persist to a process-relative location.";
-            return;
+            // A02: the default state location is the one resolved product
+            // directory. A refused or unusable root fails closed instead of
+            // relocating durable state to a process-relative (CWD-dependent)
+            // location or falling back to production storage.
+            string root = ProductStorage.Current.EffectiveDirectory;
+            if (string.IsNullOrWhiteSpace(root) || !Path.IsPathFullyQualified(root))
+            {
+                _statePath = Path.Combine("TabDock", "state.json");
+                _storageAvailable = false;
+                _storageFailureReason = "The product storage folder path is unavailable; refusing to persist to a process-relative location.";
+                return;
+            }
+            _statePath = Path.Combine(root, "state.json");
         }
-        _statePath = string.IsNullOrWhiteSpace(statePath)
-            ? Path.Combine(appData, "TabDock", "state.json")
-            : Path.GetFullPath(statePath);
+        else
+        {
+            _statePath = Path.GetFullPath(statePath);
+        }
 
         try
         {
@@ -188,9 +195,12 @@ public sealed class PersistenceService
     }
 
     /// <summary>
-    /// Builds the serialized state JSON (and validates the target path) on the
-    /// caller's thread. Returns null when the write should be skipped (storage
-    /// unavailable, unsafe load, or unchanged content).
+    /// Builds the immutable serialized state JSON (and validates the target
+    /// path) on the caller's thread. Returns null only when the request is
+    /// rejected outright (storage unavailable or unsafe load). An admitted
+    /// snapshot must claim a request generation even when it equals the last
+    /// completed disk content, so unchanged-content suppression happens later,
+    /// inside the serialized writer decision.
     /// </summary>
     private string? BuildStateJson(IEnumerable<Group> groups)
     {
@@ -244,8 +254,6 @@ public sealed class PersistenceService
         }
 
         string json = JsonSerializer.Serialize(state, TabDockJsonContext.Default.PersistedState);
-        if (string.Equals(json, _lastSavedJson, StringComparison.Ordinal) && File.Exists(_statePath))
-            return null;
 
         PathKind currentPath = ClassifyPath(_statePath, out string currentReason);
         if (currentPath == PathKind.Directory || currentPath == PathKind.Unreadable)
@@ -273,6 +281,14 @@ public sealed class PersistenceService
             // Latest-wins: only the most-recently-requested generation may touch
             // disk. A delayed async snapshot from an earlier attempt is dropped.
             if (generation != System.Threading.Interlocked.Read(ref _lastAttemptedGeneration))
+                return;
+
+            // Unchanged suppression belongs here, where every earlier admitted
+            // write has already settled and the completed-content marker is
+            // authoritative. Comparing in BuildStateJson let a newer request
+            // equal to the old disk content vanish while a different write was
+            // still in flight, leaving that stale snapshot on disk.
+            if (string.Equals(json, _lastSavedJson, StringComparison.Ordinal) && File.Exists(_statePath))
                 return;
 
             try
@@ -317,6 +333,24 @@ public sealed class PersistenceService
     public List<Group> Load()
     {
         var result = new List<Group>();
+        try
+        {
+            return LoadCore(result);
+        }
+        catch (Exception ex)
+        {
+            // A load failure of any kind is not evidence that the user's state
+            // is empty. Latch save protection before returning so an emergency
+            // or exit cleanup save cannot replace unresolved evidence.
+            _stateLoadFailed = true;
+            result.Clear();
+            _log.LogException("PersistenceService.Load unexpected failure; refusing later saves", ex);
+            return result;
+        }
+    }
+
+    private List<Group> LoadCore(List<Group> result)
+    {
         if (!_storageAvailable)
         {
             _stateLoadFailed = true;
@@ -479,28 +513,22 @@ public sealed class PersistenceService
                 return StateReadKind.Corrupt;
             }
 
-            int version = 1;
-            if (TryGetPropertyIgnoreCase(document.RootElement, "Version", out JsonElement versionElement))
+            StateSchemaVersionKind versionKind = StateSchemaVersionPolicy.Classify(
+                document.RootElement,
+                out int version,
+                out string versionReason);
+            if (versionKind == StateSchemaVersionKind.Corrupt)
             {
-                if (!versionElement.TryGetInt32(out version))
-                {
-                    reason = "Version is not an integer";
-                    return StateReadKind.Corrupt;
-                }
-            }
-
-            if (version > PersistedState.CurrentVersion)
-            {
-                reason = version.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                return StateReadKind.Unsupported;
-            }
-            if (version < 1)
-            {
-                reason = version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                reason = versionReason;
                 return StateReadKind.Corrupt;
             }
+            if (versionKind == StateSchemaVersionKind.Unsupported)
+            {
+                reason = versionReason;
+                return StateReadKind.Unsupported;
+            }
 
-            if (!TryGetPropertyIgnoreCase(document.RootElement, "Groups", out JsonElement groups)
+            if (!StateSchemaVersionPolicy.TryGetPropertyIgnoreCase(document.RootElement, "Groups", out JsonElement groups)
                 || groups.ValueKind != JsonValueKind.Array)
             {
                 reason = "Groups array is missing";
@@ -570,7 +598,7 @@ public sealed class PersistenceService
         }
 
         var restored = new PersistedGroup();
-        if (TryGetPropertyIgnoreCase(element, "Id", out JsonElement idElement)
+        if (StateSchemaVersionPolicy.TryGetPropertyIgnoreCase(element, "Id", out JsonElement idElement)
             && idElement.ValueKind == JsonValueKind.String)
         {
             if (!idElement.TryGetGuid(out Guid id))
@@ -578,28 +606,28 @@ public sealed class PersistenceService
             else
                 restored.Id = id;
         }
-        if (TryGetPropertyIgnoreCase(element, "Name", out JsonElement nameElement))
+        if (StateSchemaVersionPolicy.TryGetPropertyIgnoreCase(element, "Name", out JsonElement nameElement))
         {
             if (nameElement.ValueKind == JsonValueKind.String)
                 restored.Name = nameElement.GetString() ?? string.Empty;
             else if (nameElement.ValueKind != JsonValueKind.Null)
                 _log.Log($"PersistenceService.Load ignored malformed group name at index {groupIndex}.");
         }
-        if (TryGetPropertyIgnoreCase(element, "AccentColor", out JsonElement accentElement))
+        if (StateSchemaVersionPolicy.TryGetPropertyIgnoreCase(element, "AccentColor", out JsonElement accentElement))
         {
             if (accentElement.ValueKind == JsonValueKind.String)
                 restored.AccentColor = accentElement.GetString() ?? string.Empty;
             else if (accentElement.ValueKind != JsonValueKind.Null)
                 _log.Log($"PersistenceService.Load ignored malformed group accent at index {groupIndex}.");
         }
-        if (TryGetPropertyIgnoreCase(element, "ActiveIndex", out JsonElement activeElement)
+        if (StateSchemaVersionPolicy.TryGetPropertyIgnoreCase(element, "ActiveIndex", out JsonElement activeElement)
             && activeElement.ValueKind == JsonValueKind.Number
             && activeElement.TryGetInt32(out int activeIndex))
         {
             restored.ActiveIndex = activeIndex;
         }
 
-        if (!TryGetPropertyIgnoreCase(element, "Tabs", out JsonElement tabsElement)
+        if (!StateSchemaVersionPolicy.TryGetPropertyIgnoreCase(element, "Tabs", out JsonElement tabsElement)
             || tabsElement.ValueKind == JsonValueKind.Null)
         {
             group = restored;
@@ -648,27 +676,6 @@ public sealed class PersistenceService
         group = restored;
         return true;
     }
-
-    private static bool TryGetPropertyIgnoreCase(
-        JsonElement element,
-        string name,
-        out JsonElement value)
-    {
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            foreach (JsonProperty property in element.EnumerateObject())
-            {
-                if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
-                {
-                    value = property.Value;
-                    return true;
-                }
-            }
-        }
-        value = default;
-        return false;
-    }
-
     private List<Group> RestoreGroups(PersistedState state, List<Group> result)
     {
         // A single null entry in the persisted array must not prevent the

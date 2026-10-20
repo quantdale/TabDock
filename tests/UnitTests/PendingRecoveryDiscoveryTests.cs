@@ -176,7 +176,7 @@ public class PendingRecoveryDiscoveryTests
     }
 
     [Fact]
-    public void OrphanedTemporaryFiles_AreSweptByAge()
+    public void OrphanedTemporaryFiles_AreSweptByAgeOnlyThroughExplicitHygiene()
     {
         string root = CreateRoot();
         try
@@ -189,6 +189,9 @@ public class PendingRecoveryDiscoveryTests
             string freshTmp = Path.Combine(root, "hidden-windows.json.pending.001.recovered.tmp");
             File.WriteAllText(freshTmp, "{ partial write");
 
+            // A10: discovery is read-only; eligible hygiene is an explicit
+            // mutating operation for lease-held recovery/startup sessions.
+            PendingRecoveryService.RunTemporaryFileHygiene(root);
             PendingRecoveryCatalog catalog = PendingRecoveryService.Discover(root, new FakePendingApi());
 
             Assert.Null(catalog.Error);

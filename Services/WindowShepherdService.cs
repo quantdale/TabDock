@@ -290,9 +290,12 @@ public sealed class WindowShepherdService
         _monitorDpiProbe = monitorDpiProbe ?? NativeMonitorDpiProbe.Instance;
         _testSequencingHook = testSequencingHook;
         _journalPath = string.IsNullOrWhiteSpace(journalPath)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TabDock", "hidden-windows.json")
+            ? Path.Combine(ProductStorage.Current.EffectiveDirectory, "hidden-windows.json")
             : Path.GetFullPath(journalPath);
     }
+
+    /// <summary>Effective journal location; exposed for storage-routing tests.</summary>
+    internal string JournalPath => _journalPath;
 
     private void TestSequence(string stage)
         => _testSequencingHook?.Invoke(stage);
@@ -3090,7 +3093,7 @@ public sealed class WindowShepherdService
     internal static void RescueOrphanedWindows(LoggingService log, string? journalPath, IRecoveryNativeApi api)
     {
         string path = string.IsNullOrWhiteSpace(journalPath)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TabDock", "hidden-windows.json")
+            ? Path.Combine(ProductStorage.Current.EffectiveDirectory, "hidden-windows.json")
             : Path.GetFullPath(journalPath);
         try
         {

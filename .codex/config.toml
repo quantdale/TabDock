@@ -3,5 +3,8 @@ command = "repowise"
 args = ["mcp", "--tools", "lean"]
 startup_timeout_sec = 20
 
+[mcp_servers.repowise.tools.get_answer]
+approval_mode = "approve"
+
 [features]
 hooks = true

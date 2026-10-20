@@ -57,10 +57,15 @@ public partial class App : Application
         // exception during the very earliest startup is still recorded.
         try
         {
+            // A02: resolve the effective product storage BEFORE any logging.
+            // A refused validation override fails closed here — no fallback
+            // log, no production-profile fallback, diagnostic output only.
+            ProductStorage storage = ProductStorage.Current;
             // Diagnostic commands must not touch product state, including the
             // normal rotating log. WPF still constructs the Application object,
             // but no windows, hooks, mutex, persistence, or services are started.
-            if (!DiagnosticCommandLine.IsDiagnosticCommand(Environment.GetCommandLineArgs().Skip(1)))
+            if (storage.IsUsable
+                && !DiagnosticCommandLine.IsDiagnosticCommand(Environment.GetCommandLineArgs().Skip(1)))
             {
                 _log = new LoggingService();
                 _log.Log(BuildIdentity.ToLogLine(BuildIdentity.Current));
@@ -85,10 +90,31 @@ public partial class App : Application
         {
             if (DiagnosticCommandLine.TryParse(e.Args, out DiagnosticCommandRequest command, out string? commandError))
             {
+                // The storage probe must report a refused resolution instead of
+                // short-circuiting; every other command exits before any
+                // product storage/native recovery work when validation inputs
+                // are invalid, without creating a fallback log.
+                if (command.Kind != DiagnosticCommandKind.ValidationStorageProbe
+                    && !ProductStorage.Current.IsUsable)
+                {
+                    WriteStorageRefusal();
+                    Shutdown(4);
+                    return;
+                }
                 int exitCode = commandError == null
                     ? DiagnosticCommandLine.Run(command)
                     : DiagnosticCommandLine.Run(e.Args);
                 Shutdown(exitCode);
+                return;
+            }
+
+            // A02 fail-closed storage boundary: an invalid validation override
+            // never falls back to the production profile and performs no
+            // cleanup, restore, rescue or persistence work.
+            if (!ProductStorage.Current.IsUsable)
+            {
+                WriteStorageRefusal();
+                Shutdown(4);
                 return;
             }
 
@@ -1191,6 +1217,20 @@ _shepherd.HideProvenance = hideProvenance;
     }
 
     /// <summary>
+    /// Diagnostic-only storage refusal report: console/stderr when attached,
+    /// debug output otherwise. Deliberately creates no log file and touches no
+    /// product storage.
+    /// </summary>
+    private static void WriteStorageRefusal()
+    {
+        string message = "TabDock storage refused: "
+            + (ProductStorage.Current.RefusalReason ?? "unknown")
+            + "; no product storage was touched.";
+        try { System.Console.Error.WriteLine(message); } catch { }
+        System.Diagnostics.Debug.WriteLine(message);
+    }
+
+    /// <summary>
     /// Acquires the current-user, cross-session product-mutation lease. Returns
     /// false if another TabDock process owns it or the user identity cannot be
     /// proven; either way this instance must exit without touching shared
@@ -1217,9 +1257,7 @@ _shepherd.HideProvenance = hideProvenance;
     {
         try
         {
-            string dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "TabDock");
+            string dir = ProductStorage.Current.EffectiveDirectory;
             if (!Directory.Exists(dir))
                 return;
 
@@ -1240,6 +1278,13 @@ _shepherd.HideProvenance = hideProvenance;
                     _log.LogException($"STARTUP[cleanup] failed to remove {path}", ex);
                 }
             }
+
+            // A10: pending-prefix recovery temp fragments are swept only on
+            // this explicit mutating startup path, which already resolved the
+            // product storage directory and holds the product-mutation lease
+            // (the app exits before this point otherwise). Discovery and all
+            // inspection callers are strictly read-only.
+            PendingRecoveryService.RunTemporaryFileHygiene(dir);
 
             // A staged backup candidate (state.json.bak.tmp) is different: it is
             // a fully-written copy of the prior primary left by a crash between

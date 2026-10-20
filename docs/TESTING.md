@@ -23,7 +23,16 @@ live repro, `Ctrl+Alt+Shift+D` captures the in-process logical group/split
 snapshot even if the header is hidden. Inspect the ZIP before sending it:
 titles are hashes/lengths, paths are redacted, and no full personal files are
 collected. `--pending-recovery` is also read-only and uses stable session entry
-IDs; it does not rewrite or mutate pending evidence. `--recover-pending` is a
+IDs; it does not rewrite or mutate pending evidence. Inspection is strictly
+read-only: default pending discovery, `--pending-recovery`, `--doctor`, the
+support bundle, launcher attention and count projections preserve the product
+directory's file set, bytes and last-write times, including aged
+pending-prefix temp fragments, sources, sidecar ledgers and unrelated files,
+and they never take the product-mutation lease. Eligible stale-temp hygiene
+runs only on explicit mutating paths (supervised `--recover-pending` and the
+leased startup cleanup) after storage-root resolution and product-mutation
+lease acquisition; a refused root or lease performs no cleanup at all.
+`--recover-pending` is a
 separate intentionally mutating workflow and must be run only under supervised
 operator control: it acquires the same SID-scoped, ACL-protected
 product-mutation lease as normal
@@ -31,11 +40,34 @@ TabDock, requires selecting the entry, selecting the exact live top-level
 candidate, and typing `YES`. Never use an automatic recover-all command or a
 raw Win32 tool for legacy evidence.
 
-The Release validation script also launches the actual WinExe with isolated
-`APPDATA`, redirected stdin/stdout/stderr, and EOF input. That hosted/process
+The Release validation script also launches the actual WinExe with redirected
+stdin/stdout/stderr and EOF input inside a verified run-owned validation
+storage root (see "Validation storage isolation" below). That hosted/process
 smoke proves the no-pending command lifecycle without touching the user's
-journal. A real PowerShell/cmd parent-console attach is a separate local
+journal; APPDATA-only environment overrides are never treated as isolation.
+A real PowerShell/cmd parent-console attach is a separate local
 Windows-console qualification; it is not implied by the redirected smoke.
+
+### Validation storage isolation
+
+Qualification children select their product storage directory through the
+paired bootstrap inputs `TABDOCK_VALIDATION_STATE_ROOT` and
+`TABDOCK_VALIDATION_RUN_ID`, validated against a launcher-created
+`tabdock-validation-run.marker.json` binding the canonical product root, run
+identity, and exact candidate identity. The read-only
+`--validation-storage-probe` command runs the same bootstrap validation and
+emits machine-readable effective-root/run/candidate proof; launchers compare
+that proof before starting any mutating child, and the child revalidates its
+root at bootstrap. Failure behavior is fail closed: missing, malformed,
+stale, or mismatched paired inputs/proof refuse the launch before logging,
+cleanup, restore, rescue, or persistence, exit nonzero, and never fall back
+to the production profile. All default storage roles (state, backups, temps,
+journal, pending evidence, logs, startup hygiene, diagnostic inspection)
+resolve beneath the one effective root. Cleanup is confined to the
+marker-bound run-owned tree and re-verifies marker ownership first; lost
+ownership retains the tree for review instead of deleting it. This boundary
+is an accidental-mutation guard for storage, not physical/native input
+qualification.
 
 ---
 

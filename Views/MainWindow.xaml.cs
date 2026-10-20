@@ -26,6 +26,7 @@ public partial class MainWindow : Window
         SourceInitialized += (_, _) => WindowChromeTheme.ApplyDarkChrome(this);
         GroupsListView.MouseDoubleClick += OnGroupsListDoubleClick;
         GroupsListView.PreviewKeyDown += OnGroupsListKeyDown;
+        MotionProfile.PlayEntrance((FrameworkElement)Content);
     }
 
     private void OnGroupsListDoubleClick(object sender, MouseButtonEventArgs e)

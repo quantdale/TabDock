@@ -162,8 +162,7 @@ public static class DiagnosticEnvironmentService
 
     public static PersistenceSnapshot InspectPersistence()
     {
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        string directory = Path.Combine(appData, "TabDock");
+        string directory = ProductStorage.Current.EffectiveDirectory;
         string statePath = Path.Combine(directory, "state.json");
         string journalPath = Path.Combine(directory, "hidden-windows.json");
         string logPath = Path.Combine(directory, "logs", "TabDock.log");
@@ -195,7 +194,7 @@ public static class DiagnosticEnvironmentService
 
     public static string ReadRecentLogText(int maxCharacters = 200_000)
     {
-        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TabDock", "logs", "TabDock.log");
+        string path = Path.Combine(ProductStorage.Current.EffectiveDirectory, "logs", "TabDock.log");
         try
         {
             if (!File.Exists(path))
@@ -441,16 +440,98 @@ public static class DiagnosticEnvironmentService
 
     internal static string ClassifyJsonText(string json, bool isState)
     {
+        if (isState)
+            return ClassifyStateJson(json, out _, out _, out _);
+
         try
         {
             using JsonDocument document = JsonDocument.Parse(json);
             JsonElement root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
                 return "corrupt (root-not-object)";
-            string property = isState ? "Groups" : "Entries";
-            return root.TryGetProperty(property, out JsonElement value) && value.ValueKind == JsonValueKind.Array
+            return StateSchemaVersionPolicy.TryGetPropertyIgnoreCase(root, "Entries", out JsonElement value)
+                && value.ValueKind == JsonValueKind.Array
                 ? "valid"
                 : "corrupt (required-array-missing)";
+        }
+        catch (JsonException)
+        {
+            return "corrupt (malformed-json)";
+        }
+    }
+
+    /// <summary>
+    /// Pure, read-only state classification shared by the doctor report and its
+    /// self-tests. Invalid root schema metadata is reported, never thrown, and
+    /// no persistence instance is constructed (so no file is quarantined).
+    /// </summary>
+    internal static string ClassifyStateJson(
+        string json,
+        out int? schemaVersion,
+        out int groupCount,
+        out int persistedMemberMetadataCount)
+    {
+        schemaVersion = null;
+        groupCount = 0;
+        persistedMemberMetadataCount = 0;
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(json);
+            JsonElement root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return "corrupt (root-not-object)";
+
+            StateSchemaVersionKind versionKind = StateSchemaVersionPolicy.Classify(
+                root, out int version, out _);
+            string status;
+            switch (versionKind)
+            {
+                case StateSchemaVersionKind.Corrupt:
+                    status = "corrupt (invalid-schema-version)";
+                    break;
+                case StateSchemaVersionKind.Unsupported:
+                    schemaVersion = version;
+                    status = "unsupported (future-schema-version)";
+                    break;
+                case StateSchemaVersionKind.Missing:
+                    status = "valid (legacy-version-absent)";
+                    break;
+                default:
+                    schemaVersion = version;
+                    status = "valid";
+                    break;
+            }
+
+            // The unsupported future-schema result is authoritative: a future
+            // schema need not retain today's Groups layout, so an absent or
+            // differently shaped Groups property must not relabel unknown
+            // future bytes as supported-schema corruption. Metadata below
+            // stays best effort. Supported/legacy roots keep the structural
+            // corruption check because their shape is defined by this schema.
+            bool hasGroupsArray = StateSchemaVersionPolicy.TryGetPropertyIgnoreCase(
+                root, "Groups", out JsonElement groups)
+                && groups.ValueKind == JsonValueKind.Array;
+
+            if (hasGroupsArray)
+            {
+                groupCount = groups.GetArrayLength();
+                foreach (JsonElement group in groups.EnumerateArray())
+                {
+                    if (group.ValueKind == JsonValueKind.Object
+                        && StateSchemaVersionPolicy.TryGetPropertyIgnoreCase(group, "Tabs", out JsonElement tabs)
+                        && tabs.ValueKind == JsonValueKind.Array)
+                        persistedMemberMetadataCount += tabs.GetArrayLength();
+                }
+            }
+
+            if (!hasGroupsArray
+                && versionKind != StateSchemaVersionKind.Unsupported
+                && versionKind != StateSchemaVersionKind.Corrupt)
+            {
+                return "corrupt (required-array-missing)";
+            }
+
+            return status;
         }
         catch (JsonException)
         {
@@ -470,34 +551,29 @@ public static class DiagnosticEnvironmentService
         try
         {
             string json = File.ReadAllText(path);
+            if (isState)
+            {
+                result.StateStatus = ClassifyStateJson(
+                    json,
+                    out int? schemaVersion,
+                    out int groupCount,
+                    out int persistedMemberMetadataCount);
+                result.SchemaVersion = schemaVersion;
+                result.GroupCount = groupCount;
+                result.PersistedMemberMetadataCount = persistedMemberMetadataCount;
+                return;
+            }
+
             using JsonDocument document = JsonDocument.Parse(json);
             JsonElement root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
                 throw new JsonException("root is not an object");
 
-            if (isState)
-            {
-                if (!root.TryGetProperty("Groups", out JsonElement groups) || groups.ValueKind != JsonValueKind.Array)
-                    throw new JsonException("Groups array is missing");
-                result.SchemaVersion = root.TryGetProperty("Version", out JsonElement version) && version.TryGetInt32(out int value)
-                    ? value : null;
-                result.GroupCount = groups.GetArrayLength();
-                foreach (JsonElement group in groups.EnumerateArray())
-                {
-                    if (group.ValueKind == JsonValueKind.Object
-                        && group.TryGetProperty("Tabs", out JsonElement tabs)
-                        && tabs.ValueKind == JsonValueKind.Array)
-                        result.PersistedMemberMetadataCount += tabs.GetArrayLength();
-                }
-                result.StateStatus = "valid";
-            }
-            else
-            {
-                if (!root.TryGetProperty("Entries", out JsonElement entries) || entries.ValueKind != JsonValueKind.Array)
-                    throw new JsonException("Entries array is missing");
-                result.JournalEntryCount = entries.GetArrayLength();
-                result.JournalStatus = "valid";
-            }
+            if (!StateSchemaVersionPolicy.TryGetPropertyIgnoreCase(root, "Entries", out JsonElement entries)
+                || entries.ValueKind != JsonValueKind.Array)
+                throw new JsonException("Entries array is missing");
+            result.JournalEntryCount = entries.GetArrayLength();
+            result.JournalStatus = "valid";
         }
         catch (JsonException)
         {

@@ -271,24 +271,18 @@
                 </ListBox.ItemContainerStyle>
                 <ListBox.Resources>
                     <DataTemplate DataType="{x:Type vm:TabViewModel}">
-                        <Border Padding="10,5" CornerRadius="6">
+                        <Border Padding="10,5" CornerRadius="6"
+                                infra:MotionProfile.EnableEntrance="True"
+                                infra:MotionProfile.EnableBorderStates="True"
+                                infra:MotionProfile.HoverBackground="{StaticResource TdSurfaceHoverBrush}"
+                                infra:MotionProfile.SelectedBackground="{StaticResource TdAccentSoftBrush}"
+                                infra:MotionProfile.SelectedBorder="{StaticResource TdAccentBrush}"
+                                infra:MotionProfile.FocusBorder="{StaticResource TdFocusBrush}">
                             <Border.Style>
                                 <Style TargetType="Border">
                                     <Setter Property="Background" Value="{StaticResource TdSurfaceRaisedBrush}" />
                                     <Setter Property="BorderBrush" Value="Transparent" />
                                     <Setter Property="BorderThickness" Value="1" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                            <Setter Property="Background" Value="{StaticResource TdSurfaceHoverBrush}" />
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                            <Setter Property="Background" Value="{StaticResource TdAccentSoftBrush}" />
-                                            <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                            <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
                                 </Style>
                             </Border.Style>
                             <StackPanel Orientation="Horizontal">
@@ -312,10 +306,11 @@
                         </Border>
                     </DataTemplate>
 
-                    <DataTemplate DataType="{x:Type vm:SplitCompositeViewModel}">
-                        <Border Padding="5" CornerRadius="6"
-                                Background="{StaticResource TdAccentSoftBrush}"
-                                BorderBrush="{StaticResource TdAccentBrush}" BorderThickness="1"
+                        <DataTemplate DataType="{x:Type vm:SplitCompositeViewModel}">
+                            <Border Padding="5" CornerRadius="6"
+                                    Background="{StaticResource TdAccentSoftBrush}"
+                                    BorderBrush="{StaticResource TdAccentBrush}" BorderThickness="1"
+                                    infra:MotionProfile.EnableEntrance="True"
                                 AutomationProperties.AutomationId="SplitCompositeItem"
                                 AutomationProperties.Name="{Binding AutomationName}"
                                 AutomationProperties.HelpText="Use Tab to reach LEFT or RIGHT, then press Enter or Space to focus that member.">
@@ -333,7 +328,9 @@
                                         Focusable="True" KeyboardNavigation.IsTabStop="True"
                                         KeyDown="SplitHalf_KeyDown"
                                         PreviewMouseLeftButtonDown="SplitHalf_PreviewMouseLeftButtonDown"
-                                        PreviewMouseDown="SplitHalf_PreviewMouseDown">
+                                        PreviewMouseDown="SplitHalf_PreviewMouseDown"
+                                        infra:MotionProfile.EnableBorderStates="True"
+                                        infra:MotionProfile.HoverBackground="{StaticResource TdSplitHoverBrush}">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Background" Value="Transparent" />
@@ -342,9 +339,6 @@
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Left.IsActive}" Value="True">
                                                     <Setter Property="Background" Value="{StaticResource TdSplitActiveBrush}" />
-                                                </DataTrigger>
-                                                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                                    <Setter Property="Background" Value="{StaticResource TdSplitHoverBrush}" />
                                                 </DataTrigger>
                                                 <Trigger Property="IsKeyboardFocusWithin" Value="True">
                                                     <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
@@ -374,7 +368,9 @@
                                         Focusable="True" KeyboardNavigation.IsTabStop="True"
                                         KeyDown="SplitHalf_KeyDown"
                                         PreviewMouseLeftButtonDown="SplitHalf_PreviewMouseLeftButtonDown"
-                                        PreviewMouseDown="SplitHalf_PreviewMouseDown">
+                                        PreviewMouseDown="SplitHalf_PreviewMouseDown"
+                                        infra:MotionProfile.EnableBorderStates="True"
+                                        infra:MotionProfile.HoverBackground="{StaticResource TdSplitHoverBrush}">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Background" Value="Transparent" />
@@ -383,9 +379,6 @@
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Right.IsActive}" Value="True">
                                                     <Setter Property="Background" Value="{StaticResource TdSplitActiveBrush}" />
-                                                </DataTrigger>
-                                                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                                    <Setter Property="Background" Value="{StaticResource TdSplitHoverBrush}" />
                                                 </DataTrigger>
                                                 <Trigger Property="IsKeyboardFocusWithin" Value="True">
                                                     <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
@@ -487,25 +480,22 @@
                             </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Padding="8,6" CornerRadius="6">
+                                    <Border Padding="8,6" CornerRadius="6"
+                                            infra:MotionProfile.EnableBorderStates="True"
+                                            infra:MotionProfile.HoverBackground="{StaticResource TdSurfaceHoverBrush}"
+                                            infra:MotionProfile.SelectedBackground="{StaticResource TdAccentSoftBrush}"
+                                            infra:MotionProfile.SelectedBorder="{StaticResource TdAccentBrush}">
                                         <Border.Style>
-                                        <Style TargetType="Border">
-                                            <Setter Property="Background" Value="{StaticResource TdSurfaceRaisedBrush}" />
-                                            <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
-                                            <Setter Property="BorderThickness" Value="1" />
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                                    <Setter Property="Background" Value="{StaticResource TdSurfaceHoverBrush}" />
-                                                </DataTrigger>
-                                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                    <Setter Property="Background" Value="{StaticResource TdAccentSoftBrush}" />
-                                                    <Setter Property="BorderBrush" Value="{StaticResource TdAccentBrush}" />
-                                                </DataTrigger>
-                                                <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                                    <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="{StaticResource TdSurfaceRaisedBrush}" />
+                                                <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
+                                                <Setter Property="BorderThickness" Value="1" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                        <Setter Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
                                         </Border.Style>
                                         <Grid>
                                             <Grid.ColumnDefinitions>

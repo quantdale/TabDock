@@ -153,8 +153,10 @@ public sealed class FrontendDesignContractTests
         string picker = Read("Views/CapturePickerWindow.xaml");
         string container = Read("Views/ContainerWindow.xaml");
 
-        Assert.Contains("IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}", picker, StringComparison.Ordinal);
-        Assert.Contains("IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}", container, StringComparison.Ordinal);
+        Assert.Contains("MotionProfile.EnableBorderStates", picker, StringComparison.Ordinal);
+        Assert.Contains("MotionProfile.EnableBorderStates", container, StringComparison.Ordinal);
+        Assert.Contains("MotionProfile.HoverBackground", picker, StringComparison.Ordinal);
+        Assert.Contains("MotionProfile.HoverBackground", container, StringComparison.Ordinal);
         Assert.Contains("IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}", picker, StringComparison.Ordinal);
         Assert.Contains("IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}", container, StringComparison.Ordinal);
     }
