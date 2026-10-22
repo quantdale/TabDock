@@ -66,3 +66,9 @@ Codex uses `.codex/config.toml` and `.codex/hooks.json`; Claude Code uses the sm
 Repository-wide instructions belong in this `AGENTS.md`; harness adapters point here. OpenSpec workflow customization has a separate canonical source: `.claude/skills/openspec-*/` and `.claude/commands/opsx/`. Do not hand-edit their generated mirrors. `scripts/sync-agent-configs.ps1` lists all synchronized targets, applies tool-specific invocation syntax, and owns the small goal/GitHub adapter templates. It does not generate unrelated harness configuration. Run it with PowerShell 7; use `-Check` for a read-only drift check. See `docs/internal/AGENT_GUIDE.md` under “Spec-driven changes (OpenSpec)” before regenerating workflows.
 
 When a detailed procedure is needed, load the relevant `.agent/workflows/` file and then the project reference it names. Use the smallest capable model/worker for reconnaissance and routine verification; reserve deeper reasoning for architecture, risky changes, ambiguous requirements, and final decisions.
+
+## Cross-project UX, DX, and AX principles
+
+Cut taglines, helper text and secondary labels. If a screen needs them to make sense, fix the layout.
+
+Make the best decision that will elevate all three: the user experience (UX), developer experience (DX), and agent experience (AX) always, without breaking anything.
