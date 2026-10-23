@@ -297,6 +297,9 @@ internal static class ResourceSoakRunner
 
     private static IReadOnlyList<ResourceSnapshot> SyntheticSnapshots(int cycles)
     {
+        // Prescribed counters only. They stay labeled synthetic and are not
+        // evidence that styled motion controls were created or collected.
+        // Actual-control collectability is MotionFeedbackLifecycleTests.
         int sampleCount = Math.Max(8, cycles);
         var snapshots = new List<ResourceSnapshot>(sampleCount);
         DateTimeOffset start = DateTimeOffset.UnixEpoch;

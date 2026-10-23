@@ -208,7 +208,11 @@ not an hour-long hosted CI job; increase cycles or use `--duration-seconds`
 for a local extended soak. Real-input extensions remain subject to the
 existing `DesktopQualificationLease` and supervised policy. A synthetic
 resource PASS is resource-only evidence and cannot satisfy physical-input,
-mixed-DPI, Windows 10/11, signing, or human-smoke gates.
+mixed-DPI, Windows 10/11, signing, or human-smoke gates. It also cannot
+prove managed motion-feedback collectability. That check is the headless
+xUnit suite `MotionFeedbackLifecycleTests`: actual styled controls, hidden
+off-screen presentation source, no `SendInput`, and no production storage.
+Synthetic resource snapshots stay labeled synthetic.
 
 Each resource run writes `resource-stability.json` and
 `resource-stability.junit.xml` and registers them in the normal
