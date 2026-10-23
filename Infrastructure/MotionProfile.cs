@@ -117,6 +117,20 @@ public static class MotionProfile
         return null;
     }
 
+    private static Border? FindOverlay(DependencyObject parent, MotionOverlayRole role)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(parent, i);
+            if (child is Border border && GetOverlayRole(border) == role)
+                return border;
+            Border? found = FindOverlay(child, role);
+            if (found is not null)
+                return found;
+        }
+        return null;
+    }
+
     private static FrameworkElement? FindAncestorRow(DependencyObject element)
     {
         for (DependencyObject? current = VisualTreeHelper.GetParent(element); current is not null; current = VisualTreeHelper.GetParent(current))
@@ -216,6 +230,41 @@ public static class MotionProfile
 
     public static Brush GetFocusBorder(DependencyObject element) =>
         (Brush)element.GetValue(FocusBorderProperty);
+
+    /// <summary>
+    /// Optional explicit selection input. Unset means the ancestor list-item
+    /// selection is the source. Picker checked-state mapping belongs to the
+    /// later capture-selection change and should bind this property rather
+    /// than add another brush writer.
+    /// </summary>
+    public enum MotionOverlayRole
+    {
+        None = 0,
+        Fill = 1,
+        Edge = 2,
+    }
+
+    public static readonly DependencyProperty OverlayRoleProperty =
+        DependencyProperty.RegisterAttached(
+            "OverlayRole", typeof(MotionOverlayRole), typeof(MotionProfile),
+            new PropertyMetadata(MotionOverlayRole.None));
+
+    public static void SetOverlayRole(DependencyObject element, MotionOverlayRole value) =>
+        element.SetValue(OverlayRoleProperty, value);
+
+    public static MotionOverlayRole GetOverlayRole(DependencyObject element) =>
+        (MotionOverlayRole)element.GetValue(OverlayRoleProperty);
+
+    public static readonly DependencyProperty IsMotionSelectedProperty =
+        DependencyProperty.RegisterAttached(
+            "IsMotionSelected", typeof(bool?), typeof(MotionProfile),
+            new PropertyMetadata(null));
+
+    public static void SetIsMotionSelected(DependencyObject element, bool? value) =>
+        element.SetValue(IsMotionSelectedProperty, value);
+
+    public static bool? GetIsMotionSelected(DependencyObject element) =>
+        (bool?)element.GetValue(IsMotionSelectedProperty);
 
     public static readonly DependencyProperty EnableBorderStatesProperty =
         DependencyProperty.RegisterAttached(
@@ -761,53 +810,62 @@ public static class MotionProfile
 
         private bool WireBorder()
         {
-            if (_element is not Border border || border.Background is not SolidColorBrush background)
+            if (_element is not Border border || border.Background is not SolidColorBrush)
                 return false;
-            if (!_hasBaseBackground)
+            CaptureAuthoritativeBase(border);
+            Border? fillOverlay = FindOverlay(border, MotionOverlayRole.Fill);
+            Border? edgeOverlay = FindOverlay(border, MotionOverlayRole.Edge);
+            SolidColorBrush? fillBrush = null;
+            SolidColorBrush? edgeBrush = null;
+            if (fillOverlay is not null)
             {
-                _baseBackground = background.Color;
-                _hasBaseBackground = true;
+                fillBrush = new SolidColorBrush(_hasBaseBackground ? _baseBackground : Colors.Transparent);
+                fillOverlay.Background = fillBrush;
+                fillOverlay.IsHitTestVisible = false;
+                _renderBackground = fillBrush;
             }
-            var renderBackground = new SolidColorBrush(_baseBackground);
-            border.Background = renderBackground;
-            _renderBackground = renderBackground;
-            SolidColorBrush? renderBorder = null;
-            if (border.BorderBrush is SolidColorBrush borderBrush)
+            if (edgeOverlay is not null)
             {
-                if (!_hasBaseBorder)
-                {
-                    _baseBorder = borderBrush.Color;
-                    _hasBaseBorder = true;
-                }
-                renderBorder = new SolidColorBrush(_baseBorder);
-                border.BorderBrush = renderBorder;
-                _renderBorder = renderBorder;
+                edgeBrush = new SolidColorBrush(_hasBaseBorder ? _baseBorder : Colors.Transparent);
+                edgeOverlay.BorderBrush = edgeBrush;
+                edgeOverlay.Background = Brushes.Transparent;
+                edgeOverlay.IsHitTestVisible = false;
+                _renderBorder = edgeBrush;
             }
 
+            // Precedence: selected fill over hover fill over the untouched
+            // semantic brush; focus border over selected border over the
+            // untouched semantic border. Overlays hide when they would only
+            // repeat the authoritative base.
             void Update()
             {
                 bool selected = HasSelectionSource(border) && IsSelectedNow();
                 bool hovered = _pointerOver || border.IsMouseOver;
+                bool focused = IsFocusNow();
                 Color hoverBackground = (GetHoverBackground(border) as SolidColorBrush)?.Color ?? _baseBackground;
                 Color selectedBackground = (GetSelectedBackground(border) as SolidColorBrush)?.Color ?? _baseBackground;
-                Color backgroundTarget = selected
-                    ? selectedBackground
-                    : hovered ? hoverBackground : _baseBackground;
-                AnimateColor(renderBackground, backgroundTarget);
-                if (renderBorder is null || !_hasBaseBorder)
+                bool showFill = fillBrush is not null && (selected || hovered);
+                if (fillBrush is not null && fillOverlay is not null)
+                {
+                    AnimateColor(fillBrush, selected ? selectedBackground : hoverBackground);
+                    Fade(fillOverlay, showFill ? 1 : 0, State);
+                }
+                if (edgeBrush is null || edgeOverlay is null)
                     return;
                 Color? selectedBorder = (GetSelectedBorder(border) as SolidColorBrush)?.Color;
                 Color? focusBorder = (GetFocusBorder(border) as SolidColorBrush)?.Color;
-                Color borderTarget = focusBorder != null && IsFocusNow()
+                bool showEdge = focused && focusBorder != null || selected && selectedBorder != null;
+                Color borderTarget = focused && focusBorder != null
                     ? focusBorder.Value
-                    : selected && selectedBorder != null
-                        ? selectedBorder.Value
-                        : _baseBorder;
-                AnimateColor(renderBorder, borderTarget);
+                    : selectedBorder ?? _baseBorder;
+                AnimateColor(edgeBrush, borderTarget);
+                Fade(edgeOverlay, showEdge ? 1 : 0, State);
             }
 
             bool IsSelectedNow()
             {
+                if (GetIsMotionSelected(border) is bool explicitSelection)
+                    return explicitSelection;
                 FrameworkElement? row = FindAncestorRow(border);
                 return row is ListBoxItem listBoxItem && listBoxItem.IsSelected
                     || row is ListViewItem listViewItem && listViewItem.IsSelected;
@@ -838,6 +896,17 @@ public static class MotionProfile
             border.MouseLeave += leave;
             AddRemoval(() => border.MouseEnter -= enter);
             AddRemoval(() => border.MouseLeave -= leave);
+            Subscribe(border, Border.BackgroundProperty, typeof(Border), (_, _) =>
+            {
+                CaptureAuthoritativeBase(border);
+                Update();
+            });
+            Subscribe(border, Border.BorderBrushProperty, typeof(Border), (_, _) =>
+            {
+                CaptureAuthoritativeBase(border);
+                Update();
+            });
+            Subscribe(border, IsMotionSelectedProperty, typeof(Border), (_, _) => Update());
             Subscribe(border, FrameworkElement.IsKeyboardFocusWithinProperty, typeof(FrameworkElement), (_, _) => Update());
             if (border.TemplatedParent is UIElement templatedParent)
                 Subscribe(templatedParent, FrameworkElement.IsKeyboardFocusWithinProperty, typeof(FrameworkElement), (_, _) => Update());
@@ -850,6 +919,20 @@ public static class MotionProfile
             }
             Update();
             return true;
+        }
+
+        private void CaptureAuthoritativeBase(Border border)
+        {
+            if (border.Background is SolidColorBrush fill && !ReferenceEquals(fill, _renderBackground))
+            {
+                _baseBackground = fill.Color;
+                _hasBaseBackground = true;
+            }
+            if (border.BorderBrush is SolidColorBrush edge && !ReferenceEquals(edge, _renderBorder))
+            {
+                _baseBorder = edge.Color;
+                _hasBaseBorder = true;
+            }
         }
 
         private static bool HasSelectionSource(Border border) =>

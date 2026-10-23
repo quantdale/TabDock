@@ -178,9 +178,15 @@
                                     CornerRadius="7" SnapsToDevicePixels="True"
                                     infrastructure:MotionProfile.EnableBorderStates="True"
                                     infrastructure:MotionProfile.FocusBorder="{StaticResource TdFocusBrush}">
-                                <ScrollViewer x:Name="PART_ContentHost"
-                                              Margin="{TemplateBinding Padding}"
-                                              VerticalAlignment="Center" />
+                                <Grid>
+                                    <Border infrastructure:MotionProfile.OverlayRole="Fill" CornerRadius="7" IsHitTestVisible="False" Opacity="0" />
+                                    <Border infrastructure:MotionProfile.OverlayRole="Edge"
+                                            CornerRadius="7" Margin="-1" BorderThickness="1"
+                                            Background="Transparent" IsHitTestVisible="False" Opacity="0" />
+                                    <ScrollViewer x:Name="PART_ContentHost"
+                                                  Margin="{TemplateBinding Padding}"
+                                                  VerticalAlignment="Center" />
+                                </Grid>
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsEnabled" Value="False">
@@ -220,7 +226,10 @@
                                                     infrastructure:MotionProfile.EnableBorderStates="True"
                                                     infrastructure:MotionProfile.HoverBackground="{StaticResource TdSurfaceHoverBrush}"
                                                     infrastructure:MotionProfile.SelectedBackground="{StaticResource TdAccentSoftBrush}">
-                                                <ContentPresenter />
+                                                <Grid>
+                                                    <Border infrastructure:MotionProfile.OverlayRole="Fill" CornerRadius="5" IsHitTestVisible="False" Opacity="0" />
+                                                    <ContentPresenter />
+                                                </Grid>
                                             </Border>
                                             <ControlTemplate.Triggers>
                                                 <Trigger Property="IsSelected" Value="True">
@@ -477,6 +486,7 @@
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
+                                    <Border infrastructure:MotionProfile.OverlayRole="Fill" Grid.ColumnSpan="4" CornerRadius="5" Margin="-10,-6" IsHitTestVisible="False" Opacity="0" />
                                     <ContentPresenter Grid.Column="0" ContentSource="Icon"
                                                       Margin="0,0,8,0" VerticalAlignment="Center" />
                                     <ContentPresenter Grid.Column="1" ContentSource="Header"
@@ -559,7 +569,9 @@
                                 CornerRadius="4" Margin="2"
                                 SnapsToDevicePixels="True"
                                 infrastructure:MotionProfile.EnableBorderStates="True"
-                                infrastructure:MotionProfile.HoverBackground="{StaticResource TdScrollThumbHoverBrush}" />
+                                infrastructure:MotionProfile.HoverBackground="{StaticResource TdScrollThumbHoverBrush}">
+                            <Border infrastructure:MotionProfile.OverlayRole="Fill" CornerRadius="4" IsHitTestVisible="False" Opacity="0" />
+                        </Border>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>

@@ -2,18 +2,18 @@
 
 ## Current objective and status — 2026-10-24
 
-UI/UX successor campaign is active. Motion attachment lifetime and color restoration are implemented, synced, and archived. Next product work is brush-state authority so style and binding sources are not overridden by local animated brushes.
+UI/UX successor campaign is active. Motion lifetime, color restoration, and brush-state authority are implemented, synced, and archived. Next product work is picker capture-selection highlighting, which should bind `IsMotionSelected` instead of adding another brush writer.
 
-Active remaining proposals: `preserve-motion-brush-state-authority`, `fix-capture-selection-highlighting`, `fix-button-feedback-template-timing`, `fix-dispatcher-safe-diagnostic-snapshots`, and `keep-tab-icons-off-ui-thread`.
+Active remaining proposals: `fix-capture-selection-highlighting`, `fix-button-feedback-template-timing`, `fix-dispatcher-safe-diagnostic-snapshots`, and `keep-tab-icons-off-ui-thread`.
 
 ## Completed this session
 
 - Archived after spec sync:
   - `openspec/changes/archive/2026-10-23-fix-motion-subscription-lifecycle`
   - `openspec/changes/archive/2026-10-24-fix-motion-color-state-restoration`
-- Motion owners detach descriptor observers, queued callbacks, and clocks. Base fill/border tokens are independent of animated endpoints. Selection, hover, and focus destinations restore those tokens.
-- `TryUpdateBorderBaseTokens` is the seam for the still-active brush-authority change. It does not implement picker mapping.
-- Evidence: Debug solution build 0 warnings/0 errors; `MotionFeedbackLifecycleTests` and `MotionColorStateTests` included in full xUnit 958/958. OpenSpec strict validation after the second archive: 44/44.
+  - `openspec/changes/archive/2026-10-24-preserve-motion-brush-state-authority`
+- Motion owners detach observers and clocks. Base tokens are independent of animated endpoints. Feedback paints on hit-test-transparent overlay layers so style triggers and bindings remain authoritative.
+- Evidence: Debug solution build 0 warnings/0 errors; full xUnit 964/964 before the final text-box template case, then `MotionBrushAuthorityTests` 7/7. OpenSpec strict validation after the brush archive: 43/43.
 
 ## Prior qualification limits
 
@@ -21,4 +21,4 @@ The 2026-09-17 release campaign remains complete only for the available single-m
 
 ## Handoff
 
-Do not treat this file's publication commit as self-described here. Next session should read Git for `HEAD`, `origin/main`, and CI. Next product work is `preserve-motion-brush-state-authority`. No UI soak, SendInput, mixed-DPI, Windows 10, or signing qualification is implied.
+Do not treat this file's publication commit as self-described here. Next session should read Git for `HEAD`, `origin/main`, and CI. Next product work is `fix-capture-selection-highlighting`. No UI soak, SendInput, mixed-DPI, Windows 10, or signing qualification is implied.

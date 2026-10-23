@@ -100,7 +100,13 @@ public sealed class MotionColorStateTests
                 (ListViewItem item, Border border) = HostRow(host);
                 item.IsSelected = true;
                 SettleColor(dispatcher, border, SelectedFill, SelectedEdge);
+                var nextFill = new SolidColorBrush(UpdatedBaseFill);
+                var nextEdge = new SolidColorBrush(UpdatedBaseEdge);
+                border.Background = nextFill;
+                border.BorderBrush = nextEdge;
                 Assert.True(MotionProfile.TryUpdateBorderBaseTokens(border, UpdatedBaseFill, UpdatedBaseEdge));
+                Assert.Same(nextFill, border.Background);
+                Assert.Same(nextEdge, border.BorderBrush);
                 SettleColor(dispatcher, border, SelectedFill, SelectedEdge);
                 item.IsSelected = false;
                 SettleColor(dispatcher, border, UpdatedBaseFill, UpdatedBaseEdge);
@@ -156,6 +162,20 @@ public sealed class MotionColorStateTests
         MotionProfile.SetSelectedBackground(border, new SolidColorBrush(SelectedFill));
         MotionProfile.SetSelectedBorder(border, new SolidColorBrush(SelectedEdge));
         MotionProfile.SetFocusBorder(border, new SolidColorBrush(FocusEdge));
+        var overlays = new Grid();
+        var fill = new Border { IsHitTestVisible = false, Opacity = 0 };
+        MotionProfile.SetOverlayRole(fill, MotionProfile.MotionOverlayRole.Fill);
+        var edge = new Border
+        {
+            IsHitTestVisible = false,
+            Opacity = 0,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(1),
+        };
+        MotionProfile.SetOverlayRole(edge, MotionProfile.MotionOverlayRole.Edge);
+        overlays.Children.Add(fill);
+        overlays.Children.Add(edge);
+        border.Child = overlays;
         MotionProfile.SetEnableBorderStates(border, true);
         item.Content = border;
         host.Root.Children.Add(item);
@@ -183,8 +203,34 @@ public sealed class MotionColorStateTests
         Assert.Equal(Channel(edge), Channel(Edge(border)));
     }
 
-    private static Color Fill(Border border) => ((SolidColorBrush)border.Background).Color;
-    private static Color Edge(Border border) => ((SolidColorBrush)border.BorderBrush).Color;
+    private static Color Fill(Border border) => Visible(border, MotionProfile.MotionOverlayRole.Fill, border.Background);
+    private static Color Edge(Border border) => Visible(border, MotionProfile.MotionOverlayRole.Edge, border.BorderBrush);
+
+    private static Color Visible(Border border, MotionProfile.MotionOverlayRole role, Brush? fallback)
+    {
+        Border? overlay = FindRole(border, role);
+        if (overlay is not null && overlay.Opacity > 0.5)
+        {
+            Brush? channel = role == MotionProfile.MotionOverlayRole.Edge ? overlay.BorderBrush : overlay.Background;
+            if (channel is SolidColorBrush animated)
+                return animated.Color;
+        }
+        return ((SolidColorBrush)fallback!).Color;
+    }
+
+    private static Border? FindRole(DependencyObject parent, MotionProfile.MotionOverlayRole role)
+    {
+        if (parent is Border border && MotionProfile.GetOverlayRole(border) == role)
+            return border;
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            Border? found = FindRole(VisualTreeHelper.GetChild(parent, i), role);
+            if (found is not null)
+                return found;
+        }
+        return null;
+    }
+
     private static bool Same(Color left, Color right) => Channel(left) == Channel(right);
     private static string Channel(Color color) => $"{color.A:X2}{color.R:X2}{color.G:X2}{color.B:X2}";
 }

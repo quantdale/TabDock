@@ -139,7 +139,7 @@
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Padding="11,9" CornerRadius="7"
+                                    <Border CornerRadius="7"
                                             infra:MotionProfile.EnableBorderStates="True"
                                             infra:MotionProfile.HoverBackground="{StaticResource TdSurfaceHoverBrush}"
                                             infra:MotionProfile.SelectedBackground="{StaticResource TdAccentSoftBrush}"
@@ -156,7 +156,11 @@
                                             </Style.Triggers>
                                         </Style>
                                     </Border.Style>
-                                    <Grid>
+                                    <Grid Margin="11,9">
+                                        <Border infra:MotionProfile.OverlayRole="Fill" CornerRadius="7" IsHitTestVisible="False" Opacity="0" />
+                                        <Border infra:MotionProfile.OverlayRole="Edge" CornerRadius="7" Margin="-1" BorderThickness="1"
+                                                Background="Transparent" IsHitTestVisible="False" Opacity="0" />
+                                        <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="Auto" />
@@ -183,6 +187,7 @@
                                                        FontFamily="{StaticResource TdMonoFont}" FontSize="9.5"
                                                        TextTrimming="CharacterEllipsis" Margin="0,3,0,0" />
                                         </StackPanel>
+                                        </Grid>
                                     </Grid>
                                 </Border>
                             </DataTemplate>
