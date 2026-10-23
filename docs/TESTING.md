@@ -22,7 +22,10 @@ Use `--doctor --output <path>` for a copyable text file and
 live repro, `Ctrl+Alt+Shift+D` captures the in-process logical group/split
 snapshot even if the header is hidden. Inspect the ZIP before sending it:
 titles are hashes/lengths, paths are redacted, and no full personal files are
-collected. `--pending-recovery` is also read-only and uses stable session entry
+collected. `logical-status.json` distinguishes available, empty, partial and
+unavailable logical evidence. The hotkey captures detached DTOs on the UI
+thread before asynchronous observation/ZIP work; CLI bundles explicitly report
+no-live-provider. `--pending-recovery` is also read-only and uses stable session entry
 IDs; it does not rewrite or mutate pending evidence. Inspection is strictly
 read-only: default pending discovery, `--pending-recovery`, `--doctor`, the
 support bundle, launcher attention and count projections preserve the product
@@ -210,8 +213,14 @@ existing `DesktopQualificationLease` and supervised policy. A synthetic
 resource PASS is resource-only evidence and cannot satisfy physical-input,
 mixed-DPI, Windows 10/11, signing, or human-smoke gates. It also cannot
 prove managed motion-feedback collectability. That check is the headless
-xUnit suite `MotionFeedbackLifecycleTests`: actual styled controls, hidden
-off-screen presentation source, no `SendInput`, and no production storage.
+xUnit suite `MotionFeedbackLifecycleTests`: actual styled controls on a
+never-shown presentation source (native invisibility asserted), managed
+Loaded/Unloaded signals, no `SendInput`, and no production storage.
+Related focus tests inject managed WPF focus properties, not native keyboard
+focus; they do not qualify physical input/activation. `ProductionTemplateContinuityTests`
+exercises actual picker and split templates, bulk commands, identity-safe refresh,
+rebindings and overlay bounds. Optional `TABDOCK_REVIEW_RENDER_ROOT` writes
+managed off-screen template PNGs for review, never desktop screenshots.
 Synthetic resource snapshots stay labeled synthetic.
 
 Each resource run writes `resource-stability.json` and

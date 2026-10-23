@@ -50,7 +50,7 @@ public sealed class CaptureSelectionHighlightTests
                 Assert.True(IsHighlighted(list, 0));
                 Assert.False(IsHighlighted(list, 1));
                 var focusedItem = (ListBoxItem)list.ItemContainerGenerator.ContainerFromIndex(1);
-                Assert.True(focusedItem.Focus());
+                Assert.True(StaDispatcherFixture.Focus(focusedItem));
                 StaDispatcherFixture.Settle(dispatcher);
                 Assert.True(checkedRow.IsSelected);
                 Assert.False(other.IsSelected);

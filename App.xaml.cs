@@ -148,7 +148,9 @@ public partial class App : Application
             _groups = new GroupManager(_shepherd, _persistence, _log);
             _events = new WinEventMonitor(_groups.GetCapturedWindow, _log);
             _hotkey = new HotkeyService(_log);
-            DiagnosticRuntime.LogicalSnapshotProvider = CaptureLogicalSnapshots;
+            DiagnosticRuntime.LogicalSnapshotProvider = () => Dispatcher.CheckAccess()
+                ? System.Threading.Tasks.Task.FromResult(CaptureLogicalSnapshots())
+                : Dispatcher.InvokeAsync(CaptureLogicalSnapshots).Task;
 
             // One authority for TabDock-originated guest hides: every native
 // SW_HIDE the shepherd issues registers an expected-hide operation,
@@ -261,35 +263,21 @@ _shepherd.HideProvenance = hideProvenance;
         }
     }
 
-    private IReadOnlyList<LogicalPresentationSnapshot> CaptureLogicalSnapshots()
+    private LogicalSnapshotCapture CaptureLogicalSnapshots()
     {
-        var snapshots = new List<LogicalPresentationSnapshot>();
-        foreach (ContainerWindow container in _containers.Values.ToList())
-        {
-            try
-            {
-                snapshots.Add(container.CreateDiagnosticSnapshot());
-            }
-            catch (Exception ex)
-            {
-                DiagnosticRuntime.Record("logical.snapshot", action: "observe", result: "failed",
-                    data: new Dictionary<string, string> { ["error"] = ex.GetType().Name });
-            }
-        }
-        return snapshots;
+        Dispatcher.VerifyAccess();
+        return LogicalSnapshotCapture.Collect(_containers.Values.ToArray()
+            .Select<ContainerWindow, Func<LogicalPresentationSnapshot>>(container => container.CreateDiagnosticSnapshot));
     }
 
-    private void ExportDiagnosticsFromHotkey()
+    private async void ExportDiagnosticsFromHotkey()
     {
         try
         {
             WinEventMetrics metrics = _events.Metrics;
             _log.Log($"WINEVENT[metrics] callbacks={metrics.CallbacksReceived} rejected={metrics.IrrelevantRejected} membership={metrics.MembershipProbes} dispatch={metrics.DispatchMembershipProbes} posts={metrics.Posts} stale={metrics.StaleDispatches} lifecycle={metrics.LifecycleCallbacks}");
-            string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-            if (string.IsNullOrWhiteSpace(desktop) || !Directory.Exists(desktop))
-                desktop = Environment.CurrentDirectory;
-            string path = Path.Combine(desktop, $"TabDock-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
-            string output = DiagnosticReportService.ExportBundle(path);
+            LogicalSnapshotCapture capture = CaptureLogicalSnapshots();
+            string output = await DiagnosticReportService.ExportToDesktopAsync(capture).ConfigureAwait(false);
             DiagnosticRuntime.Record("support.export", action: "zip", result: "success",
                 data: new Dictionary<string, string>
                 {

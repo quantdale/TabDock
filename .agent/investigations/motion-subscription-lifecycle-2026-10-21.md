@@ -16,10 +16,14 @@ Deferred activation until `Loaded` resolves `TdButton` `HoverOverlay` and `Press
 
 ## Evidence
 
+Correction (2026-10-24): this historical run used a shown off-screen HWND;
+it did not establish a never-visible test fixture. The corrected fixture and
+new lifecycle regressions are recorded in [session correction review](session-correction-review-2026-10-24.md).
+
 - `dotnet test tests/UnitTests/TabDock.UnitTests.csproj -c Debug --filter FullyQualifiedName~MotionFeedbackLifecycleTests`: 5/5 passed. The 30-control probe asserts observers attach, then collects discarded styled buttons, feedback borders, and disabled buttons in both motion modes, beside plain controls.
 - Synthetic resource snapshots remain labeled synthetic in `ResourceSoakRunner` and are not used as this proof.
 - Full suite remains appropriate now that A02/A10 are archived; it was not required to accept this change and is part of the later integrated gate.
 
 ## Non-claims
 
-No visible product window, SendInput, production-storage mutation, color-restoration fix (A06), brush-authority fix (A07), or picker selection mapping (A08) is implied.
+No SendInput, production-storage mutation, color-restoration fix (A06), brush-authority fix (A07), or picker selection mapping (A08) is implied by this historical run. Its hidden-HWND claim is superseded by the correction above.

@@ -308,7 +308,15 @@ public partial class ContainerWindow : Window
         => $"pid:{member.ProcessId}/hwnd:0x{member.Hwnd.ToInt64():X}";
 
     public ContainerWindow(GroupViewModel viewModel, GroupManager manager, WindowShepherdService shepherd, LoggingService log, IconService icons)
+        : this(viewModel, manager, shepherd, log, icons, null)
     {
+    }
+
+    internal ContainerWindow(GroupViewModel viewModel, GroupManager manager, WindowShepherdService shepherd,
+        LoggingService log, IconService icons, ResourceDictionary? fixtureResources)
+    {
+        if (fixtureResources != null)
+            Resources = fixtureResources;
         _viewModel = viewModel;
         _manager = manager;
         _shepherd = shepherd;

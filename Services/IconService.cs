@@ -46,126 +46,90 @@ public sealed class IconService
     }
 
 
-    /// <summary>Retrieves and caches the icon for an executable path, avoiding repeated ExtractIconEx calls for frequently-captured apps.</summary>
+    /// <summary>Background-only compatibility wrapper; UI callers use the completed cache or async lookup.</summary>
     public ImageSource? GetFileIcon(string exePath)
     {
-        // A member captured from a process whose image path could not be read
-        // carries an empty ExePath; there is nothing to extract, so skip the
-        // interop call rather than caching a failure under an empty key.
-        if (string.IsNullOrEmpty(exePath))
-            return null;
-
-        TaskCompletionSource<ImageSource?>? waitFor = null;
-        TaskCompletionSource<ImageSource?>? producer = null;
-        lock (_cacheGate)
-        {
-            if (_iconCache.TryGetValue(exePath, out ImageSource? cached))
-                return cached;
-
-            if (_inFlight.TryGetValue(exePath, out waitFor))
-            {
-                // Another picker worker is already resolving this executable.
-                // Wait outside the lock so concurrent callers share one native
-                // extraction rather than racing into ExtractIconEx.
-            }
-            else
-            {
-                producer = new TaskCompletionSource<ImageSource?>(TaskCreationOptions.RunContinuationsAsynchronously);
-                _inFlight[exePath] = producer;
-            }
-        }
-
-        if (producer == null)
-        {
-            // The producer always completes (extraction failures are converted
-            // to a cached null), but the wait stays bounded so an anomalous
-            // producer can never pin this worker indefinitely. A timeout
-            // returns an uncached null; the next query retries.
-            if (!waitFor!.Task.Wait(TimeSpan.FromSeconds(5)))
-                return null;
-            return waitFor.Task.Result;
-        }
-
-        ImageSource? result;
-        try
-        {
-            result = _testExtractor != null ? _testExtractor(exePath) : ExtractFileIcon(exePath);
-        }
-        catch
-        {
-            // Preserve the existing cosmetic-failure behavior and cache the
-            // null result for this process lifetime.
-            result = null;
-        }
-
-        lock (_cacheGate)
-        {
-            _iconCache[exePath] = result;
-            _inFlight.Remove(exePath);
-        }
-        producer.TrySetResult(result);
-        return result;
+        Task<ImageSource?> pending = GetFileIconAsync(exePath);
+        return pending.Wait(TimeSpan.FromSeconds(5)) ? pending.GetAwaiter().GetResult() : null;
     }
+
+    internal const int MaximumActiveProducers = 2;
+    internal const int MaximumQueuedPaths = 256;
+    private readonly Queue<(string Path, TaskCompletionSource<ImageSource?> Completion)> _pending = new();
+    private int _workers;
 
     /// <summary>
-    /// Schedules icon resolution without waiting. Completed cache entries invoke
-    /// <paramref name="completed"/> before return. A miss joins the existing
-    /// single-flight producer or starts one off the caller thread. Queue
-    /// rejection and cancellation are not represented as cached extraction failures.
+    /// Bounded case-insensitive single-flight extraction. Cancellation abandons
+    /// only this consumer, never the shared native producer. Queue refusal is
+    /// not cached, whereas an actual extraction failure is cached as null.
     /// </summary>
-    internal void RequestFileIcon(string exePath, Action<ImageSource?> completed)
+    public Task<ImageSource?> GetFileIconAsync(string exePath, CancellationToken cancellationToken = default)
     {
-        if (completed == null)
-            throw new ArgumentNullException(nameof(completed));
+        if (cancellationToken.IsCancellationRequested)
+            return Task.FromCanceled<ImageSource?>(cancellationToken);
         if (string.IsNullOrEmpty(exePath))
-        {
-            completed(null);
-            return;
-        }
+            return Task.FromResult<ImageSource?>(null);
 
-        Task<ImageSource?>? pending;
+        Task<ImageSource?> task;
         lock (_cacheGate)
         {
             if (_iconCache.TryGetValue(exePath, out ImageSource? cached))
+                return Task.FromResult(cached);
+            if (!_inFlight.TryGetValue(exePath, out TaskCompletionSource<ImageSource?>? completion))
             {
-                completed(cached);
-                return;
+                if (_workers >= MaximumActiveProducers && _pending.Count >= MaximumQueuedPaths)
+                    return Task.FromResult<ImageSource?>(null);
+                completion = new TaskCompletionSource<ImageSource?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _inFlight.Add(exePath, completion);
+                _pending.Enqueue((exePath, completion));
+                if (_workers < MaximumActiveProducers)
+                {
+                    _workers++;
+                    _ = Task.Run(DrainQueue);
+                }
             }
-
-            if (!_inFlight.TryGetValue(exePath, out TaskCompletionSource<ImageSource?>? producer))
-            {
-                producer = new TaskCompletionSource<ImageSource?>(TaskCreationOptions.RunContinuationsAsynchronously);
-                _inFlight[exePath] = producer;
-                Task.Run(() => ProduceFileIcon(exePath, producer));
-            }
-            pending = producer.Task;
+            task = completion.Task;
         }
-
-        _ = pending.ContinueWith(
-            task => completed(task.Status == TaskStatus.RanToCompletion ? task.Result : null),
-            CancellationToken.None,
-            TaskContinuationOptions.None,
-            TaskScheduler.Default);
+        return cancellationToken.CanBeCanceled ? task.WaitAsync(cancellationToken) : task;
     }
 
-    private void ProduceFileIcon(string exePath, TaskCompletionSource<ImageSource?> producer)
+    private void DrainQueue()
     {
-        ImageSource? result;
-        try
+        while (true)
         {
-            result = _testExtractor != null ? _testExtractor(exePath) : ExtractFileIcon(exePath);
+            (string Path, TaskCompletionSource<ImageSource?> Completion) work;
+            lock (_cacheGate)
+            {
+                if (_pending.Count == 0)
+                {
+                    _workers--;
+                    return;
+                }
+                work = _pending.Dequeue();
+            }
+            ImageSource? result;
+            try
+            {
+                result = _testExtractor != null ? _testExtractor(work.Path) : ExtractFileIcon(work.Path);
+                if (result is { IsFrozen: false })
+                {
+                    if (result.CanFreeze)
+                        result.Freeze();
+                    else
+                        result = null;
+                }
+            }
+            catch
+            {
+                result = null;
+            }
+            lock (_cacheGate)
+            {
+                _iconCache[work.Path] = result;
+                _inFlight.Remove(work.Path);
+            }
+            work.Completion.TrySetResult(result);
         }
-        catch
-        {
-            result = null;
-        }
-
-        lock (_cacheGate)
-        {
-            _iconCache[exePath] = result;
-            _inFlight.Remove(exePath);
-        }
-        producer.TrySetResult(result);
     }
 
     /// <summary>

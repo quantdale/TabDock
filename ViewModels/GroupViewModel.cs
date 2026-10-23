@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -19,6 +21,10 @@ public sealed class GroupViewModel : ViewModelBase
     private readonly LoggingService _log;
     private TabViewModel? _activeTab;
     private bool _isRenaming;
+    private bool _detached;
+    private readonly Dispatcher? _iconDispatcher = Dispatcher.FromThread(Thread.CurrentThread);
+    private readonly Dictionary<TabViewModel, CancellationTokenSource> _iconRequests = new();
+    internal Task IconResolutionCompletion { get; private set; } = Task.CompletedTask;
 
     public Group Model => _group;
 
@@ -167,8 +173,8 @@ public sealed class GroupViewModel : ViewModelBase
             var tvm = new TabViewModel(m);
             tvm.PopOutRequested += OnPopOutRequested;
             tvm.CloseWindowRequested += OnCloseWindowRequested;
-            ProjectIcon(tvm, m.ExePath);
             Tabs.Add(tvm);
+            ProjectIcon(tvm, m.ExePath);
         }
 
         if (Tabs.Count > 0 && group.ActiveIndex >= 0 && group.ActiveIndex < Tabs.Count)
@@ -231,6 +237,8 @@ public sealed class GroupViewModel : ViewModelBase
 
     private void Tabs_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        foreach (TabViewModel tab in _iconRequests.Keys.Where(tab => !Tabs.Contains(tab)).ToArray())
+            CancelIcon(tab);
         OnPropertyChanged(nameof(CanUseSplitAffordance));
         OnPropertyChanged(nameof(SplitAffordanceToolTip));
         if (_splitComposite != null)
@@ -262,29 +270,54 @@ public sealed class GroupViewModel : ViewModelBase
 
     private void ProjectIcon(TabViewModel tab, string exePath)
     {
+        CancelIcon(tab);
+        if (_detached)
+            return;
         if (_icons.TryGetCachedFileIcon(exePath, out ImageSource? cached))
         {
             tab.Icon = cached;
             return;
         }
+        // A headless model without a dispatcher may keep its placeholder;
+        // it must never receive UI property changes on an arbitrary worker.
+        if (_iconDispatcher == null)
+            return;
+        var cancellation = new CancellationTokenSource();
+        _iconRequests.Add(tab, cancellation);
+        Task delivery = DeliverIconAsync(
+            _icons.GetFileIconAsync(exePath, cancellation.Token),
+            new WeakReference<GroupViewModel>(this), new WeakReference<TabViewModel>(tab),
+            _iconDispatcher, cancellation.Token);
+        IconResolutionCompletion = Task.WhenAll(IconResolutionCompletion, delivery);
+    }
 
-        Dispatcher? dispatcher = Dispatcher.FromThread(Thread.CurrentThread);
-        _icons.RequestFileIcon(exePath, icon =>
+    private static async Task DeliverIconAsync(Task<ImageSource?> pending,
+        WeakReference<GroupViewModel> owner, WeakReference<TabViewModel> target,
+        Dispatcher dispatcher, CancellationToken cancellation)
+    {
+        try
         {
-            void Apply()
+            ImageSource? icon = await pending.ConfigureAwait(false);
+            if (cancellation.IsCancellationRequested || dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+                return;
+            await dispatcher.InvokeAsync(() =>
             {
-                if (!Tabs.Contains(tab))
-                    return;
-                if (icon is { IsFrozen: false, CanFreeze: true })
-                    icon.Freeze();
-                tab.Icon = icon;
-            }
+                if (!cancellation.IsCancellationRequested && owner.TryGetTarget(out GroupViewModel? vm)
+                    && !vm._detached && target.TryGetTarget(out TabViewModel? tab)
+                    && vm.Tabs.Contains(tab))
+                    tab.Icon = icon;
+            }, DispatcherPriority.DataBind, cancellation).Task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        catch (InvalidOperationException) { /* Dispatcher shutdown is cosmetic. */ }
+    }
 
-            if (dispatcher == null || dispatcher.CheckAccess())
-                Apply();
-            else
-                _ = dispatcher.BeginInvoke(Apply);
-        });
+    private void CancelIcon(TabViewModel tab)
+    {
+        if (!_iconRequests.Remove(tab, out CancellationTokenSource? cancellation))
+            return;
+        cancellation.Cancel();
+        cancellation.Dispose();
     }
 
     public void SetActiveTab(TabViewModel tab)
@@ -325,8 +358,6 @@ public sealed class GroupViewModel : ViewModelBase
     {
         TabViewModel? previousActive = ActiveTab;
         TabViewModel? tvm = null;
-        bool memberAdded = false;
-        bool tabAdded = false;
         try
         {
             // Finish all managed-object construction before mutating either
@@ -336,17 +367,17 @@ public sealed class GroupViewModel : ViewModelBase
             tvm = new TabViewModel(window);
             tvm.PopOutRequested += OnPopOutRequested;
             tvm.CloseWindowRequested += OnCloseWindowRequested;
-            ProjectIcon(tvm, window.ExePath);
 
             _group.Members.Add(window);
-            memberAdded = true;
             Tabs.Add(tvm);
-            tabAdded = true;
             SetActiveTab(tvm);
         }
         catch
         {
-            if (tabAdded && tvm != null)
+            // ObservableCollection commits before notifying listeners. A
+            // throwing Add observer can leave an item inserted even though
+            // Add never returned; inspect actual membership during rollback.
+            if (tvm != null && Tabs.Contains(tvm))
                 Tabs.Remove(tvm);
 
             if (tvm != null)
@@ -355,7 +386,7 @@ public sealed class GroupViewModel : ViewModelBase
                 tvm.CloseWindowRequested -= OnCloseWindowRequested;
             }
 
-            if (memberAdded)
+            if (_group.Members.Contains(window))
                 _group.Members.Remove(window);
 
             if (previousActive != null && Tabs.Contains(previousActive))
@@ -373,6 +404,7 @@ public sealed class GroupViewModel : ViewModelBase
         // so index 0 into an empty group saves nothing — and the group-created
         // commit ran before any member existed.
         _manager.RequestDurableSave("tab-captured");
+        ProjectIcon(tvm!, window.ExePath);
     }
 
     /// <summary>
@@ -549,6 +581,9 @@ public sealed class GroupViewModel : ViewModelBase
     /// </summary>
     public void Detach()
     {
+        _detached = true;
+        foreach (TabViewModel tab in _iconRequests.Keys.ToArray())
+            CancelIcon(tab);
         _splitComposite?.Detach();
         _group.PropertyChanged -= OnGroupPropertyChanged;
         _manager.CaptureAdmissionChanged -= Manager_CaptureAdmissionChanged;

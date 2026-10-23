@@ -1,5 +1,9 @@
 using System;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
+using System.Threading.Tasks;
+using System.Reflection;
+using System.Windows;
 using System.Threading;
 using System.Windows.Threading;
 
@@ -15,12 +19,14 @@ internal static class StaDispatcherFixture
     public static void Run(Action<Dispatcher> action, TimeSpan? timeout = null)
     {
         Exception? failure = null;
-        using var done = new ManualResetEventSlim(false);
+        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher? activeDispatcher = null;
         var thread = new Thread(() =>
         {
             try
             {
                 Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+                activeDispatcher = dispatcher;
                 dispatcher.InvokeAsync(() =>
                 {
                     try
@@ -44,17 +50,56 @@ internal static class StaDispatcherFixture
             }
             finally
             {
-                done.Set();
+                done.TrySetResult(true);
             }
         });
         thread.SetApartmentState(ApartmentState.STA);
         thread.IsBackground = true;
         thread.Name = "TabDock.StaDispatcherFixture";
         thread.Start();
-        if (!done.Wait(timeout ?? TimeSpan.FromSeconds(60)))
-            throw new TimeoutException("STA dispatcher fixture timed out.");
+        if (!done.Task.Wait(timeout ?? TimeSpan.FromSeconds(60)))
+        {
+            activeDispatcher?.BeginInvokeShutdown(DispatcherPriority.Send);
+            // Test actions must be bounded. Give an in-flight managed turn a
+            // chance to release its resources; never dispose a signal it uses.
+            bool joined = thread.Join(TimeSpan.FromSeconds(5));
+            throw new TimeoutException(joined ? "STA dispatcher fixture timed out and stopped."
+                : "STA fixture action did not stop within its shutdown budget.");
+        }
+        thread.Join();
         if (failure is not null)
-            throw failure;
+            ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
+    [ThreadStatic]
+    private static WeakReference<UIElement>? _managedFocus;
+
+    /// <summary>Inject managed focus properties, never native keyboard focus.</summary>
+    public static bool Focus(UIElement element)
+    {
+        if (_managedFocus != null && _managedFocus.TryGetTarget(out UIElement? previous))
+        {
+            SetReadOnly(previous, "IsKeyboardFocusWithinPropertyKey", false);
+            SetReadOnly(previous, "IsKeyboardFocusedPropertyKey", false);
+        }
+        SetReadOnly(element, "IsKeyboardFocusWithinPropertyKey", true);
+        SetReadOnly(element, "IsKeyboardFocusedPropertyKey", true);
+        _managedFocus = new WeakReference<UIElement>(element);
+        return element.IsKeyboardFocusWithin;
+    }
+
+    private static void SetReadOnly(UIElement element, string name, bool value)
+    {
+        FieldInfo field = typeof(UIElement).GetField(name, BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("WPF focus test key missing: " + name);
+        if (name == "IsKeyboardFocusWithinPropertyKey")
+        {
+            MethodInfo writeFlag = typeof(UIElement).GetMethod("WriteFlag", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException("WPF focus cache test seam missing");
+            Type flags = writeFlag.GetParameters()[0].ParameterType;
+            writeFlag.Invoke(element, new[] { Enum.Parse(flags, "IsKeyboardFocusWithinCache"), (object)value });
+        }
+        element.SetValue((DependencyPropertyKey)field.GetValue(null)!, value);
     }
 
     public static void Settle(Dispatcher dispatcher)

@@ -63,7 +63,7 @@ public sealed class MotionBrushAuthorityTests
                 item.Content = border;
                 host.Root.Children.Add(item);
                 host.Realize();
-                Assert.True(item.Focus());
+                Assert.True(StaDispatcherFixture.Focus(item));
                 StaDispatcherFixture.Settle(dispatcher);
                 Assert.Equal(Channel(FocusEdge), Channel(((SolidColorBrush)border.BorderBrush).Color));
                 Assert.Equal(DependencyProperty.UnsetValue, border.ReadLocalValue(Border.BorderBrushProperty));
@@ -72,7 +72,7 @@ public sealed class MotionBrushAuthorityTests
                 host.Realize();
                 host.Root.Children.Add(item);
                 host.Realize();
-                Assert.True(item.Focus());
+                Assert.True(StaDispatcherFixture.Focus(item));
                 StaDispatcherFixture.Settle(dispatcher);
                 Assert.Equal(Channel(FocusEdge), Channel(((SolidColorBrush)border.BorderBrush).Color));
                 Assert.Equal(DependencyProperty.UnsetValue, border.ReadLocalValue(Border.BackgroundProperty));
@@ -142,7 +142,7 @@ public sealed class MotionBrushAuthorityTests
                 Assert.NotNull(border);
                 Assert.Equal(DependencyProperty.UnsetValue, border.ReadLocalValue(Border.BackgroundProperty));
                 Assert.Equal(DependencyProperty.UnsetValue, border.ReadLocalValue(Border.BorderBrushProperty));
-                Assert.True(box.Focus());
+                Assert.True(StaDispatcherFixture.Focus(box));
                 StaDispatcherFixture.Settle(dispatcher);
                 Assert.Equal(DependencyProperty.UnsetValue, border.ReadLocalValue(Border.BorderBrushProperty));
                 Border? edge = FindRole(border, MotionProfile.MotionOverlayRole.Edge);

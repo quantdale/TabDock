@@ -231,12 +231,7 @@ public static class MotionProfile
     public static Brush GetFocusBorder(DependencyObject element) =>
         (Brush)element.GetValue(FocusBorderProperty);
 
-    /// <summary>
-    /// Optional explicit selection input. Unset means the ancestor list-item
-    /// selection is the source. Picker checked-state mapping belongs to the
-    /// later capture-selection change and should bind this property rather
-    /// than add another brush writer.
-    /// </summary>
+    /// <summary>Identifies template-provided fill and border decoration layers.</summary>
     public enum MotionOverlayRole
     {
         None = 0,
@@ -255,6 +250,10 @@ public static class MotionProfile
     public static MotionOverlayRole GetOverlayRole(DependencyObject element) =>
         (MotionOverlayRole)element.GetValue(OverlayRoleProperty);
 
+    /// <summary>
+    /// Explicit checked-target input for picker rows. Unset preserves ancestor
+    /// list-item selection as the source for ordinary workspace tabs.
+    /// </summary>
     public static readonly DependencyProperty IsMotionSelectedProperty =
         DependencyProperty.RegisterAttached(
             "IsMotionSelected", typeof(bool?), typeof(MotionProfile),
@@ -306,13 +305,13 @@ public static class MotionProfile
     {
         if (IsReducedMotion)
             return;
-        element.Opacity = 0;
+        double targetOpacity = element.Opacity;
         var translate = new TranslateTransform();
         element.RenderTransform = translate;
         translate.BeginAnimation(TranslateTransform.YProperty,
             new DoubleAnimation(6, 0, Navigation) { EasingFunction = StandardEase });
         element.BeginAnimation(UIElement.OpacityProperty,
-            new DoubleAnimation(0, 1, Navigation) { EasingFunction = StandardEase });
+            new DoubleAnimation(0, targetOpacity, Navigation) { EasingFunction = StandardEase });
     }
 
     public static readonly DependencyProperty EnableChevronRotateProperty =
@@ -378,6 +377,7 @@ public static class MotionProfile
         private MotionBehavior _behaviors;
         private MotionBehavior _wired;
         private bool _hooksInstalled;
+        private bool _lifetimeActive;
         private bool _disposed;
         private bool _templateWatched;
         private int _generation = 1;
@@ -467,7 +467,7 @@ public static class MotionProfile
             InstallHooks();
             if (behavior == MotionBehavior.Popup && _element is Popup popup)
                 ApplyPopup(popup);
-            if (_element.IsLoaded)
+            if (_element.IsLoaded || _lifetimeActive)
                 QueueActivate();
         }
 
@@ -485,7 +485,7 @@ public static class MotionProfile
             if (_wired != MotionBehavior.None)
             {
                 DeactivateObservers();
-                if (_element.IsLoaded)
+                if (_element.IsLoaded || _lifetimeActive)
                     QueueActivate();
             }
         }
@@ -503,6 +503,7 @@ public static class MotionProfile
         {
             if (_disposed)
                 return;
+            _lifetimeActive = true;
             ActivateNow();
         }
 
@@ -510,6 +511,7 @@ public static class MotionProfile
         {
             if (_disposed)
                 return;
+            _lifetimeActive = false;
             DeactivateObservers();
         }
 
@@ -708,7 +710,7 @@ public static class MotionProfile
             button.MouseLeave += leave;
             AddRemoval(() => button.MouseEnter -= enter);
             AddRemoval(() => button.MouseLeave -= leave);
-            Subscribe(button, Button.IsPressedProperty, typeof(Button), (_, _) =>
+            void UpdatePressed()
             {
                 if (button.IsPressed)
                 {
@@ -722,7 +724,11 @@ public static class MotionProfile
                         Fade(pressed, 0, State);
                     ScaleTo(border, 1, State);
                 }
-            });
+            }
+            Subscribe(button, Button.IsPressedProperty, typeof(Button), (_, _) => UpdatePressed());
+            UpdatePressed();
+            if (hover is not null)
+                Fade(hover, button.IsMouseOver ? 1 : 0, Feedback);
             return true;
         }
 
@@ -766,8 +772,12 @@ public static class MotionProfile
             });
             bool initially = row is ListBoxItem initLi && initLi.IsSelected
                 || row is ListViewItem initLvi && initLvi.IsSelected;
-            if (initially && selected is not null)
-                selected.Opacity = 1;
+            if (selected is not null)
+                Fade(selected, initially ? 1 : 0, State);
+            if (hover is not null)
+                Fade(hover, row.IsMouseOver ? 1 : 0, Feedback);
+            if (focus is not null)
+                Fade(focus, row.IsKeyboardFocusWithin ? 1 : 0, State);
             return true;
         }
 
@@ -776,24 +786,31 @@ public static class MotionProfile
             if (_element is not TextBlock check || check.TemplatedParent is not CheckBox box)
                 return false;
             WatchTemplate(box);
-            if (box.IsChecked == true)
-                check.Visibility = Visibility.Visible;
+            check.Visibility = box.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+            check.Opacity = box.IsChecked == true ? 1 : 0;
+            if (check.RenderTransform is ScaleTransform initialScale)
+            {
+                initialScale.ScaleX = 1;
+                initialScale.ScaleY = 1;
+            }
             Subscribe(box, ToggleButton.IsCheckedProperty, typeof(ToggleButton), (_, _) =>
             {
                 if (box.IsChecked == true)
                 {
                     check.Visibility = Visibility.Visible;
-                    check.Opacity = 0;
-                    Fade(check, 1, Feedback);
+                    check.Opacity = 1;
+                    check.BeginAnimation(UIElement.OpacityProperty,
+                        new DoubleAnimation(0, 1, Feedback) { EasingFunction = StandardEase });
+                    Track(check, UIElement.OpacityProperty);
                     if (check.RenderTransform is not ScaleTransform scale)
                     {
                         scale = new ScaleTransform();
                         check.RenderTransformOrigin = new Point(0.5, 0.5);
                         check.RenderTransform = scale;
                     }
-                    scale.ScaleX = 0.6;
-                    scale.ScaleY = 0.6;
-                    var animation = new DoubleAnimation(1, Feedback) { EasingFunction = StandardEase };
+                    scale.ScaleX = 1;
+                    scale.ScaleY = 1;
+                    var animation = new DoubleAnimation(0.6, 1, Feedback) { EasingFunction = StandardEase };
                     scale.BeginAnimation(ScaleTransform.ScaleXProperty, animation);
                     scale.BeginAnimation(ScaleTransform.ScaleYProperty, animation.Clone());
                     Track(scale, ScaleTransform.ScaleXProperty);
@@ -956,6 +973,7 @@ public static class MotionProfile
                 glyph.RenderTransformOrigin = new Point(0.5, 0.5);
                 glyph.RenderTransform = rotate;
             }
+            rotate.Angle = toggle.IsChecked == true ? 180 : 0;
             Subscribe(toggle, ToggleButton.IsCheckedProperty, typeof(ToggleButton), (_, _) =>
             {
                 rotate.BeginAnimation(RotateTransform.AngleProperty,

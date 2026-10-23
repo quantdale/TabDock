@@ -1,11 +1,11 @@
 # Audit remediation: OpenSpec change index
 
-**Status:** A01–A04, A06–A10 implemented, reviewed, synced, and archived; A05 and A11 remain active proposals
+**Status:** A01–A11 implemented, reviewed, synced and archived; session corrections verified locally
 **Updated:** 2026-10-24
 **Source:** [current-tree audit, A01–A11](../investigations/repository-audit-2026-10-20.md)
 **Planning record:** [proposal-generation plan](audit-openspec-proposals-2026-10-20.md)
 
-All 11 changes use the configured `spec-driven` schema. A01–A04 and A06–A10 are complete and archived; their requirements are now in the main specs. A05 and A11 remain active proposals and are not implemented.
+All 11 changes use the configured `spec-driven` schema and are archived; their requirements are in the main specs. The [session correction review](../investigations/session-correction-review-2026-10-24.md) supersedes earlier overbroad acceptance claims and records corrected runtime/test evidence.
 
 ## Separate changes
 
@@ -15,15 +15,15 @@ All 11 changes use the configured `spec-driven` schema. A01–A04 and A06–A10 
 | A02 | High | [isolate-validation-storage-roots](../../openspec/changes/archive/2026-10-21-isolate-validation-storage-roots/) | 16/16 archived | Safety pair with A10 before full process/ZIP qualification |
 | A03 | High | [fix-motion-subscription-lifecycle](../../openspec/changes/archive/2026-10-23-fix-motion-subscription-lifecycle/) | 10/10 archived | Foundation for A06/A07/A08/A09; deferred Loaded attachment incidentally resolves A09's first-load null overlay on the current template |
 | A04 | Medium | [fix-persistence-latest-request-wins](../../openspec/changes/archive/2026-10-21-fix-persistence-latest-request-wins/) | 9/9 archived | Apply after A01; shared persistence safety boundaries |
-| A05 | Medium | [fix-dispatcher-safe-diagnostic-snapshots](../../openspec/changes/fix-dispatcher-safe-diagnostic-snapshots/) | 10 | Independent fixture-based development; ZIP/CLI qualification after A02/A10 |
+| A05 | Medium | [fix-dispatcher-safe-diagnostic-snapshots](../../openspec/changes/archive/2026-10-24-fix-dispatcher-safe-diagnostic-snapshots/) | 10/10 archived | Immutable owner-thread capture, same-bundle status/issues, asynchronous hotkey and atomic ZIP publication |
 | A06 | Medium | [fix-motion-color-state-restoration](../../openspec/changes/archive/2026-10-24-fix-motion-color-state-restoration/) | 7/7 archived | Base tokens are independent of animated endpoints; A07 updates them through the owner seam |
 | A07 | Medium | [preserve-motion-brush-state-authority](../../openspec/changes/archive/2026-10-24-preserve-motion-brush-state-authority/) | 10/10 archived | Semantic brushes stay styled/bound; `IsMotionSelected` is the picker seam for A08 |
 | A08 | Medium | [fix-capture-selection-highlighting](../../openspec/changes/archive/2026-10-24-fix-capture-selection-highlighting/) | 8/8 archived | Both picker templates bind `IsMotionSelected` to checked-target selection |
 | A09 | Low | [fix-button-feedback-template-timing](../../openspec/changes/archive/2026-10-24-fix-button-feedback-template-timing/) | 8/8 archived | Deferred Loaded attachment already resolves current overlays; proof added, no second observer |
 | A10 | Low | [keep-recovery-discovery-read-only](../../openspec/changes/archive/2026-10-21-keep-recovery-discovery-read-only/) | 10/10 archived | Independent direct-directory regressions; combine with A02 for complete validation safety |
-| A11 | Medium | [keep-tab-icons-off-ui-thread](../../openspec/changes/keep-tab-icons-off-ui-thread/) | 0/11, UI wait fixed | Membership no longer calls the blocking icon API; producer cap, cancellation, and picker unification remain |
+| A11 | Medium | [keep-tab-icons-off-ui-thread](../../openspec/changes/archive/2026-10-24-keep-tab-icons-off-ui-thread/) | 11/11 archived | Two shared producers, 256 queued paths, consumer cancellation, frozen dispatcher delivery and weak UI ownership |
 
-## Recommended execution order
+## Historical execution order (completed)
 
 1. Repair **A01** with explicit-path tests to prevent malformed metadata from erasing the usable backup during cleanup.
 2. Implement the **A10/A02 safety pair**, using direct-directory/non-mutating probe tests first. Their code work is independently stageable; they are a shared validation prerequisite, not a circular implementation dependency. Run full process/ZIP gates only when both are present.
@@ -58,4 +58,4 @@ The audit's optional icon-cache eviction and live Windows reduced-motion prefere
 
 ## Handoff
 
-A01, A02, A04, and A10 are archived under `openspec/changes/archive/2026-10-21-*`. A03 is archived under `openspec/changes/archive/2026-10-23-fix-motion-subscription-lifecycle`. A06 is archived under `openspec/changes/archive/2026-10-24-fix-motion-color-state-restoration`. A07 is archived under `openspec/changes/archive/2026-10-24-preserve-motion-brush-state-authority`. A08 is archived under `openspec/changes/archive/2026-10-24-fix-capture-selection-highlighting`. A09 is archived under `openspec/changes/archive/2026-10-24-fix-button-feedback-template-timing`. A05 and A11 remain active. A03's deferred attachment incidentally makes the current TdButton hover/pressed overlays respond after load; A09 must retest that contract rather than adding a second observer.
+A01, A02, A04, and A10 are archived under `openspec/changes/archive/2026-10-21-*`. A03 is archived under `openspec/changes/archive/2026-10-23-fix-motion-subscription-lifecycle`. A06 is archived under `openspec/changes/archive/2026-10-24-fix-motion-color-state-restoration`. A07 is archived under `openspec/changes/archive/2026-10-24-preserve-motion-brush-state-authority`. A08 is archived under `openspec/changes/archive/2026-10-24-fix-capture-selection-highlighting`. A09 is archived under `openspec/changes/archive/2026-10-24-fix-button-feedback-template-timing`. A05 and A11 are archived under `openspec/changes/archive/2026-10-24-fix-dispatcher-safe-diagnostic-snapshots` and `openspec/changes/archive/2026-10-24-keep-tab-icons-off-ui-thread`. All active proposals are closed. Current correction evidence: Release CI/publish gate PASS with 998/998 unit tests; reduced-motion focused 54/54; strict main specs 39/39. Physical/signing limitations remain separate, as detailed in the session correction review.

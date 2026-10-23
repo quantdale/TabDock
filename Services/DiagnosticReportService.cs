@@ -26,7 +26,9 @@ public static class DiagnosticReportService
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    public static DiagnosticReport CreateReport(bool includeHash)
+    public static DiagnosticReport CreateReport(bool includeHash) => CreateReport(includeHash, LogicalSnapshotCapture.NoProvider);
+
+    private static DiagnosticReport CreateReport(bool includeHash, LogicalSnapshotCapture logicalCapture)
     {
         var report = new DiagnosticReport
         {
@@ -40,14 +42,9 @@ public static class DiagnosticReportService
         };
         report.Build.ExecutablePath = DiagnosticEnvironmentService.RedactPath(report.Build.ExecutablePath);
 
-        try
-        {
-            report.LogicalPresentations = DiagnosticRuntime.LogicalSnapshotProvider?.Invoke()?.ToList() ?? new List<LogicalPresentationSnapshot>();
-        }
-        catch (Exception ex)
-        {
-            report.Issues.Add("logical snapshot unavailable (" + Classify(ex) + ")");
-        }
+        report.LogicalPresentations = logicalCapture.CopySnapshots();
+        report.LogicalSnapshotStatus = logicalCapture.Status;
+        report.Issues.AddRange(logicalCapture.Issues);
 
         try
         {
@@ -160,6 +157,7 @@ public static class DiagnosticReportService
         }
         builder.AppendLine();
         builder.AppendLine("[logical-presentations]");
+        builder.AppendLine($"status={report.LogicalSnapshotStatus}");
         if (report.LogicalPresentations.Count == 0)
             builder.AppendLine("none (command-line doctor observes native state and persisted metadata; use the in-product hotkey export for live logical state)");
         foreach (LogicalPresentationSnapshot logical in report.LogicalPresentations)
@@ -190,7 +188,7 @@ public static class DiagnosticReportService
         => DiagnosticEnvironmentService.SanitizeJsonText(JsonSerializer.Serialize(report, s_jsonOptions));
 
     public static string ExportBundle(string? outputPath)
-        => ExportBundleAsync(outputPath).GetAwaiter().GetResult();
+        => ExportBundleAsync(outputPath, LogicalSnapshotCapture.NoProvider).GetAwaiter().GetResult();
 
     /// <summary>
     /// Builds the support ZIP off-thread so a UI hotkey caller never blocks on
@@ -199,17 +197,45 @@ public static class DiagnosticReportService
     /// target file is never silently overwritten: the path is uniquified and
     /// the final name is returned to the caller.
     /// </summary>
-    public static async Task<string> ExportBundleAsync(string? outputPath)
-    {
-        string path = string.IsNullOrWhiteSpace(outputPath)
-            ? Path.Combine(Environment.CurrentDirectory, $"TabDock-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..8]}.zip")
-            : Path.GetFullPath(outputPath);
-        string? directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
+    public static Task<string> ExportBundleAsync(string? outputPath) =>
+        ExportFromProviderAsync(outputPath, DiagnosticRuntime.LogicalSnapshotProvider, null);
 
+    internal static async Task<string> ExportFromProviderAsync(string? outputPath,
+        Func<Task<LogicalSnapshotCapture>>? provider, Func<DiagnosticReport>? observation)
+    {
+        LogicalSnapshotCapture capture = LogicalSnapshotCapture.NoProvider;
+        if (provider != null)
+        {
+            try { capture = await provider().WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); }
+            catch { capture = LogicalSnapshotCapture.Unavailable(); }
+        }
+        provider = null;
+        return await ExportCapturedBundleAsync(outputPath, capture, observation).ConfigureAwait(false);
+    }
+
+    public static Task<string> ExportBundleAsync(string? outputPath, LogicalSnapshotCapture capture) =>
+        ExportCapturedBundleAsync(outputPath, capture, null);
+
+    /// <summary>Resolve potentially redirected Desktop storage only on a worker.</summary>
+    internal static Task<string> ExportToDesktopAsync(LogicalSnapshotCapture capture) => Task.Run(() =>
+    {
+        string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        if (string.IsNullOrWhiteSpace(desktop) || !Directory.Exists(desktop))
+            desktop = Environment.CurrentDirectory;
+        return ExportBundleAsync(Path.Combine(desktop, $"TabDock-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip"), capture);
+    });
+
+    internal static async Task<string> ExportCapturedBundleAsync(string? outputPath, LogicalSnapshotCapture capture,
+        Func<DiagnosticReport>? observation)
+    {
         return await Task.Run(() =>
         {
+            string path = string.IsNullOrWhiteSpace(outputPath)
+                ? Path.Combine(Environment.CurrentDirectory, $"TabDock-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..8]}.zip")
+                : Path.GetFullPath(outputPath);
+            string? directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory))
+                Directory.CreateDirectory(directory);
             // Publish only a completed archive. Writing directly to the final
             // desktop path lets a file watcher observe a non-empty but still-open
             // ZIP and makes consumers race the producer. The temporary name is
@@ -219,7 +245,11 @@ public static class DiagnosticReportService
             string temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
-                DiagnosticReport report = CreateReport(includeHash: true);
+                DiagnosticReport report = observation != null ? observation() : CreateReport(includeHash: true, capture);
+                report.LogicalPresentations = capture.CopySnapshots();
+                report.LogicalSnapshotStatus = capture.Status;
+                if (observation != null)
+                    report.Issues.AddRange(capture.Issues);
                 string doctor = FormatDoctor(report);
                 using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
                 using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: false))
@@ -231,24 +261,26 @@ public static class DiagnosticReportService
                     AddEntry(archive, "state-summary.json", JsonSerializer.Serialize(report.Persistence, s_jsonOptions));
                     AddEntry(archive, "hwnd-snapshot.json", JsonSerializer.Serialize(report.NativeWindows, s_jsonOptions));
                     AddEntry(archive, "logical-snapshot.json", JsonSerializer.Serialize(report.LogicalPresentations, s_jsonOptions));
+                    AddEntry(archive, "logical-status.json", JsonSerializer.Serialize(new { status = report.LogicalSnapshotStatus, issues = capture.Issues }, s_jsonOptions));
                     AddEntry(archive, "trace.jsonl", string.Join("\n", report.Trace.Select(e => JsonSerializer.Serialize(e, s_jsonlOptions))));
                     AddEntry(archive, "recent-log.txt", report.RecentLog);
                 }
 
                 string finalPath = path;
-                if (File.Exists(finalPath))
+                string baseName = Path.GetFileNameWithoutExtension(path);
+                string extension = Path.GetExtension(path);
+                for (int attempt = 1; ; attempt++)
                 {
-                    string baseName = Path.GetFileNameWithoutExtension(path);
-                    string extension = Path.GetExtension(path);
-                    int attempt = 1;
-                    do
+                    try
                     {
-                        finalPath = Path.Combine(directory ?? Environment.CurrentDirectory, $"{baseName}({attempt++}){extension}");
+                        File.Move(temporaryPath, finalPath); // atomic, never overwrite
+                        return finalPath;
                     }
-                    while (File.Exists(finalPath));
+                    catch (IOException) when (File.Exists(finalPath))
+                    {
+                        finalPath = Path.Combine(directory ?? Environment.CurrentDirectory, $"{baseName}({attempt}){extension}");
+                    }
                 }
-                File.Move(temporaryPath, finalPath);
-                return finalPath;
             }
             finally
             {

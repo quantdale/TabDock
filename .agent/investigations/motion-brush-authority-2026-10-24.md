@@ -10,4 +10,9 @@ Semantic brushes stay under their style, trigger, or binding. Hit-test-transpare
 
 ## Evidence
 
+Correction (2026-10-24): original split/picker fixtures below were substitute
+styles, not production-template verification, and the host was shown off-screen.
+Actual production split/picker templates, geometry and commands now have
+never-shown regression coverage; see [session correction review](session-correction-review-2026-10-24.md).
+
 Debug solution build: 0 warnings, 0 errors. Full xUnit suite before the actual-template addition: 964/964. `MotionBrushAuthorityTests` after the actual `TdTextBox` template case: 7/7, including split-active style updates, picker focus recycling, live bindings, and frozen-brush integrity, in both motion modes. Physical split/keyboard smoke was not run.

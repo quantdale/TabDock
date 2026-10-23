@@ -105,7 +105,7 @@ public static class DiagnosticRuntime
 {
     public static DiagnosticTrace Trace { get; } = new();
 
-    public static Func<IReadOnlyList<LogicalPresentationSnapshot>>? LogicalSnapshotProvider { get; set; }
+    public static Func<System.Threading.Tasks.Task<LogicalSnapshotCapture>>? LogicalSnapshotProvider { get; set; }
 
     public static void Record(string kind, IntPtr container = default, IntPtr guest = default,
         IntPtr foreground = default, string? group = null, string? action = null,

@@ -16,4 +16,8 @@ Keyboard focus is read from the border, its templated parent, or the ancestor ro
 
 ## Evidence
 
+Correction (2026-10-24): the original host was shown off-screen and color
+assertions accepted intermediate opacity. Never-shown fixtures and strict
+opacity endpoints now replace that weaker evidence; see [session correction review](session-correction-review-2026-10-24.md).
+
 `MotionColorStateTests` and `MotionFeedbackLifecycleTests`: 14/14 passed, both motion modes. `dotnet build TabDock.sln` Debug: 0 warnings, 0 errors. Full xUnit suite: 958/958 passed. A02/A10 were already archived, so the old full-suite deferral did not block this gate.

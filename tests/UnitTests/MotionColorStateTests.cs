@@ -81,9 +81,9 @@ public sealed class MotionColorStateTests
                 host.Realize();
                 item.IsSelected = true;
                 SettleColor(dispatcher, border, SelectedFill, SelectedEdge);
-                Assert.True(item.Focus(), "row did not accept keyboard focus");
+                Assert.True(StaDispatcherFixture.Focus(item), "managed focus state not applied");
                 SettleColor(dispatcher, border, SelectedFill, FocusEdge);
-                Assert.True(other.Focus(), "focus did not leave the selected row");
+                Assert.True(StaDispatcherFixture.Focus(other), "managed focus state did not move");
                 SettleColor(dispatcher, border, SelectedFill, SelectedEdge);
             }
         });
@@ -195,12 +195,24 @@ public sealed class MotionColorStateTests
         while (DateTime.UtcNow < deadline)
         {
             StaDispatcherFixture.Settle(dispatcher);
-            if (Same(Fill(border), fill) && Same(Edge(border), edge))
+            if (AtEndpoints(border) && Same(Fill(border), fill) && Same(Edge(border), edge))
                 return;
             StaDispatcherFixture.Pump(dispatcher, TimeSpan.FromMilliseconds(40));
         }
+        Assert.True(AtEndpoints(border), "feedback opacity did not settle to a complete endpoint");
         Assert.Equal(Channel(fill), Channel(Fill(border)));
         Assert.Equal(Channel(edge), Channel(Edge(border)));
+    }
+
+    private static bool AtEndpoints(Border border)
+    {
+        foreach (MotionProfile.MotionOverlayRole role in new[] { MotionProfile.MotionOverlayRole.Fill, MotionProfile.MotionOverlayRole.Edge })
+        {
+            Border? overlay = FindRole(border, role);
+            if (overlay is not null && overlay.Opacity > .0001 && overlay.Opacity < .9999)
+                return false;
+        }
+        return true;
     }
 
     private static Color Fill(Border border) => Visible(border, MotionProfile.MotionOverlayRole.Fill, border.Background);

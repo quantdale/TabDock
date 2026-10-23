@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -7,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using TabDock.Infrastructure;
+using TabDock.ViewModels;
 using Xunit;
 
 namespace TabDock.UnitTests;
@@ -27,8 +29,10 @@ public sealed class ButtonFeedbackTimingTests
             using (HiddenVisualHost host = HiddenVisualHost.Create())
             {
                 ResourceDictionary resources = SharedTemplateLoader.Load();
+                int commands = 0;
                 var button = new Button
                 {
+                    Command = new RelayCommand(_ => commands++),
                     Style = (Style)resources[styleKey],
                     Content = styleKey,
                     Width = 120,
@@ -50,10 +54,13 @@ public sealed class ButtonFeedbackTimingTests
                 SetPressed(button, true);
                 Wait(dispatcher, () => pressed.Opacity > 0.9);
                 Assert.True(pressed.Opacity > 0.9);
-                Assert.True(button.Focus());
+                Assert.True(StaDispatcherFixture.Focus(button));
                 SetPressed(button, false);
                 Wait(dispatcher, () => pressed.Opacity < 0.1);
-                Assert.True(button.IsKeyboardFocused);
+                Assert.True(button.IsKeyboardFocusWithin);
+                Assert.Equal(0, commands); // cosmetic state must not invoke the action
+                typeof(Button).GetMethod("OnClick", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(button, null);
+                Assert.Equal(1, commands); // managed activation remains exactly once
             }
         });
     }
@@ -80,10 +87,39 @@ public sealed class ButtonFeedbackTimingTests
                 host.Realize();
                 Raise(button, Mouse.MouseEnterEvent);
                 StaDispatcherFixture.Settle(dispatcher);
-                Assert.True(button.Focus());
+                Assert.True(StaDispatcherFixture.Focus(button));
                 Assert.True(button.IsEnabled);
             }
         });
+    }
+
+    [Fact]
+    public void ReplacedTemplateParts_AreCollectibleWhileButtonSurvives()
+    {
+        StaDispatcherFixture.Run(dispatcher =>
+        {
+            using var policy = MotionProfile.OverrideReducedMotion(false);
+            using var host = HiddenVisualHost.Create();
+            var button = new Button { Style = (Style)SharedTemplateLoader.Load()["TdButton"], Content = "replace" };
+            host.Root.Children.Add(button);
+            host.Realize();
+            WeakReference[] parts = ReplaceTemplate(button, host);
+            StaDispatcherFixture.CollectSettled(dispatcher);
+            Assert.All(parts, part => Assert.False(part.IsAlive));
+            Assert.True(button.IsEnabled);
+        });
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference[] ReplaceTemplate(Button button, HiddenVisualHost host)
+    {
+        Border oldRoot = Part<Border>(button, "ButtonBorder")!;
+        Border oldHover = Part<Border>(button, "HoverOverlay")!;
+        var refs = new[] { new WeakReference(oldRoot), new WeakReference(oldHover) };
+        MotionProfile.TryQueueOwnedCallback(oldRoot, () => oldHover.Opacity = .2);
+        button.Template = new ControlTemplate(typeof(Button)) { VisualTree = new FrameworkElementFactory(typeof(ContentPresenter)) };
+        host.Realize();
+        return refs;
     }
 
     private static void Raise(UIElement element, RoutedEvent routedEvent)

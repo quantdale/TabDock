@@ -1,8 +1,9 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -478,28 +479,28 @@ internal sealed class HiddenVisualHost : IDisposable
     private readonly HwndSource _source;
     private bool _disposed;
 
-    private HiddenVisualHost(HwndSource source, StackPanel root)
+    private HiddenVisualHost(HwndSource source, LifecyclePanel root)
     {
         _source = source;
         Root = root;
     }
 
-    public StackPanel Root { get; }
+    public LifecyclePanel Root { get; }
 
     public static HiddenVisualHost Create()
     {
         var parameters = new HwndSourceParameters("TabDock.MotionLifecycle")
         {
-            WindowStyle = unchecked((int)0x80000000) | 0x10000000 | 0x02000000,
+            WindowStyle = unchecked((int)0x80000000) | 0x02000000,
             ExtendedWindowStyle = 0x00000080 | 0x08000000,
             PositionX = -32000,
             PositionY = -32000,
-            Width = 240,
-            Height = 160,
+            Width = 1024,
+            Height = 768,
         };
         var source = new HwndSource(parameters);
-        ShowWindow(source.Handle, 8);
-        var root = new StackPanel { Width = 240, Height = 160 };
+        Assert.False(NativeMethods.IsWindowVisible(source.Handle));
+        var root = new LifecyclePanel { Width = 1024, Height = 768 };
         source.RootVisual = root;
         root.Measure(new Size(240, 160));
         root.Arrange(new Rect(0, 0, 240, 160));
@@ -522,10 +523,35 @@ internal sealed class HiddenVisualHost : IDisposable
             return;
         _disposed = true;
         Root.Children.Clear();
+        Root.UpdateLayout();
+        Assert.False(NativeMethods.IsWindowVisible(_source.Handle));
         _source.RootVisual = null;
         _source.Dispose();
     }
 
-    [DllImport("user32.dll")]
-    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    // Managed lifecycle signals on a never-shown presentation source. These
+    // tests exercise real templates/observers but do not certify native input.
+    internal sealed class LifecyclePanel : StackPanel
+    {
+        private HashSet<FrameworkElement> _attached = new();
+        public new void UpdateLayout()
+        {
+            base.UpdateLayout();
+            var current = new HashSet<FrameworkElement>();
+            Visit(this, current);
+            foreach (FrameworkElement retired in _attached.Except(current))
+                retired.RaiseEvent(new RoutedEventArgs(FrameworkElement.UnloadedEvent, retired));
+            foreach (FrameworkElement added in current.Except(_attached))
+                added.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent, added));
+            _attached = current;
+        }
+
+        private static void Visit(DependencyObject node, HashSet<FrameworkElement> elements)
+        {
+            if (node is FrameworkElement element)
+                elements.Add(element);
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+                Visit(VisualTreeHelper.GetChild(node, i), elements);
+        }
+    }
 }

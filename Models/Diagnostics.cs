@@ -244,6 +244,7 @@ public sealed class DiagnosticReport
     public List<TabDockProcessSnapshot> TabDockProcesses { get; set; } = new();
     public List<NativeWindowSnapshot> NativeWindows { get; set; } = new();
     public List<LogicalPresentationSnapshot> LogicalPresentations { get; set; } = new();
+    public string LogicalSnapshotStatus { get; set; } = "unavailable";
     public List<DiagnosticEventRecord> Trace { get; set; } = new();
     public string RecentLog { get; set; } = "unavailable";
     public List<string> Issues { get; set; } = new();

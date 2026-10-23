@@ -444,7 +444,7 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
             completion));
     }
 
-    private void ResolveIconsOnWorker(
+    private async Task ResolveIconsOnWorker(
         int refreshGeneration,
         IReadOnlyList<IconWorkItem> requests,
         CancellationToken cancellationToken,
@@ -462,7 +462,11 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
                 ImageSource? icon = null;
                 try
                 {
-                    icon = _icons.GetFileIcon(request.ExePath);
+                    icon = await _icons.GetFileIconAsync(request.ExePath, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
                 }
                 catch (Exception ex)
                 {

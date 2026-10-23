@@ -142,6 +142,7 @@
                                     <Border CornerRadius="7"
                                             infra:MotionProfile.EnableBorderStates="True"
                                             infra:MotionProfile.IsMotionSelected="{Binding IsSelected, Mode=OneWay}"
+                                            infra:MotionProfile.FocusBorder="{StaticResource TdFocusBrush}"
                                             infra:MotionProfile.HoverBackground="{StaticResource TdSurfaceHoverBrush}"
                                             infra:MotionProfile.SelectedBackground="{StaticResource TdAccentSoftBrush}"
                                             infra:MotionProfile.SelectedBorder="{StaticResource TdAccentBrush}">
@@ -157,11 +158,11 @@
                                             </Style.Triggers>
                                         </Style>
                                     </Border.Style>
-                                    <Grid Margin="11,9">
+                                    <Grid>
                                         <Border infra:MotionProfile.OverlayRole="Fill" CornerRadius="7" IsHitTestVisible="False" Opacity="0" />
                                         <Border infra:MotionProfile.OverlayRole="Edge" CornerRadius="7" Margin="-1" BorderThickness="1"
                                                 Background="Transparent" IsHitTestVisible="False" Opacity="0" />
-                                        <Grid>
+                                        <Grid Margin="11,9">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="Auto" />
