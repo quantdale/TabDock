@@ -2,7 +2,7 @@
 
 ## Current objective and status — 2026-10-24
 
-UI/UX successor campaign is active. The motion chain and capture-selection highlighting are implemented, synced, and archived. Next product work is keeping tab-icon extraction off the UI thread, then dispatcher-safe diagnostic snapshots.
+UI/UX successor campaign is active. The motion chain and capture-selection highlighting are implemented, synced, and archived. Tab membership no longer waits on uncached icon extraction. The icon proposal remains open for its producer cap, cancellation, and picker-unification tasks. Diagnostic snapshots remain active after that.
 
 Active remaining proposals: `keep-tab-icons-off-ui-thread` and `fix-dispatcher-safe-diagnostic-snapshots`.
 
@@ -16,6 +16,7 @@ Active remaining proposals: `keep-tab-icons-off-ui-thread` and `fix-dispatcher-s
   - `openspec/changes/archive/2026-10-24-fix-button-feedback-template-timing`
 - Button hover/pressed feedback resolves after template realization. A09 needed regression proof, not a second observer.
 - Evidence: Debug solution build 0 warnings/0 errors; `ButtonFeedbackTimingTests` 5/5 on actual shared and derived button templates in both motion modes. OpenSpec strict validation after the button archive: 41/41.
+- `AddCapturedWindow` now uses a completed icon-cache lookup and schedules extraction off the caller. `TabIconNonblockingTests` proves membership returns while the extractor is still gated. Picker icon tests 33/33 still pass. The proposal's two-producer cap, queue saturation, and picker-path unification are not done.
 
 ## Prior qualification limits
 

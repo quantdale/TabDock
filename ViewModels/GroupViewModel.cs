@@ -2,8 +2,10 @@ using System;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Linq;
+using System.Threading;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using TabDock.Models;
 using TabDock.Services;
 
@@ -165,7 +167,7 @@ public sealed class GroupViewModel : ViewModelBase
             var tvm = new TabViewModel(m);
             tvm.PopOutRequested += OnPopOutRequested;
             tvm.CloseWindowRequested += OnCloseWindowRequested;
-            tvm.Icon = _icons.GetFileIcon(m.ExePath);
+            ProjectIcon(tvm, m.ExePath);
             Tabs.Add(tvm);
         }
 
@@ -258,6 +260,33 @@ public sealed class GroupViewModel : ViewModelBase
         }
     }
 
+    private void ProjectIcon(TabViewModel tab, string exePath)
+    {
+        if (_icons.TryGetCachedFileIcon(exePath, out ImageSource? cached))
+        {
+            tab.Icon = cached;
+            return;
+        }
+
+        Dispatcher? dispatcher = Dispatcher.FromThread(Thread.CurrentThread);
+        _icons.RequestFileIcon(exePath, icon =>
+        {
+            void Apply()
+            {
+                if (!Tabs.Contains(tab))
+                    return;
+                if (icon is { IsFrozen: false, CanFreeze: true })
+                    icon.Freeze();
+                tab.Icon = icon;
+            }
+
+            if (dispatcher == null || dispatcher.CheckAccess())
+                Apply();
+            else
+                _ = dispatcher.BeginInvoke(Apply);
+        });
+    }
+
     public void SetActiveTab(TabViewModel tab)
     {
         int idx = Tabs.IndexOf(tab);
@@ -307,7 +336,7 @@ public sealed class GroupViewModel : ViewModelBase
             tvm = new TabViewModel(window);
             tvm.PopOutRequested += OnPopOutRequested;
             tvm.CloseWindowRequested += OnCloseWindowRequested;
-            tvm.Icon = _icons.GetFileIcon(window.ExePath);
+            ProjectIcon(tvm, window.ExePath);
 
             _group.Members.Add(window);
             memberAdded = true;

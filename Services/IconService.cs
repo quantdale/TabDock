@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
@@ -104,6 +105,67 @@ public sealed class IconService
         }
         producer.TrySetResult(result);
         return result;
+    }
+
+    /// <summary>
+    /// Schedules icon resolution without waiting. Completed cache entries invoke
+    /// <paramref name="completed"/> before return. A miss joins the existing
+    /// single-flight producer or starts one off the caller thread. Queue
+    /// rejection and cancellation are not represented as cached extraction failures.
+    /// </summary>
+    internal void RequestFileIcon(string exePath, Action<ImageSource?> completed)
+    {
+        if (completed == null)
+            throw new ArgumentNullException(nameof(completed));
+        if (string.IsNullOrEmpty(exePath))
+        {
+            completed(null);
+            return;
+        }
+
+        Task<ImageSource?>? pending;
+        lock (_cacheGate)
+        {
+            if (_iconCache.TryGetValue(exePath, out ImageSource? cached))
+            {
+                completed(cached);
+                return;
+            }
+
+            if (!_inFlight.TryGetValue(exePath, out TaskCompletionSource<ImageSource?>? producer))
+            {
+                producer = new TaskCompletionSource<ImageSource?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _inFlight[exePath] = producer;
+                Task.Run(() => ProduceFileIcon(exePath, producer));
+            }
+            pending = producer.Task;
+        }
+
+        _ = pending.ContinueWith(
+            task => completed(task.Status == TaskStatus.RanToCompletion ? task.Result : null),
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.Default);
+    }
+
+    private void ProduceFileIcon(string exePath, TaskCompletionSource<ImageSource?> producer)
+    {
+        ImageSource? result;
+        try
+        {
+            result = _testExtractor != null ? _testExtractor(exePath) : ExtractFileIcon(exePath);
+        }
+        catch
+        {
+            result = null;
+        }
+
+        lock (_cacheGate)
+        {
+            _iconCache[exePath] = result;
+            _inFlight.Remove(exePath);
+        }
+        producer.TrySetResult(result);
     }
 
     /// <summary>

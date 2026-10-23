@@ -21,7 +21,7 @@ All 11 changes use the configured `spec-driven` schema. A01–A04 and A06–A10 
 | A08 | Medium | [fix-capture-selection-highlighting](../../openspec/changes/archive/2026-10-24-fix-capture-selection-highlighting/) | 8/8 archived | Both picker templates bind `IsMotionSelected` to checked-target selection |
 | A09 | Low | [fix-button-feedback-template-timing](../../openspec/changes/archive/2026-10-24-fix-button-feedback-template-timing/) | 8/8 archived | Deferred Loaded attachment already resolves current overlays; proof added, no second observer |
 | A10 | Low | [keep-recovery-discovery-read-only](../../openspec/changes/archive/2026-10-21-keep-recovery-discovery-read-only/) | 10/10 archived | Independent direct-directory regressions; combine with A02 for complete validation safety |
-| A11 | Medium | [keep-tab-icons-off-ui-thread](../../openspec/changes/keep-tab-icons-off-ui-thread/) | 11 | Independent icon/membership seam; preserve UI lifetime and existing cache contracts |
+| A11 | Medium | [keep-tab-icons-off-ui-thread](../../openspec/changes/keep-tab-icons-off-ui-thread/) | 0/11, UI wait fixed | Membership no longer calls the blocking icon API; producer cap, cancellation, and picker unification remain |
 
 ## Recommended execution order
 
