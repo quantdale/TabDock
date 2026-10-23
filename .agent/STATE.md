@@ -2,9 +2,9 @@
 
 ## Current objective and status — 2026-10-24
 
-UI/UX successor campaign is active. Motion lifetime, color restoration, brush authority, and capture-selection highlighting are implemented, synced, and archived. Next product work is button feedback timing, which should be retested against the deferred attachment before adding another observer.
+UI/UX successor campaign is active. The motion chain and capture-selection highlighting are implemented, synced, and archived. Next product work is keeping tab-icon extraction off the UI thread, then dispatcher-safe diagnostic snapshots.
 
-Active remaining proposals: `fix-button-feedback-template-timing`, `fix-dispatcher-safe-diagnostic-snapshots`, and `keep-tab-icons-off-ui-thread`.
+Active remaining proposals: `keep-tab-icons-off-ui-thread` and `fix-dispatcher-safe-diagnostic-snapshots`.
 
 ## Completed this session
 
@@ -13,8 +13,9 @@ Active remaining proposals: `fix-button-feedback-template-timing`, `fix-dispatch
   - `openspec/changes/archive/2026-10-24-fix-motion-color-state-restoration`
   - `openspec/changes/archive/2026-10-24-preserve-motion-brush-state-authority`
   - `openspec/changes/archive/2026-10-24-fix-capture-selection-highlighting`
-- Checked picker rows now highlight from `WindowInfo.IsSelected`, including unfocused and multi-checked rows, without changing list focus or workspace-tab selection.
-- Evidence this session: Debug solution build 0 warnings/0 errors; full xUnit 964/964 before the picker visual cases; `CaptureSelectionHighlightTests` 5/5 on the actual standalone and inline templates in both motion modes. OpenSpec strict validation after the picker archive: 42/42.
+  - `openspec/changes/archive/2026-10-24-fix-button-feedback-template-timing`
+- Button hover/pressed feedback resolves after template realization. A09 needed regression proof, not a second observer.
+- Evidence: Debug solution build 0 warnings/0 errors; `ButtonFeedbackTimingTests` 5/5 on actual shared and derived button templates in both motion modes. OpenSpec strict validation after the button archive: 41/41.
 
 ## Prior qualification limits
 
@@ -22,4 +23,4 @@ The 2026-09-17 release campaign remains complete only for the available single-m
 
 ## Handoff
 
-Do not treat this file's publication commit as self-described here. Next session should read Git for `HEAD`, `origin/main`, and CI. Next product work is `fix-button-feedback-template-timing`. No UI soak, SendInput, mixed-DPI, Windows 10, or signing qualification is implied.
+Do not treat this file's publication commit as self-described here. Next session should read Git for `HEAD`, `origin/main`, and CI. Next product work is `keep-tab-icons-off-ui-thread`. No UI soak, SendInput, mixed-DPI, Windows 10, or signing qualification is implied.
