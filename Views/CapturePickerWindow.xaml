@@ -141,6 +141,7 @@
                                 <DataTemplate>
                                     <Border CornerRadius="7"
                                             infra:MotionProfile.EnableBorderStates="True"
+                                            infra:MotionProfile.IsMotionSelected="{Binding IsSelected, Mode=OneWay}"
                                             infra:MotionProfile.HoverBackground="{StaticResource TdSurfaceHoverBrush}"
                                             infra:MotionProfile.SelectedBackground="{StaticResource TdAccentSoftBrush}"
                                             infra:MotionProfile.SelectedBorder="{StaticResource TdAccentBrush}">

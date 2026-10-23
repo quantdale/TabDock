@@ -1,11 +1,11 @@
 # Audit remediation: OpenSpec change index
 
-**Status:** A01–A04, A06, A07, and A10 implemented, reviewed, synced, and archived; A05, A08, A09, and A11 remain active proposals
+**Status:** A01–A04, A06–A08, and A10 implemented, reviewed, synced, and archived; A05, A09, and A11 remain active proposals
 **Updated:** 2026-10-24
 **Source:** [current-tree audit, A01–A11](../investigations/repository-audit-2026-10-20.md)
 **Planning record:** [proposal-generation plan](audit-openspec-proposals-2026-10-20.md)
 
-All 11 changes use the configured `spec-driven` schema. A01–A04, A06, A07, and A10 are complete and archived; their requirements are now in the main specs. A05, A08, A09, and A11 remain active proposals and are not implemented.
+All 11 changes use the configured `spec-driven` schema. A01–A04, A06–A08, and A10 are complete and archived; their requirements are now in the main specs. A05, A09, and A11 remain active proposals and are not implemented.
 
 ## Separate changes
 
@@ -18,7 +18,7 @@ All 11 changes use the configured `spec-driven` schema. A01–A04, A06, A07, and
 | A05 | Medium | [fix-dispatcher-safe-diagnostic-snapshots](../../openspec/changes/fix-dispatcher-safe-diagnostic-snapshots/) | 10 | Independent fixture-based development; ZIP/CLI qualification after A02/A10 |
 | A06 | Medium | [fix-motion-color-state-restoration](../../openspec/changes/archive/2026-10-24-fix-motion-color-state-restoration/) | 7/7 archived | Base tokens are independent of animated endpoints; A07 updates them through the owner seam |
 | A07 | Medium | [preserve-motion-brush-state-authority](../../openspec/changes/archive/2026-10-24-preserve-motion-brush-state-authority/) | 10/10 archived | Semantic brushes stay styled/bound; `IsMotionSelected` is the picker seam for A08 |
-| A08 | Medium | [fix-capture-selection-highlighting](../../openspec/changes/fix-capture-selection-highlighting/) | 8 | After A07 and its prerequisites; picker model-to-visual mapping only |
+| A08 | Medium | [fix-capture-selection-highlighting](../../openspec/changes/archive/2026-10-24-fix-capture-selection-highlighting/) | 8/8 archived | Both picker templates bind `IsMotionSelected` to checked-target selection |
 | A09 | Low | [fix-button-feedback-template-timing](../../openspec/changes/fix-button-feedback-template-timing/) | 8 | After A03; verify incidental fixes rather than force redundant code changes |
 | A10 | Low | [keep-recovery-discovery-read-only](../../openspec/changes/archive/2026-10-21-keep-recovery-discovery-read-only/) | 10/10 archived | Independent direct-directory regressions; combine with A02 for complete validation safety |
 | A11 | Medium | [keep-tab-icons-off-ui-thread](../../openspec/changes/keep-tab-icons-off-ui-thread/) | 11 | Independent icon/membership seam; preserve UI lifetime and existing cache contracts |
@@ -58,4 +58,4 @@ The audit's optional icon-cache eviction and live Windows reduced-motion prefere
 
 ## Handoff
 
-A01, A02, A04, and A10 are archived under `openspec/changes/archive/2026-10-21-*`. A03 is archived under `openspec/changes/archive/2026-10-23-fix-motion-subscription-lifecycle`. A06 is archived under `openspec/changes/archive/2026-10-24-fix-motion-color-state-restoration`. A07 is archived under `openspec/changes/archive/2026-10-24-preserve-motion-brush-state-authority`. A05, A08, A09, and A11 remain active. A03's deferred attachment incidentally makes the current TdButton hover/pressed overlays respond after load; A09 must retest that contract rather than adding a second observer.
+A01, A02, A04, and A10 are archived under `openspec/changes/archive/2026-10-21-*`. A03 is archived under `openspec/changes/archive/2026-10-23-fix-motion-subscription-lifecycle`. A06 is archived under `openspec/changes/archive/2026-10-24-fix-motion-color-state-restoration`. A07 is archived under `openspec/changes/archive/2026-10-24-preserve-motion-brush-state-authority`. A08 is archived under `openspec/changes/archive/2026-10-24-fix-capture-selection-highlighting`. A05, A09, and A11 remain active. A03's deferred attachment incidentally makes the current TdButton hover/pressed overlays respond after load; A09 must retest that contract rather than adding a second observer.
