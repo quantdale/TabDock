@@ -72,6 +72,17 @@ public static class MotionProfile
         return owner is not null && owner.TryQueue(action);
     }
 
+    /// <summary>
+    /// Replaces authoritative border base tokens without sampling an animated
+    /// endpoint. Later live style/binding updates call this seam; it does not
+    /// observe picker selection or theme resources itself.
+    /// </summary>
+    internal static bool TryUpdateBorderBaseTokens(DependencyObject element, Color? background, Color? border)
+    {
+        MotionAttachmentOwner? owner = Owner(element);
+        return owner is not null && owner.TryUpdateBorderBaseTokens(background, border);
+    }
+
     private static MotionAttachmentOwner? Owner(DependencyObject element) =>
         element.GetValue(AttachmentOwnerProperty) as MotionAttachmentOwner;
 
@@ -322,6 +333,14 @@ public static class MotionProfile
         private bool _templateWatched;
         private int _generation = 1;
         private PopupAnimation? _previousPopupAnimation;
+        private Color _baseBackground;
+        private Color _baseBorder;
+        private bool _hasBaseBackground;
+        private bool _hasBaseBorder;
+        private bool _pointerOver;
+        private SolidColorBrush? _renderBackground;
+        private SolidColorBrush? _renderBorder;
+        private Action? _refreshBorder;
 
         private MotionAttachmentOwner(FrameworkElement element) => _element = element;
 
@@ -357,6 +376,28 @@ public static class MotionProfile
                     action();
                 });
             _queued.Add(operation);
+            return true;
+        }
+
+        public bool TryUpdateBorderBaseTokens(Color? background, Color? border)
+        {
+            if (_disposed)
+                return false;
+            if (background is Color fill)
+            {
+                _baseBackground = fill;
+                _hasBaseBackground = true;
+                if (_renderBackground is not null)
+                    _renderBackground.Color = fill;
+            }
+            if (border is Color edge)
+            {
+                _baseBorder = edge;
+                _hasBaseBorder = true;
+                if (_renderBorder is not null)
+                    _renderBorder.Color = edge;
+            }
+            _refreshBorder?.Invoke();
             return true;
         }
 
@@ -467,6 +508,10 @@ public static class MotionProfile
             StopClocks();
             _wired = MotionBehavior.None;
             _templateWatched = false;
+            _pointerOver = false;
+            _refreshBorder = null;
+            _renderBackground = null;
+            _renderBorder = null;
             ActiveObserverCount = 0;
             DescriptorObserverCount = 0;
         }
@@ -718,41 +763,47 @@ public static class MotionProfile
         {
             if (_element is not Border border || border.Background is not SolidColorBrush background)
                 return false;
-            var normalBackground = new SolidColorBrush(background.Color);
-            border.Background = normalBackground;
-            SolidColorBrush? normalBorder = null;
+            if (!_hasBaseBackground)
+            {
+                _baseBackground = background.Color;
+                _hasBaseBackground = true;
+            }
+            var renderBackground = new SolidColorBrush(_baseBackground);
+            border.Background = renderBackground;
+            _renderBackground = renderBackground;
+            SolidColorBrush? renderBorder = null;
             if (border.BorderBrush is SolidColorBrush borderBrush)
             {
-                normalBorder = new SolidColorBrush(borderBrush.Color);
-                border.BorderBrush = normalBorder;
+                if (!_hasBaseBorder)
+                {
+                    _baseBorder = borderBrush.Color;
+                    _hasBaseBorder = true;
+                }
+                renderBorder = new SolidColorBrush(_baseBorder);
+                border.BorderBrush = renderBorder;
+                _renderBorder = renderBorder;
             }
-
-            bool hasSelectedBackground = GetSelectedBackground(border) is SolidColorBrush;
-            Color hoverBackground = (GetHoverBackground(border) as SolidColorBrush)?.Color ?? normalBackground.Color;
-            Color selectedBackground = (GetSelectedBackground(border) as SolidColorBrush)?.Color ?? normalBackground.Color;
-            bool hasSelectedBorder = GetSelectedBorder(border) is SolidColorBrush;
-            Color? selectedBorder = (GetSelectedBorder(border) as SolidColorBrush)?.Color;
-            Color? focusBorder = (GetFocusBorder(border) as SolidColorBrush)?.Color;
 
             void Update()
             {
-                bool selected = (hasSelectedBackground || hasSelectedBorder) && IsSelectedNow();
+                bool selected = HasSelectionSource(border) && IsSelectedNow();
+                bool hovered = _pointerOver || border.IsMouseOver;
+                Color hoverBackground = (GetHoverBackground(border) as SolidColorBrush)?.Color ?? _baseBackground;
+                Color selectedBackground = (GetSelectedBackground(border) as SolidColorBrush)?.Color ?? _baseBackground;
                 Color backgroundTarget = selected
                     ? selectedBackground
-                    : border.IsMouseOver ? hoverBackground : normalBackground.Color;
-                normalBackground.BeginAnimation(SolidColorBrush.ColorProperty,
-                    new ColorAnimation(backgroundTarget, State) { EasingFunction = StandardEase });
-                Track(normalBackground, SolidColorBrush.ColorProperty);
-                if (normalBorder is null)
+                    : hovered ? hoverBackground : _baseBackground;
+                AnimateColor(renderBackground, backgroundTarget);
+                if (renderBorder is null || !_hasBaseBorder)
                     return;
-                Color borderTarget = focusBorder != null && border.IsKeyboardFocusWithin
+                Color? selectedBorder = (GetSelectedBorder(border) as SolidColorBrush)?.Color;
+                Color? focusBorder = (GetFocusBorder(border) as SolidColorBrush)?.Color;
+                Color borderTarget = focusBorder != null && IsFocusNow()
                     ? focusBorder.Value
                     : selected && selectedBorder != null
                         ? selectedBorder.Value
-                        : normalBorder.Color;
-                normalBorder.BeginAnimation(SolidColorBrush.ColorProperty,
-                    new ColorAnimation(borderTarget, State) { EasingFunction = StandardEase });
-                Track(normalBorder, SolidColorBrush.ColorProperty);
+                        : _baseBorder;
+                AnimateColor(renderBorder, borderTarget);
             }
 
             bool IsSelectedNow()
@@ -762,19 +813,53 @@ public static class MotionProfile
                     || row is ListViewItem listViewItem && listViewItem.IsSelected;
             }
 
-            MouseEventHandler onMouse = (_, _) => Update();
-            border.MouseEnter += onMouse;
-            border.MouseLeave += onMouse;
-            AddRemoval(() => border.MouseEnter -= onMouse);
-            AddRemoval(() => border.MouseLeave -= onMouse);
+            bool IsFocusNow()
+            {
+                if (border.IsKeyboardFocusWithin)
+                    return true;
+                if (border.TemplatedParent is UIElement parent && parent.IsKeyboardFocusWithin)
+                    return true;
+                FrameworkElement? row = FindAncestorRow(border);
+                return row is not null && row.IsKeyboardFocusWithin;
+            }
+
+            _refreshBorder = Update;
+            MouseEventHandler enter = (_, _) =>
+            {
+                _pointerOver = true;
+                Update();
+            };
+            MouseEventHandler leave = (_, _) =>
+            {
+                _pointerOver = false;
+                Update();
+            };
+            border.MouseEnter += enter;
+            border.MouseLeave += leave;
+            AddRemoval(() => border.MouseEnter -= enter);
+            AddRemoval(() => border.MouseLeave -= leave);
             Subscribe(border, FrameworkElement.IsKeyboardFocusWithinProperty, typeof(FrameworkElement), (_, _) => Update());
+            if (border.TemplatedParent is UIElement templatedParent)
+                Subscribe(templatedParent, FrameworkElement.IsKeyboardFocusWithinProperty, typeof(FrameworkElement), (_, _) => Update());
             FrameworkElement? ancestor = FindAncestorRow(border);
             if (ancestor is not null)
             {
                 Subscribe(ancestor, ListBoxItem.IsSelectedProperty, typeof(ListBoxItem), (_, _) => Update());
+                if (!ReferenceEquals(ancestor, border.TemplatedParent))
+                    Subscribe(ancestor, FrameworkElement.IsKeyboardFocusWithinProperty, typeof(FrameworkElement), (_, _) => Update());
             }
             Update();
             return true;
+        }
+
+        private static bool HasSelectionSource(Border border) =>
+            GetSelectedBackground(border) is SolidColorBrush || GetSelectedBorder(border) is SolidColorBrush;
+
+        private void AnimateColor(SolidColorBrush brush, Color target)
+        {
+            brush.BeginAnimation(SolidColorBrush.ColorProperty,
+                new ColorAnimation(target, State) { EasingFunction = StandardEase });
+            Track(brush, SolidColorBrush.ColorProperty);
         }
 
         private bool WireChevron()

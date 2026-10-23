@@ -1,11 +1,11 @@
 # Audit remediation: OpenSpec change index
 
-**Status:** A01–A04 and A10 implemented, reviewed, synced, and archived; A05–A09 and A11 remain active proposals
-**Updated:** 2026-10-23
+**Status:** A01–A04, A06, and A10 implemented, reviewed, synced, and archived; A05, A07–A09, and A11 remain active proposals
+**Updated:** 2026-10-24
 **Source:** [current-tree audit, A01–A11](../investigations/repository-audit-2026-10-20.md)
 **Planning record:** [proposal-generation plan](audit-openspec-proposals-2026-10-20.md)
 
-All 11 changes use the configured `spec-driven` schema. A01–A04 and A10 are complete and archived; their requirements are now in the main specs. A05–A09 and A11 remain active proposals and are not implemented.
+All 11 changes use the configured `spec-driven` schema. A01–A04, A06, and A10 are complete and archived; their requirements are now in the main specs. A05, A07–A09, and A11 remain active proposals and are not implemented.
 
 ## Separate changes
 
@@ -16,7 +16,7 @@ All 11 changes use the configured `spec-driven` schema. A01–A04 and A10 are co
 | A03 | High | [fix-motion-subscription-lifecycle](../../openspec/changes/archive/2026-10-23-fix-motion-subscription-lifecycle/) | 10/10 archived | Foundation for A06/A07/A08/A09; deferred Loaded attachment incidentally resolves A09's first-load null overlay on the current template |
 | A04 | Medium | [fix-persistence-latest-request-wins](../../openspec/changes/archive/2026-10-21-fix-persistence-latest-request-wins/) | 9/9 archived | Apply after A01; shared persistence safety boundaries |
 | A05 | Medium | [fix-dispatcher-safe-diagnostic-snapshots](../../openspec/changes/fix-dispatcher-safe-diagnostic-snapshots/) | 10 | Independent fixture-based development; ZIP/CLI qualification after A02/A10 |
-| A06 | Medium | [fix-motion-color-state-restoration](../../openspec/changes/fix-motion-color-state-restoration/) | 7 | After A03; establish base-token correctness before A07 |
+| A06 | Medium | [fix-motion-color-state-restoration](../../openspec/changes/archive/2026-10-24-fix-motion-color-state-restoration/) | 7/7 archived | Base tokens are independent of animated endpoints; A07 updates them through the owner seam |
 | A07 | Medium | [preserve-motion-brush-state-authority](../../openspec/changes/preserve-motion-brush-state-authority/) | 10 | After A03/A06; shared template/rendering authority for A08 |
 | A08 | Medium | [fix-capture-selection-highlighting](../../openspec/changes/fix-capture-selection-highlighting/) | 8 | After A07 and its prerequisites; picker model-to-visual mapping only |
 | A09 | Low | [fix-button-feedback-template-timing](../../openspec/changes/fix-button-feedback-template-timing/) | 8 | After A03; verify incidental fixes rather than force redundant code changes |
@@ -58,4 +58,4 @@ The audit's optional icon-cache eviction and live Windows reduced-motion prefere
 
 ## Handoff
 
-A01, A02, A04, and A10 are archived under `openspec/changes/archive/2026-10-21-*`. A03 is archived under `openspec/changes/archive/2026-10-23-fix-motion-subscription-lifecycle` after its specs were synced. A05–A09 and A11 remain active, unimplemented proposals. A03's deferred attachment incidentally makes the current TdButton hover/pressed overlays respond after load; A09 must retest that contract rather than adding a second observer.
+A01, A02, A04, and A10 are archived under `openspec/changes/archive/2026-10-21-*`. A03 is archived under `openspec/changes/archive/2026-10-23-fix-motion-subscription-lifecycle`. A06 is archived under `openspec/changes/archive/2026-10-24-fix-motion-color-state-restoration`. A05, A07–A09, and A11 remain active. A03's deferred attachment incidentally makes the current TdButton hover/pressed overlays respond after load; A09 must retest that contract rather than adding a second observer.
