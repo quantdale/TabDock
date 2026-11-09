@@ -46,13 +46,6 @@ public sealed class IconService
     }
 
 
-    /// <summary>Background-only compatibility wrapper; UI callers use the completed cache or async lookup.</summary>
-    public ImageSource? GetFileIcon(string exePath)
-    {
-        Task<ImageSource?> pending = GetFileIconAsync(exePath);
-        return pending.Wait(TimeSpan.FromSeconds(5)) ? pending.GetAwaiter().GetResult() : null;
-    }
-
     internal const int MaximumActiveProducers = 2;
     internal const int MaximumQueuedPaths = 256;
     private readonly Queue<(string Path, TaskCompletionSource<ImageSource?> Completion)> _pending = new();

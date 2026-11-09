@@ -30,9 +30,9 @@
 # ------------------------------------------------------------------------------
 # NuGet package restore outputs (defensive)
 # ------------------------------------------------------------------------------
-# The current projects have no PackageReference nodes, but NuGet-generated
-# project lock/state files are still created under obj/. The rules below
-# protect against future package usage or PackageReference additions.
+# NuGet-generated project lock/state files are created under obj/. The
+# rules below also cover packages/ if a future restore layout uses it.
+# Direct PackageReferences currently live in the app and unit-test projects.
 
 **/packages/
 *.nupkg

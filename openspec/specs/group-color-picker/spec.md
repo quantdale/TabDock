@@ -1,17 +1,17 @@
 # group-color-picker
 
 ## Purpose
-Captures the intended (non-)behavior of `GroupViewModel.PickColorCommand`, clarifying it as a documented no-op rather than a misdirected trigger for the capture picker.
+Workspace accent selection is the container color chip. It must change and persist the workspace accent without opening the capture picker, and the removed `PickColorCommand` placeholder must not be restored as a capture trigger.
 
 ## Requirements
 
-### Requirement: PickColorCommand is a documented no-op, not a misdirected trigger
-`GroupViewModel.PickColorCommand` SHALL NOT invoke `AddWindowsRequested` (`ViewModels/GroupViewModel.cs:103`). Executing `PickColorCommand` SHALL be a documented no-op: it SHALL NOT raise `AddWindowsRequested`, open the capture picker, or change `AccentColor` (or any other observable state).
+### Requirement: Accent selection does not open capture
+The product SHALL NOT expose `PickColorCommand`. Choosing a palette color from the container color chip SHALL set that workspace's accent to the chosen color and persist it. That choice SHALL NOT open the capture picker. Opening the capture picker SHALL remain a separate add-windows action.
 
-#### Scenario: Executing the command raises no events and changes no state
-- **WHEN** `PickColorCommand.Execute` is invoked
-- **THEN** `AddWindowsRequested` is not raised, the capture picker is not opened, `AccentColor` is unchanged, and no other observable state changes
+#### Scenario: A palette choice changes accent without opening capture
+- **WHEN** the user chooses a palette color from the container color chip
+- **THEN** the workspace accent becomes that color, the change is persisted, and the capture picker does not open
 
-#### Scenario: AddWindowsRequested is only raised by RequestAddWindows
-- **WHEN** any code path other than `GroupViewModel.RequestAddWindows()` needs to open the capture picker
-- **THEN** `PickColorCommand`'s execution is not a valid trigger for that — `AddWindowsRequested` is raised solely by `RequestAddWindows()`
+#### Scenario: Capture is not reached through a color command
+- **WHEN** the user opens the capture picker
+- **THEN** that action is the add-windows request, not a color command, and `PickColorCommand` is not available

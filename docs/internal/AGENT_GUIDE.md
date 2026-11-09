@@ -77,7 +77,7 @@ The main csproj excludes `bin/**`, `obj/**`, `tests/**`, `docs/**`, and `Spike/*
 | `Models/` | Data objects: `CapturedWindow`, `Group`, `PersistedState`, persistence DTOs |
 | `ViewModels/` | WPF view models and `RelayCommand` |
 | `Views/` | WPF windows and dialogs (`MainWindow`, `ContainerWindow`, fallback `CapturePickerWindow`); group switching and routine capture are in-window container surfaces |
-| `Infrastructure/` | `NativeHwndHost` — a plain `HwndHost` marker window sized/positioned to match the WPF-rendered content area; guests are positioned over it, never reparented into it |
+| `Infrastructure/` | `NativeHwndHost` (content-area marker; guests are positioned over it, never reparented), `MotionProfile` (owned opt-in feedback), `WindowChromeTheme` (best-effort dark DWM chrome for standard windows), and `BindingTraceDiagnostics` (opt-in `TABDOCK_TRACE_BINDINGS` capture) |
 | `Converters/` | `BoolToVisibilityConverter`, `ColorToBrushConverter` |
 | `app.manifest` | DPI awareness, compatibility, and execution level (`asInvoker`) |
 
@@ -252,12 +252,11 @@ The pattern was made mandatory after a historical runaway self-recursion inciden
 
 One-line short imperative summary; no bare URLs and no `progress`/`WIP` placeholders as the summary.
 
-### Known dead/inert code (do not clean up)
+### Known inert code and removed footguns
 
-- `MainViewModel.SelectedGroup` — bound in `MainWindow.xaml` but never consumed.
-- `GroupViewModel.CloseGroupCommand` / `CloseRequested` — no binding and no subscriber.
-- `GroupViewModel.PickColorCommand` — deliberate inert placeholder (documented no-op; see `openspec/specs/group-color-picker`).
-- `IconService.GetWindowIcon(IntPtr)` — no production callers; kept for the tests.
+- `MainViewModel.SelectedGroup` is live. `MainWindow.xaml` binds it, and `OpenSelectedGroupCommand` uses it when the command parameter is not a group. Do not delete it as unused.
+- `GroupViewModel.CloseGroupCommand` / `CloseRequested` still have no XAML binding and no subscriber. `CloseGroup()` raises the event after a successful close. Leave that seam unless a new caller audit shows it is safe to remove.
+- `GroupViewModel.PickColorCommand` and `IconService.GetWindowIcon(IntPtr)` were removed after caller verification (`a7ab0a7`). The unused blocking `IconService.GetFileIcon(string)` wrapper was removed later; it waited up to five seconds and had no callers. Do not restore either icon wrapper or the color command. UI icons use `TryGetCachedFileIcon` or `GetFileIconAsync`. Accent selection is the container color chip (`openspec/specs/group-color-picker`).
 - Many `NativeMethods.cs` declarations exist solely for the ValidationDriver via its link-include of the file (annotated `Test-harness only` in the source) — an "unused code" cleanup pass will break the driver build.
 
 ### Spec-driven changes (OpenSpec)

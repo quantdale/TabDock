@@ -21,7 +21,7 @@ Shepherd's presentation authority:
 ```text
 BuildIdentity + environment/persistence probes
                     |
-             DoctorReportService
+          DiagnosticReportService
                     |
        observed HWND snapshot + bounded trace
                     |

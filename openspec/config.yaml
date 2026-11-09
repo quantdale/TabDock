@@ -5,13 +5,15 @@ schema: spec-driven
 # Add your tech stack, conventions, style guides, domain knowledge, etc.
 context: |
   Tech stack: C# 12 / .NET 8 / WPF (net8.0-windows), Windows 10/11 x64.
-  Native interop is P/Invoke only - no third-party NuGet packages.
+  Native interop is P/Invoke in NativeMethods.cs. The only added package is
+  Microsoft-maintained System.Threading.AccessControl for the product-mutation
+  lease; do not add unrelated third-party NuGet packages or remove that one.
   Capture model: "Shepherd" - guests are never reparented; TabDock positions
   and z-orders the external HWND over the container's content area.
-  Architecture: Services/ (GroupManager, WindowShepherdService,
-  GuestLifecycleService, WinEventMonitor, PersistenceService, HotkeyService,
-  IconService, LoggingService), Models/, ViewModels/, Views/,
-  Infrastructure/NativeHwndHost, Converters/.
+  Architecture: Services/, Models/, ViewModels/, Views/,
+  Infrastructure/ (NativeHwndHost, MotionProfile, WindowChromeTheme,
+  BindingTraceDiagnostics), Converters/. Accent selection is the container
+  color chip, not a PickColorCommand.
   Code style: file-scoped namespaces, explicit usings (ImplicitUsings
   disabled), nullable reference types enabled, XML doc comments on public
   types, all P/Invoke centralized in NativeMethods.cs.

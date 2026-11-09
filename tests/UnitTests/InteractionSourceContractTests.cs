@@ -330,6 +330,31 @@ public sealed class InteractionSourceContractTests
         Assert.Equal(5, Regex.Matches(code, @"private readonly ReplaceableDispatcherTimer\s+").Count);
     }
 
+    [Fact]
+    public void AccentSelection_PersistsPaletteColorWithoutOpeningCapture()
+    {
+        string view = Read("Views/ContainerWindow.xaml.cs");
+        string handler = Slice(
+            view,
+            "private void ColorMenuItem_Click",
+            "private void AddWindow_Click");
+        Assert.Contains("_viewModel.AccentColor = color;", handler);
+        Assert.Contains("_manager.SaveState();", handler);
+        Assert.DoesNotContain("AddWindowsRequested", handler);
+        Assert.DoesNotContain("RequestAddWindows", handler);
+        Assert.DoesNotContain("OpenCapturePanel", handler);
+
+        string xaml = Read("Views/ContainerWindow.xaml");
+        Assert.Contains("AutomationProperties.Name=\"Change workspace accent\"", xaml);
+        Assert.Contains("Click=\"ColorMenuItem_Click\"", xaml);
+
+        string group = Read("ViewModels/GroupViewModel.cs");
+        Assert.DoesNotContain("PickColorCommand", group);
+        Assert.Single(Regex.Matches(group, @"AddWindowsRequested\?\.Invoke"));
+        string request = Slice(group, "public void RequestAddWindows()", "public GroupViewModel(");
+        Assert.Contains("AddWindowsRequested?.Invoke(this, EventArgs.Empty);", request);
+    }
+
     private static string Read(string relativePath)
         => File.ReadAllText(Path.Combine(RepoRoot, relativePath));
 
