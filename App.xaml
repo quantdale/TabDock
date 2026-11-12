@@ -19,27 +19,28 @@
         <FontFamily x:Key="TdMonoFont">Cascadia Mono, Consolas</FontFamily>
         <FontFamily x:Key="TdIconFont">Segoe Fluent Icons, Segoe MDL2 Assets, Segoe UI Symbol</FontFamily>
 
-        <!-- Compact, utility-first dark product palette. -->
-        <SolidColorBrush x:Key="TdWindowBackgroundBrush" Color="#080A0E" />
+        <!-- Graphite instruments, luminous lavender actions, and clear semantic status colors.
+             TdContentVoidBrush is locked to the native content host fill. -->
+        <SolidColorBrush x:Key="TdWindowBackgroundBrush" Color="#0B0B12" />
         <SolidColorBrush x:Key="TdChromeBrush" Color="#0C0F14" />
-        <SolidColorBrush x:Key="TdSurfaceBrush" Color="#0F1217" />
-        <SolidColorBrush x:Key="TdSurfaceRaisedBrush" Color="#151A22" />
-        <SolidColorBrush x:Key="TdSurfaceInteractiveBrush" Color="#1B212B" />
-        <SolidColorBrush x:Key="TdSurfaceHoverBrush" Color="#222A36" />
-        <SolidColorBrush x:Key="TdInputBrush" Color="#11151C" />
+        <SolidColorBrush x:Key="TdSurfaceBrush" Color="#15151F" />
+        <SolidColorBrush x:Key="TdSurfaceRaisedBrush" Color="#1C1C29" />
+        <SolidColorBrush x:Key="TdSurfaceInteractiveBrush" Color="#252535" />
+        <SolidColorBrush x:Key="TdSurfaceHoverBrush" Color="#272D38" />
+        <SolidColorBrush x:Key="TdInputBrush" Color="#11111B" />
         <SolidColorBrush x:Key="TdContentVoidBrush" Color="#07090D" />
         <SolidColorBrush x:Key="TdBorderBrush" Color="#272D38" />
-        <SolidColorBrush x:Key="TdBorderStrongBrush" Color="#394252" />
+        <SolidColorBrush x:Key="TdBorderStrongBrush" Color="#494961" />
         <SolidColorBrush x:Key="TdTextBrush" Color="#F7F8FA" />
-        <SolidColorBrush x:Key="TdTextMutedBrush" Color="#ADB4C0" />
-        <SolidColorBrush x:Key="TdTextSubtleBrush" Color="#7E8898" />
-        <SolidColorBrush x:Key="TdAccentBrush" Color="#6798FF" />
-        <SolidColorBrush x:Key="TdAccentTextBrush" Color="#A9C3FF" />
-        <SolidColorBrush x:Key="TdAccentSoftBrush" Color="#18233F" />
+        <SolidColorBrush x:Key="TdTextMutedBrush" Color="#BABACB" />
+        <SolidColorBrush x:Key="TdTextSubtleBrush" Color="#9292A9" />
+        <SolidColorBrush x:Key="TdAccentBrush" Color="#A78BFA" />
+        <SolidColorBrush x:Key="TdAccentTextBrush" Color="#D3C4FF" />
+        <SolidColorBrush x:Key="TdAccentSoftBrush" Color="#2A2045" />
         <SolidColorBrush x:Key="TdFocusBrush" Color="#9CB8FF" />
-        <SolidColorBrush x:Key="TdPrimaryFillBrush" Color="#486ED8" />
-        <SolidColorBrush x:Key="TdPrimaryHoverBrush" Color="#557BE3" />
-        <SolidColorBrush x:Key="TdPrimaryPressedBrush" Color="#3D5FBF" />
+        <SolidColorBrush x:Key="TdPrimaryFillBrush" Color="#C4AEFF" />
+        <SolidColorBrush x:Key="TdPrimaryHoverBrush" Color="#D5C4FF" />
+        <SolidColorBrush x:Key="TdPrimaryPressedBrush" Color="#A88CE8" />
         <SolidColorBrush x:Key="TdSplitActiveBrush" Color="#2A3E68" />
         <SolidColorBrush x:Key="TdSplitHoverBrush" Color="#22304F" />
         <SolidColorBrush x:Key="TdWarningBrush" Color="#F2C45B" />
@@ -50,8 +51,8 @@
         <SolidColorBrush x:Key="TdDangerSurfaceBrush" Color="#301B21" />
         <SolidColorBrush x:Key="TdDangerBorderBrush" Color="#64303B" />
         <SolidColorBrush x:Key="TdDangerHoverBrush" Color="#3A2028" />
-        <SolidColorBrush x:Key="TdScrollThumbBrush" Color="#2E3644" />
-        <SolidColorBrush x:Key="TdScrollThumbHoverBrush" Color="#4A5468" />
+        <SolidColorBrush x:Key="TdScrollThumbBrush" Color="#3C3B50" />
+        <SolidColorBrush x:Key="TdScrollThumbHoverBrush" Color="#625D7D" />
 
         <Style x:Key="TdFocusVisualStyle">
             <Setter Property="Control.Template">
@@ -64,11 +65,27 @@
             </Setter>
         </Style>
 
+        <Style x:Key="TdWindowIconFallback" TargetType="{x:Type TextBlock}">
+            <Setter Property="Text" Value="&#xE737;" />
+            <Setter Property="FontFamily" Value="{StaticResource TdIconFont}" />
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="Foreground" Value="{StaticResource TdTextMutedBrush}" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="IsHitTestVisible" Value="False" />
+            <Setter Property="Visibility" Value="Collapsed" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Icon}" Value="{x:Null}">
+                    <Setter Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
         <Style x:Key="TdCard" TargetType="{x:Type Border}">
             <Setter Property="Background" Value="{StaticResource TdSurfaceBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource TdBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="CornerRadius" Value="18" />
         </Style>
 
         <Style x:Key="TdBadge" TargetType="{x:Type Border}">
@@ -100,13 +117,13 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="7" SnapsToDevicePixels="True"
+                                CornerRadius="10" SnapsToDevicePixels="True"
                                 infrastructure:MotionProfile.EnableButtonFeedback="True">
                             <Grid>
-                                <Border x:Name="HoverOverlay" Background="#12FFFFFF"
-                                        CornerRadius="7" Opacity="0" />
-                                <Border x:Name="PressedOverlay" Background="#24000000"
-                                        CornerRadius="7" Opacity="0" />
+                                <Border x:Name="HoverOverlay" Background="#1CFFFFFF"
+                                        CornerRadius="10" Opacity="0" />
+                                <Border x:Name="PressedOverlay" Background="#30000000"
+                                        CornerRadius="10" Opacity="0" />
                                 <ContentPresenter Margin="{TemplateBinding Padding}"
                                                   HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                                   VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
@@ -129,8 +146,8 @@
 
         <Style x:Key="TdPrimaryButton" TargetType="{x:Type Button}" BasedOn="{StaticResource TdButton}">
             <Setter Property="Background" Value="{StaticResource TdPrimaryFillBrush}" />
+            <Setter Property="Foreground" Value="#211535" />
             <Setter Property="BorderBrush" Value="{StaticResource TdPrimaryFillBrush}" />
-            <Setter Property="Foreground" Value="White" />
         </Style>
 
         <Style x:Key="TdSecondaryButton" TargetType="{x:Type Button}" BasedOn="{StaticResource TdButton}" />
@@ -333,7 +350,7 @@
                                     Background="{StaticResource TdInputBrush}"
                                     BorderBrush="{StaticResource TdBorderStrongBrush}"
                                     BorderThickness="1" CornerRadius="4">
-                                <TextBlock x:Name="CheckMark" Text="✓" Foreground="White"
+                                <TextBlock x:Name="CheckMark" Text="✓" Foreground="#211535"
                                            FontSize="12" FontWeight="Bold" Visibility="Collapsed"
                                            HorizontalAlignment="Center" VerticalAlignment="Center"
                                            infrastructure:MotionProfile.EnableCheckmarkFeedback="True" />
@@ -378,17 +395,17 @@
                         <Border x:Name="RowBorder" Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="7" Padding="{TemplateBinding Padding}"
+                                CornerRadius="12" Padding="{TemplateBinding Padding}"
                                 SnapsToDevicePixels="True"
                                 infrastructure:MotionProfile.EnableRowFeedback="True">
                             <Grid>
                                 <Border x:Name="RowHoverOverlay" Background="#0DFFFFFF"
-                                        CornerRadius="7" Opacity="0" />
+                                        CornerRadius="12" Opacity="0" />
                                 <Border x:Name="RowSelectedOverlay" Background="{StaticResource TdAccentSoftBrush}"
                                         BorderBrush="{StaticResource TdAccentBrush}" BorderThickness="1"
-                                        CornerRadius="7" Opacity="0" />
+                                        CornerRadius="12" Opacity="0" />
                                 <Border x:Name="RowFocusOverlay" BorderBrush="{StaticResource TdFocusBrush}"
-                                        BorderThickness="1" CornerRadius="7" Opacity="0" />
+                                        BorderThickness="1" CornerRadius="12" Opacity="0" />
                                 <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                                   VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
                             </Grid>

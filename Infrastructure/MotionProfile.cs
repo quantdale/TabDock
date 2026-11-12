@@ -697,6 +697,7 @@ public static class MotionProfile
             {
                 if (hover is not null)
                     Fade(hover, 1, Feedback);
+                ScaleTo(border, 1.015, State);
             };
             MouseEventHandler leave = (_, _) =>
             {

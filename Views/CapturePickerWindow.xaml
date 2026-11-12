@@ -19,7 +19,7 @@
         UseLayoutRounding="True"
         SnapsToDevicePixels="True">
 
-    <Grid Margin="22,20,22,18">
+    <Grid Margin="24">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -34,10 +34,8 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel Grid.Column="0">
-                <TextBlock Text="Capture windows" Style="{StaticResource TdHeading}" />
-                <TextBlock Text="Select the apps to keep together, then choose their destination workspace."
-                           Style="{StaticResource TdBodyMuted}"
-                           Margin="0,3,18,0" TextWrapping="Wrap" />
+                <TextBlock Text="Capture windows" Style="{StaticResource TdHeading}" FontSize="28" />
+
             </StackPanel>
             <Button Grid.Column="1" Style="{StaticResource TdToolbarButton}"
                     Content="Refresh windows"
@@ -49,15 +47,15 @@
 
         <!-- Search and destination are one control band so the filtering and
              routing decisions read as one coherent step. -->
-        <Border Grid.Row="1" Style="{StaticResource TdCard}" Padding="12" Margin="0,0,0,10">
+        <Border Grid.Row="1" Style="{StaticResource TdCard}" Padding="16" Margin="0,0,0,12">
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" MinWidth="220" />
+                    <ColumnDefinition Width="3*" />
                     <ColumnDefinition Width="14" />
-                    <ColumnDefinition Width="250" MinWidth="190" />
+                    <ColumnDefinition Width="2*" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
-                    <TextBlock Style="{StaticResource TdSectionLabel}" Text="SEARCH WINDOWS" Margin="1,0,0,6" />
+                    <TextBlock Style="{StaticResource TdSectionLabel}" Text="Search" Margin="1,0,0,6" />
                     <TextBox Style="{StaticResource TdTextBox}"
                              Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                              AutomationProperties.Name="Search capturable windows"
@@ -65,7 +63,7 @@
                              ToolTip="Filter by window title, executable path, or window class" />
                 </StackPanel>
                 <StackPanel Grid.Column="2">
-                    <TextBlock Style="{StaticResource TdSectionLabel}" Text="DESTINATION" Margin="1,0,0,6" />
+                    <TextBlock Style="{StaticResource TdSectionLabel}" Text="Workspace" Margin="1,0,0,6" />
                     <ComboBox Style="{StaticResource TdComboBox}"
                               ItemsSource="{Binding Groups}"
                               SelectedItem="{Binding SelectedGroupOption}"
@@ -82,7 +80,7 @@
         </Border>
 
         <!-- Primary selection surface. -->
-        <Border Grid.Row="2" Style="{StaticResource TdCard}" Padding="10">
+        <Border Grid.Row="2" Style="{StaticResource TdCard}" Padding="14">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -94,9 +92,9 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
                         <TextBlock Text="Available windows" Style="{StaticResource TdSubheading}" FontSize="14" />
-                        <Border Style="{StaticResource TdBadge}" Margin="9,0,0,0" Padding="7,2">
+                        <Border Style="{StaticResource TdBadge}" HorizontalAlignment="Left" Margin="0,6,0,0" Padding="7,2">
                             <TextBlock Text="{Binding SelectionSummary}"
                                        Foreground="{StaticResource TdTextMutedBrush}" FontSize="10"
                                        AutomationProperties.AutomationId="CaptureSelectionSummary"
@@ -139,7 +137,7 @@
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <Border CornerRadius="7"
+                                    <Border CornerRadius="10"
                                             infra:MotionProfile.EnableBorderStates="True"
                                             infra:MotionProfile.IsMotionSelected="{Binding IsSelected, Mode=OneWay}"
                                             infra:MotionProfile.FocusBorder="{StaticResource TdFocusBrush}"
@@ -159,8 +157,8 @@
                                         </Style>
                                     </Border.Style>
                                     <Grid>
-                                        <Border infra:MotionProfile.OverlayRole="Fill" CornerRadius="7" IsHitTestVisible="False" Opacity="0" />
-                                        <Border infra:MotionProfile.OverlayRole="Edge" CornerRadius="7" Margin="-1" BorderThickness="1"
+                                        <Border infra:MotionProfile.OverlayRole="Fill" CornerRadius="10" IsHitTestVisible="False" Opacity="0" />
+                                        <Border infra:MotionProfile.OverlayRole="Edge" CornerRadius="10" Margin="-1" BorderThickness="1"
                                                 Background="Transparent" IsHitTestVisible="False" Opacity="0" />
                                         <Grid Margin="11,9">
                                         <Grid.ColumnDefinitions>
@@ -174,19 +172,22 @@
                                                   VerticalAlignment="Center" Margin="1,0,11,0"
                                                   AutomationProperties.Name="{Binding Title, StringFormat='Select {0}'}"
                                                   AutomationProperties.HelpText="Select this window for capture" />
-                                        <Border Grid.Column="1" Width="36" Height="36" CornerRadius="7"
+                                        <Border Grid.Column="1" Width="36" Height="36" CornerRadius="10"
                                                 Background="{StaticResource TdSurfaceInteractiveBrush}"
                                                 BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="1"
                                                 Margin="0,0,11,0">
-                                            <Image Source="{Binding Icon}" Width="20" Height="20"
+                                            <Grid>
+                                                <TextBlock Style="{StaticResource TdWindowIconFallback}" />
+                                                <Image Source="{Binding Icon}" Width="20" Height="20"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Grid>
                                         </Border>
                                         <StackPanel Grid.Column="2" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Title}" Foreground="{StaticResource TdTextBrush}"
                                                        FontWeight="SemiBold" FontSize="12"
                                                        TextTrimming="CharacterEllipsis" />
                                             <TextBlock Text="{Binding ExePath}" Foreground="{StaticResource TdTextSubtleBrush}"
-                                                       FontFamily="{StaticResource TdMonoFont}" FontSize="9.5"
+                                                       FontFamily="{StaticResource TdMonoFont}" FontSize="10.5"
                                                        TextTrimming="CharacterEllipsis" Margin="0,3,0,0" />
                                         </StackPanel>
                                         </Grid>
@@ -216,7 +217,7 @@
                                        Foreground="{StaticResource TdTextMutedBrush}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
-                        <TextBlock Text="No matching windows" Style="{StaticResource TdSubheading}"
+                        <TextBlock Text="Nothing in view yet" Style="{StaticResource TdSubheading}"
                                    FontSize="14" HorizontalAlignment="Center" />
                         <TextBlock Text="{Binding EmptyFilterText}" Style="{StaticResource TdBodyMuted}"
                                    FontSize="11" TextAlignment="Center" TextWrapping="Wrap" Margin="0,5,0,0" />
@@ -254,10 +255,7 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0"
-                           Text="Search matches title, executable path, and window class."
-                           Foreground="{StaticResource TdTextSubtleBrush}" FontSize="10"
-                           VerticalAlignment="Center" Margin="0,0,14,0" />
+
                 <StackPanel Grid.Column="1" Orientation="Horizontal">
                     <Button Style="{StaticResource TdSecondaryButton}"
                             Content="Cancel" MinWidth="82" IsCancel="True"

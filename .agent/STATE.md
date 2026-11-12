@@ -1,26 +1,24 @@
 # TabDock agent state
 
-## Objective and status — 2026-11-09
+## Objective and status — 2026-11-13
 
-Repository maintenance is implemented on `maintenance/repository-cleanup` from verified `origin/main` `fff02e4`. Publication must be checked against current Git and exact-SHA hosted CI, not this file. No active OpenSpec changes remain. The accent-contract archive is `2026-11-09-align-accent-selection-contract`.
+Frontend overhaul implemented; supervised native-workflow qualification remains pending. See [the active plan](plans/ui-overhaul.md) for reference lock, scope and evidence. Resolve branch/HEAD/status dynamically with Git.
 
-## What changed
+## Completed
 
-- `group-color-picker` now records the shipped color chip. It no longer requires the removed `PickColorCommand` no-op.
-- The agent guide no longer says launcher `SelectedGroup` is unused, and it no longer tells agents to preserve `PickColorCommand` or `GetWindowIcon`.
-- The unused blocking `IconService.GetFileIcon(string)` wrapper is gone. UI icons stay on the cache or `GetFileIconAsync`.
-- The diagnostics map names `DiagnosticReportService`. OpenSpec context names the AccessControl package and the real Infrastructure types.
-
-## Preserved
-
-- `CloseGroupCommand` / `CloseRequested` remain; they still have no subscriber.
-- The detached `.kilo/worktrees/neighborly-air` worktree was not modified.
-- Historical audit notes were not rewritten.
+- Refero-informed graphite/lavender design across launcher, standalone picker, container, inline capture and shared primitives.
+- Separated launcher actions and container toolbar to preserve minimum-width usability; clearer workspace identities, empty states, pale tactile actions and icon fallbacks.
+- Inline capture height now accounts for actual window height and measured chrome; confirmation actions stay visible at 420×300.
+- Preserved underlying commands, state/data flows, automation IDs, keyboard affordances, native content colors and Shepherd/no-reparent architecture.
 
 ## Validation
 
-Local Release `scripts/validate.ps1 -Configuration Release -Ci -Publish` passed on parent `fff02e4` plus this working tree: 999/999 unit tests, 0 warnings, audited restore, resource/visual synthetic gate, native ABI, doctor/pending-recovery/support-bundle privacy, OpenSpec 39/39, and publish `--version` smoke. Hosted CI for the integrated SHA is not recorded here.
+- Solution build: zero warnings/errors. Unit tests: 1,004 passed. Diff whitespace check passed.
+- Default/minimum-size fixture renders reviewed; final inline minimum-size render confirms selection list scrolls above visible Cancel/Add selected controls.
+- Evidence: `D:/Documents/tryPython/_AgentArtifacts/TabDock/sessions/20261113-codex-ui-overhaul/`.
+- No live capture/split/input or physical mixed-DPI qualification. docs/TESTING.md requires supervised real input; supervision was requested asynchronously.
+- User authorized committing and pushing the redesign directly to main on 2026-11-13. Hosted CI for the resulting exact SHA must be checked and reported in session output.
 
-## Handoff
+## Next action
 
-Read Git for branch, HEAD, `origin/main`, cleanliness, and exact-SHA CI. Do not recreate the removed color command or blocking icon wrapper. Further product changes need fresh evidence.
+Review the redesign and run supervised native capture/split/pop-out/keyboard and mixed-DPI qualification. Do not represent fixture rendering or unit tests as proof of live desktop behavior.

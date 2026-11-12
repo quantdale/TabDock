@@ -4,6 +4,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:infra="clr-namespace:TabDock.Infrastructure"
+        xmlns:converters="clr-namespace:TabDock.Converters"
         xmlns:vm="clr-namespace:TabDock.ViewModels"
         mc:Ignorable="d"
         Title="{Binding Name}"
@@ -21,6 +22,7 @@
         Name="Root">
 
     <Window.Resources>
+        <converters:RemainingHeightConverter x:Key="RemainingHeight" />
         <!-- Native-feeling title-bar controls keep the compact Windows geometry
              while using the same surface/focus system as the rest of TabDock. -->
         <Style TargetType="Button" x:Key="CaptionButtonStyle">
@@ -28,7 +30,7 @@
             <Setter Property="Foreground" Value="{StaticResource TdTextMutedBrush}" />
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Width" Value="46" />
+            <Setter Property="Width" Value="32" />
             <Setter Property="Height" Value="38" />
             <Setter Property="FontFamily" Value="{StaticResource TdIconFont}" />
             <Setter Property="FontSize" Value="10" />
@@ -37,7 +39,8 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="CaptionBorder"
+                        <Border x:Name="CaptionBorder" CornerRadius="6"
+                                infra:MotionProfile.EnableButtonFeedback="True"
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}">
@@ -93,7 +96,7 @@
                       CornerRadius="0" />
     </WindowChrome.WindowChrome>
 
-    <Grid Background="{StaticResource TdWindowBackgroundBrush}">
+    <Grid x:Name="WorkspaceLayout" Background="{StaticResource TdWindowBackgroundBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -104,7 +107,7 @@
         <!-- True-centered * Auto * caption geometry is intentionally retained;
              tests and presentation guarantees depend on the title remaining
              centered independently of the controls on either side. -->
-        <Border Grid.Row="0" Height="38" Background="{StaticResource TdChromeBrush}"
+        <Border x:Name="CaptionBand" Grid.Row="0" Height="38" Background="{StaticResource TdChromeBrush}"
                 BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="0,0,0,1">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -139,8 +142,8 @@
 
                 <Grid Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center">
                     <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
-                               Foreground="{StaticResource TdTextBrush}" FontSize="12" FontWeight="SemiBold"
-                               MaxWidth="220" TextTrimming="CharacterEllipsis" HorizontalAlignment="Center" TextAlignment="Center"
+                               Foreground="{StaticResource TdTextBrush}" FontSize="13" FontWeight="SemiBold"
+                               MaxWidth="140" TextTrimming="CharacterEllipsis" HorizontalAlignment="Center" TextAlignment="Center"
                                WindowChrome.IsHitTestVisibleInChrome="True"
                                ToolTip="Double-click to rename"
                                MouseLeftButtonDown="TitleText_MouseLeftButtonDown">
@@ -158,7 +161,7 @@
 
                     <TextBox Text="{Binding Name, UpdateSourceTrigger=LostFocus}"
                              VerticalAlignment="Center" MinHeight="26" Height="28" Padding="7,3"
-                             MaxWidth="220" MinWidth="140" HorizontalAlignment="Center"
+                             MaxWidth="140" MinWidth="110" HorizontalAlignment="Center"
                              WindowChrome.IsHitTestVisibleInChrome="True"
                              x:Name="RenameBox"
                              AutomationProperties.Name="Rename workspace"
@@ -180,27 +183,6 @@
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal"
                             HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,6,0">
-                        <Button Style="{StaticResource ChromePillButtonStyle}"
-                                Content="Workspace ▾" Margin="0,0,2,0"
-                                AutomationProperties.AutomationId="GroupSelector"
-                                AutomationProperties.Name="Switch workspace"
-                                Click="GroupButton_Click"
-                                ToolTip="Switch workspace, create a new one, rename, or delete this workspace">
-                            <Button.ContextMenu>
-                                <ContextMenu x:Name="GroupContextMenu" Closed="GroupContextMenu_Closed" />
-                            </Button.ContextMenu>
-                        </Button>
-                        <Button Style="{StaticResource ChromePillButtonStyle}"
-                                Content="Split ▾" Margin="2,0,0,0"
-                                Click="SplitAffordance_Click"
-                                IsEnabled="{Binding CanUseSplitAffordance}"
-                                ToolTip="{Binding SplitAffordanceToolTip}"
-                                AutomationProperties.AutomationId="SplitAffordance"
-                                AutomationProperties.Name="Split tabs"
-                                AutomationProperties.HelpText="{Binding SplitAffordanceToolTip}" />
-                    </StackPanel>
-
                     <Button Style="{StaticResource CaptionButtonStyle}"
                             Content="&#xE710;" Click="AddWindow_Click"
                             IsEnabled="{Binding CaptureAllowed}"
@@ -227,8 +209,31 @@
              active tab and keyboard focus. MinHeight (not Height) lets the strip
              grow by the horizontal-scrollbar height when tabs overflow, so tab
              content is never squeezed or clipped. -->
-        <Border Grid.Row="1" Background="{StaticResource TdSurfaceBrush}" MinHeight="42"
+        <Border x:Name="WorkspaceBand" Grid.Row="1" Background="{StaticResource TdSurfaceBrush}" MinHeight="42"
                 BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="0,0,0,1">
+            <DockPanel LastChildFill="True">
+                <Border DockPanel.Dock="Top" Padding="8,5" BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="0,0,0,1" Background="{StaticResource TdChromeBrush}">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,6,0">
+                        <Button Style="{StaticResource ChromePillButtonStyle}"
+                                Content="Workspace ▾" Margin="0,0,2,0"
+                                AutomationProperties.AutomationId="GroupSelector"
+                                AutomationProperties.Name="Switch workspace"
+                                Click="GroupButton_Click"
+                                ToolTip="Switch workspace, create a new one, rename, or delete this workspace">
+                            <Button.ContextMenu>
+                                <ContextMenu x:Name="GroupContextMenu" Closed="GroupContextMenu_Closed" />
+                            </Button.ContextMenu>
+                        </Button>
+                        <Button Style="{StaticResource ChromePillButtonStyle}"
+                                Content="Split ▾" Margin="2,0,0,0"
+                                Click="SplitAffordance_Click"
+                                IsEnabled="{Binding CanUseSplitAffordance}"
+                                ToolTip="{Binding SplitAffordanceToolTip}"
+                                AutomationProperties.AutomationId="SplitAffordance"
+                                AutomationProperties.Name="Split tabs"
+                                AutomationProperties.HelpText="{Binding SplitAffordanceToolTip}" />
+                    </StackPanel>
+                </Border>
             <ListBox x:Name="TabsListBox"
                      ItemsSource="{Binding DisplayTabs}"
                      SelectedItem="{Binding ActiveTab, Mode=OneWay}"
@@ -414,6 +419,7 @@
                     </DataTemplate>
                 </ListBox.Resources>
             </ListBox>
+            </DockPanel>
         </Border>
 
         <!-- Inline capture uses the same hierarchy and selection treatment as
@@ -425,7 +431,14 @@
                 DataContext="{x:Null}"
                 Background="{StaticResource TdSurfaceRaisedBrush}"
                 BorderBrush="{StaticResource TdBorderStrongBrush}"
-                BorderThickness="0,0,0,1" Padding="16" MaxHeight="360">
+                BorderThickness="0,0,0,1" Padding="12">
+            <Border.MaxHeight>
+                <MultiBinding Converter="{StaticResource RemainingHeight}" ConverterParameter="360">
+                    <Binding ElementName="Root" Path="ActualHeight" />
+                    <Binding ElementName="CaptionBand" Path="ActualHeight" />
+                    <Binding ElementName="WorkspaceBand" Path="ActualHeight" />
+                </MultiBinding>
+            </Border.MaxHeight>
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -441,7 +454,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel>
                         <TextBlock Text="Add windows" Style="{StaticResource TdSubheading}" FontSize="14" />
-                        <TextBlock Text="Search the desktop, select one or more windows, then add them to this workspace."
+                        <TextBlock Text="Select windows for this workspace."
                                    Style="{StaticResource TdBodyMuted}" FontSize="10.5" Margin="0,3,12,0" />
                     </StackPanel>
                     <Button Grid.Column="1" Style="{StaticResource TdToolbarButton}"
@@ -639,8 +652,8 @@
                     </Popup.Style>
                     <Border Background="{StaticResource TdSurfaceRaisedBrush}"
                             BorderBrush="{StaticResource TdBorderStrongBrush}"
-                            BorderThickness="1" CornerRadius="10"
-                            Padding="26,22" MaxWidth="390"
+                            BorderThickness="1" CornerRadius="18"
+                            Padding="30,26" MaxWidth="390"
                             SnapsToDevicePixels="True">
                         <StackPanel>
                             <Border Width="48" Height="48" CornerRadius="8"
@@ -651,9 +664,9 @@
                                 <TextBlock Text="+" Foreground="{StaticResource TdAccentTextBrush}" FontSize="26"
                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Border>
-                            <TextBlock Text="This workspace is empty" Style="{StaticResource TdSubheading}"
+                            <TextBlock Text="Your windows belong here" Style="{StaticResource TdSubheading}"
                                        HorizontalAlignment="Center" />
-                            <TextBlock Text="Capture one or more desktop windows to start working here."
+                            <TextBlock Text="Add a window to begin."
                                        Style="{StaticResource TdBodyMuted}" FontSize="11"
                                        TextWrapping="Wrap" TextAlignment="Center" Margin="0,5,0,12" />
                             <Button Style="{StaticResource TdPrimaryButton}"

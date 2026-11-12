@@ -44,7 +44,7 @@ public sealed class FrontendDesignContractTests
         Assert.Contains("AutomationProperties.AutomationId=\"CaptureAdmissionStatus\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"GroupsListView\"", xaml, StringComparison.Ordinal);
         Assert.Contains("AutomationProperties.AutomationId=\"LauncherEmptyStateHeading\"", xaml, StringComparison.Ordinal);
-        Assert.Contains("Build your first workspace", xaml, StringComparison.Ordinal);
+        Assert.Contains("Make room for focus", xaml, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public sealed class FrontendDesignContractTests
         // The prompt must not be a WPF sibling of the native host: the child
         // HWND always paints above siblings (airspace), hiding it entirely.
         int hostIndex = xaml.IndexOf("x:Name=\"ContentHost\"", StringComparison.Ordinal);
-        int emptyTextIndex = xaml.IndexOf("This workspace is empty", StringComparison.Ordinal);
+        int emptyTextIndex = xaml.IndexOf("Your windows belong here", StringComparison.Ordinal);
         Assert.True(hostIndex >= 0 && emptyTextIndex > hostIndex, "empty-state copy must follow the content host");
         Assert.Contains(
             "<Popup x:Name=\"EmptyStateOverlay\"",

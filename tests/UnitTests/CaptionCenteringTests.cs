@@ -21,7 +21,7 @@ public sealed class CaptionCenteringTests
         Assert.Contains("Grid.Column=\"1\" HorizontalAlignment=\"Center\"", xaml, StringComparison.Ordinal);
         Assert.Contains("TextAlignment=\"Center\"", xaml, StringComparison.Ordinal);
         // MaxWidth trimming must still exist so a long title does not cover side controls.
-        Assert.Contains("MaxWidth=\"220\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("MaxWidth=\"140\"", xaml, StringComparison.Ordinal);
         // Rename TextBox must also be centered in the same column.
         int renameIdx = xaml.IndexOf("x:Name=\"RenameBox\"", StringComparison.Ordinal);
         Assert.True(renameIdx > 0, "RenameBox must exist");

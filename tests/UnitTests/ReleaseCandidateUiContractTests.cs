@@ -179,7 +179,7 @@ public sealed class ReleaseCandidateUiContractTests
         Assert.Contains("TextTrimming=\"CharacterEllipsis\"", picker, StringComparison.Ordinal);
         Assert.Contains("ScrollViewer.HorizontalScrollBarVisibility=\"Auto\"", container, StringComparison.Ordinal);
         Assert.Contains("AutomationProperties.AutomationId=\"WorkspaceTabs\"", container, StringComparison.Ordinal);
-        Assert.Contains("MaxWidth=\"220\"", container, StringComparison.Ordinal);
+        Assert.Contains("MaxWidth=\"140\"", container, StringComparison.Ordinal);
     }
 
     [Fact]
