@@ -44,7 +44,7 @@ public sealed class FrontendDesignContractTests
         Assert.Contains("AutomationProperties.AutomationId=\"CaptureAdmissionStatus\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"GroupsListView\"", xaml, StringComparison.Ordinal);
         Assert.Contains("AutomationProperties.AutomationId=\"LauncherEmptyStateHeading\"", xaml, StringComparison.Ordinal);
-        Assert.Contains("Make room for focus", xaml, StringComparison.Ordinal);
+        Assert.Contains("No workspaces yet", xaml, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -221,6 +221,14 @@ focus; they do not qualify physical input/activation. `ProductionTemplateContinu
 exercises actual picker and split templates, bulk commands, identity-safe refresh,
 rebindings and overlay bounds. Optional `TABDOCK_REVIEW_RENDER_ROOT` writes
 managed off-screen template PNGs for review, never desktop screenshots.
+`FrontendInteractionRegressionTests` adds managed Enter/Space routing and
+contrast checks plus complete WPF client-layout fixtures at minimum/default
+sizes, including overflowing tabs, long titles, empty searches and blocked
+capture/recovery. Its layout loader strips code-behind handlers and replaces
+the native marker with a WPF border; its key tests raise managed routed events
+and inject focus properties. Neither path sends input or proves native
+activation, guest presentation, screen-reader announcements, or physical DPI.
+Set the render root to your session artifact directory to retain those PNGs.
 Synthetic resource snapshots stay labeled synthetic.
 
 Each resource run writes `resource-stability.json` and

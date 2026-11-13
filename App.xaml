@@ -31,6 +31,8 @@
         <SolidColorBrush x:Key="TdContentVoidBrush" Color="#07090D" />
         <SolidColorBrush x:Key="TdBorderBrush" Color="#272D38" />
         <SolidColorBrush x:Key="TdBorderStrongBrush" Color="#494961" />
+        <!-- Enabled control boundaries are distinct from decorative card edges. -->
+        <SolidColorBrush x:Key="TdControlBorderBrush" Color="#7F7F9C" />
         <SolidColorBrush x:Key="TdTextBrush" Color="#F7F8FA" />
         <SolidColorBrush x:Key="TdTextMutedBrush" Color="#BABACB" />
         <SolidColorBrush x:Key="TdTextSubtleBrush" Color="#9292A9" />
@@ -99,7 +101,7 @@
         <Style x:Key="TdButton" TargetType="{x:Type Button}">
             <Setter Property="Foreground" Value="{StaticResource TdTextBrush}" />
             <Setter Property="Background" Value="{StaticResource TdSurfaceInteractiveBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource TdBorderStrongBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource TdControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="14,8" />
             <Setter Property="MinHeight" Value="38" />
@@ -177,7 +179,7 @@
         <Style x:Key="TdTextBox" TargetType="{x:Type TextBox}">
             <Setter Property="Foreground" Value="{StaticResource TdTextBrush}" />
             <Setter Property="Background" Value="{StaticResource TdInputBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource TdBorderStrongBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource TdControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="11,8" />
             <Setter Property="MinHeight" Value="38" />
@@ -218,7 +220,7 @@
         <Style x:Key="TdComboBox" TargetType="{x:Type ComboBox}">
             <Setter Property="Foreground" Value="{StaticResource TdTextBrush}" />
             <Setter Property="Background" Value="{StaticResource TdInputBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource TdBorderStrongBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource TdControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="10,6" />
             <Setter Property="MinHeight" Value="38" />
@@ -276,7 +278,7 @@
                                     <ControlTemplate TargetType="{x:Type ToggleButton}">
                                         <Border x:Name="ComboBorder"
                                                 Background="{StaticResource TdInputBrush}"
-                                                BorderBrush="{StaticResource TdBorderStrongBrush}"
+                                                BorderBrush="{StaticResource TdControlBorderBrush}"
                                                 BorderThickness="1" CornerRadius="7"
                                                 MinHeight="38" SnapsToDevicePixels="True">
                                             <Grid>
@@ -348,7 +350,7 @@
                             </Grid.ColumnDefinitions>
                             <Border x:Name="CheckBorder" Grid.Column="0" Width="18" Height="18"
                                     Background="{StaticResource TdInputBrush}"
-                                    BorderBrush="{StaticResource TdBorderStrongBrush}"
+                                    BorderBrush="{StaticResource TdControlBorderBrush}"
                                     BorderThickness="1" CornerRadius="4">
                                 <TextBlock x:Name="CheckMark" Text="✓" Foreground="#211535"
                                            FontSize="12" FontWeight="Bold" Visibility="Collapsed"

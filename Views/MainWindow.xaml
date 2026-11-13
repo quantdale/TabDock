@@ -104,23 +104,23 @@
             </Grid>
         </Border>
 
-        <Border Grid.Row="2" Style="{StaticResource TdCard}" Padding="20">
+        <Border Grid.Row="2" Style="{StaticResource TdCard}" Padding="16">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <Grid Grid.Row="0" Margin="0,2,0,20">
+                <Grid Grid.Row="0" Margin="0,2,0,12">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <Grid>
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <TextBlock Text="Workspaces" Style="{StaticResource TdHeading}" FontSize="32" />
+                        <TextBlock Text="Workspaces" Style="{StaticResource TdHeading}" FontSize="28" />
                         <Border Grid.Column="1" Style="{StaticResource TdBadge}" VerticalAlignment="Center">
                             <TextBlock Text="{Binding Groups.Count, StringFormat='{}{0:00} workspaces'}" FontFamily="{StaticResource TdMonoFont}" Foreground="{StaticResource TdTextMutedBrush}" FontSize="11"/>
                         </Border>
                     </Grid>
-                    <StackPanel Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,18,0,0">
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,12,0,0">
                         <Button Style="{StaticResource TdSecondaryButton}"
                                 Content="New workspace" MinWidth="120" Margin="0,0,8,0"
                                 Command="{Binding NewGroupCommand}"
@@ -197,10 +197,13 @@
                         </ListView.ItemTemplate>
                     </ListView>
 
-                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
-                                MaxWidth="390">
-                        <StackPanel.Style>
-                            <Style TargetType="StackPanel">
+                    <!-- The actions are already visible above. Keep the empty
+                         state compact when recovery/admission notices need space. -->
+                    <TextBlock Text="No workspaces yet"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               AutomationProperties.AutomationId="LauncherEmptyStateHeading">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource TdSubheading}">
                                 <Setter Property="Visibility" Value="Collapsed" />
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding Groups.Count}" Value="0">
@@ -208,38 +211,8 @@
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
-                        </StackPanel.Style>
-                        <Border Width="64" Height="64" CornerRadius="20"
-                                Background="{StaticResource TdAccentSoftBrush}"
-                                BorderBrush="{StaticResource TdBorderStrongBrush}"
-                                BorderThickness="1"
-                                HorizontalAlignment="Center" Margin="0,0,0,11">
-                            <TextBlock Text="+" Foreground="{StaticResource TdAccentTextBrush}"
-                                       FontSize="24" FontWeight="Light"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <TextBlock Text="Make room for focus"
-                                   AutomationProperties.AutomationId="LauncherEmptyStateHeading"
-                                   Style="{StaticResource TdSubheading}"
-                                   HorizontalAlignment="Center" />
-                        <TextBlock Text="Bring your open windows into one workspace."
-                                   Style="{StaticResource TdBodyMuted}"
-                                   TextWrapping="Wrap" TextAlignment="Center"
-                                   Margin="0,5,0,13" />
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                            <Button Style="{StaticResource TdSecondaryButton}"
-                                    Content="New workspace" MinWidth="118"
-                                    Command="{Binding NewGroupCommand}"
-                                    AutomationProperties.Name="Create first workspace" />
-                            <Button Style="{StaticResource TdPrimaryButton}"
-                                    Content="Capture windows" MinWidth="132" Margin="8,0,0,0"
-                                    Command="{Binding CaptureCommand}"
-                                    IsEnabled="{Binding CaptureAllowed}"
-                                    AutomationProperties.Name="Capture windows for first workspace"
-                                    ToolTip="{Binding CaptureButtonToolTip}"
-                                    ToolTipService.ShowOnDisabled="True" />
-                        </StackPanel>
-                    </StackPanel>
+                        </TextBlock.Style>
+                    </TextBlock>
                 </Grid>
             </Grid>
         </Border>

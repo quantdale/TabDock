@@ -4,10 +4,11 @@ Maintainer reference for the WPF frontend: the shared design system, the
 presentation contracts the native shepherd depends on, and the automation
 contracts the ValidationDriver and accessibility tooling rely on.
 
-The visual direction comes from the 2026-09-12 Refero-guided overhaul
-(`.agent/plans/refero-frontend-overhaul-2026-09-12.md`): compact dark
-productivity chrome, layered charcoal surfaces, one blue focus/action system,
-small radii, and dense high-information rows.
+The current visual direction is the 2026-11-13 Refero-guided overhaul
+(`.agent/plans/ui-overhaul.md`): graphite surfaces, lavender actions, rounded
+controls, and compact productivity chrome. The successor qualification
+(`.agent/plans/ux-successor-2026-11-13.md`) protects keyboard routing, control
+contrast, and minimum-size recovery states without changing that identity.
 
 ## Where the UI lives
 
@@ -18,29 +19,28 @@ small radii, and dense high-information rows.
 | Container | `Views/ContainerWindow.xaml` | workspace chrome: caption, tabs, split halves, inline capture panel, empty state |
 
 `App.xaml` owns the shared design system. Window-local resources exist only
-for surface-specific chrome (`Views/ContainerWindow.xaml`: capture-button,
+for surface-specific chrome (`Views/ContainerWindow.xaml`: caption-button,
 chrome-pill, and tab-close styles).
 
 ## Design tokens (`App.xaml`)
 
-Colors are `SolidColorBrush` resources, all prefixed `Td`. Views consume tokens
-only; the design-contract tests fail if a raw font stack or split tint
-reappears in a view.
+Colors are `SolidColorBrush` resources, prefixed `Td`; `App.xaml` is the
+value authority. Shared typography and semantic surfaces use tokens, while
+workspace accents remain user-selectable.
 
-Surfaces, in elevation order: `TdWindowBackgroundBrush` (#080A0E),
-`TdChromeBrush` (#0C0F14), `TdSurfaceBrush` (#0F1217),
-`TdSurfaceRaisedBrush` (#151A22), `TdSurfaceInteractiveBrush` (#1B212B),
-`TdSurfaceHoverBrush` (#222A36), `TdInputBrush` (#11151C).
-
-Borders and text: `TdBorderBrush` (#272D38), `TdBorderStrongBrush` (#394252),
-`TdTextBrush` (#F7F8FA), `TdTextMutedBrush` (#ADB4C0), `TdTextSubtleBrush`
-(#7E8898).
-
-Focus/action system: `TdAccentBrush` (#6798FF, rails/icons),
-`TdAccentTextBrush` (#A9C3FF), `TdAccentSoftBrush` (#18233F, selected
-surfaces), `TdFocusBrush` (#9CB8FF, keyboard-focus borders),
-`TdPrimaryFillBrush` (#486ED8), `TdPrimaryHoverBrush` (#557BE3),
-`TdPrimaryPressedBrush` (#3D5FBF).
+- Surfaces: `TdWindowBackgroundBrush`, `TdChromeBrush`, `TdSurfaceBrush`,
+  `TdSurfaceRaisedBrush`, `TdSurfaceInteractiveBrush`, `TdSurfaceHoverBrush`,
+  `TdInputBrush`.
+- Decorative edges: `TdBorderBrush`, `TdBorderStrongBrush`. Enabled control
+  boundaries use `TdControlBorderBrush`, independently of card decoration;
+  unchecked selection-control boundaries are tested at >=3:1 against input,
+  row, and selected-row fills.
+- Text hierarchy: `TdTextBrush`, `TdTextMutedBrush`, `TdTextSubtleBrush`.
+- Accent/selection: `TdAccentBrush`, `TdAccentTextBrush`, `TdAccentSoftBrush`.
+  Primary actions use `TdPrimaryFillBrush` with dark ink; hover/press feedback
+  is supplied by template overlays and `MotionProfile`.
+- Keyboard focus: `TdFocusBrush`; split state: `TdSplitActiveBrush` and
+  `TdSplitHoverBrush`. Semantic state and focus remain independent.
 
 Status and scroll: `TdWarningBrush`, `TdWarningSurfaceBrush`,
 `TdWarningBorderBrush`, `TdWarningIconSurfaceBrush`, `TdDangerBrush`,
@@ -65,11 +65,23 @@ Implicit (system-theme-leak suppression; do not remove): `ContextMenu`,
 app-level `ListBoxItem` alignment defaults. The default templates inherit the
 user's system theme/accent color on some desktops.
 
-Interaction states are expressed with border color, surface color, and text
-color — never by changing border thickness, which shifts content by a pixel.
-Lists that need richer rows supply `TdListItem`, which provides hover,
-selected, and `IsKeyboardFocusWithin` border cues. `FocusVisualStyle` is nulled
-where a custom cue exists so the dotted rectangle does not double up.
+Buttons and inputs communicate focus without growing their borders or
+shifting content. The checkbox's fixed 18-DIP box also uses a thicker focused
+edge. `TdListItem` provides workspace hover, selection and focus overlays;
+capture rows use the candidate's checked state rather than navigational list
+selection. `FocusVisualStyle` is nulled where a custom cue exists.
+
+`CaptureSelection.EnableRowKeyboard` forwards unmodified Space on a focused
+capture row to its candidate's checked state. It leaves focused checkboxes to
+native activation and ignores repeated toggles. Both standalone and inline
+lists opt in. Launcher Enter falls back to the selected workspace only from a
+navigation container; a nested Open button keeps its row-specific command.
+
+The launcher keeps one set of create/capture actions above its compact empty
+state. Standalone selection counts sit beside the footer actions, leaving
+room for results or recovery guidance at minimum size. Inline capture uses a
+single search/utility band and bounds its height against `WorkspaceLayout`
+minus the measured caption and workspace bands.
 
 ## Window chrome
 
@@ -147,6 +159,15 @@ that keep the log clean:
   chrome wiring, airspace nesting, focus conventions, dense-strip contract.
 - `tests/UnitTests/CaptionCenteringTests.cs` — true-centered title geometry.
 - `tests/UnitTests/BindingTraceDiagnosticsTests.cs` — trace opt-in.
+- `tests/UnitTests/FrontendInteractionRegressionTests.cs` — managed key
+  routing, capture checked state, enabled-control contrast, complete inline
+  candidate containment with overflowing tabs, and minimum/default client
+  layouts with empty, long-content and blocked/recovery fixtures. Optional
+  `TABDOCK_REVIEW_RENDER_ROOT` retains PNGs in a session artifact directory.
+  The layout loader removes code-behind events and replaces the native marker;
+  the launcher routing test uses the real constructed window without showing it.
+  These checks never send input, show a window, or qualify native activation,
+  guest capture, screen-reader announcements, or physical DPI behavior.
 - Runtime visual qualification uses the driver's UI Automation actions plus
   vision review; see `.agent/workflows/visual-evidence-review.md` and the
   2026-09-12 plan's captured-state list. Structural contract tests do not

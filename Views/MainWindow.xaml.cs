@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using TabDock.Infrastructure;
@@ -16,8 +17,14 @@ public partial class MainWindow : Window
 {
     private MainViewModel ViewModel { get; }
 
-    public MainWindow(MainViewModel viewModel)
+    public MainWindow(MainViewModel viewModel) : this(viewModel, null)
     {
+    }
+
+    internal MainWindow(MainViewModel viewModel, ResourceDictionary? resources)
+    {
+        if (resources != null)
+            Resources.MergedDictionaries.Add(resources);
         InitializeComponent();
         DataContext = viewModel;
         ViewModel = viewModel;
@@ -39,7 +46,10 @@ public partial class MainWindow : Window
 
     private void OnGroupsListKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter)
+        // A nested Open button owns its row-specific command parameter. Only
+        // navigation-container Enter should fall back to the selected workspace.
+        if (e.Key != Key.Enter || (e.OriginalSource is not ListViewItem
+            && !ReferenceEquals(e.OriginalSource, GroupsListView)))
             return;
         if (ViewModel.SelectedGroup is Group group)
         {

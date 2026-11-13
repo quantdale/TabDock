@@ -92,15 +92,9 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                        <TextBlock Text="Available windows" Style="{StaticResource TdSubheading}" FontSize="14" />
-                        <Border Style="{StaticResource TdBadge}" HorizontalAlignment="Left" Margin="0,6,0,0" Padding="7,2">
-                            <TextBlock Text="{Binding SelectionSummary}"
-                                       Foreground="{StaticResource TdTextMutedBrush}" FontSize="10"
-                                       AutomationProperties.AutomationId="CaptureSelectionSummary"
-                                       AutomationProperties.LiveSetting="Polite" />
-                        </Border>
-                    </StackPanel>
+                    <TextBlock Grid.Column="0" Text="Available windows"
+                               Style="{StaticResource TdSubheading}" FontSize="14"
+                               VerticalAlignment="Center" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                         <Button Style="{StaticResource TdGhostButton}"
                                 Content="Select visible" Padding="9,4" MinHeight="28"
@@ -115,6 +109,7 @@
 
                 <Grid Grid.Row="1">
                     <ListBox x:Name="WindowsListBox"
+                             infra:CaptureSelection.EnableRowKeyboard="True"
                              ItemsSource="{Binding FilteredWindows}"
                              AutomationProperties.Name="Capturable windows"
                              AutomationProperties.HelpText="Use Space or the row checkbox to select windows for capture."
@@ -209,15 +204,8 @@
                                 </Style.Triggers>
                             </Style>
                         </StackPanel.Style>
-                        <Border Width="42" Height="42" CornerRadius="8"
-                                Background="{StaticResource TdSurfaceInteractiveBrush}"
-                                BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="1"
-                                HorizontalAlignment="Center" Margin="0,0,0,10">
-                            <TextBlock Text="⌕" FontSize="19"
-                                       Foreground="{StaticResource TdTextMutedBrush}"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <TextBlock Text="Nothing in view yet" Style="{StaticResource TdSubheading}"
+                        <TextBlock Text="{Binding EmptyFilterHeading}" Style="{StaticResource TdSubheading}"
+                                   AutomationProperties.LiveSetting="Polite"
                                    FontSize="14" HorizontalAlignment="Center" />
                         <TextBlock Text="{Binding EmptyFilterText}" Style="{StaticResource TdBodyMuted}"
                                    FontSize="11" TextAlignment="Center" TextWrapping="Wrap" Margin="0,5,0,0" />
@@ -256,6 +244,13 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
+                <Border Grid.Column="0" Style="{StaticResource TdBadge}"
+                        HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0,0,8,0" Padding="7,2">
+                    <TextBlock Text="{Binding SelectionSummary}"
+                               Foreground="{StaticResource TdTextMutedBrush}" FontSize="10"
+                               AutomationProperties.AutomationId="CaptureSelectionSummary"
+                               AutomationProperties.LiveSetting="Polite" />
+                </Border>
                 <StackPanel Grid.Column="1" Orientation="Horizontal">
                     <Button Style="{StaticResource TdSecondaryButton}"
                             Content="Cancel" MinWidth="82" IsCancel="True"

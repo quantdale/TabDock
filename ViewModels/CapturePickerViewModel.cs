@@ -85,9 +85,13 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
 
     public bool HasFilteredWindows => _filteredWindows.Count > 0;
 
+    public string EmptyFilterHeading => Windows.Count == 0
+        ? "No windows available"
+        : "No matching windows";
+
     public string EmptyFilterText => Windows.Count == 0
-        ? "No capturable windows are currently available."
-        : "No windows match your search.";
+        ? "Open a window, then refresh."
+        : "Try another title, app, or window class.";
 
     public bool CaptureAllowed => _manager.CaptureAllowed;
     public string CaptureAdmissionReason => _manager.CaptureAdmissionReason;
@@ -356,6 +360,7 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
             || row.ClassName.Contains(query, StringComparison.OrdinalIgnoreCase)));
 
         OnPropertyChanged(nameof(HasFilteredWindows));
+        OnPropertyChanged(nameof(EmptyFilterHeading));
         OnPropertyChanged(nameof(EmptyFilterText));
         ((RelayCommand)SelectAllVisibleCommand).RaiseCanExecuteChanged();
     }

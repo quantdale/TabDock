@@ -431,10 +431,10 @@
                 DataContext="{x:Null}"
                 Background="{StaticResource TdSurfaceRaisedBrush}"
                 BorderBrush="{StaticResource TdBorderStrongBrush}"
-                BorderThickness="0,0,0,1" Padding="12">
+                BorderThickness="0,0,0,1" Padding="12,8">
             <Border.MaxHeight>
                 <MultiBinding Converter="{StaticResource RemainingHeight}" ConverterParameter="360">
-                    <Binding ElementName="Root" Path="ActualHeight" />
+                    <Binding ElementName="WorkspaceLayout" Path="ActualHeight" />
                     <Binding ElementName="CaptionBand" Path="ActualHeight" />
                     <Binding ElementName="WorkspaceBand" Path="ActualHeight" />
                 </MultiBinding>
@@ -442,28 +442,13 @@
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <Grid Grid.Row="0" Margin="0,0,0,10">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel>
-                        <TextBlock Text="Add windows" Style="{StaticResource TdSubheading}" FontSize="14" />
-                        <TextBlock Text="Select windows for this workspace."
-                                   Style="{StaticResource TdBodyMuted}" FontSize="10.5" Margin="0,3,12,0" />
-                    </StackPanel>
-                    <Button Grid.Column="1" Style="{StaticResource TdToolbarButton}"
-                            Content="Refresh windows"
-                            AutomationProperties.AutomationId="CaptureRefresh"
-                            Command="{Binding RefreshCommand}" />
-                </Grid>
-
-                <Grid Grid.Row="1" Margin="0,0,0,9">
+                <!-- Keep one utility band so a complete candidate remains
+                     visible even at the container's minimum height. -->
+                <Grid Grid.Row="0" Margin="0,0,0,9">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -473,7 +458,13 @@
                              Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                              AutomationProperties.Name="Search windows to add"
                              ToolTip="Filter by window title, executable path, or class" />
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0">
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
+                        <Button Style="{StaticResource TdToolbarButton}"
+                                Content="&#xE72C;" FontFamily="{StaticResource TdIconFont}" FontSize="14"
+                                Width="32" MinHeight="32" Padding="0" Margin="0,0,4,0"
+                                AutomationProperties.AutomationId="CaptureRefresh"
+                                AutomationProperties.Name="Refresh capturable windows"
+                                ToolTip="Refresh windows" Command="{Binding RefreshCommand}" />
                         <Button Style="{StaticResource TdGhostButton}" Content="Select visible"
                                 MinHeight="30" Padding="9,4" Command="{Binding SelectAllVisibleCommand}" />
                         <Button Style="{StaticResource TdGhostButton}" Content="Clear"
@@ -482,9 +473,10 @@
                     </StackPanel>
                 </Grid>
 
-                <Border Grid.Row="2" Style="{StaticResource TdCard}" Padding="6">
+                <Border Grid.Row="1" Style="{StaticResource TdCard}" Padding="6">
                     <Grid>
                         <ListBox ItemsSource="{Binding FilteredWindows}" MaxHeight="190"
+                                 infra:CaptureSelection.EnableRowKeyboard="True"
                                  AutomationProperties.Name="Capturable windows to add"
                                  AutomationProperties.HelpText="Use Space or the row checkbox to select windows for this workspace."
                                  Background="Transparent" BorderThickness="0"
@@ -542,8 +534,11 @@
                                                     Background="{StaticResource TdSurfaceInteractiveBrush}"
                                                     BorderBrush="{StaticResource TdBorderBrush}" BorderThickness="1"
                                                     Margin="0,0,9,0">
-                                                <Image Source="{Binding Icon}" Width="18" Height="18"
-                                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                <Grid>
+                                                    <TextBlock Style="{StaticResource TdWindowIconFallback}" FontSize="14" />
+                                                    <Image Source="{Binding Icon}" Width="18" Height="18"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                </Grid>
                                             </Border>
                                             <StackPanel Grid.Column="2" VerticalAlignment="Center">
                                                 <TextBlock Text="{Binding Title}" Foreground="{StaticResource TdTextBrush}"
@@ -577,7 +572,7 @@
                     </Grid>
                 </Border>
 
-                <Grid Grid.Row="3" Margin="0,10,0,0">
+                <Grid Grid.Row="2" Margin="0,8,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
