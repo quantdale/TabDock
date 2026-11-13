@@ -98,3 +98,31 @@ Both standalone and inline capture rows SHALL derive selected fill/border feedba
 
 - **WHEN** checked-row sequences run with enabled and reduced motion
 - **THEN** final highlighted rows match the same checked-target set in both modes and ordinary workspace-tab selection semantics are unchanged
+
+### Requirement: Filtered capture selections SHALL remain transparent to the user
+
+Both capture surfaces SHALL disclose how many checked candidates are hidden by
+search whenever the count is nonzero. The summary and primary action help SHALL
+update when filtering, checking, bulk clearing or identity-safe refresh changes
+that count. This disclosure SHALL NOT clear hidden targets, select visible rows
+implicitly, or weaken final capture admission. Clearing selection SHALL include
+hidden candidates; selection controls SHALL distinguish this from editing the
+search query. Truncated candidate titles and executable paths SHALL remain
+inspectable through target-specific tooltips.
+
+#### Scenario: Search hides a checked target
+
+- **WHEN** search hides one of two checked candidates
+- **THEN** the summary exposes two selected with one hidden and primary action
+  help explains that both are included; submitting retains the master checked set
+
+#### Scenario: Search is cleared or stale targets disappear
+
+- **WHEN** the query is cleared or refresh drops a hidden target's identity
+- **THEN** hidden counts and primary action help reflect only the current
+  candidate set, without changing other valid checked candidates
+
+#### Scenario: Bulk clear includes hidden targets
+
+- **WHEN** Clear selection is activated while checked candidates are out of view
+- **THEN** all checked targets are cleared and the hidden count disappears

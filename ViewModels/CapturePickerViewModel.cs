@@ -76,12 +76,25 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
 
     public int SelectedCount => Windows.Count(w => w.IsSelected);
 
-    public string SelectionSummary => SelectedCount switch
+    /// <summary>Checked targets remain authoritative even when search hides their rows.</summary>
+    public int HiddenSelectedCount => SelectedCount - _filteredWindows.Count(w => w.IsSelected);
+
+    public string SelectionSummary
     {
-        0 => "Select one or more windows",
-        1 => "1 window selected",
-        int count => $"{count} windows selected",
-    };
+        get
+        {
+            int count = SelectedCount;
+            int hidden = HiddenSelectedCount;
+            if (hidden > 0)
+                return $"{count} selected · {hidden} hidden";
+            return count switch
+            {
+                0 => "Select one or more windows",
+                1 => "1 window selected",
+                _ => $"{count} windows selected",
+            };
+        }
+    }
 
     public bool HasFilteredWindows => _filteredWindows.Count > 0;
 
@@ -105,9 +118,11 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
     public string GroupSelectedHelpText
         => !CaptureAllowed
             ? $"Capture is unavailable: {CaptureAdmissionReason}"
-            : HasSelection
-                ? "Add the selected windows to the destination workspace."
-                : "Select at least one window first.";
+            : HiddenSelectedCount > 0
+                ? $"Add all selected windows, including {HiddenSelectedCount} hidden by search, to the destination workspace."
+                : HasSelection
+                    ? "Add the selected windows to the destination workspace."
+                    : "Select at least one window first.";
 
     public ICommand RefreshCommand { get; }
     public ICommand GroupSelectedCommand { get; }
@@ -362,6 +377,9 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(HasFilteredWindows));
         OnPropertyChanged(nameof(EmptyFilterHeading));
         OnPropertyChanged(nameof(EmptyFilterText));
+        OnPropertyChanged(nameof(HiddenSelectedCount));
+        OnPropertyChanged(nameof(SelectionSummary));
+        OnPropertyChanged(nameof(GroupSelectedHelpText));
         ((RelayCommand)SelectAllVisibleCommand).RaiseCanExecuteChanged();
     }
 
@@ -408,6 +426,7 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
     {
         OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(SelectedCount));
+        OnPropertyChanged(nameof(HiddenSelectedCount));
         OnPropertyChanged(nameof(SelectionSummary));
         OnPropertyChanged(nameof(GroupSelectedHelpText));
         ((RelayCommand)GroupSelectedCommand).RaiseCanExecuteChanged();

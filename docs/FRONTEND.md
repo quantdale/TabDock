@@ -83,6 +83,14 @@ room for results or recovery guidance at minimum size. Inline capture uses a
 single search/utility band and bounds its height against `WorkspaceLayout`
 minus the measured caption and workspace bands.
 
+Search does not remove checked targets from capture. Both summaries disclose
+nonzero hidden-selection counts, and primary-action help explicitly includes
+those hidden targets. Bulk Clear removes all checks, not the search query;
+titles and executable paths trimmed in rows remain available as tooltips.
+The destination dropdown gives unselected highlighted/focused choices a
+reserved one-DIP focus boundary without changing the committed destination or
+shifting content, in both motion modes.
+
 ## Window chrome
 
 - The launcher and picker are standard chrome windows. Their
@@ -162,7 +170,9 @@ that keep the log clean:
 - `tests/UnitTests/FrontendInteractionRegressionTests.cs` — managed key
   routing, capture checked state, enabled-control contrast, complete inline
   candidate containment with overflowing tabs, and minimum/default client
-  layouts with empty, long-content and blocked/recovery fixtures. Optional
+  layouts with empty, long-content and blocked/recovery fixtures; hidden-target
+  disclosure across filtering/refresh/bulk clear; and destination-item keyboard
+  focus/highlight independent of selection. Optional
   `TABDOCK_REVIEW_RENDER_ROOT` retains PNGs in a session artifact directory.
   The layout loader removes code-behind events and replaces the native marker;
   the launcher routing test uses the real constructed window without showing it.

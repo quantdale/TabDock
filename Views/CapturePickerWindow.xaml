@@ -71,7 +71,7 @@
                               AutomationProperties.HelpText="Choose an existing workspace or create a new group.">
                         <ComboBox.ItemTemplate>
                             <DataTemplate>
-                                <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}" />
                             </DataTemplate>
                         </ComboBox.ItemTemplate>
                     </ComboBox>
@@ -101,7 +101,7 @@
                                 Command="{Binding SelectAllVisibleCommand}"
                                 AutomationProperties.Name="Select all visible windows" />
                         <Button Style="{StaticResource TdGhostButton}"
-                                Content="Clear" Padding="9,4" MinHeight="28" Margin="2,0,0,0"
+                                Content="Clear selection" Padding="9,4" MinHeight="28" Margin="2,0,0,0"
                                 Command="{Binding ClearSelectionCommand}"
                                 AutomationProperties.Name="Clear window selection" />
                     </StackPanel>
@@ -180,10 +180,10 @@
                                         <StackPanel Grid.Column="2" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Title}" Foreground="{StaticResource TdTextBrush}"
                                                        FontWeight="SemiBold" FontSize="12"
-                                                       TextTrimming="CharacterEllipsis" />
+                                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}" />
                                             <TextBlock Text="{Binding ExePath}" Foreground="{StaticResource TdTextSubtleBrush}"
                                                        FontFamily="{StaticResource TdMonoFont}" FontSize="10.5"
-                                                       TextTrimming="CharacterEllipsis" Margin="0,3,0,0" />
+                                                       TextTrimming="CharacterEllipsis" Margin="0,3,0,0" ToolTip="{Binding ExePath}" />
                                         </StackPanel>
                                         </Grid>
                                     </Grid>

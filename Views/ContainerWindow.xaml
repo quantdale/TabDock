@@ -466,9 +466,12 @@
                                 AutomationProperties.Name="Refresh capturable windows"
                                 ToolTip="Refresh windows" Command="{Binding RefreshCommand}" />
                         <Button Style="{StaticResource TdGhostButton}" Content="Select visible"
+                                AutomationProperties.Name="Select all visible windows"
                                 MinHeight="30" Padding="9,4" Command="{Binding SelectAllVisibleCommand}" />
                         <Button Style="{StaticResource TdGhostButton}" Content="Clear"
                                 MinHeight="30" Padding="9,4" Margin="2,0,0,0"
+                                AutomationProperties.Name="Clear window selection"
+                                ToolTip="Clear all selections, including windows hidden by search"
                                 Command="{Binding ClearSelectionCommand}" />
                     </StackPanel>
                 </Grid>
@@ -542,10 +545,10 @@
                                             </Border>
                                             <StackPanel Grid.Column="2" VerticalAlignment="Center">
                                                 <TextBlock Text="{Binding Title}" Foreground="{StaticResource TdTextBrush}"
-                                                           FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                           FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}" />
                                                 <TextBlock Text="{Binding ExePath}" Foreground="{StaticResource TdTextSubtleBrush}"
                                                            FontFamily="{StaticResource TdMonoFont}" FontSize="9"
-                                                           TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
+                                                           TextTrimming="CharacterEllipsis" Margin="0,2,0,0" ToolTip="{Binding ExePath}" />
                                             </StackPanel>
                                             </Grid>
                                         </Grid>

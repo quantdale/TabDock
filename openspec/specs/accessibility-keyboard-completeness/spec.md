@@ -77,3 +77,11 @@ Critical styled inputs, picker rows, workspace tabs and split halves SHALL retai
 
 - **WHEN** keyboard focus moves from LEFT to RIGHT on a loaded composite
 - **THEN** the visible focus indication follows RIGHT while semantic active-member feedback and existing activation behavior remain independent and correct
+
+#### Scenario: Destination navigation does not hide keyboard focus
+
+- **WHEN** an unselected destination choice gains keyboard focus or highlight
+  in the standalone capture workspace dropdown
+- **THEN** it has visible navigation feedback independent of the committed
+  destination, and moving away clears that feedback without shifting item content
+- **AND** enabled and reduced motion preserve the same final focus/selection meaning

@@ -240,6 +240,7 @@
                             <Setter.Value>
                                         <ControlTemplate TargetType="{x:Type ComboBoxItem}">
                                             <Border x:Name="ItemBorder" Background="{TemplateBinding Background}"
+                                                    BorderBrush="Transparent" BorderThickness="1"
                                                     CornerRadius="5" Padding="{TemplateBinding Padding}"
                                                     SnapsToDevicePixels="True"
                                                     infrastructure:MotionProfile.EnableBorderStates="True"
@@ -251,6 +252,14 @@
                                                 </Grid>
                                             </Border>
                                             <ControlTemplate.Triggers>
+                                                <!-- Highlight is navigation, not committed selection. -->
+                                                <Trigger Property="IsHighlighted" Value="True">
+                                                    <Setter TargetName="ItemBorder" Property="Background" Value="{StaticResource TdSurfaceHoverBrush}" />
+                                                    <Setter TargetName="ItemBorder" Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
+                                                </Trigger>
+                                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                                    <Setter TargetName="ItemBorder" Property="BorderBrush" Value="{StaticResource TdFocusBrush}" />
+                                                </Trigger>
                                                 <Trigger Property="IsSelected" Value="True">
                                                     <Setter Property="Foreground" Value="{StaticResource TdAccentTextBrush}" />
                                                 </Trigger>

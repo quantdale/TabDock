@@ -97,6 +97,8 @@ public sealed class FrontendInteractionRegressionTests
             host.Realize();
             var row = (ListBoxItem)list.ItemContainerGenerator.ContainerFromIndex(0);
             Assert.Contains(Descendants<TextBlock>(row), text => text.IsVisible && text.Text == "\uE737");
+            TextBlock title = Descendants<TextBlock>(row).Single(text => text.Text == picker.Windows[0].Title);
+            Assert.Equal(picker.Windows[0].Title, title.ToolTip);
             StaDispatcherFixture.Focus(row);
             SendManagedKey(row, Key.Space, host);
             Assert.True(picker.Windows[0].IsSelected);
@@ -263,6 +265,154 @@ public sealed class FrontendInteractionRegressionTests
     }
 
     [Fact]
+    public void FilteredSelectionSummary_DisclosesHiddenTargetsAndTracksAllStateChanges()
+    {
+        StaDispatcherFixture.Run(dispatcher =>
+        {
+            using var fixture = new Fixture();
+            using var picker = fixture.Picker(dispatcher);
+            var summaries = new List<string>();
+            picker.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(CapturePickerViewModel.SelectionSummary))
+                    summaries.Add(picker.SelectionSummary);
+            };
+            picker.Windows[0].IsSelected = true;
+            picker.SearchText = "Terminal";
+            Assert.Equal("1 selected · 1 hidden", picker.SelectionSummary);
+            Assert.Contains("1 hidden by search", picker.GroupSelectedHelpText);
+            Assert.Equal(picker.SelectionSummary, summaries.Last());
+            picker.SelectAllVisibleCommand.Execute(null);
+            Assert.Equal("2 selected · 1 hidden", picker.SelectionSummary);
+            picker.SearchText = "no-such-window";
+            Assert.Equal("2 selected · 2 hidden", picker.SelectionSummary);
+            Assert.Equal(2, picker.SelectedCount);
+            Assert.True(picker.GroupSelectedCommand.CanExecute(null));
+            picker.SearchText = string.Empty;
+            Assert.Equal("2 windows selected", picker.SelectionSummary);
+            Assert.Equal(picker.SelectionSummary, summaries.Last());
+            picker.SearchText = "Terminal";
+            picker.ClearSelectionCommand.Execute(null);
+            Assert.Equal("Select one or more windows", picker.SelectionSummary);
+            Assert.False(picker.GroupSelectedCommand.CanExecute(null));
+            Assert.DoesNotContain("hidden", picker.GroupSelectedHelpText);
+            Assert.Equal(picker.SelectionSummary, summaries.Last());
+        });
+    }
+
+    [Fact]
+    public void HiddenSelectionRefresh_UsesCurrentIdentityAndCandidateSet()
+    {
+        StaDispatcherFixture.Run(dispatcher =>
+        {
+            using var fixture = new Fixture();
+            using var picker = fixture.Picker(dispatcher);
+            picker.SelectAllVisibleCommand.Execute(null);
+            picker.SearchText = "Terminal";
+            picker.Refresh();
+            Assert.Equal(1, picker.HiddenSelectedCount);
+            Assert.Equal("2 selected · 1 hidden", picker.SelectionSummary);
+            fixture.Manager.CreateGroup("Other workspace").Members.Add(new CapturedWindow { Hwnd = new IntPtr(11) });
+            picker.Refresh();
+            Assert.Equal(0, picker.HiddenSelectedCount);
+            Assert.Equal("1 window selected", picker.SelectionSummary);
+            Assert.Equal(new IntPtr(12), Assert.Single(picker.Windows).Hwnd);
+        });
+    }
+
+    [Theory]
+    [InlineData("Views/CapturePickerWindow.xaml", 544, 420)]
+    [InlineData("Views/CapturePickerWindow.xaml", 744, 610)]
+    [InlineData("Views/ContainerWindow.xaml", 420, 300)]
+    [InlineData("Views/ContainerWindow.xaml", 980, 640)]
+    public void HiddenSelectionSummary_RendersWithoutClippingAtMinimumAndDefaultSizes(string path, int width, int height)
+    {
+        StaDispatcherFixture.Run(dispatcher =>
+        {
+            using var fixture = new Fixture();
+            using var picker = new CapturePickerViewModel(fixture.Manager, fixture.Icons, fixture.Log, () => Enumerable.Range(1, 500)
+                .Select(i => new CapturePickerViewModel.WindowInfo(new IntPtr(i), (uint)i, "Fixture", "Editor " + i, "", (uint)(1000 + i), 2000 + i)), dispatcher);
+            using var host = HiddenVisualHost.Create();
+            using var motion = MotionProfile.OverrideReducedMotion(true);
+            picker.SelectAllVisibleCommand.Execute(null);
+            picker.SearchText = "no-such-window";
+            FrameworkElement root = LoadLayout(path);
+            root.Width = width;
+            root.Height = height;
+            root.DataContext = picker;
+            if (path.Contains("Container", StringComparison.Ordinal))
+            {
+                root.DataContext = fixture.Workspace;
+                var panel = (Border)root.FindName("CapturePanel");
+                panel.DataContext = picker;
+                panel.Visibility = Visibility.Visible;
+            }
+            host.Root.Children.Add(root);
+            host.Realize();
+            StaDispatcherFixture.Settle(dispatcher);
+            TextBlock summary = Descendants<TextBlock>(root).Single(t => AutomationProperties.GetAutomationId(t) == "CaptureSelectionSummary");
+            Assert.Equal("500 selected · 500 hidden", summary.Text);
+            Assert.True(summary.DesiredSize.Width <= summary.ActualWidth + 1, "Hidden selection summary is clipped.");
+            Button submit = Descendants<Button>(root).Single(b => AutomationProperties.GetAutomationId(b) is "CaptureGroupThese" or "CaptureAddSelected");
+            Assert.True(submit.IsEnabled);
+            Assert.Contains("500 hidden by search", AutomationProperties.GetHelpText(submit));
+            RenderIfRequested(root, $"hidden-selection-{Path.GetFileNameWithoutExtension(path)}-{width}");
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DestinationChoices_ExposeUnselectedKeyboardFocusWithoutMovingContent(bool reducedMotion)
+    {
+        StaDispatcherFixture.Run(dispatcher =>
+        {
+            using var host = HiddenVisualHost.Create();
+            using var motion = MotionProfile.OverrideReducedMotion(reducedMotion);
+            ResourceDictionary palette = SharedTemplateLoader.Load();
+            var combo = new ComboBox { Style = (Style)palette["TdComboBox"] };
+            var selected = new ComboBoxItem { Content = "Current workspace", Style = combo.ItemContainerStyle, IsSelected = true, Width = 260 };
+            var other = new HighlightedComboBoxItem { Content = "Destination workspace", Style = combo.ItemContainerStyle, Width = 260 };
+            host.Root.Children.Add(selected);
+            host.Root.Children.Add(other);
+            host.Realize();
+            Size before = other.RenderSize;
+            var edge = (Border)other.Template.FindName("ItemBorder", other);
+            Assert.True(StaDispatcherFixture.Focus(other));
+            StaDispatcherFixture.Settle(dispatcher);
+            Assert.True(edge.BorderBrush is SolidColorBrush, "Destination row has no visible focus boundary.");
+            Assert.Equal(((SolidColorBrush)palette["TdFocusBrush"]).Color, ((SolidColorBrush)edge.BorderBrush).Color);
+            Assert.False(other.IsSelected);
+            Assert.True(selected.IsSelected);
+            Assert.Equal(before, other.RenderSize);
+            StaDispatcherFixture.Focus(selected);
+            StaDispatcherFixture.Settle(dispatcher);
+            Assert.NotEqual(((SolidColorBrush)palette["TdFocusBrush"]).Color, ((SolidColorBrush)edge.BorderBrush).Color);
+            other.SetHighlighted(true);
+            StaDispatcherFixture.Settle(dispatcher);
+            Assert.Equal(((SolidColorBrush)palette["TdFocusBrush"]).Color, ((SolidColorBrush)edge.BorderBrush).Color);
+            Assert.False(other.IsSelected);
+            other.SetHighlighted(false);
+            StaDispatcherFixture.Settle(dispatcher);
+            Assert.NotEqual(((SolidColorBrush)palette["TdFocusBrush"]).Color, ((SolidColorBrush)edge.BorderBrush).Color);
+            var region = new Grid { Width = 280, Height = 100, Background = (Brush)palette["TdSurfaceRaisedBrush"] };
+            // Render the same production item templates without opening a popup.
+            host.Root.Children.Remove(selected);
+            host.Root.Children.Remove(other);
+            region.RowDefinitions.Add(new RowDefinition());
+            region.RowDefinitions.Add(new RowDefinition());
+            region.Children.Add(selected);
+            Grid.SetRow(other, 1);
+            region.Children.Add(other);
+            host.Root.Children.Add(region);
+            host.Realize();
+            StaDispatcherFixture.Focus(other);
+            StaDispatcherFixture.Settle(dispatcher);
+            RenderIfRequested(region, $"destination-keyboard-{reducedMotion}");
+        });
+    }
+
+    [Fact]
     public void EnabledUncheckedSelectionControl_HasThreeToOneBoundaryContrast()
     {
         StaDispatcherFixture.Run(_ =>
@@ -369,6 +519,12 @@ public sealed class FrontendInteractionRegressionTests
         DirectoryInfo? dir = new(AppContext.BaseDirectory);
         while (dir != null && !File.Exists(Path.Combine(dir.FullName, "TabDock.sln"))) dir = dir.Parent;
         return dir?.FullName ?? throw new InvalidOperationException("Repository not found.");
+    }
+
+    private sealed class HighlightedComboBoxItem : ComboBoxItem
+    {
+        // WPF's protected setter is a managed-state seam, not simulated input.
+        public void SetHighlighted(bool value) => IsHighlighted = value;
     }
 
     private sealed class Fixture : IDisposable
