@@ -227,12 +227,16 @@ internal static class MonitorDpiService
 /// round trip entirely. Entries are only stored for successful probes, so a
 /// transient failure retries on the next query; callers must invalidate on
 /// WM_DPICHANGED (one monitor) and WM_DISPLAYCHANGE / topology changes (all).
-/// UI-thread confined like every other display-state consumer.
+/// Diagnostic exports also probe on workers while WPF invalidates on the UI
+/// thread. Cache access is synchronized; native observation stays outside the
+/// lock and can publish only within the generation in which it started.
 /// </summary>
 internal sealed class CachedMonitorDpiProbe : IMonitorDpiProbe
 {
     private readonly IMonitorDpiProbe _inner;
     private readonly Dictionary<IntPtr, uint> _cache = new();
+    private readonly object _gate = new();
+    private long _generation;
 
     public CachedMonitorDpiProbe(IMonitorDpiProbe inner)
     {
@@ -243,15 +247,37 @@ internal sealed class CachedMonitorDpiProbe : IMonitorDpiProbe
     {
         if (monitor == IntPtr.Zero)
             return 0;
-        if (_cache.TryGetValue(monitor, out uint cached))
-            return cached;
+        long generation;
+        lock (_gate)
+        {
+            if (_cache.TryGetValue(monitor, out uint cached))
+                return cached;
+            generation = _generation;
+        }
         uint dpi = _inner.GetEffectiveDpi(monitor);
-        if (dpi != 0)
-            _cache[monitor] = dpi;
+        lock (_gate)
+        {
+            if (dpi != 0 && generation == _generation)
+                _cache[monitor] = dpi;
+        }
         return dpi;
     }
 
-    public void Invalidate() => _cache.Clear();
+    public void Invalidate()
+    {
+        lock (_gate)
+        {
+            unchecked { _generation++; }
+            _cache.Clear();
+        }
+    }
 
-    public void Invalidate(IntPtr monitor) => _cache.Remove(monitor);
+    public void Invalidate(IntPtr monitor)
+    {
+        lock (_gate)
+        {
+            unchecked { _generation++; }
+            _cache.Remove(monitor);
+        }
+    }
 }

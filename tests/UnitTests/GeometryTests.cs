@@ -87,6 +87,54 @@ public class GeometryTests
         Assert.Equal(2 * 643, SplitGeometry.MinContentWidth(split: true, leftMinW: 643, rightMinW: 1));
     }
 
+    [Theory]
+    [InlineData(1073741824, 0)]
+    [InlineData(int.MaxValue, 0)]
+    [InlineData(0, int.MaxValue)]
+    [InlineData(int.MaxValue, int.MaxValue)]
+    public void MinContentWidth_UnrepresentableNativeMinimum_SaturatesInsteadOfWrapping(int left, int right)
+    {
+        Assert.Equal(int.MaxValue, SplitGeometry.MinContentWidth(true, left, right));
+    }
+
+    [Theory]
+    [InlineData(int.MaxValue, 144u)]
+    [InlineData(int.MaxValue, 192u)]
+    [InlineData(1000000000, uint.MaxValue)]
+    public void ScaleUnawareLogicalToPhysical_UnrepresentableNativeMinimum_Saturates(int value, uint dpi)
+    {
+        Assert.Equal(int.MaxValue, SplitGeometry.ScaleUnawareLogicalToPhysical(value, dpi));
+    }
+
+    [Theory]
+    [InlineData(300, 16, 316)]
+    [InlineData(int.MaxValue, 16, int.MaxValue)]
+    [InlineData(2147483640, 80, int.MaxValue)]
+    public void MinOuterTrackSize_ChromeCannotWrapASaturatedContentMinimum(int content, int chrome, int expected)
+    {
+        Assert.Equal(expected, SplitGeometry.MinOuterTrackSize(content, chrome));
+    }
+
+    [Fact]
+    public void NativeMinimumArithmetic_SeededFullRangeMatchesExactIntegerOracle()
+    {
+        var random = new Random(20261113);
+        for (int sample = 0; sample < 10_000; sample++)
+        {
+            int value = random.Next(1, int.MaxValue);
+            uint dpi = (uint)random.NextInt64(1, (long)uint.MaxValue + 1);
+            var exact = ((System.Numerics.BigInteger)value * dpi + 95) / 96;
+            int expected = (int)System.Numerics.BigInteger.Min(exact, int.MaxValue);
+            Assert.Equal(expected, SplitGeometry.ScaleUnawareLogicalToPhysical(value, dpi));
+
+            int right = random.Next(0, int.MaxValue);
+            var requiredWidth = System.Numerics.BigInteger.Max((System.Numerics.BigInteger)value * 2,
+                (System.Numerics.BigInteger)right * 2 - 1);
+            Assert.Equal((int)System.Numerics.BigInteger.Min(requiredWidth, int.MaxValue),
+                SplitGeometry.MinContentWidth(true, value, right));
+        }
+    }
+
     [Fact]
     public void MinContentWidth_NormalSpansFullWidth()
     {

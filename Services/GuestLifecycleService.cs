@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Windows;
 using System.Windows.Threading;
 using TabDock.Models;
@@ -45,7 +46,7 @@ public sealed class GuestLifecycleService
         LocationDrift = 4,
     }
 
-    private readonly Dictionary<IntPtr, RepairKind> _pendingRepair = new();
+    private readonly Dictionary<IntPtr, (CapturedWindow Member, RepairKind Kind)> _pendingRepair = new();
     private bool _repairScheduled;
 
     public GuestLifecycleService(GroupManager groups, Dictionary<Guid, ContainerWindow> containers, LoggingService log,
@@ -312,13 +313,17 @@ public sealed class GuestLifecycleService
     /// </summary>
     private void QueueRepair(IntPtr hwnd, RepairKind kind)
     {
-        if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out _))
+        if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? member))
             return;
         if (!_containers.TryGetValue(group.Id, out _))
             return;
 
-        _pendingRepair.TryGetValue(hwnd, out RepairKind existing);
-        _pendingRepair[hwnd] = existing | kind;
+        _pendingRepair.TryGetValue(hwnd, out var existing);
+        // The monitor already proved generation at its dispatch hop. Preserve
+        // that proof through this second hop too; a replacement must neither
+        // receive old work nor inherit old flags when it queues its own repair.
+        RepairKind combined = ReferenceEquals(existing.Member, member) ? existing.Kind | kind : kind;
+        _pendingRepair[hwnd] = (member, combined);
         if (!_repairScheduled)
         {
             _repairScheduled = true;
@@ -332,23 +337,30 @@ public sealed class GuestLifecycleService
         if (_pendingRepair.Count == 0)
             return;
 
-        foreach (var kvp in _pendingRepair)
+        // Native work can pump messages and enqueue another repair. Detach
+        // this batch before invoking it so reentrant work survives for its own
+        // dispatcher turn instead of changing the enumerator or being cleared.
+        var batch = _pendingRepair.ToArray();
+        _pendingRepair.Clear();
+        foreach (var kvp in batch)
         {
             IntPtr hwnd = kvp.Key;
-            RepairKind kind = kvp.Value;
-            if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match))
+            CapturedWindow expected = kvp.Value.Member;
+            RepairKind kind = kvp.Value.Kind;
+            if (!_groups.TryGetCapturedMember(hwnd, out Group? group, out CapturedWindow? match)
+                || !ReferenceEquals(match, expected))
                 continue;
             if (!_containers.TryGetValue(group.Id, out var container))
                 continue;
             if ((kind & RepairKind.Pair) != 0)
                 container.PairZOrderBehindGuest(hwnd);
-            if ((kind & RepairKind.MoveSizeEnd) != 0 && match != null)
-                container.NoteGuestMoveSize(match, started: false);
-            if ((kind & RepairKind.LocationDrift) != 0 && match != null)
-                container.ReconcilePresentationDrift(match);
+            if ((kind & RepairKind.MoveSizeEnd) != 0
+                && ReferenceEquals(_groups.GetCapturedWindow(hwnd), expected))
+                container.NoteGuestMoveSize(expected, started: false);
+            if ((kind & RepairKind.LocationDrift) != 0
+                && ReferenceEquals(_groups.GetCapturedWindow(hwnd), expected))
+                container.ReconcilePresentationDrift(expected);
         }
-
-        _pendingRepair.Clear();
     }
 
     // Some guests (e.g. Windows 11 Notepad) mirror document content into the
@@ -465,9 +477,9 @@ public sealed class GuestLifecycleService
             }
 
             // Same rule as App.OnContainerClosed, and load-bearing for the same
-            // reason (findings L12 / M5): PersistedTabs is populated only for a
-            // group restored from a previous session's state.json, so a
-            // non-empty one means real saved layout intent. Removing the group
+            // reason (findings L12 / M5): PersistedTabs carries restored or
+            // pre-emergency-release metadata, so a non-empty collection means
+            // real saved layout intent. Removing the group
             // here regardless — which this path used to do — wiped that intent
             // whenever the last live member of a restored, re-populated group
             // was closed or tray-hidden, overriding the guard the close path

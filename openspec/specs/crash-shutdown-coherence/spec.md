@@ -24,6 +24,14 @@ monitor is stopped. A cancelled logoff SHALL therefore not leave live hooks,
 timers, or move-sync loops acting on unmanaged standalone windows, nor erase the
 layout intent that a later save should preserve.
 
+#### Scenario: Emergency release saves the full pre-release intent
+- **WHEN** normal exit, crash cleanup, session ending or monitor-failure cleanup releases all or only some members
+- **THEN** the full ordered live metadata and active intent are captured before the first release, cleanup saves never shrink it to a pending subset or revive obsolete restored metadata, and repeated cleanup is idempotent
+
+#### Scenario: New capture retires emergency snapshot authority
+- **WHEN** an operational group admits a new captured member after emergency release
+- **THEN** subsequent saves use current live membership again, while ordinary pop-out never creates emergency layout intent
+
 #### Scenario: A cancelled logoff leaves nothing half-captured
 - **WHEN** `SessionEnding` releases all guests and the logoff is then cancelled by another application
 - **THEN** no HWND remains in the captured index, the hooks and stale container dispatch are removed, released tabs and split references are cleared from the presentation, and the group's persisted tab metadata and active intent remain available for a later save

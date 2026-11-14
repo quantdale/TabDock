@@ -88,6 +88,10 @@ internal static class QualificationManifestVerifier
         string[] runDirectories;
         try
         {
+            // Child output is untrusted even when its names are lexically beneath
+            // the parent. Reject redirected roots before inspecting their contents.
+            childRoot = new VisualPathPolicy(parentRoot, createRoot: false)
+                .Resolve(RelativePath(parentRoot, childRoot));
             runDirectories = Directory.Exists(childRoot)
                 ? Directory.GetDirectories(childRoot)
                     .Where(directory => File.Exists(Path.Combine(directory, "run-manifest.json")))
@@ -97,7 +101,7 @@ internal static class QualificationManifestVerifier
         }
         catch (Exception ex)
         {
-            return ChildManifestVerification.Invalid(expectedShard, exitCode, $"child artifact directory enumeration failed: {ex.GetType().Name}");
+            return ChildManifestVerification.Invalid(expectedShard, exitCode, $"child artifact directory enumeration failed: {ex.GetType().Name}: {ex.Message}");
         }
 
         if (runDirectories.Length != 1)
@@ -111,14 +115,20 @@ internal static class QualificationManifestVerifier
         }
 
         string runDirectory = runDirectories[0];
-        string manifestPath = Path.Combine(runDirectory, "run-manifest.json");
+        if (!TryResolveRelative(parentRoot, RelativePath(parentRoot, Path.Combine(runDirectory, "run-manifest.json")),
+                out string? manifestPath, out string pathError))
+        {
+            return ChildManifestVerification.Invalid(expectedShard, exitCode, $"child manifest path invalid: {pathError}");
+        }
         string relativeChildDirectory = RelativePath(parentRoot, runDirectory);
-        string manifestSha = Sha256File(manifestPath);
+        string manifestSha = "MISSING";
         var errors = new List<string>();
         JsonDocument? document = null;
         try
         {
-            byte[] bytes = File.ReadAllBytes(manifestPath);
+            byte[] bytes = File.ReadAllBytes(manifestPath!);
+            // Bind the hash to the very bytes parsed, not a separate earlier read.
+            manifestSha = Convert.ToHexString(SHA256.HashData(bytes));
             document = JsonDocument.Parse(bytes, new JsonDocumentOptions
             {
                 AllowTrailingCommas = false,
@@ -401,7 +411,7 @@ internal static class QualificationManifestVerifier
         List<string> errors)
     {
         var references = new List<ManifestArtifactReference>();
-        var paths = new HashSet<string>(StringComparer.Ordinal);
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         JsonElement index = Child(root, "artifactIndex");
         if (index.ValueKind != JsonValueKind.Array)
         {
@@ -431,10 +441,17 @@ internal static class QualificationManifestVerifier
                 errors.Add($"artifact path escapes child root: {pathError}");
                 continue;
             }
-            bool actualExists = File.Exists(fullPath);
-            string actualHash = actualExists ? Sha256File(fullPath!) : "MISSING";
-            if (exists != actualExists || !string.Equals(expectedHash, actualHash, StringComparison.OrdinalIgnoreCase))
-                errors.Add($"artifact hash/existence mismatch for '{normalized}'");
+            try
+            {
+                bool actualExists = File.Exists(fullPath);
+                string actualHash = actualExists ? Sha256File(fullPath!) : "MISSING";
+                if (exists != actualExists || !string.Equals(expectedHash, actualHash, StringComparison.OrdinalIgnoreCase))
+                    errors.Add($"artifact hash/existence mismatch for '{normalized}'");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                errors.Add($"artifact '{normalized}' could not be verified: {ex.GetType().Name}");
+            }
             references.Add(new ManifestArtifactReference(normalized!, kind ?? "unknown", expectedHash ?? "MISSING", exists));
         }
 
@@ -544,30 +561,18 @@ internal static class QualificationManifestVerifier
 
     public static bool TryNormalizeRelativePath(string? rawPath, out string? normalized, out string error)
     {
-        normalized = null;
-        if (string.IsNullOrWhiteSpace(rawPath))
+        try
         {
-            error = "path is empty";
+            normalized = VisualPathPolicy.NormalizePortableRelative(rawPath!);
+            error = string.Empty;
+            return true;
+        }
+        catch (ArgumentException ex)
+        {
+            normalized = null;
+            error = ex.Message;
             return false;
         }
-
-        string candidate = rawPath.Replace('\\', '/');
-        if (candidate.StartsWith("/", StringComparison.Ordinal)
-            || candidate.Contains(":", StringComparison.Ordinal))
-        {
-            error = "path is absolute";
-            return false;
-        }
-
-        string[] segments = candidate.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length == 0 || segments.Any(segment => segment is "." or ".."))
-        {
-            error = "path contains an empty or traversal segment";
-            return false;
-        }
-        normalized = string.Join('/', segments);
-        error = string.Empty;
-        return true;
     }
 
     private static bool TryResolveRelative(
@@ -576,20 +581,21 @@ internal static class QualificationManifestVerifier
         out string? fullPath,
         out string error)
     {
-        string root = File.Exists(rootOrManifestPath)
-            ? Path.GetDirectoryName(rootOrManifestPath) ?? string.Empty
-            : rootOrManifestPath;
-        string candidate = Path.GetFullPath(Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar)));
-        string normalizedRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!candidate.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+        try
+        {
+            string root = File.Exists(rootOrManifestPath)
+                ? Path.GetDirectoryName(rootOrManifestPath) ?? string.Empty
+                : rootOrManifestPath;
+            fullPath = new VisualPathPolicy(root, createRoot: false).Resolve(relativePath);
+            error = string.Empty;
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
         {
             fullPath = null;
-            error = "resolved path leaves the bundle root";
+            error = ex.Message;
             return false;
         }
-        fullPath = candidate;
-        error = string.Empty;
-        return true;
     }
 
     public static string RelativePath(string root, string path)

@@ -1,0 +1,115 @@
+# Plan: repository-wide audit and remediation
+
+**Status:** complete — local audit/remediation; physical qualification not claimed
+**Updated:** 2026-11-13
+
+## Objective
+
+Aggressively audit the whole repository for verified correctness, security, reliability, performance and maintainability defects; fix legitimate issues with meaningful regression evidence. Continue beyond the first pass, avoiding speculative rewrites. Final report must distinguish verified results, assumptions and remaining qualification risks.
+
+## Baseline and constraints
+
+- Fresh fetch: clean `main`, HEAD and origin/main both `a85280fe46a09da717da462db8c07c9d55095a1d`; no unpushed commits. Working branch `audit/repository-20261113`. No commits/push authorized by this request.
+- Preserve Shepherd/no-reparent architecture, native identity gates, journal durability and evidence. No unattended input, production state mutation or display changes. Use isolated fixtures and CLI/headless validation.
+- 950 tracked files, 249 C# files, roughly 100k lines of C#/PowerShell/XAML including tests/tooling. Audit production and validation/release tooling, not just application UI.
+- Repowise tools/resources unavailable; Pi graph stale (October revision and irrelevant worktree entries). Use exact current Git/file reads and focused searches instead.
+- Session evidence: `_AgentArtifacts/TabDock/sessions/20261113-pi-repository-audit/` outside the repository.
+
+## Steps
+
+- [x] Establish Git baseline, fetch remote, preserve work and read execution/validation constraints.
+- [x] Establish fresh build/tests/dependency/static-analysis baseline.
+- [x] Audit storage, recovery, diagnostics/privacy, locking and shutdown paths.
+- [x] Audit native identity, capture/release, WinEvent, DPI/geometry and resource lifecycles.
+- [x] Audit viewmodels, WPF interaction, layout, cancellation and concurrency.
+- [x] Audit validation driver, performance tooling, scripts/dependencies and CI/release trust boundaries.
+- [x] Reproduce each actionable finding with focused red-capable regression; implement root-cause fixes; record rejected hypotheses.
+- [x] Independent counterexample/second-pass sweep and appropriate benchmarks/property tests.
+- [x] Run final full CI-safe Release/publish gate, Debug build/tests and tooling suites; inspect diff and Git state.
+- [x] Report verified findings/fixes/optimizations and remaining risks with explicit evidence scope.
+
+## Findings and evidence
+
+### Pass 1 — verified and fixed
+
+1. **DiagnosticTrace concurrent eviction corruption.** Sequence numbers were allocated before taking the ring lock; a delayed writer could overwrite a newer event sharing its slot. Existing concurrency coverage only asserted sorted output. New newest-tail stress test reproduced `[19435,19997,19998,20000]` instead of `[19997..20000]`. Allocate/install under one lock, keeping caller-data copying outside it. Regression performs 10 × 20k concurrent writes and checks exact retained sequences.
+2. **Picker retired-row subscriptions.** Anonymous handlers remained on refreshed/disposed candidate rows, retaining the picker and emitting current-state notifications for obsolete rows. Two direct lifecycle regressions each observed 5 unexpected notifications. Named handlers now detach on refresh/dispose, with current-row/disposed checks on delivery.
+3. **Malformed validation markers escape the refusal boundary.** JsonObject parses lazily; duplicate required OR unknown root properties threw ArgumentException on first access, so bootstrap/probe did not return structured refusal. Force dictionary validation inside the parse boundary and classify duplicate-property exceptions as marker-malformed. Three tests verify no throw, refusal and byte/time/file-set preservation.
+4. **JSON credential-alias privacy gap.** Structured sanitizer omitted `pass`, `pwd`, `db_pwd`, `credential`, `client-credentials` although the text path recognizes corresponding credentials. Five regressions showed opaque planted values surviving in JSON. Extend sensitive-key detection, exercise nested JSON documents and JSONL and preserve an unrelated `compass` field. This verifies sanitizer behavior; no real credential exposure was observed.
+5. **WinEvent stale lifetime replay.** Stop only checked `_running`; queued old DESTROY/NAMECHANGE/FOREGROUND callbacks became admissible after Start with the same member. Three deterministic context-queue regressions reproduced unwanted dispatch. Stop now advances a dispatch generation, queued work captures it, and stale work is rejected before tracing/member probing. Stopped native callbacks are rejected before membership work.
+
+### Pass 2 — native release counterexamples and tooling dependency audit
+
+6. **Unsafe post-token intentional-hide finalization.** After successful own-token removal and failed journal clear, the fallback used tokenless PID/thread/class checks. A same-process/same-class recycled HWND passed and received fallback ShowWindow/DWM calls. Four injected missing/foreign-nonce cases at before-show/before-transitions boundaries failed before the fix. `EvaluateAfterOwnCaptureTokenRemoval` now requires an absent capture token plus the existing surviving per-HWND released-close nonce, without consuming it; missing evidence remains pending and a foreign value is a mismatch. No new property/P/Invoke is introduced.
+7. **Own-token finalization retries incorrectly classified as recycled.** After the same disk failure, a second visible/hidden Release saw its own missing token as a positive mismatch and returned TargetGoneOrRecycled. Two actual locked-journal/production-Hide regressions reproduced this. Shepherd now records the exact captured object's successful token-removal phase, uses strong process evidence at retry entry and nonce proof at every further mutation, avoids removing a second token, and drops phase state when unregistering. Four additional retry counterexamples prove missing process/nonce or foreign nonce/token performs no native mutation; uncertainty preserves journal evidence. Shared release fixtures now model the nonce installed by real capture. Native identity spec updated for these invariants.
+8. **Vulnerable development-tool dependency and CI blind spot.** Full npm audit (including dev dependencies, unlike an initial omit-dev check) reported Zod 4.4.3 / GHSA-mrhx-c7xc-m3w5, high severity oversized constrained-collection memory exhaustion. Updated ONLY the allowed transitive Zod lock entry to 4.6.7; OpenSpec remains exactly 1.8.0. Full npm audit now reports zero vulnerabilities. Canonical -Ci validation now requires npm and runs `npm audit --include=dev --audit-level=low` even on a warm install; nonzero audit/network results fail validation. Added an AST-bound script regression that first failed for the missing gate, then executes the real audit-step body/Invoke-Step with failing and succeeding npm doubles to verify exit propagation. Updated testing and CI-tooling specification.
+
+### Pass 3 — lifecycle, arithmetic, shutdown intent and ownership
+
+9. **Second-hop lifecycle generation loss.** Monitor dispatch preserved captured reference, but GuestLifecycleService coalesced only HWND. A queued old MOVESIZEEND cleared a replacement member's new drag state. A never-shown real-container regression reproduced this through monitor → lifecycle → container. Queue entries now retain member reference; replacements cannot inherit old flags; detached batches protect reentrant queue additions. Two cases cover replacement with/without its own location-repair flags and prove current END still works.
+10. **Native minimum/coordinate arithmetic overflow.** Split minimum multiplication wrapped huge native minima to zero/negative; scaled unaware dimensions narrowed to int.MinValue; epsilon subtraction could throw or treat opposite integer extremes as one-pixel neighbors. Ten red cases reproduced these. Width/scaling now use wide exact arithmetic and saturate; epsilon subtraction widens before Math.Abs. Added a 10k full-range seeded BigInteger oracle in addition to the existing million-case partition sweep. 103 focused geometry/containment/DPI tests pass.
+11. **Shutdown layout-intent loss.** EmergencyReleaseAll removed members before retaining metadata, so normal exit/crash/session/monitor cleanup saved obsolete restored metadata, only a pending subset, or no new group. Four original red cases plus six added combinations exercise real release/persistence. The complete ordered live metadata/active index is snapshotted before teardown, retained through repeated release/normalization/save, and a new admission retires snapshot authority. Ordinary pop-out remains unchanged. Ten intent tests plus 134 surrounding release/persistence/mutation tests pass. Native recovery evidence remains separate and retained.
+12. **Closed container retained by VM collection handler.** ContainerWindow_Closed removed the VM's strip listener but not the container's distinct Tabs.CollectionChanged listener, contrary to its comment. A forced-GC/settled never-shown-container regression proved retention with a live VM; removing the correct listener makes the actual closed container collectible. Eight affected lifetime/motion/lifecycle tests pass.
+13. **Unbounded native z-order walks.** Microsoft documents GetWindow-loop infinite-enumeration risk under concurrent destruction/reorder. Two cyclic/unending seam cases exceeded 4,096 probes before the fix. The shared relative-order predicate and remaining invisible-helper walk now bound traversal at 4,096 steps, without per-layout HashSet allocation; stable 2,000-window traversal remains supported. Seven ZOrder/runtime tests pass. This is deterministic pathological-list protection, not an observed workstation hang.
+
+### Pass 4 — path trust boundaries, DPI invalidation and benchmark safety
+
+14. **Qualification path aliases and reparse escapes.** Portable paths accepted alternate streams, Win32 trimmed aliases/device names and junction-backed artifacts. PowerShell and visual-driver policy now reject these before evidence access; Microsoft-documented superscript-digit COM/LPT devices are included. Alias and actual session-owned junction regressions went red then green. Child import now shares the same driver normalizer/resolver instead of silently collapsing empty segments or using lexical containment alone.
+15. **DPI cache invalidation race.** A worker diagnostic probe could finish after UI invalidation and repopulate stale DPI; unsynchronized dictionary access also crossed threads. Cache access is now locked and an invalidation generation prevents obsolete in-flight probes from caching results. Native probing remains outside the lock. Per-monitor and whole-cache race regressions were red, then green. An original caller may still receive its completed observation; no claim of a globally atomic display-topology snapshot.
+16. **Unsafe startup benchmark preflight.** The old primary-only state check missed backup restoration and native journal rescue. Extracted read-only storage preflight checks primary and backup, rejects unknown/reparse state and any existing journal (even with the nonempty-state override), resolves the ordinary known folder and refuses validation-root overrides. AST-bound disposable-fixture regression went red, then green; benchmark itself was not launched.
+17. **Child-manifest read failures escaped fail-closed aggregation.** Exclusive locks on a child manifest or artifact threw IOException rather than returning FAIL_HARNESS. Hash/read boundaries now classify failures; the manifest hash is computed from the exact parsed byte snapshot, eliminating an extra file read. Six new native-free manifest regressions (including child-root/artifact junctions and case-aliased duplicate paths) failed, then all 20 manifest/visual contracts passed. File-path duplicate detection now follows Windows case-insensitive semantics.
+18. **Evidence staging checked destination containment after writing.** A pre-existing junction under `qualification/external` received files outside the candidate root before the late check refused the merge. A full real-merge fixture reproduced outside writes. Copy authorization now requires an explicit destination root and resolves every destination before directory creation/copy, including handoff copies. The full release-tooling suite passes 184 tests and the redirected directory remains untouched.
+
+Arithmetic follow-up for finding 10: adding container chrome to an extreme content minimum could overflow again. `MinOuterTrackSize` now saturates that addition; three additional cases (two red before the fix) exercise the actual minimum helper.
+
+### Evidence so far
+
+All evidence below is in the outside-Git session directory named above.
+
+- `baseline-validation.log`: fresh audited Release/publish CI-safe gate PASS; 1,037 xUnit tests, zero build warnings/errors, configured NuGet sources report no vulnerable packages, auxiliary builds, synthetic resources, native ABI, CLI/privacy/storage smoke and 39 specs.
+- `first-regressions-red.log`: all 6 new cases failed against baseline. `first-regressions-green.log`: all 52 tests in the three affected suites passed after fixes.
+- `privacy-monitor-red.log`: all 8 new alias/restart cases failed before their fixes. `privacy-monitor-green.log`: all 28 tests in affected privacy/monitor suites passed afterward.
+- `unit-pass1.log`: full Release suite PASS, 1,051 tests, no skips/failures (14 additional cases).
+- `analyzers.log`: Debug solution build with requested latest-all analysis, zero warnings/errors (incremental build; do not overstate analyzer coverage).
+- `release-tooling-pass1.log`: 179 release-tooling tests passed.
+- `release-finalization-red.log`: all four recycled-HWND finalization cases fail before nonce fix; `release-finalization-green.log`: 91 release/identity/recovery tests pass.
+- `release-retry-red.log`: both own-token retry cases return TargetGoneOrRecycled before phase fix; `release-retry-green.log`: 93 focused tests pass. `unit-pass2.log`: full Release suite 1,061 passed, 24 new cases total.
+- `npm-audit-all.json`: one high-severity Zod advisory before update; `npm-zod-update.log`, `npm-audit-after.json`: one package updated, no vulnerabilities after update. `openspec-after-zod.log`: CLI 1.8.0, 39 specs pass.
+- `npm-gate-red.log`: old 179 script tests pass, new missing-audit test fails. `npm-gate-green.log`: 180 script tests pass including real step-body failure/success propagation.
+- `pass2-validation.log`, `pass2-resources/`: repeated full audited Release/publish gate passes with 1,061 tests, zero warnings/errors, all CLI/storage/privacy/ABI/resource smokes, 39 specs, npm and NuGet audits. Builds carry baseline commit metadata plus the uncommitted working-tree patch, not a committed/published candidate.
+- `deterministic-pass1.log`, `deterministic-pass1/`: 205 native-free driver self-tests, synthetic topology and run-manifest PASS (before native release additions; repeat on final tree).
+- `format-analyzers.log`, `analyzer-report/format-report.json`: read-only dotnet format analyzer pass exits zero with empty report. Not proof of absent defects.
+- `lifecycle-dispatch-red.log`, `lifecycle-dispatch-green.log`: production second-hop stale-member failure reproduced, both generation/coalescing cases plus six monitor tests pass.
+- `geometry-extremes-red.log`, `geometry-extremes-green.log`: 10 adversarial failures before fix; 103 focused tests including full-range integer oracle pass afterward.
+- `shutdown-intent-red.log`, `shutdown-intent-green.log`: 4 original layout-loss cases red; 144 affected tests green including ten layout/lifecycle counterexamples.
+- `container-lifetime-red.log`, `container-lifetime-green.log`: actual closed container retained then collected; eight affected tests pass.
+- `zorder-budget-red.log`, `zorder-budget-green.log`: cyclic/unending traversal exceeds budget before fix; seven predicate/runtime tests pass afterward. `resume-debug-build.log`: ordinary Debug solution build zero warnings/errors.
+- Trace microbenchmark: same-baseline detached Windows-git worktree was created at `_AgentWorktrees/TabDock/audit-baseline-a85280fe` and has since been removed using git worktree (fresh worktree list confirms only canonical and pre-existing `.kilo` worktrees remain). `perf-{baseline,current}-trace.json` runs were concurrent and therefore noisy, not causal performance evidence. A later current-only run `perf-current-trace-sequential.json` reports ~1.22 ms/10k no-data records, 2.52 ms/10k data records, 32.28 ms/100k, unchanged allocations. A later baseline-only run `perf-baseline-trace-sequential.json` measured medians 1.46/2.52/27.47 ms respectively with the same allocations. Timing directions are mixed and samples noisy; no speedup or regression claim.
+- Active LSP probes of all changed C# paths: inconclusive (server unavailable/not ready); zero returned findings are NOT clean-file evidence. Compiler/tests are authoritative build evidence.
+
+### Source coverage / follow-up map
+
+Read actual current source for PersistenceService (whole), ProductStorage (whole), LoggingService (first 300 lines), DiagnosticEnvironmentService/DiagnosticReportService/DiagnosticTrace (whole), GroupManager/GroupViewModel/CapturePickerViewModel/IconService (whole), WindowIdentityGate (through evaluation core), WinEventMonitor and GuestLifecycleService (whole), GuestHideProvenance/PresentationLayoutCoordinator (whole), ProductMutationLease and DiagnosticCommandLine (whole), App bootstrap (first 280), WindowShepherd capture/release/journal/rescue sections (not positioning yet). Read corresponding current storage/privacy/diagnostic/monitor/native-interaction/icon specifications and relevant tests.
+
+Further current source read: WindowShepherd positioning/min-track/DPI/deferred/Z-order, MonitorDpiService/GuestDpiPositionScope/SplitGeometry/PaneContainmentPolicy/ZOrder/NativeSnapshotService/LogicalSnapshotCapture (whole), logging teardown, App startup/shutdown/monitor retry/container registry, MotionProfile (whole), MainWindow and CapturePickerWindow code-behind, Group/Tab/Main viewmodels, relevant shutdown/native specs and fixtures. Subsequent sweep read container input/split/chrome/capture bodies, smaller presentation policies/native wrappers, pending-recovery ledger/retirement, driver ownership/visual evidence and release/package verifiers. Resumed sweep independently re-read drag/split wiring, pending source-generation/retirement code, qualification import/hashing/staging, and small admission/initial-presentation/chrome/binding policies; new counterexamples led to findings 17–18 rather than relying on previous passing checks.
+
+**Rejected/deferred hypotheses:** Cold journal-cache read failure can make JournalClear return success on an empty failed cache in a synthetic cold-release fixture, but real capture always loads/commits the cache before binding/admission. No verified production path reaches cold cache with a live capture, so no speculative fix added. GroupViewModel externally writable Replace/Reset collections may have edge cases, but confirm production callers before changing those semantics. MainViewModel manager subscriptions share app lifetime; no shorter current production lifetime confirmed. UI motion queued operation history grows only through bounded current production activation paths; avoid treating test-only callback churn as a production performance claim. Existing comments/tests remain hypotheses, not proof.
+
+## Final verification and handoff
+
+The final report is [repository audit outcome](../investigations/repository-audit-2026-11-13.md). No further verified actionable defect was identified in the final source/diff/counterexample pass. This is a bounded, evidence-backed audit result, not a guarantee of absent defects.
+
+Current-tree evidence (outside Git, same session directory):
+
+- `completion-validation.log`: canonical Release/CI/publish PASS; **1,102** xUnit tests, zero build warnings/errors, 39 OpenSpec capabilities, full-dev npm audit zero vulnerabilities, audited NuGet restores/report, auxiliary builds, synthetic resource gate, ABI/CLI/storage/privacy and published-version smokes.
+- `completion-debug.log`: normal `dotnet build TabDock.sln` with zero warnings/errors; all **1,102** Debug tests pass (65 more cases than baseline).
+- `completion-deterministic.log`: canonical deterministic QA tier passes **211** native-free self-tests, synthetic topology and run-manifest PASS; includes six new import counterexamples.
+- `completion-release-tooling.log`: **184** tests pass, including alias/junction/staging, safe startup preflight and npm audit propagation. `completion-storage-safety.log`: **24** ownership/process-budget checks pass.
+- `completion-analyzers-{app,driver}.log` and report directories: read-only dotnet-format analyzers succeed; both reports empty. C# LSP remains inconclusive, not clean-file evidence.
+- `completion-powershell-parse.log`, `completion-workflow-parse.log`: all 20 PowerShell scripts and 4 workflow YAML files parse. `completion-config-drift.log`: 142 generated agent files, zero differences.
+- PSScriptAnalyzer 1.24.0 obtained only under the session artifact directory, no repository dependency added. `completion-powershell-analysis.json`: 261 warnings, zero errors. Most are Write-Host/verb/ShouldProcess naming/style advisories; substantive-looking results were read and triaged. Baseline comparison shows three added warnings: two intentional FileNotFound/DirectoryNotFound catches in read-only preflight, plus a script-scope test variable consumed by an AST-extracted step. Unused-array assignments in the offline verifier still execute required validation side effects; no blanket suppression or speculative behavior change.
+- Red follow-up evidence: `manifest-boundary-red.log`, `manifest-case-red.log`, `staging-boundary-red.log`, `superscript-devices{,-script}-red.log`. Green evidence is subsumed by the final gates above.
+
+At audit completion, changes were intentionally uncommitted on `audit/repository-20261113`, with no unpushed commits and origin/main still at the baseline. The user subsequently authorized committing this audited patch and pushing directly to `main` without force. Resolve publication state dynamically from Git; the final SHA and exact-SHA hosted CI result are reported in session output, not a self-referential state-only follow-up commit. Session-owned baseline worktree removed; unrelated `.kilo` worktree unchanged; no short-TEMP directory created. No signing/deployment or unattended real input performed.
+
+**Remaining qualification limits:** supervised desktop/native capture/activation/browser behavior, physical mixed-DPI and Windows 10/11 cross-machine qualification, long physical resource soaks and production signing remain unclaimed. Static reparse checks reject existing redirections; they are not an OS sandbox against a concurrently hostile filesystem actor. Benchmarks do not establish a speedup. See the report for validation limits and retained nonblocking analyzer advisories.

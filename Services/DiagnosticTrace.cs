@@ -43,7 +43,6 @@ public sealed class DiagnosticTrace
 
         var record = new DiagnosticEventRecord(data)
         {
-            Sequence = System.Threading.Interlocked.Increment(ref _nextSequence),
             TimestampUtc = DateTimeOffset.UtcNow.ToString("O"),
             Kind = kind,
             GroupId = groupId,
@@ -56,6 +55,10 @@ public sealed class DiagnosticTrace
 
         lock (_gate)
         {
+            // Allocation and installation must share one linearization point.
+            // Otherwise a delayed writer can overwrite the same ring slot
+            // after a newer sequence has already been installed there.
+            record.Sequence = ++_nextSequence;
             int index = (int)((record.Sequence - 1) % _buffer.Length);
             _buffer[index] = record;
             if (_count < _buffer.Length)

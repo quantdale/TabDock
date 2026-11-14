@@ -228,6 +228,38 @@ public class CapturePickerViewModelTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RetiredRows_DoNotNotifyThePickerAfterRefreshOrDispose(bool dispose)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "TabDock-picker-subscriptions-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var log = new LoggingService(Path.Combine(root, "logs"));
+            var manager = new GroupManager(
+                new WindowShepherdService(log, Path.Combine(root, "journal.json")),
+                new PersistenceService(log, Path.Combine(root, "state.json")), log);
+            using var picker = new CapturePickerViewModel(manager, new IconService(log), log,
+                () => new[] { new CapturePickerViewModel.WindowInfo(new IntPtr(1), 1, "Test", "Test", null) });
+            CapturePickerViewModel.WindowInfo retiredRow = picker.Windows[0];
+            if (dispose)
+                picker.Dispose();
+            else
+                picker.Refresh();
+
+            int notifications = 0;
+            picker.PropertyChanged += (_, _) => notifications++;
+            retiredRow.IsSelected = true;
+            Assert.Equal(0, notifications);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static DrawingImage FrozenImage()
     {
         var image = new DrawingImage();

@@ -164,6 +164,23 @@ valid under their original schema and do not synthesize visual evidence.
 - **THEN** offline verification fails before reading or accepting the artifact
   as qualification evidence
 
+#### Scenario: Win32 aliases and filesystem redirection cannot escape portable paths
+
+- **WHEN** an artifact path names an alternate data stream, reserved device (including superscript-digit COM/LPT aliases), trimmed-name alias, or an existing junction/symlink component beneath the bundle root
+- **THEN** PowerShell offline verification, child-manifest import, and the driver's visual path policy reject it before reading or accepting the artifact
+
+#### Scenario: Child evidence cannot be read
+
+- **WHEN** a child manifest or indexed artifact is locked, missing, or unreadable
+- **THEN** import returns a structured `FAIL_HARNESS` result rather than throwing out of the parent aggregation
+- **AND** the child manifest hash binds the same byte snapshot that is parsed
+
+#### Scenario: A staging destination redirects writes
+
+- **WHEN** an existing junction/symlink redirects an imported evidence destination outside the candidate or handoff root
+- **THEN** merge refuses before creating directories or copying evidence through that destination
+- **AND** candidate bytes and the redirected directory remain unchanged
+
 #### Scenario: An unsupported bundle schema is supplied
 
 - **WHEN** the bundle uses a future schema or a schema outside the explicitly

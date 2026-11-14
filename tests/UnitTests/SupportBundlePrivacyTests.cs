@@ -88,6 +88,34 @@ public class SupportBundlePrivacyTests
         Assert.DoesNotContain("API-KEY-SECRET", sanitizedJson, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("pass")]
+    [InlineData("pwd")]
+    [InlineData("db_pwd")]
+    [InlineData("credential")]
+    [InlineData("client-credentials")]
+    public void JsonCredentialAliases_AreRedactedInDocumentsAndJsonLines(string key)
+    {
+        const string secret = "opaqueValue741852963";
+        string json = JsonSerializer.Serialize(new
+        {
+            nested = new[] { new System.Collections.Generic.Dictionary<string, string> { [key] = secret } },
+            compass = "ordinary-value",
+        });
+
+        foreach (string sanitized in new[]
+        {
+            DiagnosticEnvironmentService.SanitizeJsonText(json),
+            DiagnosticEnvironmentService.SanitizeJsonLine(json),
+        })
+        {
+            using JsonDocument document = JsonDocument.Parse(sanitized);
+            Assert.Equal("<redacted>", document.RootElement.GetProperty("nested")[0].GetProperty(key).GetString());
+            Assert.DoesNotContain(secret, sanitized, StringComparison.Ordinal);
+            Assert.Equal("ordinary-value", document.RootElement.GetProperty("compass").GetString());
+        }
+    }
+
     [Fact]
     public void PendingRecoveryDiscoveryReport_RedactsPersonalPathsAndTitles()
     {

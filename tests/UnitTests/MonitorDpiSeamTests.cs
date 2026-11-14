@@ -168,6 +168,47 @@ public class MonitorDpiSeamTests
         Assert.Equal(0, api.RestoreContextCount);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async System.Threading.Tasks.Task Cache_InvalidationCannotBeUndoneByAnOlderInFlightProbe(bool allMonitors)
+    {
+        using var entered = new System.Threading.ManualResetEventSlim();
+        using var release = new System.Threading.ManualResetEventSlim();
+        int calls = 0;
+        var inner = new DelegateProbe(_ =>
+        {
+            if (System.Threading.Interlocked.Increment(ref calls) != 1)
+                return 144;
+            entered.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
+            return 96; // observation started before a real DPI/topology change
+        });
+        var cache = new CachedMonitorDpiProbe(inner);
+        IntPtr monitor = new(7);
+        var pending = System.Threading.Tasks.Task.Run(() => cache.GetEffectiveDpi(monitor));
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+            if (allMonitors)
+                cache.Invalidate();
+            else
+                cache.Invalidate(monitor);
+        }
+        finally { release.Set(); }
+        Assert.Equal(96u, await pending);
+        Assert.Equal(144u, cache.GetEffectiveDpi(monitor));
+        Assert.Equal(144u, cache.GetEffectiveDpi(monitor));
+        Assert.Equal(2, calls); // new successful observation is cached normally
+    }
+
+    private sealed class DelegateProbe : IMonitorDpiProbe
+    {
+        private readonly Func<IntPtr, uint> _probe;
+        public DelegateProbe(Func<IntPtr, uint> probe) => _probe = probe;
+        public uint GetEffectiveDpi(IntPtr monitor) => _probe(monitor);
+    }
+
     private sealed class FakeProbe : IMonitorDpiProbe
     {
         public uint Dpi { get; set; }

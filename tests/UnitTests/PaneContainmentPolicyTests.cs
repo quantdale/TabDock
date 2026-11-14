@@ -66,6 +66,15 @@ public class PaneContainmentPolicyTests
         Assert.False(SuppressWouldApply(cache, 1001, visible: true, Rect(10, 10, 500, 400)));
     }
 
+    [Theory]
+    [InlineData(int.MinValue, 0)]
+    [InlineData(int.MinValue, int.MaxValue)]
+    [InlineData(int.MaxValue, int.MinValue)]
+    public void EpsilonComparison_ExtremeCoordinates_NeitherThrowNorWrapIntoAMatch(int first, int second)
+    {
+        Assert.False(PaneContainmentPolicy.MatchesWithinEpsilon(Rect(first, 0, first, 10), Rect(second, 0, second, 10)));
+    }
+
     [Fact]
     public void EpsilonBoundary_OnePixelIsSameRefusal_TwoPixelsDiffer()
     {

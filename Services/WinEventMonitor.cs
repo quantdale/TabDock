@@ -31,6 +31,7 @@ public sealed class WinEventMonitor : IDisposable
     private IntPtr _hookLocationChange;
     private bool _running;
     private bool _disposed;
+    private long _dispatchGeneration;
     private long _callbacksReceived;
     private long _irrelevantRejected;
     private long _membershipProbes;
@@ -215,6 +216,7 @@ public sealed class WinEventMonitor : IDisposable
         if (!_running && !HasInstalledHooks)
             return;
         _running = false;
+        unchecked { _dispatchGeneration++; }
         // Drop the dispatch target so an in-flight native callback after this
         // point cannot post onto a context we no longer own; Raise's _running
         // guard discards anything already posted.
@@ -260,7 +262,7 @@ public sealed class WinEventMonitor : IDisposable
     private void OnWinEvent(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
     {
         Interlocked.Increment(ref _callbacksReceived);
-        if (hwnd == IntPtr.Zero)
+        if (!_running || hwnd == IntPtr.Zero)
         {
             Interlocked.Increment(ref _irrelevantRejected);
             return;
@@ -367,6 +369,7 @@ public sealed class WinEventMonitor : IDisposable
     private void Post(WindowEventArgs args)
     {
         Interlocked.Increment(ref _posts);
+        long generation = _dispatchGeneration;
         if (_uiContext != null)
         {
             // The Post hop is load-bearing beyond thread affinity: the hide
@@ -374,16 +377,24 @@ public sealed class WinEventMonitor : IDisposable
             // that caused them completed (e.g. a tab switch has already moved
             // the active tab by the time its SW_HIDE event is handled).
             // Do not replace this with a synchronous Send/direct call.
-            _uiContext.Post(_ => Raise(args), null);
+            _uiContext.Post(_ => Raise(args, generation), null);
         }
         else
         {
-            Raise(args);
+            Raise(args, generation);
         }
     }
 
-    private void Raise(WindowEventArgs args)
+    private void Raise(WindowEventArgs args, long generation)
     {
+        // Stop invalidates queued work permanently, including after a later
+        // Start. Member identity alone cannot prove the hook lifetime is current.
+        if (!_running || generation != _dispatchGeneration)
+        {
+            Interlocked.Increment(ref _staleDispatches);
+            return;
+        }
+
         bool traceEvent = IsDiagnosticEvent(args.EventType);
         IntPtr traceGuest = args.EventType == NativeMethods.EVENT_OBJECT_REORDER ? args.RelatedHwnd : args.Hwnd;
         if (traceEvent)
@@ -392,13 +403,9 @@ public sealed class WinEventMonitor : IDisposable
                 foreground: _getForegroundWindow(), action: "dispatch");
         }
 
-        // A posted dispatch can outlive Stop() (its guard drops it here), and
-        // the guest may have been released between the native event and this
-        // hop — Windows aggressively recycles HWND values, so re-verify the
-        // HWND still names a captured window instead of acting on a stale
-        // snapshot of desktop state.
-        if (!_running)
-            return;
+        // The guest may have been released between the native event and this
+        // hop. Windows aggressively recycles HWND values, so also re-verify
+        // member ownership within the current hook lifetime.
 
         bool desktopReorder = args.EventType == NativeMethods.EVENT_OBJECT_REORDER
             && args.Hwnd == _getDesktopWindow();

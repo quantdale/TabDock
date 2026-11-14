@@ -57,8 +57,18 @@ public static class SplitGeometry
     {
         leftMinW = Math.Max(0, leftMinW);
         rightMinW = Math.Max(0, rightMinW);
-        return split ? Math.Max(2 * leftMinW, 2 * rightMinW - 1) : leftMinW;
+        if (!split)
+            return leftMinW;
+        // Native min-track values come from another process. A large value
+        // must remain an oversized constraint, not wrap into a small/negative
+        // width that silently permits an undersized pane.
+        long width = Math.Max(2L * leftMinW, 2L * rightMinW - 1);
+        return (int)Math.Min(int.MaxValue, width);
     }
+
+    /// <summary>Composes a native outer-track minimum from content and nonnegative chrome.</summary>
+    internal static int MinOuterTrackSize(int contentMinimum, int chrome)
+        => (int)Math.Min(int.MaxValue, (long)Math.Max(0, contentMinimum) + Math.Max(0, chrome));
 
     /// <summary>
     /// The minimum CONTENT HEIGHT. Normal mode: the active guest spans the full
@@ -89,6 +99,10 @@ public static class SplitGeometry
     {
         if (value <= 0 || monitorDpi == 0 || monitorDpi == NativeMethods.USER_DEFAULT_SCREEN_DPI)
             return value;
-        return (int)Math.Ceiling(value * monitorDpi / (double)NativeMethods.USER_DEFAULT_SCREEN_DPI);
+        long scaled = (long)value * monitorDpi;
+        long physical = (scaled + NativeMethods.USER_DEFAULT_SCREEN_DPI - 1) / NativeMethods.USER_DEFAULT_SCREEN_DPI;
+        // Saturate unrepresentable native dimensions instead of allowing the
+        // narrowing conversion to produce int.MinValue.
+        return (int)Math.Min(int.MaxValue, physical);
     }
 }

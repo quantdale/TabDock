@@ -44,6 +44,24 @@ local binary and SHALL not require a globally installed OpenSpec CLI.
 - **THEN** arbitrary npm lifecycle scripts are not enabled or globally
   approved
 
+### Requirement: Canonical CI SHALL audit the OpenSpec dependency tree
+
+Canonical `validate.ps1 -Ci` SHALL run the npm vulnerability audit against the
+repository lockfile with development dependencies included, even when the local
+CLI is already installed. Reported vulnerabilities and unavailable/failed audit
+results SHALL fail qualification. The exact OpenSpec CLI pin and scripts-disabled
+installation policy SHALL remain unchanged.
+
+#### Scenario: A transitive development-tool vulnerability is reported
+
+- **WHEN** npm reports a vulnerability in OpenSpec or a locked transitive dependency
+- **THEN** canonical CI fails rather than omitting the development dependency tree
+
+#### Scenario: A warm install still requires a successful audit
+
+- **WHEN** the local OpenSpec binary already exists during CI qualification
+- **THEN** the dependency audit still runs and a nonzero audit exit fails validation
+
 ### Requirement: Canonical validation compile-qualifies the performance harness
 
 The isolated `tests/Performance/TabDock.Performance.csproj` engineering harness

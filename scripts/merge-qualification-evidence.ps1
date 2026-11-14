@@ -44,8 +44,13 @@ function Set-MergeProperty {
 function Copy-ValidatedQualificationFile {
     param(
         [Parameter(Mandatory = $true)][string]$SourcePath,
-        [Parameter(Mandatory = $true)][string]$DestinationPath
+        [Parameter(Mandatory = $true)][string]$DestinationPath,
+        [Parameter(Mandatory = $true)][string]$DestinationRoot
     )
+    # Authorize before creating directories or copying, not after the staged
+    # report is written. A pre-existing junction must never redirect writes.
+    $relative = [IO.Path]::GetRelativePath([IO.Path]::GetFullPath($DestinationRoot), [IO.Path]::GetFullPath($DestinationPath))
+    $DestinationPath = (Resolve-QualificationRelativePath -Root $DestinationRoot -RelativePath $relative).FullPath
     if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) { throw "validated qualification artifact is missing: $SourcePath" }
     if (Test-Path -LiteralPath $DestinationPath -PathType Leaf) {
         $sourceHash = Get-QualificationFileSha256 $SourcePath
@@ -98,13 +103,13 @@ function Stage-QualificationReport {
     foreach ($entry in @(Get-QualificationProperty $bundle 'artifactIndex')) {
         $source = (Resolve-QualificationRelativePath -Root $bundleRoot -RelativePath ([string](Get-QualificationProperty $entry 'relativePath'))).FullPath
         $relativeFromReport = (Resolve-QualificationRelativePath -Root $reportRoot -RelativePath ([IO.Path]::GetRelativePath($reportRoot, $source))).RelativePath
-        Copy-ValidatedQualificationFile -SourcePath $source -DestinationPath (Join-Path $stageRoot ($relativeFromReport -replace '/', '\'))
+        Copy-ValidatedQualificationFile -SourcePath $source -DestinationPath (Join-Path $stageRoot ($relativeFromReport -replace '/', '\')) -DestinationRoot $ArtifactRoot
     }
     $bundleRelativeFromBundleRoot = [IO.Path]::GetRelativePath($bundleRoot, $bundleFull)
-    Copy-ValidatedQualificationFile -SourcePath $bundleFull -DestinationPath (Join-Path $stageBundleRoot ($bundleRelativeFromBundleRoot -replace '/', '\'))
+    Copy-ValidatedQualificationFile -SourcePath $bundleFull -DestinationPath (Join-Path $stageBundleRoot ($bundleRelativeFromBundleRoot -replace '/', '\')) -DestinationRoot $ArtifactRoot
     $reportRelative = (Resolve-QualificationRelativePath -Root $reportRoot -RelativePath ([IO.Path]::GetFileName($reportFull))).RelativePath
     $stagedReportPath = Join-Path $stageRoot ($reportRelative -replace '/', '\')
-    Copy-ValidatedQualificationFile -SourcePath $reportFull -DestinationPath $stagedReportPath
+    Copy-ValidatedQualificationFile -SourcePath $reportFull -DestinationPath $stagedReportPath -DestinationRoot $ArtifactRoot
     $stagedBundlePath = Join-Path $stageBundleRoot ($bundleRelativeFromBundleRoot -replace '/', '\')
     $stagedReportRelative = (Resolve-QualificationRelativePath -Root $ArtifactRoot -RelativePath ([IO.Path]::GetRelativePath($ArtifactRoot, $stagedReportPath))).RelativePath
     $stagedBundleRelative = (Resolve-QualificationRelativePath -Root $ArtifactRoot -RelativePath ([IO.Path]::GetRelativePath($ArtifactRoot, $stagedBundlePath))).RelativePath
@@ -302,7 +307,7 @@ if (-not [string]::IsNullOrWhiteSpace($HandoffDir)) {
     # The publication handoff is deliberately bounded to the merged evidence
     # record and the externally staged bundle trees. It does not include the
     # retained candidate root, release manifest, checksums, scripts, or source.
-    Copy-Item -LiteralPath $outputFull -Destination (Join-Path $handoffRoot 'release-external-evidence.json')
+    Copy-ValidatedQualificationFile -SourcePath $outputFull -DestinationPath (Join-Path $handoffRoot 'release-external-evidence.json') -DestinationRoot $handoffRoot
     foreach ($staged in @($imports)) {
         $stageRoot = [IO.Path]::GetDirectoryName([string]$staged.stagedReportRelativePath)
         if ([string]::IsNullOrWhiteSpace($stageRoot)) { throw 'staged machine report has no bounded qualification directory' }
@@ -312,9 +317,7 @@ if (-not [string]::IsNullOrWhiteSpace($HandoffDir)) {
             $relative = (Resolve-QualificationRelativePath -Root $artifactRoot -RelativePath ([IO.Path]::GetRelativePath($artifactRoot, $file.FullName))).RelativePath
             if ($relative -notlike 'qualification/external/*') { throw "staged handoff path is outside qualification/external: '$relative'" }
             $destination = Join-Path $handoffRoot ($relative -replace '/', '\')
-            $destinationParent = [IO.Path]::GetDirectoryName($destination)
-            if (-not (Test-Path -LiteralPath $destinationParent -PathType Container)) { New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null }
-            Copy-ValidatedQualificationFile -SourcePath $file.FullName -DestinationPath $destination
+            Copy-ValidatedQualificationFile -SourcePath $file.FullName -DestinationPath $destination -DestinationRoot $handoffRoot
         }
     }
     Write-Host "Qualification evidence handoff: $handoffRoot (upload this data-only directory for Stage B)" -ForegroundColor Green

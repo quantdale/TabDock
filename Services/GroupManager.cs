@@ -294,6 +294,8 @@ public sealed class GroupManager
 
     private void OnMembersChanged(Group group, NotifyCollectionChangedEventArgs e)
     {
+        if (e.Action == NotifyCollectionChangedAction.Add && e.NewItems?.Count > 0)
+            group.HasEmergencyLayoutSnapshot = false;
         if (e.Action == NotifyCollectionChangedAction.Reset)
         {
             RebuildIndex();
@@ -530,6 +532,7 @@ public sealed class GroupManager
         {
             foreach (var group in Groups.ToList())
             {
+                CaptureEmergencyLayoutIntent(group);
                 for (int i = group.Members.Count - 1; i >= 0; i--)
                 {
                     CapturedWindow cw = group.Members[i];
@@ -571,23 +574,31 @@ public sealed class GroupManager
             if (group.Members.Count == 0)
                 continue;
 
-            group.PersistedTabs.Clear();
-            foreach (CapturedWindow member in group.Members)
-            {
-                group.PersistedTabs.Add(new PersistedTabMetadata
-                {
-                    ExePath = member.ExePath,
-                    OriginalTitle = member.OriginalTitle,
-                    CustomLabel = member.CustomLabel,
-                    Left = member.OriginalBounds.left,
-                    Top = member.OriginalBounds.top,
-                    Right = member.OriginalBounds.right,
-                    Bottom = member.OriginalBounds.bottom,
-                    WasMaximized = member.WasMaximized,
-                });
-            }
-            group.PersistedActiveIndex = group.ActiveIndex;
+            CaptureEmergencyLayoutIntent(group);
             group.Members.Clear();
         }
+    }
+
+    private static void CaptureEmergencyLayoutIntent(Group group)
+    {
+        if (group.HasEmergencyLayoutSnapshot || group.Members.Count == 0)
+            return;
+        group.PersistedTabs.Clear();
+        foreach (CapturedWindow member in group.Members)
+        {
+            group.PersistedTabs.Add(new PersistedTabMetadata
+            {
+                ExePath = member.ExePath,
+                OriginalTitle = member.OriginalTitle,
+                CustomLabel = member.CustomLabel,
+                Left = member.OriginalBounds.left,
+                Top = member.OriginalBounds.top,
+                Right = member.OriginalBounds.right,
+                Bottom = member.OriginalBounds.bottom,
+                WasMaximized = member.WasMaximized,
+            });
+        }
+        group.PersistedActiveIndex = group.ActiveIndex;
+        group.HasEmergencyLayoutSnapshot = true;
     }
 }

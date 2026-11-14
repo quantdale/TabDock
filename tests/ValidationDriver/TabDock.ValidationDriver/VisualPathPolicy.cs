@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace TabDock.ValidationDriver;
 
@@ -14,19 +15,22 @@ internal sealed class VisualPathPolicy
     private readonly string _root;
     private readonly string _rootWithSeparator;
 
-    public VisualPathPolicy(string root)
+    public VisualPathPolicy(string root, bool createRoot = true)
     {
         if (string.IsNullOrWhiteSpace(root))
             throw new ArgumentException("artifact root is required.", nameof(root));
         _root = Path.GetFullPath(root);
         _rootWithSeparator = _root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
             + Path.DirectorySeparatorChar;
-        Directory.CreateDirectory(_root);
+        if (createRoot)
+            Directory.CreateDirectory(_root);
     }
 
     public string Root => _root;
 
-    public string NormalizeRelative(string relativePath)
+    public string NormalizeRelative(string relativePath) => NormalizePortableRelative(relativePath);
+
+    internal static string NormalizePortableRelative(string relativePath)
     {
         if (string.IsNullOrWhiteSpace(relativePath))
             throw new ArgumentException("visual artifact path is empty.", nameof(relativePath));
@@ -40,6 +44,13 @@ internal sealed class VisualPathPolicy
         string[] segments = candidate.Split('/', StringSplitOptions.None);
         if (segments.Length == 0 || segments.Any(segment => segment.Length == 0 || segment is "." or ".."))
             throw new ArgumentException($"visual artifact path contains an empty or traversal segment: '{relativePath}'.", nameof(relativePath));
+        if (segments.Any(segment => segment.EndsWith('.') || segment.EndsWith(' ')
+            || segment.Any(character => character < ' ' || "<>:\"|?*".Contains(character))
+            || Regex.IsMatch(segment, @"^(?:CON|PRN|AUX|NUL|COM[1-9\u00B9\u00B2\u00B3]|LPT[1-9\u00B9\u00B2\u00B3])(?:\.|$)",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)))
+        {
+            throw new ArgumentException($"visual artifact path contains an unsafe Win32 segment: '{relativePath}'.", nameof(relativePath));
+        }
         return string.Join('/', segments);
     }
 
@@ -49,6 +60,7 @@ internal sealed class VisualPathPolicy
         string full = Path.GetFullPath(Path.Combine(_root, normalized.Replace('/', Path.DirectorySeparatorChar)));
         if (!full.StartsWith(_rootWithSeparator, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException($"visual artifact path escapes the artifact root: '{relativePath}'.", nameof(relativePath));
+        EnsureNoReparseComponents(normalized);
         return full;
     }
 
@@ -59,6 +71,24 @@ internal sealed class VisualPathPolicy
         string full = Path.GetFullPath(fullPath);
         if (!full.StartsWith(_rootWithSeparator, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException($"path is outside the artifact root: '{fullPath}'.", nameof(fullPath));
-        return NormalizeRelative(Path.GetRelativePath(_root, full));
+        string normalized = NormalizeRelative(Path.GetRelativePath(_root, full));
+        EnsureNoReparseComponents(normalized);
+        return normalized;
+    }
+
+    private void EnsureNoReparseComponents(string normalized)
+    {
+        string component = _root;
+        foreach (string segment in new[] { string.Empty }.Concat(normalized.Split('/')))
+        {
+            if (segment.Length > 0)
+                component = Path.Combine(component, segment);
+            FileAttributes attributes;
+            try { attributes = File.GetAttributes(component); }
+            catch (FileNotFoundException) { continue; }
+            catch (DirectoryNotFoundException) { continue; }
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                throw new ArgumentException("visual artifact path contains a reparse-point component.", nameof(normalized));
+        }
     }
 }

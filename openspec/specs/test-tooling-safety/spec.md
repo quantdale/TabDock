@@ -88,6 +88,22 @@ Historical audit records MAY mention Spike as past tense.
 - **THEN** no remaining requirement asks them to spawn, reparent, or
   HWND-validate a Spike process
 
+### Requirement: Startup measurement SHALL preflight every automatic restore source
+
+The opt-in real-launcher startup benchmark SHALL check primary and backup layout
+state and refuse existing recovery journals before launching a candidate. Its
+preflight and log reader SHALL use the same ordinary known-folder storage root;
+validation overrides SHALL be refused. Unknown/unreadable state SHALL fail closed.
+An explicit supervised nonempty-layout opt-in SHALL NOT authorize journal rescue.
+
+#### Scenario: Only the backup contains groups
+- **WHEN** primary state is absent and a backup can restore populated layout intent
+- **THEN** default startup measurement refuses without launching a process or changing evidence
+
+#### Scenario: Empty layout still carries recovery evidence
+- **WHEN** primary/backup layout is empty but a recovery journal exists
+- **THEN** measurement refuses even with the nonempty-layout opt-in and preserves journal bytes
+
 ### Requirement: Process qualification SHALL verify effective storage isolation
 Resource-soak and redirected recovery-smoke launchers SHALL create a fresh marker-bound product directory, obtain matching read-only root proof from the exact child candidate, and pass the same verified inputs to any subsequent mutating child. APPDATA-only environment overrides SHALL NOT satisfy this prerequisite. Existing supervised scenario snapshot/restore behavior, guarded spawn limits, process identity, and input qualification SHALL remain in force.
 

@@ -32,10 +32,10 @@ public static class PaneContainmentPolicy
     /// </summary>
     public static bool MatchesWithinEpsilon(NativeMethods.RECT refused, NativeMethods.RECT requested)
     {
-        return Math.Abs(refused.left - requested.left) <= RectEpsilon
-            && Math.Abs(refused.top - requested.top) <= RectEpsilon
-            && Math.Abs(refused.right - requested.right) <= RectEpsilon
-            && Math.Abs(refused.bottom - requested.bottom) <= RectEpsilon;
+        return Math.Abs((long)refused.left - requested.left) <= RectEpsilon
+            && Math.Abs((long)refused.top - requested.top) <= RectEpsilon
+            && Math.Abs((long)refused.right - requested.right) <= RectEpsilon
+            && Math.Abs((long)refused.bottom - requested.bottom) <= RectEpsilon;
     }
 
     /// <summary>

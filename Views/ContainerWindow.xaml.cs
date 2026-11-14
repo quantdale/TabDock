@@ -1059,11 +1059,10 @@ public partial class ContainerWindow : Window
         _paneContainment.InvalidateAll();
         _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
         _viewModel.EmptiedByPopOut -= ViewModel_EmptiedByPopOut;
-        // Detach unsubscribes Group.PropertyChanged + Tabs.CollectionChanged
-        // internally (hardening: Tabs is VM-owned and would otherwise keep the
-        // VM/Window rooted via the strip projection after Close). Do not also
-        // unsubscribe Tabs here — that would double-unsubscribe and hide future
-        // wiring mistakes; rely on the single Detach path.
+        // This is the container's listener, distinct from the view model's
+        // strip-projection listener removed by Detach. A retained VM must not
+        // keep its closed container and visual tree alive through this event.
+        _viewModel.Tabs.CollectionChanged -= Tabs_CollectionChanged;
         _viewModel.Detach();
 
         // Drop the active-guest authority so any pending WM_ACTIVATE or restore
@@ -2793,8 +2792,8 @@ public partial class ContainerWindow : Window
             return false;
         int chromeW = Math.Max(0, outer.Width - content.Width);
         int chromeH = Math.Max(0, outer.Height - content.Height);
-        minTrackW = contentMinW + chromeW;
-        minTrackH = contentMinH + chromeH;
+        minTrackW = SplitGeometry.MinOuterTrackSize(contentMinW, chromeW);
+        minTrackH = SplitGeometry.MinOuterTrackSize(contentMinH, chromeH);
         return true;
     }
 

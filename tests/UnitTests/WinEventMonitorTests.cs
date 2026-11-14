@@ -165,6 +165,44 @@ public class WinEventMonitorTests
         }
     }
 
+    [Theory]
+    [InlineData(NativeMethods.EVENT_OBJECT_DESTROY)]
+    [InlineData(NativeMethods.EVENT_OBJECT_NAMECHANGE)]
+    [InlineData(NativeMethods.EVENT_SYSTEM_FOREGROUND)]
+    public void Restart_RejectsQueuedEventsFromTheStoppedHookLifetime(uint eventType)
+    {
+        string root = CreateRoot("TabDock-winevent-restart-");
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        try
+        {
+            var context = new RecordingContext();
+            SynchronizationContext.SetSynchronizationContext(context);
+            var api = new EventApi();
+            var member = new CapturedWindow { Hwnd = new IntPtr(0x9999) };
+            using var log = new LoggingService(root);
+            using var monitor = new WinEventMonitor(_ => member, log, api, () => new IntPtr(0xD), () => member.Hwnd);
+            int dispatched = 0;
+            monitor.WindowDestroyed += (_, _) => dispatched++;
+            monitor.WindowNameChanged += (_, _) => dispatched++;
+            monitor.WindowForegroundChanged += (_, _) => dispatched++;
+            Assert.True(monitor.Start());
+            api.Raise(member.Hwnd, eventType, 0, 0);
+            monitor.Stop();
+            Assert.True(monitor.Start());
+            context.DispatchNext();
+            Assert.Equal(0, dispatched);
+
+            api.Raise(member.Hwnd, eventType, 0, 0);
+            context.DispatchNext();
+            Assert.Equal(1, dispatched);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+            DeleteRoot(root);
+        }
+    }
+
     private static string CreateRoot(string prefix)
     {
         string root = Path.Combine(Path.GetTempPath(), prefix + Guid.NewGuid().ToString("N"));

@@ -32,6 +32,10 @@ Native min-track probing SHALL use a documented short `SMTO_ABORTIFHUNG` bound,
 run only during dirty constraint refreshes, and retain the last successful value
 for the same captured identity when a later probe times out or fails.
 
+#### Scenario: Oversized native minimum does not wrap into a usable pane
+- **WHEN** a guest reports a minimum whose DPI scaling or split-width requirement exceeds a signed 32-bit dimension
+- **THEN** conversion and constraint arithmetic saturate at the maximum representable positive dimension rather than wrapping into a small or negative constraint
+
 #### Scenario: A non-pumping guest does not cause a long split freeze
 - **WHEN** one or both visible guests do not pump `WM_GETMINMAXINFO`
 - **THEN** the dispatcher wait is bounded per guest, the prior identity-scoped constraint remains if available, and layout continues without a resize war

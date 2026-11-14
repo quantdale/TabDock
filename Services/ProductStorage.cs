@@ -260,8 +260,13 @@ internal sealed class ProductStorage
         try
         {
             markerNode = JsonNode.Parse(markerJson);
+            // JsonObject materializes its property dictionary lazily. Duplicate
+            // keys throw ArgumentException at first access, not during Parse;
+            // force that validation inside the malformed-marker boundary.
+            if (markerNode is JsonObject parsedMarker)
+                _ = parsedMarker.Count;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or ArgumentException)
         {
             return Refuse("marker-malformed");
         }

@@ -203,6 +203,7 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         var processImagePathCache = new Dictionary<uint, string?>();
         var processStartCache = new Dictionary<uint, long>();
         Guid? previouslySelectedGroupId = SelectedGroupOption?.Id;
+        DetachRowHandlers();
         Windows.Clear();
         _currentWindowSet.Clear();
         Groups.Clear();
@@ -355,15 +356,23 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         // Only selection changes affect command state. Raising the global
         // requery for every icon assignment turned each refresh into an
         // O(rows^2) CommandManager storm.
-        info.PropertyChanged += (_, e) =>
-        {
-            if (!string.Equals(e.PropertyName, nameof(WindowInfo.IsSelected), StringComparison.Ordinal))
-                return;
-            NotifySelectionState();
-        };
+        info.PropertyChanged += Row_PropertyChanged;
         Windows.Add(info);
         _currentWindowSet.Add(info);
         candidates++;
+    }
+
+    private void Row_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (!_disposed && sender is WindowInfo row && _currentWindowSet.Contains(row)
+            && string.Equals(e.PropertyName, nameof(WindowInfo.IsSelected), StringComparison.Ordinal))
+            NotifySelectionState();
+    }
+
+    private void DetachRowHandlers()
+    {
+        foreach (WindowInfo row in _currentWindowSet)
+            row.PropertyChanged -= Row_PropertyChanged;
     }
 
     private void ApplyFilter()
@@ -588,6 +597,7 @@ public sealed class CapturePickerViewModel : ViewModelBase, IDisposable
         if (_disposed)
             return;
         _disposed = true;
+        DetachRowHandlers();
         _manager.CaptureAdmissionChanged -= Manager_CaptureAdmissionChanged;
         unchecked { _refreshGeneration++; }
         CancelIconResolution();

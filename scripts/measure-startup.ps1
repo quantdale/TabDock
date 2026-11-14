@@ -18,9 +18,9 @@
     refuses to run by default unless
       * no TabDock process is running (the single-instance lease would make a
         second instance exit immediately and the measurement would time out), and
-      * %APPDATA%\TabDock\state.json contains no groups (a non-empty state would
-        restore containers, and killing the measured instance could disturb
-        captured windows).
+      * neither state.json nor its fallback state.json.bak contains groups,
+        and no recovery journal exists (startup could otherwise restore
+        containers or replay native guest recovery before measurement).
     Pass -AllowNonEmptyState only when you understand that restoring and
     force-killing containers may release captured windows.
 
@@ -44,7 +44,8 @@
     Per-run startup timeout (default 30).
 
 .PARAMETER AllowNonEmptyState
-    Skip the empty-state.json safety check.
+    Skip the primary/backup empty-layout check for a supervised measurement.
+    This never bypasses the recovery-journal refusal.
 
 .PARAMETER OutputPath
     Optional JSON report path. Defaults to artifacts\perf\startup-<timestamp>.json.
@@ -69,8 +70,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$logPath = Join-Path $env:APPDATA 'TabDock\logs\TabDock.log'
-$statePath = Join-Path $env:APPDATA 'TabDock\state.json'
+# Match ProductStorage's ordinary known-folder resolution; APPDATA-only
+# overrides are not proof of the directory the candidate will actually use.
+$roaming = [Environment]::GetFolderPath('ApplicationData')
+if ([string]::IsNullOrWhiteSpace($roaming) -or -not [IO.Path]::IsPathFullyQualified($roaming)) {
+    throw 'The production storage directory is unavailable; refusing startup measurement.'
+}
+if ($null -ne [Environment]::GetEnvironmentVariable('TABDOCK_VALIDATION_STATE_ROOT') -or
+    $null -ne [Environment]::GetEnvironmentVariable('TABDOCK_VALIDATION_RUN_ID')) {
+    throw 'Startup measurement does not accept validation storage overrides; its preflight and log reader must observe the same ordinary product root.'
+}
+$productRoot = Join-Path $roaming 'TabDock'
+$logPath = Join-Path $productRoot 'logs\TabDock.log'
 $startupCompleteMarker = 'TabDock startup complete.'
 
 if ([string]::IsNullOrWhiteSpace($Exe)) {
@@ -84,21 +95,37 @@ if (Get-Process TabDock -ErrorAction SilentlyContinue) {
     throw 'TabDock is already running. Close it first: the single-instance lease would make the measured launch exit immediately.'
 }
 
-if (-not $AllowNonEmptyState -and (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+function Assert-StartupMeasurementStorage {
+    param([string]$ProductRoot, [switch]$AllowNonEmptyState)
+    # A journal can replay native presentation before any groups open. An
+    # explicit nonempty-layout opt-in is not consent to rescue existing guests.
+    $journal = Join-Path $ProductRoot 'hidden-windows.json'
     try {
-        $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-        $groupCount = @($state.Groups).Count
-        if ($groupCount -gt 0) {
-            throw "state.json contains $groupCount group(s). Refusing to restart the app and force-kill it with restored state; close TabDock normally first, or pass -AllowNonEmptyState."
+        $null = [IO.File]::GetAttributes($journal)
+        throw 'A recovery journal exists. Refusing startup measurement that could replay native guest recovery; resolve it through normal supervised startup first.'
+    }
+    catch [IO.FileNotFoundException] { }
+    catch [IO.DirectoryNotFoundException] { }
+
+    foreach ($name in @('state.json', 'state.json.bak')) {
+        $path = Join-Path $ProductRoot $name
+        try { $attributes = [IO.File]::GetAttributes($path) }
+        catch [IO.FileNotFoundException] { continue }
+        catch [IO.DirectoryNotFoundException] { continue }
+        if (($attributes -band ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint)) -ne 0) {
+            throw "$name is not an ordinary readable state file; refusing measurement."
+        }
+        if ($AllowNonEmptyState) { continue }
+        $state = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        if ($null -eq $state -or $state.Groups -isnot [array]) {
+            throw "$name has unknown state structure; refusing a destructive measurement."
+        }
+        if ($state.Groups.Count -gt 0) {
+            throw "$name contains $($state.Groups.Count) group(s). Refusing to force-kill restored containers; pass -AllowNonEmptyState only for an explicitly supervised measurement."
         }
     }
-    catch [System.Management.Automation.RuntimeException] {
-        throw
-    }
-    catch {
-        throw "state.json could not be parsed ($($_.Exception.Message)). Refusing to run a destructive measurement against unknown state."
-    }
 }
+Assert-StartupMeasurementStorage -ProductRoot $productRoot -AllowNonEmptyState:$AllowNonEmptyState
 
 function Read-LogTail([string]$Path, [long]$FromOffset) {
     for ($attempt = 0; $attempt -lt 10; $attempt++) {

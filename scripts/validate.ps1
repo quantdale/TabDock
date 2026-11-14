@@ -10,8 +10,8 @@
 .PARAMETER Configuration
     Build configuration. Debug is the local default; CI uses Release.
 .PARAMETER Ci
-    Enable the CI qualification policy, including NuGet vulnerability audit,
-    OpenSpec validation, support-bundle privacy inspection, and no-restore
+    Enable the CI qualification policy, including NuGet and OpenSpec tooling
+    vulnerability audits, OpenSpec validation, support-bundle privacy inspection, and no-restore
     builds after the audited restore.
 .PARAMETER Publish
     Also run the self-contained single-file publish smoke test (Release,
@@ -242,10 +242,10 @@ try {
     if ($Ci) {
         $env:OPENSPEC_NO_UPDATE_CHECK = '1'
         $env:OPENSPEC_TELEMETRY = '0'
+        if ($null -eq (Get-Command npm -ErrorAction SilentlyContinue)) {
+            throw 'Node/npm is required by -Ci to install and audit repository-owned OpenSpec tooling.'
+        }
         if (-not (Test-Path -LiteralPath $OpenSpecLocal -PathType Leaf)) {
-            if ($null -eq (Get-Command npm -ErrorAction SilentlyContinue)) {
-                throw 'Node/npm is required by -Ci to install repository-owned OpenSpec tooling.'
-            }
             Invoke-Step 'Install repository-owned OpenSpec tooling' {
                 Push-Location $OpenSpecRoot
                 try {
@@ -258,6 +258,18 @@ try {
         }
         if (-not (Test-Path -LiteralPath $OpenSpecLocal -PathType Leaf)) {
             throw "Repository-owned OpenSpec CLI was not installed: $OpenSpecLocal"
+        }
+        # OpenSpec is a devDependency, so production-only npm auditing would
+        # skip its entire dependency tree. Check even on a warm local install;
+        # the lockfile remains the authority and network/audit failures are fatal.
+        Invoke-Step 'OpenSpec dependency vulnerability audit' {
+            Push-Location $OpenSpecRoot
+            try {
+                npm audit --include=dev --audit-level=low
+            }
+            finally {
+                Pop-Location
+            }
         }
         Invoke-Step 'OpenSpec validation' {
             & $OpenSpecLocal validate --all --no-interactive

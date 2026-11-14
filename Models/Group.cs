@@ -57,8 +57,8 @@ public sealed class Group : INotifyPropertyChanged
     public ObservableCollection<CapturedWindow> Members { get; } = new();
 
     /// <summary>
-    /// Tab metadata saved from the previous session. HWNDs are not restored,
-    /// but this intent can be used for future matching / re-population UI.
+    /// Saved layout intent from restore or a pre-emergency-release snapshot.
+    /// HWNDs are not restored; this metadata supports later re-population.
     /// </summary>
     public List<PersistedTabMetadata> PersistedTabs { get; } = new();
 
@@ -80,6 +80,13 @@ public sealed class Group : INotifyPropertyChanged
     /// Written back verbatim by PersistenceService while the group is unpopulated.
     /// </summary>
     public int PersistedActiveIndex { get; set; }
+
+    /// <summary>
+    /// During emergency teardown, PersistedTabs holds the complete pre-release
+    /// layout. A remaining RecoveryPending subset must not replace that intent.
+    /// New live admission retires this session-only snapshot authority.
+    /// </summary>
+    internal bool HasEmergencyLayoutSnapshot { get; set; }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

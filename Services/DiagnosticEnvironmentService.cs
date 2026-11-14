@@ -421,7 +421,10 @@ public static class DiagnosticEnvironmentService
     private static bool IsSensitiveKey(string key)
     {
         string normalized = new(key.Where(char.IsLetterOrDigit).ToArray());
-        return normalized.Contains("password", StringComparison.OrdinalIgnoreCase)
+        return normalized.Equals("pass", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("pwd", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("credential", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("password", StringComparison.OrdinalIgnoreCase)
             || normalized.Contains("passwd", StringComparison.OrdinalIgnoreCase)
             || normalized.Contains("token", StringComparison.OrdinalIgnoreCase)
             || normalized.Contains("secret", StringComparison.OrdinalIgnoreCase)

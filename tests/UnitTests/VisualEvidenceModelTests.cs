@@ -30,6 +30,62 @@ public sealed class VisualEvidenceModelTests
         }
     }
 
+    [Theory]
+    [InlineData("visual/frame.png.")]
+    [InlineData("visual /frame.png")]
+    [InlineData("NUL")]
+    [InlineData("CON.json")]
+    [InlineData("visual/COM1.png")]
+    [InlineData("visual/COM¹.png")]
+    [InlineData("LPT².json")]
+    [InlineData("COM³")]
+    public void Policy_RejectsWin32DeviceAndTrimmedNameAliases(string relative)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "tabdock-visual-alias-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var policy = new VisualPathPolicy(root);
+            Assert.Throws<ArgumentException>(() => policy.NormalizeRelative(relative));
+        }
+        finally { TryDelete(root); }
+    }
+
+    [Fact]
+    public void Policy_RejectsJunctionEscapeThroughAnOtherwisePortablePath()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "tabdock-visual-junction-" + Guid.NewGuid().ToString("N"));
+        string outside = Path.Combine(root, "outside");
+        string bundle = Path.Combine(root, "bundle");
+        string junction = Path.Combine(bundle, "linked");
+        Directory.CreateDirectory(outside);
+        var policy = new VisualPathPolicy(bundle);
+        try
+        {
+            var start = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            foreach (string argument in new[] { "/c", "mklink", "/J", junction, outside })
+                start.ArgumentList.Add(argument);
+            using var process = System.Diagnostics.Process.Start(start)!;
+            Assert.True(process.WaitForExit(5000));
+            Assert.Equal(0, process.ExitCode);
+            File.WriteAllText(Path.Combine(outside, "sentinel.json"), "outside-evidence");
+
+            Assert.Throws<ArgumentException>(() => policy.Resolve("linked/sentinel.json"));
+            Assert.Throws<ArgumentException>(() => policy.RelativeFromFullPath(Path.Combine(junction, "sentinel.json")));
+            Assert.Equal("outside-evidence", File.ReadAllText(Path.Combine(outside, "sentinel.json")));
+        }
+        finally
+        {
+            if (Directory.Exists(junction))
+                Directory.Delete(junction);
+            TryDelete(root);
+        }
+    }
+
     [Fact]
     public void Model_SerializesStableSchemaEnumsAndIdentity()
     {

@@ -1182,10 +1182,9 @@ _shepherd.HideProvenance = hideProvenance;
         // returns early when Tabs.Count == 0, skipping the prompt and any group
         // removal).
         //
-        // Group.PersistedTabs is populated ONLY by PersistenceService.Load, i.e.
-        // only for a group restored from a PREVIOUS session's state.json — never
-        // for one created fresh in the running session (GroupManager.CreateGroup
-        // starts it empty). Requiring PersistedTabs.Count == 0 too is load-bearing,
+        // Group.PersistedTabs carries restored or pre-emergency-release layout
+        // intent. Fresh interactive shells start empty. Requiring the saved
+        // metadata to be empty as well as live membership is load-bearing,
         // not a nicety: without it, this would also delete a just-relaunched
         // restored-but-not-yet-repopulated group the moment its auto-opened empty
         // shell closes during ordinary app exit, wiping exactly the persisted

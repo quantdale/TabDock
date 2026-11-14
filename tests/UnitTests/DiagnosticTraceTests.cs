@@ -67,6 +67,23 @@ public class DiagnosticTraceTests
     }
 
     [Fact]
+    public void Record_ConcurrentWriters_RetainTheNewestSequencesRatherThanOnlySortedOnes()
+    {
+        const int capacity = 4;
+        const int count = 20_000;
+        for (int round = 0; round < 10; round++)
+        {
+            var trace = new DiagnosticTrace(capacity);
+            Parallel.For(0, count, new ParallelOptions { MaxDegreeOfParallelism = 8 },
+                _ => trace.Record("concurrent"));
+
+            Assert.Equal(
+                Enumerable.Range(count - capacity + 1, capacity).Select(sequence => (long)sequence),
+                trace.Snapshot().Select(record => record.Sequence));
+        }
+    }
+
+    [Fact]
     public async Task Record_ConcurrentWriters_RespectCapacityAndSequenceOrder()
     {
         var trace = new DiagnosticTrace(128);

@@ -229,18 +229,19 @@ public sealed class PersistenceService
                 continue;
             }
 
+            bool useLiveMembers = g.Members.Count > 0 && !g.HasEmergencyLayoutSnapshot;
             var pg = new PersistedGroup
             {
                 Id = g.Id,
                 Name = g.Name,
                 AccentColor = g.AccentColor,
-                // A group with no live members has only loaded metadata;
-                // preserve its persisted active intent rather than the
-                // clamped -1 live index.
-                ActiveIndex = g.Members.Count > 0 ? g.ActiveIndex : g.PersistedActiveIndex,
+                // Restored/unpopulated and emergency-snapshotted groups keep
+                // saved active intent rather than the clamped or partial live
+                // index left by release.
+                ActiveIndex = useLiveMembers ? g.ActiveIndex : g.PersistedActiveIndex,
             };
 
-            if (g.Members.Count > 0)
+            if (useLiveMembers)
             {
                 foreach (CapturedWindow m in g.Members)
                     pg.Tabs.Add(ToPersistedTab(m));

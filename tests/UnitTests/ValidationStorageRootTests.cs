@@ -285,6 +285,28 @@ public sealed class ValidationStorageRootTests : IDisposable
         Assert.Equal("marker-malformed", storage.RefusalReason);
     }
 
+    [Theory]
+    [InlineData("SchemaVersion", "1")]
+    [InlineData("RunId", "\"different-run\"")]
+    [InlineData("Unrecognized", "0")]
+    public void DuplicateMarkerProperties_AreRefusedWithoutThrowingOrMutating(string property, string value)
+    {
+        WriteMarker();
+        string markerPath = Path.Combine(_productDir, ProductStorage.MarkerFileName);
+        string marker = File.ReadAllText(markerPath);
+        // Duplicate unknown fields matter too: materializing JsonObject's lazy
+        // dictionary can throw even while reading an unrelated required field.
+        string additions = property == "Unrecognized" ? "\"Unrecognized\":1," : string.Empty;
+        File.WriteAllText(markerPath, "{" + additions + "\"" + property + "\":" + value + "," + marker[1..]);
+        var before = Snapshot(_productDir);
+
+        ProductStorage storage = Resolve(_productDir, RunId);
+
+        Assert.False(storage.IsUsable);
+        Assert.Equal("marker-malformed", storage.RefusalReason);
+        AssertSnapshotUnchanged(before, _productDir);
+    }
+
     [Fact]
     public void UnsupportedMarkerSchema_IsRefused()
     {

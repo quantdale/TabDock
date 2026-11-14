@@ -753,6 +753,100 @@ internal static class DeterministicSelfTests
             return !QualificationManifestVerifier.VerifyParent(parent.ManifestPath, out IReadOnlyList<string> errors)
                 && errors.Any(error => error.Contains("re-verification", StringComparison.OrdinalIgnoreCase));
         });
+
+        yield return ("MAN12-child-paths-reject-aliases-and-empty-segments", () =>
+        {
+            string[] unsafePaths = { "result.json.", "folder /result.json", "CON.json", "folder/NUL", "COM¹.json", "LPT²", "folder//result.json" };
+            return unsafePaths.All(path => !QualificationManifestVerifier.TryNormalizeRelativePath(path, out _, out _))
+                && QualificationManifestVerifier.TryNormalizeRelativePath("runs/attempt-001/result.json", out string? normalized, out _)
+                && normalized == "runs/attempt-001/result.json";
+        });
+
+        yield return ("MAN13-child-artifact-junction-is-rejected", () =>
+        {
+            using var fixture = new ManifestFixture();
+            string manifestPath = fixture.WriteChild("startup");
+            string runDirectory = Path.GetDirectoryName(manifestPath)!;
+            string outside = Path.Combine(fixture.Root, "outside");
+            Directory.CreateDirectory(outside);
+            string artifact = Directory.GetFiles(runDirectory).First(path => path.EndsWith(".junit.xml", StringComparison.Ordinal));
+            string moved = Path.Combine(outside, Path.GetFileName(artifact));
+            File.Move(artifact, moved);
+            string link = Path.Combine(runDirectory, "linked");
+            MakeManifestJunction(link, outside);
+            try
+            {
+                string json = File.ReadAllText(manifestPath).Replace(Path.GetFileName(artifact), "linked/" + Path.GetFileName(artifact), StringComparison.Ordinal);
+                File.WriteAllText(manifestPath, json);
+                ChildManifestVerification result = fixture.ImportExisting("startup", 0);
+                return !result.Valid && result.FailureReason?.Contains("reparse", StringComparison.OrdinalIgnoreCase) == true;
+            }
+            finally { Directory.Delete(link); }
+        });
+
+        yield return ("MAN14-child-manifest-directory-junction-is-rejected", () =>
+        {
+            using var fixture = new ManifestFixture();
+            string manifestPath = fixture.WriteChild("startup");
+            string runDirectory = Path.GetDirectoryName(manifestPath)!;
+            string outside = Path.Combine(fixture.Root, "outside-run");
+            Directory.Move(runDirectory, outside);
+            MakeManifestJunction(runDirectory, outside);
+            try
+            {
+                ChildManifestVerification result = fixture.ImportExisting("startup", 0);
+                return !result.Valid && result.FailureReason?.Contains("reparse", StringComparison.OrdinalIgnoreCase) == true;
+            }
+            finally { Directory.Delete(runDirectory); }
+        });
+
+        yield return ("MAN15-unreadable-child-manifest-is-a-structured-failure", () =>
+        {
+            using var fixture = new ManifestFixture();
+            string manifestPath = fixture.WriteChild("startup");
+            using var held = new FileStream(manifestPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            ChildManifestVerification result = fixture.ImportExisting("startup", 0);
+            return !result.Valid && result.Outcome.Kind == ScenarioOutcomeKind.FailHarness;
+        });
+
+        yield return ("MAN16-unreadable-child-artifact-is-a-structured-failure", () =>
+        {
+            using var fixture = new ManifestFixture();
+            string manifestPath = fixture.WriteChild("startup");
+            string artifact = Directory.GetFiles(Path.GetDirectoryName(manifestPath)!)
+                .First(path => path.EndsWith(".junit.xml", StringComparison.Ordinal));
+            using var held = new FileStream(artifact, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            ChildManifestVerification result = fixture.ImportExisting("startup", 0);
+            return !result.Valid && result.Outcome.Kind == ScenarioOutcomeKind.FailHarness;
+        });
+
+        yield return ("MAN17-child-artifact-case-alias-is-a-duplicate", () =>
+        {
+            using var fixture = new ManifestFixture();
+            string manifestPath = fixture.WriteChild("startup");
+            JsonObject manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+            JsonArray artifacts = manifest["artifactIndex"]!.AsArray();
+            JsonObject alias = artifacts[0]!.DeepClone().AsObject();
+            alias["relativePath"] = alias["relativePath"]!.GetValue<string>().ToUpperInvariant();
+            artifacts.Add(alias);
+            File.WriteAllText(manifestPath, manifest.ToJsonString());
+            ChildManifestVerification result = fixture.ImportExisting("startup", 0);
+            return !result.Valid && result.FailureReason?.Contains("duplicated", StringComparison.OrdinalIgnoreCase) == true;
+        });
+    }
+
+    private static void MakeManifestJunction(string linkPath, string targetPath)
+    {
+        using Process process = Process.Start(new ProcessStartInfo("cmd.exe")
+        {
+            Arguments = "/c mklink /J \"" + linkPath + "\" \"" + targetPath + "\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        })!;
+        if (!process.WaitForExit(5000) || process.ExitCode != 0)
+            throw new IOException("could not create the session-owned manifest junction fixture");
     }
 
     private sealed class ManifestFixture : IDisposable

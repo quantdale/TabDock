@@ -1,5 +1,4 @@
 using System;
-using TabDock.Infrastructure;
 
 namespace TabDock.Services;
 
@@ -11,6 +10,10 @@ namespace TabDock.Services;
 /// </summary>
 internal static class ZOrder
 {
+    // USER32's list is live, not a stable enumeration: concurrent reorder or
+    // destruction can revisit handles. Bound probes without allocating a set
+    // on every hot layout pass; an unprovable order is simply not satisfied.
+    internal const int MaximumTraversalSteps = 4096;
     /// <summary>
     /// Returns true when <paramref name="upper"/> occurs anywhere above
     /// <paramref name="lower"/> in the top-level z-order. The split compositor
@@ -24,10 +27,12 @@ internal static class ZOrder
         if (upper == IntPtr.Zero || lower == IntPtr.Zero || upper == lower)
             return false;
 
-        for (IntPtr hwnd = upper; hwnd != IntPtr.Zero; hwnd = getNext(hwnd))
+        IntPtr hwnd = upper;
+        for (int step = 0; step < MaximumTraversalSteps && hwnd != IntPtr.Zero; step++)
         {
             if (hwnd == lower)
                 return true;
+            hwnd = getNext(hwnd);
         }
         return false;
     }

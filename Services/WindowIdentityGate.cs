@@ -377,6 +377,54 @@ internal static class WindowIdentityGate
         }
     }
 
+    /// <summary>
+    /// Verifies a release finalization mutation after this transaction removed
+    /// its own capture token. The surviving per-HWND nonce proves the exact
+    /// window instance; process/thread/class fields alone survive HWND reuse.
+    /// This check does not consume the nonce because more than one distinct
+    /// finalization mutation may still need the same generation proof.
+    /// </summary>
+    internal static WindowIdentityResult EvaluateAfterOwnCaptureTokenRemoval(
+        CapturedWindow captured, IWindowIdentityNativeApi api, out string reason)
+    {
+        WindowIdentityResult identity = EvaluateBeforeCaptureToken(
+            captured, api, verifyExecutable: false, verifyProcessInstance: false, out reason);
+        if (identity != WindowIdentityResult.Match)
+            return identity;
+
+        try
+        {
+            if (api.GetCaptureIdentityToken(captured.Hwnd) != IntPtr.Zero)
+            {
+                reason = "a capture token appeared after own token removal";
+                return WindowIdentityResult.Mismatch;
+            }
+            if (captured.ReleasedCloseNonce == 0)
+            {
+                reason = "captured HWND nonce is unavailable after own token removal";
+                return WindowIdentityResult.Unverifiable;
+            }
+            IntPtr nonce = api.GetReleasedCloseNonce(captured.Hwnd);
+            if (nonce == IntPtr.Zero)
+            {
+                reason = "HWND nonce is absent after own token removal";
+                return WindowIdentityResult.Unverifiable;
+            }
+            if (nonce != new IntPtr(captured.ReleasedCloseNonce))
+            {
+                reason = "HWND nonce differs after own token removal";
+                return WindowIdentityResult.Mismatch;
+            }
+            reason = "surviving HWND nonce matched after own token removal";
+            return WindowIdentityResult.Match;
+        }
+        catch (Exception ex)
+        {
+            reason = $"post-token identity probe threw {ex.GetType().Name}";
+            return WindowIdentityResult.Unverifiable;
+        }
+    }
+
     public static bool Matches(
         CapturedWindow captured,
         IWindowIdentityNativeApi api,

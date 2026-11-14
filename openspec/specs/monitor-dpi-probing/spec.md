@@ -30,6 +30,18 @@ obtained through a PerMonitorV2 HWND associated with that monitor and
 - **THEN** unaware logical dimensions SHALL convert to the expected physical
   dimensions while aware guests and failed probes remain unchanged
 
+### Requirement: DPI cache invalidation SHALL survive concurrent diagnostic observation
+
+The effective-DPI cache SHALL synchronize worker diagnostic reads and UI-thread
+invalidation. An observation started before a DPI/topology invalidation SHALL
+NOT repopulate the cache afterward with the obsolete value. Native helper work
+SHALL remain outside the cache lock.
+
+#### Scenario: In-flight old observation completes after invalidation
+
+- **WHEN** UI invalidation occurs while an earlier worker probe is in flight
+- **THEN** a subsequent query performs a new observation rather than reusing the old probe result, and successful current-generation values remain cached
+
 ### Requirement: Known DPI-unaware guests SHALL remain capturable
 
 Capture SHALL accept a guest whose DPI-awareness probe positively identifies

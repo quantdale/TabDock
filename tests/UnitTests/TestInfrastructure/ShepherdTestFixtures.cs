@@ -55,6 +55,7 @@ internal sealed class ReleaseTestFixture : IDisposable
         ShepherdFakeIdentityApi identity = ShepherdFakeIdentityApi.For(1, 11, 101, 1001);
         ShepherdFakeReleaseApi native = new();
         CapturedWindow captured = CapturedWindowFor(1, 11, 1001, 101);
+        identity.ReleasedCloseNonce = new IntPtr(captured.ReleasedCloseNonce);
         HiddenWindowEntry entry = JournalEntryFor(captured);
         var entries = new List<HiddenWindowEntry> { entry };
         if (twoEntries)
@@ -62,6 +63,7 @@ internal sealed class ReleaseTestFixture : IDisposable
             CapturedWindow second = CapturedWindowFor(2, 22, 2002, 202);
             entries.Add(JournalEntryFor(second));
             ShepherdFakeIdentityApi secondIdentity = ShepherdFakeIdentityApi.For(2, 22, 202, 2002);
+            secondIdentity.ReleasedCloseNonce = new IntPtr(second.ReleasedCloseNonce);
             identity.Add(secondIdentity);
             ReleaseTestFixture fixture = new(root, journalPath, statePath, tempLog, identity, native, captured, entry,
                 new WindowShepherdService(

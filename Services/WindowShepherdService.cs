@@ -218,6 +218,10 @@ public sealed class WindowShepherdService
     // This map is UI-thread owned, like the captured-member index in
     // GroupManager, and is consulted on both identity tiers.
     private readonly WindowIdentityBinding _capturedByHwnd = new();
+    // A failed journal finalization may outlive our successful token removal.
+    // Retain this exact-object phase so retry uses the surviving HWND nonce,
+    // rather than mistaking our own removal for positive recycle evidence.
+    private readonly HashSet<CapturedWindow> _releaseTokenRemoved = new();
 
     /// <summary>
     /// Logs a failed positioning call with the native error, at most once per
@@ -801,6 +805,7 @@ public sealed class WindowShepherdService
     private void UnregisterCapturedIdentity(CapturedWindow window)
     {
         _capturedByHwnd.Unbind(window);
+        _releaseTokenRemoved.Remove(window);
     }
 
     internal void BindCapturedWindowForTesting(CapturedWindow window)
@@ -834,9 +839,15 @@ public sealed class WindowShepherdService
 
     private bool RemoveCaptureIdentityToken(CapturedWindow window)
     {
+        // Callers have just proven the appropriate mutation boundary. A retry
+        // must not remove a second token after our prior removal succeeded.
+        if (_releaseTokenRemoved.Contains(window))
+            return true;
         if (window.WindowIdentityToken == 0)
             return false;
         bool removed = _identityApi.RemoveCaptureIdentityToken(window.Hwnd, new IntPtr(window.WindowIdentityToken));
+        if (removed)
+            _releaseTokenRemoved.Add(window);
         if (!removed)
         {
             _log.Log($"SHEPHERD[identity-token] could not remove the capture token from 0x{window.Hwnd.ToInt64():X}; future capture of this HWND remains fail-closed.");
@@ -1884,14 +1895,8 @@ public sealed class WindowShepherdService
     /// </summary>
     public bool IsContainerBelowGuest(IntPtr containerHwnd, IntPtr guestHwnd)
     {
-        IntPtr cur = NativeMethods.GetWindow(containerHwnd, NativeMethods.GW_HWNDPREV);
-        while (cur != IntPtr.Zero)
-        {
-            if (cur == guestHwnd)
-                return true;
-            cur = NativeMethods.GetWindow(cur, NativeMethods.GW_HWNDPREV);
-        }
-        return false;
+        return ZOrder.IsOrderedAbove(guestHwnd, containerHwnd,
+            hwnd => NativeMethods.GetWindow(hwnd, NativeMethods.GW_HWNDNEXT));
     }
 
     /// <summary>
@@ -1911,8 +1916,13 @@ public sealed class WindowShepherdService
         }
 
         IntPtr previous = NativeMethods.GetWindow(containerHwnd, NativeMethods.GW_HWNDPREV);
+        int probes = 0;
         while (previous != IntPtr.Zero && !NativeMethods.IsWindowVisible(previous))
+        {
+            if (++probes >= ZOrder.MaximumTraversalSteps)
+                return false;
             previous = NativeMethods.GetWindow(previous, NativeMethods.GW_HWNDPREV);
+        }
 
         return previous == guestHwnd;
     }
@@ -2162,11 +2172,24 @@ public sealed class WindowShepherdService
     public WindowReleaseOutcome Release(CapturedWindow window, bool show = true)
     {
         _pendingBrowserFullscreenExits.Remove(window);
-        WindowIdentityResult identityResult = EvaluateCurrentCapturedWindow(
-            window,
-            "release",
-            verifyExecutable: true,
-            verifyProcessInstance: true);
+        WindowIdentityResult identityResult;
+        if (_releaseTokenRemoved.Contains(window))
+        {
+            // A retry still needs strong process-instance evidence at entry,
+            // then the non-consuming HWND-generation proof at every mutation.
+            identityResult = WindowIdentityGate.EvaluateBeforeCaptureToken(
+                window, _identityApi, verifyExecutable: true, verifyProcessInstance: true, out _);
+            if (identityResult == WindowIdentityResult.Match)
+                TryReleaseMutationBoundaryAfterOwnTokenRemoval(window, "release-retry", out identityResult);
+        }
+        else
+        {
+            identityResult = EvaluateCurrentCapturedWindow(
+                window,
+                "release",
+                verifyExecutable: true,
+                verifyProcessInstance: true);
+        }
         if (identityResult != WindowIdentityResult.Match)
         {
             _minTrackCache.Remove(window);
@@ -2210,6 +2233,8 @@ public sealed class WindowShepherdService
         string operation,
         out WindowIdentityResult result)
     {
+        if (_releaseTokenRemoved.Contains(window))
+            return TryReleaseMutationBoundaryAfterOwnTokenRemoval(window, operation, out result);
         TestSequence(operation + ".before");
         result = EvaluateCurrentCapturedWindow(
             window,
@@ -2224,9 +2249,9 @@ public sealed class WindowShepherdService
     /// this transaction itself removed the capture token one step earlier, so
     /// the live HWND property cannot be required there — requiring it would
     /// misread our own release step as a positive recycle and strand the hidden
-    /// guest with its tab detached. Identity strength is preserved through
-    /// HWND existence, PID/GUI-thread, and class identity via the pre-token
-    /// core; a genuine recycle or death still fails as Mismatch.
+    /// guest with its tab detached. Preserve the captured-object binding and
+    /// require the surviving per-HWND nonce, in addition to HWND/PID/thread/
+    /// class identity, so a same-process replacement cannot pass this tail.
     /// </summary>
     private bool TryReleaseMutationBoundaryAfterOwnTokenRemoval(
         CapturedWindow window,
@@ -2242,11 +2267,9 @@ public sealed class WindowShepherdService
         }
         else
         {
-            result = WindowIdentityGate.EvaluateBeforeCaptureToken(
+            result = WindowIdentityGate.EvaluateAfterOwnCaptureTokenRemoval(
                 window,
                 _identityApi,
-                verifyExecutable: false,
-                verifyProcessInstance: false,
                 out reason);
         }
 
@@ -2333,8 +2356,8 @@ public sealed class WindowShepherdService
         // Never leave an ambiguous hidden guest after finalization failed.
         // When THIS transaction already removed the capture token, the live
         // token check would force Mismatch against our own release step, so
-        // those boundaries evaluate through the pre-token core instead (full
-        // HWND/PID/thread/class strength; genuine recycles still mismatch).
+        // those boundaries require the surviving HWND nonce instead. Merely
+        // matching PID/thread/class cannot distinguish a same-process recycle.
         if (!TryReleaseFinalizationBoundary(
                 window,
                 ownTokenRemoved,

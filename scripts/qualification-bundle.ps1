@@ -109,6 +109,14 @@ function ConvertTo-QualificationRelativePath {
     if (($segments.Count -eq 0) -or (@($segments | Where-Object { $_ -eq '' -or $_ -eq '.' -or $_ -eq '..' }).Count -gt 0)) {
         throw "qualification artifact path contains an empty or traversal segment: '$Path'"
     }
+    foreach ($segment in $segments) {
+        # Portable evidence names cannot identify Win32 devices, alternate data
+        # streams or aliases that the filesystem trims to a different name.
+        if ($segment -match '[<>:"|?*\x00-\x1F]' -or $segment.EndsWith('.') -or $segment.EndsWith(' ') -or
+            $segment -match '^(?i:CON|PRN|AUX|NUL|COM[1-9\u00B9\u00B2\u00B3]|LPT[1-9\u00B9\u00B2\u00B3])(?:\.|$)') {
+            throw "qualification artifact path contains an unsafe Win32 segment: '$Path'"
+        }
+    }
     return ($segments -join '/')
 }
 
@@ -123,6 +131,21 @@ function Resolve-QualificationRelativePath {
         [IO.Path]::Combine($rootFull, $normalized.Replace('/', [string][IO.Path]::DirectorySeparatorChar)))
     if (-not $candidate.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)) {
         throw "qualification artifact path escapes bundle root: '$RelativePath'"
+    }
+    # Lexical containment is insufficient: an existing junction/symlink in an
+    # untrusted returned bundle may redirect an otherwise safe relative path.
+    # Inspect every component including the root before authorizing reads.
+    $component = [IO.Path]::TrimEndingDirectorySeparator($rootFull)
+    foreach ($part in @('') + $normalized.Split('/')) {
+        if ($part.Length -gt 0) { $component = Join-Path $component $part }
+        try {
+            $attributes = [IO.File]::GetAttributes($component)
+        }
+        catch [IO.FileNotFoundException] { continue }
+        catch [IO.DirectoryNotFoundException] { continue }
+        if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "qualification artifact path contains a reparse-point component: '$RelativePath'"
+        }
     }
     return [pscustomobject]@{ RelativePath = $normalized; FullPath = $candidate }
 }

@@ -81,6 +81,11 @@ preserve durable recovery evidence, and remain retryable.
   executable still match
 - **THEN** the old callback SHALL be rejected by the per-capture HWND token
 
+#### Scenario: A coalesced second dispatcher hop preserves captured generation
+
+- **WHEN** a lifecycle repair is coalesced after monitor dispatch and the HWND is released or recaptured before the repair runs
+- **THEN** the old captured member's repair is dropped and a replacement's repair never inherits flags from the obsolete generation
+
 #### Scenario: A valid current member remains actionable
 
 - **WHEN** all captured identity fields and the live object binding match
@@ -154,6 +159,20 @@ Win32 race and SHALL NOT be described as atomic.
 - **THEN** no subsequent native mutation SHALL target the replacement and the
   old release evidence SHALL be retained or classified only from positive
   mismatch evidence
+
+#### Scenario: Own token removal does not authorize a recycled HWND
+
+- **WHEN** release removes its own capture token but journal finalization fails
+- **THEN** any further fallback mutation requires the surviving per-HWND nonce
+  as well as current binding/PID/thread/class evidence; missing or different
+  nonce evidence never authorizes mutation of a same-process replacement
+
+#### Scenario: Journal finalization remains safely retryable
+
+- **WHEN** a release retry follows successful own-token removal and failed journal finalization
+- **THEN** it distinguishes that exact object's recorded release phase from a
+  foreign token loss, revalidates strong process identity and the surviving HWND
+  nonce, never removes a second token, and completes only when finalization succeeds
 
 #### Scenario: Rescue stops after placement when generation changes
 

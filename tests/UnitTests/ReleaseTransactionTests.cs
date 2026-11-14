@@ -335,6 +335,130 @@ public class ReleaseTransactionTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Release_JournalFinalizationFailureAfterOwnTokenRemoval_RemainsRetryable(bool show)
+    {
+        FileStream? journalLock = null;
+        ReleaseTestFixture? holder = null;
+        try
+        {
+            using ReleaseTestFixture fixture = ReleaseTestFixture.Create(sequencingHook: (stage, _) =>
+            {
+                string tokenBoundary = show ? "release-before-token-removal.before"
+                    : "release-intentional-hide-before-token-removal.before";
+                if (stage == tokenBoundary && journalLock == null && holder != null)
+                    journalLock = new FileStream(holder.JournalPath, FileMode.Open, FileAccess.Read, FileShare.None);
+            });
+            holder = fixture;
+            // Exercise a genuinely journaled hidden capture, so failure is at
+            // finalization rather than the initial cache read.
+            Assert.Equal(WindowHideOutcome.Hidden, fixture.Service.Hide(fixture.Captured));
+            Assert.Equal(WindowReleaseOutcome.RecoveryPending, fixture.Service.Release(fixture.Captured, show));
+            Assert.Equal(IntPtr.Zero, fixture.Identity.CaptureToken);
+            journalLock!.Dispose();
+            journalLock = null;
+            // Disable reinjection while retrying the actual same-window release.
+            holder = null;
+
+            WindowReleaseOutcome retry = fixture.Service.Release(fixture.Captured, show);
+
+            Assert.Equal(WindowReleaseOutcome.Released, retry);
+            Assert.Empty(fixture.ReadEntries());
+            Assert.Equal(1, fixture.Identity.TokenRemovalCount);
+        }
+        finally
+        {
+            journalLock?.Dispose();
+        }
+    }
+
+    [Theory]
+    [InlineData("missing-process", WindowReleaseOutcome.RecoveryPending)]
+    [InlineData("missing-nonce", WindowReleaseOutcome.RecoveryPending)]
+    [InlineData("foreign-nonce", WindowReleaseOutcome.TargetGoneOrRecycled)]
+    [InlineData("foreign-token", WindowReleaseOutcome.TargetGoneOrRecycled)]
+    public void Release_FinalizationRetry_RevalidatesBeforeAnyFurtherMutation(string change, WindowReleaseOutcome expected)
+    {
+        FileStream? journalLock = null;
+        ReleaseTestFixture? holder = null;
+        try
+        {
+            using ReleaseTestFixture fixture = ReleaseTestFixture.Create(sequencingHook: (stage, _) =>
+            {
+                if (stage == "release-intentional-hide-before-token-removal.before" && holder != null)
+                    journalLock = new FileStream(holder.JournalPath, FileMode.Open, FileAccess.Read, FileShare.None);
+            });
+            holder = fixture;
+            Assert.Equal(WindowReleaseOutcome.RecoveryPending, fixture.Service.Release(fixture.Captured, show: false));
+            journalLock!.Dispose();
+            journalLock = null;
+            holder = null;
+            int mutations = fixture.Native.MutationCount;
+            switch (change)
+            {
+                case "missing-process": fixture.Identity.ProcessStartTicks = 0; break;
+                case "missing-nonce": fixture.Identity.ReleasedCloseNonce = IntPtr.Zero; break;
+                case "foreign-nonce": fixture.Identity.ReleasedCloseNonce = new IntPtr(999); break;
+                case "foreign-token": fixture.Identity.CaptureToken = new IntPtr(999); break;
+            }
+
+            Assert.Equal(expected, fixture.Service.Release(fixture.Captured, show: false));
+            Assert.Equal(mutations, fixture.Native.MutationCount);
+            Assert.Equal(0, fixture.Identity.NonceConsumptionCount);
+            if (expected == WindowReleaseOutcome.RecoveryPending)
+                Assert.Single(fixture.ReadEntries());
+        }
+        finally
+        {
+            journalLock?.Dispose();
+        }
+    }
+
+    [Theory]
+    [InlineData("show", false)]
+    [InlineData("show", true)]
+    [InlineData("transitions", false)]
+    [InlineData("transitions", true)]
+    public void IntentionalHide_SameProcessRecycleAfterOwnTokenRemoval_DoesNotMutateReplacement(
+        string boundary, bool foreignNonce)
+    {
+        FileStream? journalLock = null;
+        ReleaseTestFixture? holder = null;
+        try
+        {
+            using ReleaseTestFixture fixture = ReleaseTestFixture.Create(sequencingHook: (stage, identity) =>
+            {
+                if (stage == "release-intentional-hide-before-token-removal.before")
+                    journalLock = new FileStream(holder!.JournalPath, FileMode.Open, FileAccess.Read, FileShare.None);
+                if (stage == "release-intentional-hide-finalization-before-" + boundary + ".before")
+                {
+                    // A replacement can have identical process/thread/class/exe
+                    // fields and no capture token. Only the surviving per-HWND
+                    // nonce distinguishes it after our own token removal.
+                    identity.ReleasedCloseNonce = foreignNonce ? new IntPtr(999) : IntPtr.Zero;
+                }
+            });
+            holder = fixture;
+            fixture.Identity.ReleasedCloseNonce = new IntPtr(fixture.Captured.ReleasedCloseNonce);
+
+            WindowReleaseOutcome result = fixture.Service.Release(fixture.Captured, show: false);
+
+            Assert.NotEqual(WindowReleaseOutcome.Released, result);
+            Assert.Equal(boundary == "show" ? 1 : 2, fixture.Native.ShowWindowCount);
+            Assert.Equal(1, fixture.Native.TransitionCount);
+            Assert.Equal(0, fixture.Identity.NonceConsumptionCount);
+            journalLock!.Dispose();
+            journalLock = null;
+            Assert.Single(fixture.ReadEntries());
+        }
+        finally
+        {
+            journalLock?.Dispose();
+        }
+    }
+
     [Fact]
     public void EmergencyRelease_ContinuesPastPendingMember()
     {

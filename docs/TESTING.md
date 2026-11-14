@@ -94,7 +94,8 @@ project path. The CI-safe entry point is:
 ```
 
 It performs audited restore, solution/app/driver/GuineaPig/Performance Release
-builds, the headless xUnit behavioral suite, the bounded headless
+builds, an npm vulnerability audit including the locked OpenSpec development
+dependency tree (also on warm installs), the headless xUnit behavioral suite, the bounded headless
 resource-lifecycle gate, the native-ABI self-test, `--version`, `--doctor`,
 support-bundle ZIP inspection, OpenSpec validation, and a self-contained
 publish smoke. It never sends desktop input.
@@ -300,10 +301,14 @@ roughly 1.4-1.9 s warm for JIT development builds and ~1.6 s warm for the
 self-contained ReadyToRun publish, with cold first launches several seconds
 slower.
 
-The script opens the real launcher briefly and uses the real
-`%APPDATA%\TabDock` state, so it refuses to run while TabDock is already
-running or while `state.json` contains groups (a restored-then-force-killed
-container could disturb captured windows). Close TabDock normally first.
+The script opens the real launcher briefly and uses the ordinary known-folder
+product root, so it refuses to run while TabDock is already running, while
+`state.json` or `state.json.bak` contains groups, or whenever a recovery journal
+exists (startup could restore containers or rescue guests before a force-kill).
+Unknown/unreadable state also refuses measurement. Validation-storage overrides
+are refused so preflight/log reading cannot silently observe a different root.
+`-AllowNonEmptyState` is supervised-only and never bypasses journal refusal.
+Close TabDock normally first; this benchmark is not an unattended audit command.
 
 ### Supervised visual evidence and multimodal review
 

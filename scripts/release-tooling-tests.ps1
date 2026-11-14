@@ -1151,6 +1151,29 @@ try {
         Assert-True $gate.Valid ($gate.Failures -join '; ')
     }
 
+    New-TestCase 'qualification-evidence-merge-rejects-destination-junction-before-copying' {
+        $handoff = New-TestQualificationHandoff -Name 'merge-destination-junction' -SyntheticTopology:$false
+        $windows10 = New-TestMachineReport -Handoff $handoff -Name 'merge-junction-windows10'
+        $windows10.Report.os.family = 'Windows 10'
+        [IO.File]::WriteAllText($windows10.Path, ($windows10.Report | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+        $baseEvidencePath = Join-Path $handoff.Fixture.ArtifactDir 'release-external-evidence.json'
+        Save-TestEvidence $baseEvidencePath (New-TestEvidence -SourceSha ('a' * 40) -ArtifactSha $handoff.Fixture.CandidateSha256)
+        $outside = Join-Path $testRoot 'merge-junction-outside'
+        New-Item -ItemType Directory -Path $outside -Force | Out-Null
+        $junction = Join-Path $handoff.Fixture.ArtifactDir 'qualification/external'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $junction) -Force | Out-Null
+        New-Item -ItemType Junction -Path $junction -Target $outside | Out-Null
+        try {
+            $mergeScript = Join-Path $repoRoot 'scripts/merge-qualification-evidence.ps1'
+            Assert-Throws 'redirected staging destination must refuse the merge' {
+                & $mergeScript -ArtifactDir $handoff.Fixture.ArtifactDir -EvidencePath $baseEvidencePath -PackagePath $handoff.PackageDir -MachineReportPath @($windows10.Path) -Operator 'Merge Test Operator'
+            }
+            Assert-True (@(Get-ChildItem -LiteralPath $outside -Force).Count -eq 0) 'merge must reject the destination before writing outside the artifact root'
+            Assert-True ((Get-QualificationFileSha256 $handoff.Fixture.Exe) -eq $handoff.Fixture.CandidateSha256) 'refused merge must preserve candidate bytes'
+        }
+        finally { [IO.Directory]::Delete($junction) }
+    }
+
     New-TestCase 'qualification-evidence-merge-rejects-candidate-substitution' {
         $handoff = New-TestQualificationHandoff -Name 'merge-candidate-substitution' -SyntheticTopology:$false
         $windows10 = New-TestMachineReport -Handoff $handoff -Name 'merge-substitution-windows10'
@@ -3361,6 +3384,91 @@ try {
         $refs = ([regex]::Matches($yml, [regex]::Escape("if (`$env:WORKFLOW_REF -ne 'refs/heads/main')"))).Count
         Assert-True ($refs -eq 2) "expected the main-ref gate in BOTH Stage B jobs (found $refs)"
         Assert-True (([regex]::Matches($yml, [regex]::Escape('WORKFLOW_SHA: ${{ github.workflow_sha }}'))).Count -eq 2) 'both jobs must capture github.workflow_sha'
+    }
+
+    New-TestCase 'qualification-relative-path-rejects-win32-aliases-and-alternate-streams' {
+        foreach ($unsafe in @('run.json:secret', 'folder/name:stream', 'run.json.', 'folder /run.json', 'NUL', 'CON.json', 'folder/COM1.txt', 'COM¹.txt', 'folder/LPT².json', 'COM³')) {
+            Assert-Throws "unsafe Win32 path alias was accepted: $unsafe" {
+                Resolve-QualificationRelativePath -Root $testRoot -RelativePath $unsafe | Out-Null
+            }
+        }
+        $safe = Resolve-QualificationRelativePath -Root $testRoot -RelativePath 'runs/attempt-001/run-manifest.json'
+        Assert-True ($safe.RelativePath -eq 'runs/attempt-001/run-manifest.json') 'portable ordinary paths must remain accepted'
+    }
+
+    New-TestCase 'qualification-relative-path-refuses-junction-escape-before-reading-outside-root' {
+        $bundleRoot = Join-Path $testRoot 'junction-bundle'
+        $outside = Join-Path $testRoot 'junction-outside'
+        New-Item -ItemType Directory -Path $bundleRoot,$outside -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $outside 'sentinel.json'), '{"outside":true}')
+        $junction = Join-Path $bundleRoot 'linked'
+        New-Item -ItemType Junction -Path $junction -Target $outside | Out-Null
+        try {
+            Assert-Throws 'lexical prefix containment must not authorize a junction escape' {
+                Resolve-QualificationRelativePath -Root $bundleRoot -RelativePath 'linked/sentinel.json' | Out-Null
+            }
+            Assert-True ([IO.File]::ReadAllText((Join-Path $outside 'sentinel.json')) -eq '{"outside":true}') 'outside evidence must be untouched'
+        }
+        finally { [IO.Directory]::Delete($junction) }
+    }
+
+    New-TestCase 'startup-measurement-preflight-refuses-backup-restore-and-journal-rescue-without-launching' {
+        $tokens = $null
+        $errors = $null
+        $startupAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PSScriptRoot 'measure-startup.ps1'), [ref]$tokens, [ref]$errors)
+        $preflight = $startupAst.Find({ param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-StartupMeasurementStorage'
+        }, $true)
+        Assert-True ($null -ne $preflight) 'the startup preflight must be independently executable before any process launch'
+        . ([scriptblock]::Create($preflight.Extent.Text))
+        $root = Join-Path $testRoot 'startup-preflight'
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+        $backup = Join-Path $root 'state.json.bak'
+        [IO.File]::WriteAllText($backup, '{"Version":2,"Groups":[{"Name":"Backup-only","Tabs":[{}]}]}')
+        Assert-Throws 'a missing primary must not hide restorable backup groups' { Assert-StartupMeasurementStorage -ProductRoot $root }
+        Assert-True ([IO.File]::ReadAllText($backup).Contains('Backup-only')) 'backup preflight must be read-only'
+        [IO.File]::Delete($backup)
+        $journal = Join-Path $root 'hidden-windows.json'
+        [IO.File]::WriteAllText($journal, '{"Version":3,"Entries":[{"Hwnd":123}]}')
+        Assert-Throws 'an empty group state must not authorize native journal rescue' { Assert-StartupMeasurementStorage -ProductRoot $root }
+        Assert-Throws 'AllowNonEmptyState does not authorize replaying recovery evidence' { Assert-StartupMeasurementStorage -ProductRoot $root -AllowNonEmptyState }
+        Assert-True ([IO.File]::ReadAllText($journal).Contains('123')) 'journal preflight must preserve bytes'
+        [IO.File]::Delete($journal)
+        Assert-StartupMeasurementStorage -ProductRoot $root
+        [IO.File]::WriteAllText((Join-Path $root 'state.json'), '{"Version":2,"Groups":[]}')
+        Assert-StartupMeasurementStorage -ProductRoot $root
+        [IO.File]::WriteAllText($backup, 'malformed')
+        Assert-Throws 'unknown backup content must refuse measurement' { Assert-StartupMeasurementStorage -ProductRoot $root }
+    }
+
+    New-TestCase 'canonical-ci-audits-openspec-dev-dependencies-and-propagates-failure' {
+        $tokens = $null
+        $parseErrors = $null
+        $validationAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PSScriptRoot 'validate.ps1'), [ref]$tokens, [ref]$parseErrors)
+        Assert-True ($parseErrors.Count -eq 0) 'canonical validation must parse'
+        $auditStep = $validationAst.Find({ param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and
+            $node.GetCommandName() -eq 'Invoke-Step' -and
+            $node.CommandElements.Count -ge 3 -and
+            $node.CommandElements[1].Extent.Text -eq "'OpenSpec dependency vulnerability audit'"
+        }, $true)
+        Assert-True ($null -ne $auditStep) 'CI must audit OpenSpec even though it is a development-only dependency'
+        $auditText = $auditStep.Extent.Text
+        Assert-True ($auditText -match 'npm audit --include=dev --audit-level=low') 'the audit must include development packages and reject reported vulnerabilities'
+        Assert-True ($auditText -notmatch '--omit=dev') 'omitting development dependencies silently excludes the CLI dependency tree'
+        $stepFunction = $validationAst.Find({ param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-Step'
+        }, $true)
+        . ([scriptblock]::Create($stepFunction.Extent.Text))
+        $OpenSpecRoot = Join-Path $repoRoot 'tools\openspec'
+        function npm { $global:LASTEXITCODE = 1 }
+        Assert-Throws 'a failing npm audit must fail canonical validation' {
+            & ([scriptblock]::Create($auditText))
+        }
+        function npm { $global:LASTEXITCODE = 0 }
+        & ([scriptblock]::Create($auditText))
     }
 
     Write-Host ''
